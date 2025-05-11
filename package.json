@@ -1,0 +1,19 @@
+{
+  "name": "group-chat-casino-bot",
+  "version": "1.0.0-group",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "docker:build": "docker build --no-cache -t group-casino-bot .",
+    "docker:run": "docker run -it --env-file .env --rm group-casino-bot"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "private": true
+}
