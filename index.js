@@ -786,19 +786,40 @@ async function shutdown(signal) { /* ... as before ... */
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-async function main() { /* ... as before, ensure admin notification uses escapeMarkdownV2 if needed ... */
-    console.log(`\n🚀🚀🚀 Initializing Group Chat Casino Bot v${BOT_VERSION} 🚀🚀🚀`);
+// --- Main Application Startup Function ---
+async function main() {
+    console.log(`\n🚀🚀🚀 Initializing Solana Group Chat Casino Bot v${BOT_VERSION} (Simplified Mode) 🚀🚀🚀`);
+    console.log(`Timestamp: ${new Date().toISOString()}`);
+    console.log("Attempting to connect to Telegram API...");
+
+    // TEMPORARY DEBUGGING LOG FOR RAILWAY:
+    const tokenForDebug = process.env.BOT_TOKEN;
+    if (tokenForDebug) {
+        console.log(`[DEBUG] Token being used by bot.getMe(): First 5 chars: '${tokenForDebug.substring(0, 5)}', Last 5 chars: '${tokenForDebug.substring(tokenForDebug.length - 5)}', Length: ${tokenForDebug.length}`);
+    } else {
+        console.log("[DEBUG] Token being used by bot.getMe() is UNDEFINED OR EMPTY at this point!");
+    }
+    // END TEMPORARY DEBUGGING LOG
+
     try {
-        const me = await bot.getMe();
-        console.log(`✅ Connected to Telegram as @${me.username} (ID: ${me.id})`);
-        if (ADMIN_USER_ID) await safeSendMessage(ADMIN_USER_ID, `🎉 Bot v${BOT_VERSION} started! Polling. Host: ${process.env.HOSTNAME||'local'}`, {parse_mode:'MarkdownV2'});
-        console.log(`\n🎉 Bot operational! Waiting for messages...`);
-        setTimeout(runPeriodicBackgroundTasks, 10000);
+        const me = await bot.getMe(); // Verifies the BOT_TOKEN and connection
+        console.log(`✅ Successfully connected to Telegram! Bot Name: @${me.username}, Bot ID: ${me.id}`);
+        // ... rest of main function
     } catch (error) {
-        console.error("❌ CRITICAL STARTUP ERROR:", error);
-        if (ADMIN_USER_ID && BOT_TOKEN) {
-            const tempBot = new TelegramBot(BOT_TOKEN, {});
-            tempBot.sendMessage(ADMIN_USER_ID, `🆘 CRITICAL STARTUP FAILURE v${BOT_VERSION}:\n${escapeMarkdownV2(error.message)}\nExiting.`).catch(()=>{});
+        console.error("❌ CRITICAL STARTUP ERROR (bot.getMe() failed):");
+        // TEMPORARY DEBUGGING LOG FOR RAILWAY (in case of error too):
+        const tokenInError = process.env.BOT_TOKEN;
+         if (tokenInError) {
+            console.log(`[DEBUG_ERROR] Token at time of error: First 5: '${tokenInError.substring(0, 5)}', Last 5: '${tokenInError.substring(tokenInError.length - 5)}', Length: ${tokenInError.length}`);
+        } else {
+            console.log("[DEBUG_ERROR] Token at time of error was UNDEFINED OR EMPTY!");
+        }
+        // END TEMPORARY DEBUGGING LOG
+        console.error(error); // This will print the ETELEGRAM 404 error
+        console.error("Please check your BOT_TOKEN on Railway, network connection, and Telegram API status.");
+        if (ADMIN_USER_ID && BOT_TOKEN) { // Check BOT_TOKEN here too
+            const tempBotForError = new TelegramBot(BOT_TOKEN, {});
+            tempBotForError.sendMessage(ADMIN_USER_ID, `🆘 CRITICAL STARTUP FAILURE v${BOT_VERSION} on Railway:\n${escapeMarkdownV2(error.message)}\nToken (ends): ...${tokenInError ? tokenInError.substring(tokenInError.length - 5) : 'N/A'}\nExiting.`).catch(e => console.error("Failed to send critical startup error admin notification:", e));
         }
         process.exit(1);
     }
