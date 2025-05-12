@@ -272,40 +272,44 @@ const DICE_ESCALATOR_BOT_ROLLS = 3; // How many times bot will attempt to roll i
 
 // --- Main Message Handler ---
 bot.on('message', async (msg) => {
+    // --- START TEMPORARY RAW MESSAGE LOG ---
+    if (msg && msg.from) {
+        console.log(`[RAW_MSG_INPUT] Received message. Text: "${msg.text || 'N/A'}", From ID: ${msg.from.id}, From Username: @${msg.from.username || 'N/A'}, Is Bot: ${msg.from.is_bot}`);
+    } else if (msg) {
+        console.log(`[RAW_MSG_INPUT] Received message with no 'from' field:`, JSON.stringify(msg).substring(0, 200));
+    } else {
+        console.log("[RAW_MSG_INPUT] Received an undefined 'msg' object in message handler.");
+        return; // Can't do anything with an undefined message
+    }
+    // --- END TEMPORARY RAW MESSAGE LOG ---
+
+
     // Initial guard: We need 'msg.from' to identify the sender.
     if (!msg.from) {
-        // console.log("[MSG_IGNORE] Message ignored: No sender information (msg.from is missing).");
         return;
     }
 
     // If the message is from any bot (including self, or the helper bot)
     if (msg.from.is_bot) {
-        // Check if it's our specifically configured DicesHelperBot
         const isFromConfiguredHelperBotById = DICES_HELPER_BOT_ID && String(msg.from.id) === DICES_HELPER_BOT_ID;
         const isFromConfiguredHelperBotByUsername = !DICES_HELPER_BOT_ID && DICES_HELPER_BOT_USERNAME && msg.from.username === DICES_HELPER_BOT_USERNAME;
 
-        if (isFromConfiguredHelperBotById || isFromConfiguredHelperBotByUsername) {
-            // It IS our helper bot. It must also have text content (the roll number).
-            if (!msg.text) {
-                console.log(`[MSG_IGNORE] Message from Helper Bot (@${msg.from.username || msg.from.id}) ignored: No text content.`);
-                return;
-            }
-            // If it's our helper AND has text, it will proceed to the specific helper processing block below.
-        } else {
-            // It's some other bot, not our configured helper. Ignore it.
-            // console.log(`[MSG_IGNORE] Message from other bot (@${msg.from.username || msg.from.id}) ignored.`);
+        if (!(isFromConfiguredHelperBotById || isFromConfiguredHelperBotByUsername)) {
+            // console.log(`[MSG_IGNORE] Ignoring message from other bot: @${msg.from.username || msg.from.id}`);
             return;
         }
-    } else {
-        // It's from a human user. Ensure it has text content if we're to process it as a command.
-        // Non-text messages from users (like stickers, photos) will be ignored by later checks.
+        if (!msg.text) { // Helper bot message MUST have text (the number)
+            console.log(`[MSG_IGNORE] Message from Helper Bot (@${msg.from.username || msg.from.id}) ignored: No text content.`);
+            return;
+        }
+    } else { // From a human
         if (!msg.text) {
             // console.log(`[MSG_IGNORE] Message from human user ${msg.from.id} ignored: No text content.`);
             return;
         }
     }
 
-    const userId = String(msg.from.id); // Will be helper's ID if from helper, or user's ID
+    const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
     const text = msg.text || ""; // Ensure text is always a string
     const chatType = msg.chat.type;
