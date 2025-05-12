@@ -1,12 +1,8 @@
-// index.js - Main Solana Casino Bot (Updated for Automatic First Roll in Dice Escalator)
-// Version 2.1.0-auto-first-roll: Incorporates DB polling for dice rolls provided by a helper bot.
+// --- Start of Part 1 ---
+// index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
+//---------------------------------------------------------------------------
 
-import 'dotenv/config';
-import TelegramBot from 'node-telegram-bot-api';
-import { Pool } from 'pg'; // For PostgreSQL
-
-// --- Start of actual code execution after imports ---
-console.log("Loading Part 1: Core Imports & Basic Setup...");
+console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities...");
 
 //---------------------------------------------------------------------------
 // index.js - Part 1: Core Imports & Basic Setup
@@ -21,6 +17,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     'DB_SSL': 'true', // Default to SSL enabled
     'DB_REJECT_UNAUTHORIZED': 'false', // Default to false
     // Add other non-DB defaults here if needed
+    'SHUTDOWN_FAIL_TIMEOUT_MS': '10000' // Timeout to force exit if shutdown hangs (e.g., 10s)
 };
 
 // Apply defaults if not set in process.env
@@ -34,6 +31,7 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL; // Crucial for DB connection
+const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10); // Parse after setting default
 
 if (!BOT_TOKEN) {
     console.error("FATAL ERROR: BOT_TOKEN is not defined.");
@@ -77,25 +75,33 @@ pool.on('remove', client => {
 pool.on('error', (err, client) => {
     console.error('❌ Unexpected error on idle PostgreSQL client', err);
     // Ensure safeSendMessage and escapeMarkdownV2 are defined before use if called early
+    // Check functions exist AND ADMIN_USER_ID is set
     if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
         safeSendMessage(ADMIN_USER_ID, `🚨 DATABASE POOL ERROR (Idle Client): ${escapeMarkdownV2(err.message || String(err))}`)
             .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
     } else {
-        console.error(`[ADMIN ALERT during DB Pool Error (Idle Client)] ${err.message || String(err)} (safeSendMessage or escapeMarkdownV2 might not be defined yet)`);
+        console.error(`[ADMIN ALERT during DB Pool Error (Idle Client)] ${err.message || String(err)} (safeSendMessage or escapeMarkdownV2 might not be defined yet, or ADMIN_USER_ID not set)`);
     }
 });
 console.log("✅ PostgreSQL Pool created.");
 
-
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// --- Telegram Bot Instance ---
+// Ensure TelegramBot is imported at the top: import TelegramBot from 'node-telegram-bot-api';
+const bot = new TelegramBot(BOT_TOKEN, { polling: true }); // Or configure for webhooks if needed
 console.log("Telegram Bot instance created and configured for polling.");
 
 const BOT_VERSION = '2.1.0-auto-first-roll'; // Updated version marker
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-// In-memory stores (consider replacing with DB for production balances/state)
+// --- Global State Variables for Shutdown & Operation ---
+let isShuttingDown = false; // Flag to prevent multiple shutdown sequences
+// Note: SHUTDOWN_FAIL_TIMEOUT_MS is parsed from process.env above
+// Note: SHUTDOWN_QUEUE_TIMEOUT_MS is removed as queue logic is omitted for now
+
+// --- In-memory stores ---
 let activeGames = new Map(); // For active game state (Dice Escalator, Coinflip, RPS)
 let userCooldowns = new Map(); // For command cooldowns
+// let RECENT_UPDATE_IDS = new Set(); // Uncomment if you implement Update ID Caching
 
 console.log(`Group Chat Casino Bot v${BOT_VERSION} initializing...`);
 console.log(`Current system time: ${new Date().toISOString()}`);
@@ -111,6 +117,11 @@ const escapeMarkdownV2 = (text) => {
 
 // Safely sends a message, handling potential errors and length limits
 async function safeSendMessage(chatId, text, options = {}) {
+    // Added check to prevent sending during shutdown if needed, but admin notifications might still be desired
+    // if (isShuttingDown && chatId !== ADMIN_USER_ID) {
+    //     console.log(`[safeSendMessage] Suppressed message to ${chatId} during shutdown.`);
+    //     return undefined;
+    // }
     if (!chatId || typeof text !== 'string') {
         console.error("[safeSendMessage] Invalid input:", { chatId, textPreview: String(text).substring(0, 50) });
         return undefined; // Indicate failure
@@ -122,7 +133,6 @@ async function safeSendMessage(chatId, text, options = {}) {
     // Handle potential length issues BEFORE escaping for MarkdownV2
     if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsis = "... (message truncated)";
-        // Calculate truncation point based on raw text length
         const truncateAt = MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsis.length;
         messageToSend = (truncateAt > 0) ? messageToSend.substring(0, truncateAt) + ellipsis : messageToSend.substring(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH);
         console.warn(`[safeSendMessage] Message for chat ${chatId} was truncated before potential escaping.`);
@@ -131,8 +141,6 @@ async function safeSendMessage(chatId, text, options = {}) {
     // Apply escaping ONLY if MarkdownV2 is specified
     if (finalOptions.parse_mode === 'MarkdownV2') {
         messageToSend = escapeMarkdownV2(messageToSend);
-        // Re-check length *after* escaping, as escaping adds characters. This is tricky.
-        // A simple re-truncation might break Markdown. Better to truncate original text more aggressively above.
         if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
              console.warn(`[safeSendMessage] Message for chat ${chatId} might still exceed length limit after escaping. Sending anyway.`);
              // Optionally truncate again, but risk breaking formatting:
@@ -140,22 +148,30 @@ async function safeSendMessage(chatId, text, options = {}) {
         }
     }
 
+    // Ensure bot instance exists before trying to send
+    if (!bot) {
+         console.error("[safeSendMessage] Error: Telegram 'bot' instance is not available.");
+         return undefined;
+    }
+
     try {
-        // Attempt to send the message
         const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
-        return sentMessage; // Return the message object on success
+        return sentMessage;
     } catch (error) {
         console.error(`[safeSendMessage] Failed to send to chat ${chatId}. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
-        // Log more details if available
-        if (error.response && error.response.body) {
+        if (error.response?.body) {
             console.error(`[safeSendMessage] API Response: ${JSON.stringify(error.response.body)}`);
         }
-        // Specific handling for common errors can be added here (e.g., blocked, chat not found)
+        // Handle specific errors like blocked bot, chat not found, etc. if needed
+        // if (error.code === 'ETELEGRAM' && error.message.includes('403 Forbidden: bot was blocked by the user')) { ... }
         return undefined; // Indicate failure
     }
 }
-console.log("Part 1: Core Imports & Basic Setup - Complete.");
 
+// Simple asynchronous sleep function (Moved from original Part 3 for self-sufficiency)
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities - Complete.");
 // --- End of Part 1 ---
 //---------------------------------------------------------------------------
 // index.js - Part 2: Database Operations & Data Management
@@ -1553,23 +1569,24 @@ async function processDiceEscalatorBotTurn(gameData, messageIdToUpdate) {
 
 console.log("Part 5b: Dice Escalator Game Logic - Complete.");
 // --- End of Part 5b ---
+// --- Start of Part 6 ---
+// index.js - Part 6: Database Initialization, Startup, Shutdown, and Enhanced Error Handling
 //---------------------------------------------------------------------------
-// index.js - Part 6: Database Initialization, Startup, Shutdown, and Error Handling
-//---------------------------------------------------------------------------
-console.log("Loading Part 6: Startup, Shutdown, and Basic Error Handling...");
+console.log("Loading Part 6: Startup, Shutdown, DB Init, Enhanced Error Handling...");
 
 // --- Database Initialization Function ---
-// Creates necessary tables if they don't already exist.
+// (Keep your existing initializeDatabase function here - it seems robust)
 async function initializeDatabase() {
     console.log('⚙️ [DB Init] Initializing Database Schema (if necessary)...');
-    let client = null; // Use a dedicated client for the transaction
+    let client = null;
     try {
-        client = await pool.connect(); // Get a client from the pool
-        await client.query('BEGIN');   // Start a transaction
+        client = await pool.connect();
+        await client.query('BEGIN');
         console.log('⚙️ [DB Init] Transaction started for schema setup.');
 
-        // Wallets Table (Example structure, adjust to your actual schema needs)
+        // Wallets Table
         console.log('⚙️ [DB Init] Ensuring "wallets" table exists...');
+        // Ensure Pool is defined (from Part 1)
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
                 user_id VARCHAR(255) PRIMARY KEY,
@@ -1584,12 +1601,12 @@ async function initializeDatabase() {
                 last_bet_amounts JSONB DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-        `);
-        // Add indexes for wallets table (examples)
+        `); // Make sure this reflects your actual schema
+        // Indexes for wallets
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_total_wagered ON wallets (total_wagered DESC);');
 
-        // User Balances Table (Example structure)
+        // User Balances Table
         console.log('⚙️ [DB Init] Ensuring "user_balances" table exists...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS user_balances (
@@ -1597,9 +1614,9 @@ async function initializeDatabase() {
                 balance_lamports BIGINT NOT NULL DEFAULT 0 CHECK (balance_lamports >= 0),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-        `);
+        `); // Make sure this reflects your actual schema
 
-        // Bets Table (Example structure for tracking bets)
+        // Bets Table
         console.log('⚙️ [DB Init] Ensuring "bets" table exists...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS bets (
@@ -1614,278 +1631,500 @@ async function initializeDatabase() {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ
             );
-        `);
+        `); // Make sure this reflects your actual schema
         await client.query('CREATE INDEX IF NOT EXISTS idx_bets_user_id_game_type ON bets (user_id, game_type);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_bets_status_created_at ON bets (status, created_at);');
 
-
-        // --- DICE ROLL REQUESTS TABLE (Crucial for Helper Bot Interaction) ---
+        // DICE ROLL REQUESTS TABLE
         console.log('⚙️ [DB Init] Ensuring "dice_roll_requests" table exists...');
-        await client.query(`
+         await client.query(`
             CREATE TABLE IF NOT EXISTS dice_roll_requests (
                 request_id SERIAL PRIMARY KEY,
-                game_id VARCHAR(255) NOT NULL UNIQUE,      -- Ensures one active roll request per game_id
+                game_id VARCHAR(255) NOT NULL UNIQUE,
                 chat_id VARCHAR(255) NOT NULL,
-                user_id VARCHAR(255) NOT NULL,             -- The user who initiated the roll prompt
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', -- e.g., 'pending', 'processing', 'completed', 'error'
-                roll_value INTEGER,                        -- Will be NULL until processed by helper
+                user_id VARCHAR(255) NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                roll_value INTEGER,
                 requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ
             );
         `);
-        // Indexes for efficient querying by helper (status, requested_at) and main bot (game_id)
+        // Indexes for dice_roll_requests
         console.log('⚙️ [DB Init] Ensuring "dice_roll_requests" indexes...');
         await client.query('CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested_at ON dice_roll_requests (status, requested_at);');
-        // Note: UNIQUE constraint on game_id already creates an index, but explicit index might be desired by some.
-        // await client.query('CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_game_id ON dice_roll_requests (game_id);');
-        // --- END DICE ROLL REQUESTS TABLE ---
 
-
-        // Add other table creations (deposits, withdrawals, ledger, etc.) here as needed for your full application.
-
-        await client.query('COMMIT'); // Commit transaction if all schema setup is successful
+        await client.query('COMMIT');
         console.log('✅ [DB Init] Database schema initialized/verified successfully.');
     } catch (err) {
         console.error('❌ CRITICAL DATABASE INITIALIZATION ERROR:', err);
         if (client) {
-            try {
-                await client.query('ROLLBACK'); // Rollback transaction on error
-                console.log('⚙️ [DB Init] Transaction rolled back due to schema setup error.');
-            } catch (rbErr) {
-                console.error('[DB Init_ERR] Rollback failed:', rbErr);
-            }
+            try { await client.query('ROLLBACK'); console.log('⚙️ [DB Init] Transaction rolled back.'); }
+            catch (rbErr) { console.error('[DB Init_ERR] Rollback failed:', rbErr); }
         }
-        // Notify admin if configured and possible
+        // Use the globally defined safeSendMessage and escapeMarkdownV2 (ensure they are defined in Part 1)
+        // Check functions exist AND ADMIN_USER_ID is set
         if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
-            safeSendMessage(ADMIN_USER_ID, `🚨 CRITICAL DB INIT FAILED: ${escapeMarkdownV2(String(err.message || err))}\\. Bot cannot start\\. Check logs\\.`, {parse_mode:'MarkdownV2'}).catch(() => {});
+            safeSendMessage(ADMIN_USER_ID, `🚨 CRITICAL DB INIT FAILED: ${escapeMarkdownV2(String(err.message || err))}. Bot cannot start. Check logs.`, {parse_mode:'MarkdownV2'}).catch(() => {});
         }
-        process.exit(2); // Exit with a specific code indicating DB init failure
+        process.exit(2); // Exit on DB init failure
     } finally {
         if (client) {
-            client.release(); // Release the client back to the pool
+            client.release();
             console.log('⚙️ [DB Init] Database client released.');
         }
     }
 }
 
 // --- Optional Periodic Background Tasks ---
-// Cleans up stale games or sessions from in-memory stores.
+// (Keep your existing runPeriodicBackgroundTasks function if you plan to use it)
+// let backgroundTaskInterval = null; // Define if you uncomment the interval below in main()
 async function runPeriodicBackgroundTasks() {
+    // Ensure global Maps/variables used here (activeGames, groupGameSessions, etc.) are defined (likely Part 1 or 2)
+    // Ensure helper functions like updateUserBalance, getGroupSession, queryDatabase, escapeMarkdownV2 are defined
     console.log(`[BACKGROUND_TASK] [${new Date().toISOString()}] Running periodic background tasks...`);
     const now = Date.now();
-    const GAME_CLEANUP_THRESHOLD_MS = JOIN_GAME_TIMEOUT_MS * 10; // Example: 10 minutes for a game to be considered stale
+    const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS || '60000', 10); // Get from env or default
+    const GAME_CLEANUP_THRESHOLD_MS = JOIN_GAME_TIMEOUT_MS * 10; // Example: 10 minutes
     let cleanedGames = 0;
 
-    for (const [gameId, gameData] of activeGames.entries()) {
-        // Define statuses that indicate a game might be stale if too old
-        const staleStatuses = ['waiting_opponent', 'waiting_choices', 'waiting_db_roll'];
-        if ((now - gameData.creationTime > GAME_CLEANUP_THRESHOLD_MS) && staleStatuses.includes(gameData.status)) {
-            console.warn(`[BACKGROUND_TASK] Cleaning stale game ${gameId} (${gameData.type}) in chat ${gameData.chatId}. Status: ${gameData.status}`);
+    // Use try...catch around the loop in case one iteration fails
+    try {
+        for (const [gameId, gameData] of activeGames.entries()) {
+             // Add checks for potentially null/undefined gameData or properties
+            if (!gameData || !gameData.creationTime || !gameData.status || !gameData.type || !gameData.chatId) {
+                console.warn(`[BACKGROUND_TASK] Skipping potentially corrupt game entry with ID: ${gameId}`);
+                activeGames.delete(gameId); // Remove corrupt entry
+                continue;
+            }
 
-            // Handle refund or specific cleanup actions based on game type and status
-            let refundReason = `refund_stale_${gameData.type}_timeout:${gameId}`;
-            let staleMsgText = `Game \\(ID: \`${escapeMarkdownV2(gameId)}\`\\) by ${gameData.initiatorMention} was cleared due to inactivity`;
+            const staleStatuses = ['waiting_opponent', 'waiting_choices', 'waiting_db_roll'];
+            if ((now - gameData.creationTime > GAME_CLEANUP_THRESHOLD_MS) && staleStatuses.includes(gameData.status)) {
+                console.warn(`[BACKGROUND_TASK] Cleaning stale game ${gameId} (${gameData.type}) in chat ${gameData.chatId}. Status: ${gameData.status}`);
+                let refundReason = `refund_stale_${gameData.type}_timeout:${gameId}`;
+                // Use a safer way to get initiator mention if it might be missing
+                const initiatorDisp = gameData.initiatorMention || (gameData.initiatorId ? `User ${gameData.initiatorId}` : 'Unknown Initiator');
+                let staleMsgText = `Game \\(ID: \`${escapeMarkdownV2(gameId)}\`\\) by ${initiatorDisp} was cleared due to inactivity`;
 
-            if (gameData.type === 'dice_escalator' && gameData.status === 'waiting_db_roll') {
-                staleMsgText += " \\(roll not processed in time\\)\\.";
-                 // Only refund if it was the first roll (playerScore still 0)
-                 if(gameData.playerScore === 0) {
-                    await updateUserBalance(gameData.initiatorId, gameData.betAmount, refundReason, gameData.chatId);
-                    staleMsgText += " Bet refunded\\.";
-                 } else {
-                     staleMsgText += ` Last score was ${gameData.playerScore}\\.`;
-                 }
-                // Clean up pending request from DB if it's stuck
-                try {
-                    await queryDatabase("DELETE FROM dice_roll_requests WHERE game_id = $1 AND status = 'pending'", [gameId]);
-                    console.log(`[BACKGROUND_TASK] Deleted stale 'pending' dice_roll_request for game ${gameId}.`);
-                } catch (dbErr) {
-                    console.error(`[BACKGROUND_TASK_ERR] Failed to delete stale dice_roll_request for game ${gameId}:`, dbErr.message);
+                // Handle specific cleanup based on type and status
+                if (gameData.type === 'dice_escalator' && gameData.status === 'waiting_db_roll') {
+                    staleMsgText += " \\(roll not processed\\)\\.";
+                    if (gameData.playerScore === 0 && gameData.initiatorId && gameData.betAmount) {
+                        // Ensure updateUserBalance exists and handles errors
+                        await updateUserBalance(gameData.initiatorId, gameData.betAmount, refundReason, gameData.chatId)
+                           .catch(e => console.error(`[BACKGROUND_TASK_ERR] Failed refund for stale dice game ${gameId}: ${e.message}`));
+                        staleMsgText += " Bet refunded\\.";
+                    } else {
+                        staleMsgText += ` Last score: ${gameData.playerScore}\\.`;
+                    }
+                    try {
+                         // Ensure queryDatabase exists
+                        await queryDatabase("DELETE FROM dice_roll_requests WHERE game_id = $1 AND status = 'pending'", [gameId]);
+                        console.log(`[BACKGROUND_TASK] Deleted stale 'pending' dice_roll_request for game ${gameId}.`);
+                    } catch (dbErr) { console.error(`[BACKGROUND_TASK_ERR] Failed delete stale dice req ${gameId}:`, dbErr.message); }
+                } else if ((gameData.type === 'coinflip' || gameData.type === 'rps') && gameData.status === 'waiting_opponent') {
+                    if (gameData.initiatorId && gameData.betAmount) {
+                         await updateUserBalance(gameData.initiatorId, gameData.betAmount, refundReason, gameData.chatId)
+                           .catch(e => console.error(`[BACKGROUND_TASK_ERR] Failed refund for stale ${gameData.type} game ${gameId}: ${e.message}`));
+                         staleMsgText += "\\. Bet refunded\\.";
+                    }
+                } else if (gameData.type === 'rps' && gameData.status === 'waiting_choices') {
+                     staleMsgText += " during choice phase\\. Bets refunded\\.";
+                     if (gameData.participants && gameData.betAmount) {
+                          for (const p of gameData.participants) {
+                               if (p.betPlaced && p.userId) { // Check userId exists
+                                    await updateUserBalance(p.userId, gameData.betAmount, refundReason, gameData.chatId)
+                                      .catch(e => console.error(`[BACKGROUND_TASK_ERR] Failed refund participant ${p.userId} for stale RPS ${gameId}: ${e.message}`));
+                               }
+                          }
+                     }
                 }
-            } else if ((gameData.type === 'coinflip' || gameData.type === 'rps') && gameData.status === 'waiting_opponent') {
-                await updateUserBalance(gameData.initiatorId, gameData.betAmount, refundReason, gameData.chatId);
-                staleMsgText += "\\. Bet refunded\\.";
-            } else if (gameData.type === 'rps' && gameData.status === 'waiting_choices') {
-                staleMsgText += " during choice phase\\. Bets refunded to all participants\\.";
-                for (const p of gameData.participants) { if (p.betPlaced) { await updateUserBalance(p.userId, gameData.betAmount, refundReason, gameData.chatId); }}
-            }
 
-            // Notify chat and clean up
-            if (gameData.gameSetupMessageId) {
-                bot.editMessageText(staleMsgText, { chatId: String(gameData.chatId), message_id: Number(gameData.gameSetupMessageId), parse_mode: 'MarkdownV2', reply_markup: {} }).catch(() => { safeSendMessage(String(gameData.chatId), staleMsgText, { parse_mode: 'MarkdownV2' }); });
-            } else {
-                safeSendMessage(String(gameData.chatId), staleMsgText, { parse_mode: 'MarkdownV2' });
-            }
+                 // Ensure bot and safeSendMessage exist before trying to notify/edit
+                 if (bot && typeof safeSendMessage === 'function') {
+                    if (gameData.chatId && gameData.gameSetupMessageId) {
+                         bot.editMessageText(staleMsgText, { chatId: String(gameData.chatId), message_id: Number(gameData.gameSetupMessageId), parse_mode: 'MarkdownV2', reply_markup: {} })
+                           .catch(() => { safeSendMessage(String(gameData.chatId), staleMsgText, { parse_mode: 'MarkdownV2' }); });
+                    } else if (gameData.chatId) {
+                         safeSendMessage(String(gameData.chatId), staleMsgText, { parse_mode: 'MarkdownV2' });
+                    }
+                 }
 
-            activeGames.delete(gameId);
-            const groupSession = await getGroupSession(gameData.chatId); // Get session to update
-            if (groupSession && groupSession.currentGameId === gameId) {
-                await updateGroupGameDetails(gameData.chatId, null, null, null); // Clear game from session
+                 activeGames.delete(gameId);
+                 // Ensure getGroupSession and updateGroupGameDetails exist
+                 const groupSession = await getGroupSession(gameData.chatId).catch(e => console.error(`[BACKGROUND_TASK_ERR] Failed getGroupSession for ${gameData.chatId}: ${e.message}`));
+                 if (groupSession && groupSession.currentGameId === gameId) {
+                     await updateGroupGameDetails(gameData.chatId, null, null, null).catch(e => console.error(`[BACKGROUND_TASK_ERR] Failed updateGroupGameDetails for ${gameData.chatId}: ${e.message}`));
+                 }
+                 cleanedGames++;
             }
-            cleanedGames++;
         }
+    } catch (loopError) {
+         console.error("[BACKGROUND_TASK_ERR] Error during stale game cleanup loop:", loopError);
     }
+
     if (cleanedGames > 0) console.log(`[BACKGROUND_TASK] Cleaned ${cleanedGames} stale game(s).`);
 
-    // Clean up very old, inactive group sessions (no active game)
+    // Clean up very old, inactive group sessions
     const SESSION_CLEANUP_THRESHOLD_MS = JOIN_GAME_TIMEOUT_MS * 30; // Example: 30 minutes
     let cleanedSessions = 0;
-    for (const [chatId, sessionData] of groupGameSessions.entries()) {
-        if (!sessionData.currentGameId && sessionData.lastActivity instanceof Date && (now - sessionData.lastActivity.getTime()) > SESSION_CLEANUP_THRESHOLD_MS) {
-            console.log(`[BACKGROUND_TASK] Cleaning inactive group session for chat ${chatId}.`);
-            groupGameSessions.delete(chatId);
-            cleanedSessions++;
+    try {
+        for (const [chatId, sessionData] of groupGameSessions.entries()) {
+             // Check sessionData exists and has expected properties
+             if (sessionData && !sessionData.currentGameId && sessionData.lastActivity instanceof Date && (now - sessionData.lastActivity.getTime()) > SESSION_CLEANUP_THRESHOLD_MS) {
+                console.log(`[BACKGROUND_TASK] Cleaning inactive group session for chat ${chatId}.`);
+                groupGameSessions.delete(chatId);
+                cleanedSessions++;
+            }
         }
+    } catch (loopError) {
+        console.error("[BACKGROUND_TASK_ERR] Error during inactive session cleanup loop:", loopError);
     }
     if (cleanedSessions > 0) console.log(`[BACKGROUND_TASK] Cleaned ${cleanedSessions} inactive group session entries.`);
+
     console.log(`[BACKGROUND_TASK] Finished. Active games: ${activeGames.size}, Group sessions: ${groupGameSessions.size}.`);
 }
-// To enable periodic tasks, uncomment the line below:
-// const backgroundTaskInterval = setInterval(runPeriodicBackgroundTasks, 15 * 60 * 1000); // e.g., every 15 minutes
 
-// --- Process-level Error Handling ---
-process.on('uncaughtException', (error, origin) => {
-    console.error(`\n🚨🚨 MAIN BOT UNCAUGHT EXCEPTION AT: ${origin} 🚨🚨`, error);
-    if (ADMIN_USER_ID && typeof safeSendMessage === "function") {
-        safeSendMessage(ADMIN_USER_ID, `🆘 MAIN BOT UNCAUGHT EXCEPTION:\nOrigin: ${escapeMarkdownV2(origin)}\nError: ${escapeMarkdownV2(error.message)}`, {parse_mode:'MarkdownV2'}).catch(() => {});
-    }
-    // Consider if bot should exit or attempt to recover. For critical errors, exit is safer.
-    // process.exit(1); // Uncomment to exit on uncaught exceptions
-});
-process.on('unhandledRejection', (reason, promise) => {
-    console.error(`\n🔥🔥 MAIN BOT UNHANDLED REJECTION 🔥🔥`, reason);
-    // console.error("Promise:", promise); // Can be very verbose
-    if (ADMIN_USER_ID && typeof safeSendMessage === "function") {
-        const reasonMsg = (reason instanceof Error) ? reason.message : String(reason);
-        safeSendMessage(ADMIN_USER_ID, `♨️ MAIN BOT UNHANDLED REJECTION:\nReason: ${escapeMarkdownV2(reasonMsg)}`, {parse_mode:'MarkdownV2'}).catch(() => {});
-    }
-});
 
-// --- Telegram Bot Library Specific Error Handling ---
-if (bot) { // Ensure bot object exists before attaching handlers
-    bot.on('polling_error', (error) => {
-        console.error(`\n🚫 MAIN BOT TELEGRAM POLLING ERROR 🚫 Code: ${error.code || 'N/A'}`);
-        console.error(`Message: ${error.message || 'No message'}`);
-        // Log full error object for more details, can be verbose
-        // console.error(error);
-        // Specific handling for common polling errors:
-        // E.g., 'EFATAL' often means network issue or token revoked.
-        // 'ECONNRESET', 'ETIMEOUT' are network related.
-        // Consider if bot should attempt to restart polling or exit based on error.
-    });
-    bot.on('webhook_error', (error) => { // If using webhooks
-        console.error(`\n🚫 MAIN BOT TELEGRAM WEBHOOK ERROR 🚫 Code: ${error.code || 'N/A'}`);
-        console.error(`Message: ${error.message || 'No message'}`);
-    });
-    bot.on('error', (error) => { // General errors from the bot instance itself
-        console.error('\n🔥 MAIN BOT GENERAL TELEGRAM LIBRARY ERROR EVENT 🔥:', error);
-    });
-} else {
-    console.error("!!! CRITICAL ERROR: 'bot' instance not defined when trying to attach general error handlers in Part 6 !!!");
+// --- Telegram Polling Retry Logic ---
+let isRetryingPolling = false;
+let retryPollingDelay = 5000; // Initial delay 5 seconds
+const MAX_RETRY_POLLING_DELAY = 60000; // Max delay 60 seconds
+let pollingRetryTimeoutId = null;
+
+async function attemptRestartPolling(error) {
+    // Only attempt retry if not already shutting down
+    if (isShuttingDown) {
+         console.log('[POLLING_RETRY] Shutdown in progress, skipping polling restart attempt.');
+         return;
+    }
+    if (isRetryingPolling) {
+        console.log('[POLLING_RETRY] Already attempting to restart polling. Skipping additional attempt.');
+        return;
+    }
+    isRetryingPolling = true;
+    clearTimeout(pollingRetryTimeoutId);
+
+    console.warn(`[POLLING_RETRY] Polling error encountered: ${error.code || 'N/A'} - ${error.message}. Attempting restart after ${retryPollingDelay / 1000}s...`);
+
+    // Ensure bot exists before trying to stop/start polling
+    if (!bot) {
+         console.error("[POLLING_RETRY] Cannot restart polling, bot instance is not available.");
+         isRetryingPolling = false;
+         return;
+    }
+
+    try {
+        if (bot.isPolling?.()) { // Check if function exists
+            await bot.stopPolling({ cancel: true });
+            console.log('[POLLING_RETRY] Explicitly stopped polling before retry.');
+        }
+    } catch (stopErr) {
+        console.error('[POLLING_RETRY] Error trying to stop polling before retry:', stopErr.message);
+    }
+
+    pollingRetryTimeoutId = setTimeout(async () => {
+         if (isShuttingDown) { // Double check before attempting start
+              console.log('[POLLING_RETRY] Shutdown initiated before polling restart could occur.');
+              isRetryingPolling = false;
+              return;
+         }
+         // Ensure bot exists again inside timeout
+         if (!bot) {
+              console.error("[POLLING_RETRY] Cannot restart polling inside timeout, bot instance is not available.");
+              isRetryingPolling = false;
+              return;
+         }
+        try {
+            console.log('[POLLING_RETRY] Attempting bot.startPolling()...');
+            // Ensure startPolling function exists
+            if (typeof bot.startPolling !== 'function') {
+                throw new Error("bot.startPolling is not a function. Cannot restart.");
+            }
+            await bot.startPolling(); // Assumes polling mode
+            console.log('✅ [POLLING_RETRY] Polling successfully restarted!');
+            retryPollingDelay = 5000; // Reset delay on success
+            isRetryingPolling = false;
+        } catch (startErr) {
+            console.error(`❌ [POLLING_RETRY] Failed to restart polling: ${startErr.code || 'N/A'} - ${startErr.message}`);
+            retryPollingDelay = Math.min(retryPollingDelay * 2, MAX_RETRY_POLLING_DELAY);
+            isRetryingPolling = false;
+            console.warn(`[POLLING_RETRY] Next automatic retry attempt will be triggered by the next 'polling_error' event after ${retryPollingDelay / 1000}s.`);
+            // Check ADMIN_USER_ID, safeSendMessage, escapeMarkdownV2 before notifying
+            if (ADMIN_USER_ID && retryPollingDelay >= MAX_RETRY_POLLING_DELAY && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+                safeSendMessage(ADMIN_USER_ID, `🚨 BOT ALERT: Failed to restart polling repeatedly. Last error: ${escapeMarkdownV2(startErr.message)}. Manual intervention may be required.`, {parse_mode: 'MarkdownV2'}).catch(()=>{});
+            }
+             // Check if the start error itself is fatal (e.g., 409 again)
+             // Use the main shutdown function (ensure it's defined)
+             if (typeof shutdown === "function" && (String(startErr.message).includes('409') || String(startErr.code).includes('EFATAL'))) {
+                  console.error("FATAL error during polling restart attempt. Initiating shutdown.");
+                  if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+                       safeSendMessage(ADMIN_USER_ID, `🚨 BOT SHUTDOWN: Fatal error during polling restart attempt. Error: ${escapeMarkdownV2(startErr.message)}.`, {parse_mode: 'MarkdownV2'}).catch(()=>{});
+                  }
+                  shutdown('POLLING_RESTART_FATAL').catch(() => process.exit(1));
+             }
+        }
+    }, retryPollingDelay);
+    // Make the timeout unref'd so it doesn't keep the process alive if everything else finishes
+    if(pollingRetryTimeoutId?.unref) pollingRetryTimeoutId.unref();
 }
 
-// --- Shutdown Handling ---
-let isShuttingDown = false;
+
+// --- The Core Shutdown Function (Enhanced Version) ---
 async function shutdown(signal) {
+    // Ensure isShuttingDown flag exists (defined in Part 1)
     if (isShuttingDown) {
-        console.log("Main Bot: Shutdown already in progress.");
+        console.warn("🚦 Shutdown already in progress, ignoring duplicate signal:", signal);
         return;
     }
     isShuttingDown = true;
-    console.log(`\n🚦 Received ${signal}. Shutting down Main Bot v${BOT_VERSION} gracefully...`);
+    console.warn(`\n🚦 Received signal: ${signal}. Initiating graceful shutdown... (PID: ${process.pid})`);
 
-    // 1. Stop Telegram Polling (if polling)
-    if (bot && typeof bot.stopPolling === 'function' && bot.isPolling()) {
-        try {
-            await bot.stopPolling({ cancel: true }); // Cancel pending requests
-            console.log("Main Bot: Telegram polling stopped.");
-        } catch (e) {
-            console.error("Main Bot: Error stopping Telegram polling:", e.message);
-        }
+    // Clear any pending polling retry timers immediately
+    clearTimeout(pollingRetryTimeoutId);
+    isRetryingPolling = false;
+
+    // Notify Admin (ensure ADMIN_USER_ID, safeSendMessage, escapeMarkdownV2, BOT_VERSION exist)
+    if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function" && typeof BOT_VERSION !== 'undefined') {
+        await safeSendMessage(ADMIN_USER_ID, `ℹ️ Bot v${BOT_VERSION} shutting down (Signal: ${escapeMarkdownV2(String(signal))})...`, { parse_mode: 'MarkdownV2' }).catch(e => console.error("Admin notify fail (shutdown start):", e));
     }
-    // If using webhooks, you might need bot.deleteWebHook();
 
-    // 2. Clear any intervals (like backgroundTaskInterval if it was active)
-    // if (backgroundTaskInterval) clearInterval(backgroundTaskInterval);
+    // 1. Stop Telegram Updates (ensure bot exists)
+    console.log("🚦 [Shutdown] Stopping Telegram updates...");
+    if (bot?.isPolling?.()) {
+        await bot.stopPolling({ cancel: true })
+            .then(() => console.log("✅ [Shutdown] Polling stopped."))
+            .catch(e => console.error("❌ [Shutdown] Error stopping polling:", e.message));
+    } else if (bot) { // Check if bot exists before assuming webhook mode
+         console.log("ℹ️ [Shutdown] Bot was not polling (Webhook mode or inactive).");
+         // Optional: If using webhooks, attempt to delete it.
+         // if (typeof bot.deleteWebHook === 'function') {
+         //     await bot.deleteWebHook({ drop_pending_updates: false })
+         //          .then(() => console.log("✅ [Shutdown] Webhook deleted."))
+         //          .catch(e => console.warn(`⚠️ [Shutdown] Non-critical error deleting webhook: ${e.message}`));
+         // }
+    } else {
+        console.log("ℹ️ [Shutdown] Telegram bot instance not available.");
+    }
 
-    // 3. Gracefully close the Database Pool
+    // 2. Close HTTP Server (If Applicable)
+    // console.log("🚦 [Shutdown] Closing HTTP server...");
+    // if (server) { // Ensure 'server' variable exists if using Express
+    //     await new Promise(resolve => server.close(err => {
+    //         if(err) console.error("❌ [Shutdown] Error closing HTTP server:", err);
+    //         else console.log("✅ [Shutdown] HTTP server closed.");
+    //         resolve();
+    //     }));
+    // } else { console.log("ℹ️ [Shutdown] HTTP server not running or N/A."); }
+
+    // 3. Stop Background Intervals
+    console.log("🚦 [Shutdown] Stopping background intervals...");
+    // if (backgroundTaskInterval) clearInterval(backgroundTaskInterval); backgroundTaskInterval = null; // Uncomment if using the periodic task
+    // Add clearing for any other intervals you might have...
+    console.log("✅ [Shutdown] Background intervals cleared.");
+
+    // 4. Wait for Processing Queues (Omitted - See Note Above)
+    // console.log("🚦 [Shutdown] Waiting for processing queues to idle...");
+    // If you implement queues (e.g., p-queue, bullmq), add waiting logic here.
+    // Ensure 'sleep' function exists (defined in Part 1)
+    // Example placeholder: await sleep(1000); // Short delay for any in-flight async operations
+     console.log("ℹ️ [Shutdown] Skipping explicit queue wait (N/A in current config).");
+
+    // 5. Close Database Pool (ensure pool exists)
+    console.log("🚦 [Shutdown] Closing Database pool...");
     if (pool && typeof pool.end === 'function') {
-        try {
-            await pool.end();
-            console.log("Main Bot: PostgreSQL pool has been closed.");
-        } catch (e) {
-            console.error("Main Bot: Error closing PostgreSQL pool:", e.message);
-        }
+        await pool.end()
+            .then(() => console.log("✅ [Shutdown] Database pool closed."))
+            .catch(e => console.error("❌ [Shutdown] Error closing Database pool:", e.message));
+    } else {
+        console.log("ℹ️ [Shutdown] Database pool not available or already closed.");
     }
 
-    // 4. Optional: Notify admin about shutdown
-    if (ADMIN_USER_ID && typeof safeSendMessage === "function") {
-        // Use a timeout to allow other shutdown tasks to complete before exiting process
-        // safeSendMessage might rely on the event loop which is about to be terminated.
-        // This is a best-effort notification.
-        const notifyAdminPromise = safeSendMessage(ADMIN_USER_ID, `ℹ️ Bot v${BOT_VERSION} shutting down (Signal: ${signal}).`, {}).catch(() => {});
-        // Wait for a short period or for the promise to resolve/reject
-        await Promise.race([notifyAdminPromise, new Promise(resolve => setTimeout(resolve, 1000))]);
-    }
-
-    console.log("✅ Main Bot: Shutdown complete. Exiting.");
-    // Exit with appropriate code based on signal or if it was an error-triggered shutdown elsewhere
-    process.exit(signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1);
+    console.log(`🏁 [Shutdown] Graceful shutdown complete (Signal: ${signal}). Exiting.`);
+    const exitCode = (signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1); // Exit 0 for clean signals, 1 otherwise
+    // Ensure process.exit exists (it's a built-in Node.js function)
+    process.exit(exitCode);
 }
-// Register signal handlers for graceful shutdown
-process.on('SIGINT', () => shutdown('SIGINT'));  // CTRL+C from terminal
-process.on('SIGTERM', () => shutdown('SIGTERM')); // kill command (default)
+
+// Watchdog timer to force exit if shutdown hangs
+function startShutdownWatchdog(signal) {
+     // Use the constant defined in Part 1 / loaded from env (ensure SHUTDOWN_FAIL_TIMEOUT_MS exists)
+     const timeoutMs = typeof SHUTDOWN_FAIL_TIMEOUT_MS === 'number' ? SHUTDOWN_FAIL_TIMEOUT_MS : 10000; // Default fallback
+     const timerId = setTimeout(() => {
+          console.error(`🚨 Forcing exit after ${timeoutMs}ms due to hanging shutdown (Signal: ${signal}).`);
+          process.exit(1); // Force exit
+     }, timeoutMs);
+     // unref() prevents the timer itself from keeping the process alive if Node wants to exit sooner
+     if (timerId?.unref) timerId.unref();
+}
 
 // --- Main Startup Function ---
 async function main() {
+    // Ensure BOT_VERSION exists (defined in Part 1)
     console.log(`\n🚀🚀🚀 Initializing Group Chat Casino Bot v${BOT_VERSION} 🚀🚀🚀`);
     console.log(`Timestamp: ${new Date().toISOString()}`);
+    console.log(`PID: ${process.pid}`);
 
-    // 1. Initialize Database Schema (creates tables if they don't exist)
+    // --- Setup Process Signal & Error Handlers ---
+    // Ensure 'shutdown' and 'startShutdownWatchdog' are defined above
+    console.log("⚙️ [Startup] Setting up process signal & error handlers...");
+    process.on('SIGINT', () => {
+        console.log("Received SIGINT.");
+        if (!isShuttingDown) startShutdownWatchdog('SIGINT'); // Start watchdog only on first signal
+        shutdown('SIGINT');
+    });
+    process.on('SIGTERM', () => {
+        console.log("Received SIGTERM.");
+         if (!isShuttingDown) startShutdownWatchdog('SIGTERM'); // Start watchdog only on first signal
+        shutdown('SIGTERM');
+    });
+
+    process.on('uncaughtException', async (error, origin) => {
+        console.error(`\n🚨🚨🚨 UNCAUGHT EXCEPTION [Origin: ${origin}] 🚨🚨🚨\n`, error);
+        // Check necessary functions/variables before notifying/shutting down
+        if (!isShuttingDown) {
+            console.error("Initiating emergency shutdown due to uncaught exception...");
+            if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+                await safeSendMessage(ADMIN_USER_ID, `🚨🚨 UNCAUGHT EXCEPTION (${escapeMarkdownV2(String(origin))})\n${escapeMarkdownV2(String(error.message || error))}\nAttempting shutdown...`, { parse_mode: 'MarkdownV2' }).catch(e => console.error("Admin notify fail (uncaught):", e));
+            }
+             startShutdownWatchdog('uncaughtException'); // Start watchdog
+            shutdown('uncaughtException').catch(() => process.exit(1)); // Attempt shutdown, force exit on failure
+        } else {
+            console.warn("Uncaught exception occurred during an ongoing shutdown sequence. Forcing exit soon via watchdog.");
+        }
+    });
+
+    process.on('unhandledRejection', async (reason, promise) => {
+        console.error('\n🔥🔥🔥 UNHANDLED PROMISE REJECTION 🔥🔥🔥');
+        // Avoid logging the full promise object, it can be huge. Log the reason.
+        console.error('Reason:', reason);
+         // Check necessary functions/variables before notifying
+        if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+            const reasonMsg = reason instanceof Error ? reason.message : String(reason);
+            // Add stack trace if available
+            const stack = reason instanceof Error ? `\nStack: ${reason.stack}` : '';
+            await safeSendMessage(ADMIN_USER_ID, `🔥🔥 UNHANDLED REJECTION\nReason: ${escapeMarkdownV2(reasonMsg)}${escapeMarkdownV2(stack)}`, { parse_mode: 'MarkdownV2' }).catch(()=>{});
+        }
+        // Decide if specific rejections should trigger shutdown:
+        // if (reason_is_critical && typeof shutdown === "function") {
+        //     if (!isShuttingDown) shutdown('unhandledRejection_critical');
+        // }
+    });
+    console.log("✅ [Startup] Process handlers set up.");
+
+    // 1. Initialize Database Schema (ensure initializeDatabase is defined)
     await initializeDatabase();
     console.log("Main Bot: Database initialization sequence completed.");
 
-    // 2. Connect to Telegram and get Bot Info
+    // 2. Connect to Telegram and Get Bot Info / Setup Listeners
     try {
         console.log("Main Bot: Connecting to Telegram...");
-        const me = await bot.getMe();
-        console.log(`✅ Successfully connected to Telegram! Bot Name: @${me.username}, Bot ID: ${me.id}`);
+        // Set up listeners *before* potentially starting polling/webhook
+        // Ensure bot exists
+        if (bot) {
+            // Polling Error Handler (Integrates Retry and Fatal Error Shutdown)
+            // Ensure attemptRestartPolling and shutdown are defined
+            bot.on('polling_error', async (error) => {
+                 console.error(`\n🚫 MAIN BOT TELEGRAM POLLING ERROR 🚫 Code: ${error.code || 'N/A'} | Message: ${error.message}`);
+                 // CRITICAL: Check for 409 Conflict FIRST
+                 if (String(error.message).includes('409 Conflict')) {
+                      console.error("FATAL: 409 Conflict detected. Another bot instance is running. Shutting down THIS instance.");
+                       // Check functions/variables before notifying/shutting down
+                       if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+                           await safeSendMessage(ADMIN_USER_ID, `🚨 BOT CONFLICT (409): Instance on host ${process.env.HOSTNAME || 'local'} shutting down. Ensure only one instance runs per token. Error: ${escapeMarkdownV2(String(error.message || error))}`, {parse_mode: 'MarkdownV2'}).catch(()=>{});
+                       }
+                       if (!isShuttingDown && typeof shutdown === 'function') {
+                            startShutdownWatchdog('POLLING_409_ERROR');
+                            shutdown('POLLING_409_ERROR').catch(() => process.exit(1)); // Trigger shutdown
+                       }
+                 } else if (String(error.code).includes('EFATAL')) { // Handle other fatal errors
+                      console.error("FATAL POLLING ERROR (EFATAL): Not attempting retry. Shutting down.", error);
+                       // Check functions/variables before notifying/shutting down
+                       if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+                           await safeSendMessage(ADMIN_USER_ID, `🚨 BOT FATAL ERROR (EFATAL): Polling stopped. Check token/config. Shutting down. Error: ${escapeMarkdownV2(error.message)}`, {parse_mode: 'MarkdownV2'}).catch(()=>{});
+                       }
+                       if (!isShuttingDown && typeof shutdown === 'function') {
+                           startShutdownWatchdog('POLLING_FATAL_ERROR');
+                           shutdown('POLLING_FATAL_ERROR').catch(() => process.exit(1)); // Trigger shutdown
+                       }
+                 } else {
+                      // Attempt to restart polling for potentially recoverable errors
+                      if (typeof attemptRestartPolling === 'function') {
+                           attemptRestartPolling(error);
+                      } else {
+                           console.error("Cannot attempt polling retry: attemptRestartPolling function not found.");
+                      }
+                 }
+            });
 
-        // 3. Notify Admin (if configured)
-        if (ADMIN_USER_ID) {
-            await safeSendMessage(ADMIN_USER_ID, `🎉 Bot v${BOT_VERSION} (DB Dice Roll Mode) started! Polling active. Host: ${process.env.HOSTNAME || 'local'}.`, { parse_mode: 'MarkdownV2' });
+            // Optional: Add other bot event listeners if needed
+            // bot.on('webhook_error', (error) => { ... });
+            bot.on('error', async (error) => { // General non-polling errors from the library
+                 console.error('\n🔥 MAIN BOT GENERAL TELEGRAM LIBRARY ERROR EVENT 🔥:', error);
+                  // Check functions/variables before notifying
+                  if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+                     await safeSendMessage(ADMIN_USER_ID, `⚠️ BOT LIBRARY ERROR\n${escapeMarkdownV2(error.message || String(error))}`, {parse_mode: 'MarkdownV2'}).catch(()=>{});
+                 }
+            });
+
+            console.log("✅ [Startup] Telegram event listeners attached.");
+
+            // Get Bot Info (after listeners are attached)
+            // Ensure bot.getMe exists
+            const me = await bot.getMe();
+            console.log(`✅ Successfully connected to Telegram! Bot Name: @${me.username}, Bot ID: ${me.id}`);
+
+            // 3. Notify Admin (if configured)
+            // Check functions/variables before notifying
+            if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof BOT_VERSION !== 'undefined') {
+                await safeSendMessage(ADMIN_USER_ID, `🎉 Bot v${BOT_VERSION} (DB Dice Roll Mode) started! PID: ${process.pid}. Host: ${process.env.HOSTNAME || 'local'}. Polling active.`, { parse_mode: 'MarkdownV2' });
+            }
+            console.log(`\n🎉 Main Bot operational! Waiting for messages...`);
+
+            // 4. Optional: Run background tasks once shortly after startup or start interval
+            // Ensure runPeriodicBackgroundTasks exists if uncommenting
+            // setTimeout(runPeriodicBackgroundTasks, 15000); // Run 15s after start
+            // backgroundTaskInterval = setInterval(runPeriodicBackgroundTasks, 15 * 60 * 1000); // Start periodic task
+
+        } else {
+             throw new Error("Telegram bot instance ('bot') failed to initialize.");
         }
-        console.log(`\n🎉 Main Bot operational! Waiting for messages...`);
-
-        // 4. Optional: Run background tasks once shortly after startup
-        // setTimeout(runPeriodicBackgroundTasks, 15000); // Run 15s after start
 
     } catch (error) {
-        console.error("❌ CRITICAL STARTUP ERROR (Main Bot: getMe or DB Init earlier):", error);
-        if (ADMIN_USER_ID && BOT_TOKEN) { // Attempt to notify admin even on critical failure
-            // Create a temporary, non-polling bot instance for notification
+        console.error("❌ CRITICAL STARTUP ERROR (Main Bot: getMe or Listener Setup):", error);
+        // Check functions/variables before notifying
+        if (ADMIN_USER_ID && BOT_TOKEN && typeof escapeMarkdownV2 === 'function') {
+            // Need TelegramBot constructor if creating temporary bot
+            // Ensure TelegramBot is imported: import TelegramBot from 'node-telegram-bot-api';
             try {
-                const tempBot = new TelegramBot(BOT_TOKEN, {}); // No polling
+                const tempBot = new TelegramBot(BOT_TOKEN, {}); // No polling for temp bot
                 await tempBot.sendMessage(ADMIN_USER_ID, `🆘 CRITICAL STARTUP FAILURE Main Bot v${BOT_VERSION}:\n${escapeMarkdownV2(error.message)}\nBot is exiting. Check logs.`, {parse_mode:'MarkdownV2'}).catch(() => {});
             } catch (tempBotError) {
-                console.error("Main Bot: Failed to create temporary bot for failure notification:", tempBotError);
+                console.error("Main Bot: Failed create temp bot for failure notification:", tempBotError);
             }
         }
-        // If initializeDatabase failed, process.exit(2) might have already been called.
-        // If getMe failed or other critical error, exit with code 1.
-        if (process.exitCode === undefined || process.exitCode === 0) {
-            process.exit(1); // Ensure exit if not already exiting
+        // Ensure exit if we reach here due to startup failure
+        // Check function exists
+        if (!isShuttingDown && typeof startShutdownWatchdog === 'function') {
+            startShutdownWatchdog('STARTUP_FAILURE');
+            process.exit(1); // Ensure exit
+        } else if (!isShuttingDown) {
+             // Fallback if watchdog timer isn't available
+             console.error("Startup failed, forcing exit.");
+             process.exit(1);
         }
     }
 } // End main() function
 
 // --- Final Execution: Start the Bot ---
+// Ensure main and startShutdownWatchdog exist
 main().catch(error => {
-    // This catches errors from the main async function itself if something goes wrong
-    // that isn't handled within main's try/catch (e.g., an await outside try/catch).
     console.error("❌ MAIN ASYNC FUNCTION UNHANDLED ERROR (Should not happen if main() has good try/catch):", error);
+    if (typeof startShutdownWatchdog === 'function') {
+         startShutdownWatchdog('MAIN_CATCH');
+    }
     process.exit(1); // Exit if the main promise chain fails catastrophically
 });
 
 console.log("Main Bot: End of index.js script. Bot startup process initiated.");
-// --- END OF index.js ---
+// --- END OF index.js (Part 6 and Startup) ---
+// --- End of Part 6 ---
