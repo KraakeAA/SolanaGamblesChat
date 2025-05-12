@@ -1143,26 +1143,34 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
         const helperName = DICES_HELPER_BOT_ID ? `Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : (DICES_HELPER_BOT_USERNAME && DICES_HELPER_BOT_USERNAME !== "YourDiceHelperBotUsername" ? `@${DICES_HELPER_BOT_USERNAME}` : "the configured Dice Helper");
         const promptMsg = `${gameData.initiatorMention}, please send the 🎲 emoji now to have ${helperName} determine your roll.`;
 
+        // --- FIX: Manually escape the period in the waiting message ---
+        // Note the '\\.' - the first backslash escapes the second one in the JS string,
+        // so Telegram receives a single backslash followed by the period.
+        const waitingMsg = "_Waiting for roll from helper\\._";
+        const textToSend = escapeMarkdownV2(promptMsg) + "\n\n" + waitingMsg;
+        // --- End FIX ---
+
         // Edit the message to show the prompt and remove buttons
         const editOpts = { chat_id: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} }; // Remove keyboard
-        console.log('[DEBUG_DE_ROLL_PROMPT] Preparing to edit message. ChatID value:', editOpts.chat_id, 'interactionMessageId (messageIdToUpdate) value:', editOpts.message_id); // Enhanced log
-        console.log('[DEBUG_DE_ROLL_PROMPT] editOptions:', JSON.stringify(editOpts)); // Keep for debugging structure
+        console.log('[DEBUG_DE_ROLL_PROMPT] Preparing to edit message. ChatID value:', editOpts.chat_id, 'interactionMessageId (messageIdToUpdate) value:', editOpts.message_id);
+        console.log('[DEBUG_DE_ROLL_PROMPT] editOptions:', JSON.stringify(editOpts));
 
         try {
-            await bot.editMessageText(escapeMarkdownV2(promptMsg) + "\n\n_Waiting for roll from helper..._", editOpts);
+            // Send the combined, appropriately escaped text
+            await bot.editMessageText(textToSend, editOpts);
             console.log(`[DE_ACTION] Prompted user ${userId} for roll via helper for game ${gameId}.`);
         } catch (error) {
              console.error(`[DE_ACTION_ERR] Failed to edit message ${msgIdToUpdate} to prompt roll for game ${gameId}: ${error.message}`);
-             // Attempt to send a new message if edit fails
-             await safeSendMessage(String(chatId), escapeMarkdownV2(promptMsg) + "\n\n_Waiting for roll from helper... (Error updating original message)_", { parse_mode: 'MarkdownV2'});
-             // Should we revert status? Maybe not, player was prompted.
+             // Attempt to send a new message if edit fails - use the corrected text here too
+             // We remove the manual escape for _ since safeSendMessage might handle differently or use default parse mode
+             const fallbackText = escapeMarkdownV2(promptMsg) + "\n\n_Waiting for roll from helper._";
+             await safeSendMessage(String(chatId), fallbackText + " (Error editing message)", { parse_mode: 'MarkdownV2'}); // Try safeSendMessage
         }
 
          // Add timeout for helper roll? If helper doesn't respond in X seconds, cancel/refund?
          // setTimeout(() => handleDiceEscalatorHelperTimeout(gameId), DICE_ESCALATOR_TIMEOUT_MS);
 
-
-    } else if (actionType === 'cashout') {
+    } else if (actionType === 'cashout') { // Keep the rest of the function ('cashout' part) as it was
         // Check if score is > 0 for cashout
         if (gameData.playerScore <= 0) {
             await safeSendMessage(userId, "You cannot cash out with a score of 0.", {});
@@ -1176,7 +1184,6 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
         gameData.status = 'player_cashed_out'; // Update status
         activeGames.set(gameId, gameData); // Save state
 
-
         let msg = `${gameData.initiatorMention} cashed out with a score of *${escapeMarkdownV2(String(score))}*!\nTotal credited: ${escapeMarkdownV2(formatCurrency(totalReturn))}.`;
         msg += `\n\n🤖 Now it's the Bot's turn. Target: Beat *${escapeMarkdownV2(String(score))}*...`;
 
@@ -1188,11 +1195,9 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
              await safeSendMessage(String(chatId), msg, { parse_mode: 'MarkdownV2'}); // Send new if edit fails
         }
 
-
         await sleep(2000); // Pause before bot plays
         await processDiceEscalatorBotTurn(gameData, msgIdToUpdate); // Start bot's turn
     }
-}
 
 // --- User Request Step 4: Enhanced processDiceEscalatorPlayerRoll ---
 async function processDiceEscalatorPlayerRoll(gameData, playerRoll) {
