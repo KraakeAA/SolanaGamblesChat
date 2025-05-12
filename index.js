@@ -630,19 +630,29 @@ async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount,
 
 async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, interactionMessageId, chatId) {
     const gameData = activeGames.get(gameId);
+
     // Validate gameData and user turn/status
-    if (!gameData || 
-        gameData.chatId !== String(chatId) || 
-        gameData.type !== 'dice_escalator' || 
-        gameData.currentPlayerId !== String(userId) || 
+    if (!gameData ||
+        gameData.chatId !== String(chatId) ||
+        gameData.type !== 'dice_escalator' ||
+        gameData.currentPlayerId !== String(userId) ||
         gameData.status !== 'player_turn_prompt_action') {
-        await safeSendMessage(userId, "It's not your turn, this game isn't active, or the action is unavailable right now.", {});
+
+        await safeSendMessage(userId, "It's not your turn, this game isn't active, or that action isn't available right now.", {});
         // Attempt to remove buttons if the message ID is known and the game state is inconsistent
         if (interactionMessageId && gameData && gameData.chatId === String(chatId)) {
              bot.editMessageReplyMarkup({}, {chat_id: String(chatId), message_id: Number(interactionMessageId)}).catch(()=>{});
         }
         return;
     }
+
+    const messageIdToUpdate = Number(interactionMessageId) || Number(gameData.gameSetupMessageId);
+    if (!messageIdToUpdate) {
+        console.error(`[DE_ACTION_ERR] No messageId available to update for game ${gameId}, action ${actionType}.`);
+        await safeSendMessage(chatId, "Error: Could not update game display. Please try starting a new game.", {});
+        return;
+    }
+
 
     if (actionType === 'roll_prompt') {
         gameData.status = 'waiting_player_roll_via_helper';
@@ -652,42 +662,38 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
             ? `the Helper Bot (ID: ${DICES_HELPER_BOT_ID})`
             : (DICES_HELPER_BOT_USERNAME && DICES_HELPER_BOT_USERNAME !== "YourDiceHelperBotUsername" ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
 
-        const promptMsg = `${gameData.initiatorMention}, please trigger ${helperBotNameToMention} to roll your dice (e.g., by typing \`/roll\` if that's its command).\n\n_Waiting for roll from helper..._`;
+        const promptMsg = `${gameData.initiatorMention}, please send the 🎲 emoji now to have ${helperBotNameToMention} determine your roll.\n\n_Waiting for roll from helper..._`;
 
-        // --- DEBUG LOGS ---
-        console.log(`[DEBUG_DE_ROLL] Preparing to edit message. ChatID type: ${typeof chatId}, ChatID value: '${chatId}'`);
-        console.log(`[DEBUG_DE_ROLL] InteractionMessageId type: ${typeof interactionMessageId}, Value: '${interactionMessageId}'`);
-        console.log(`[DEBUG_DE_ROLL] GameData initiatorMention: ${gameData.initiatorMention}`);
-        // --- END DEBUG LOGS ---
+        console.log(`[DEBUG_DE_ROLL_PROMPT] Preparing to edit message. ChatID type: ${typeof chatId}, ChatID value: '${chatId}'`);
+        console.log(`[DEBUG_DE_ROLL_PROMPT] MessageIdToUpdate type: ${typeof messageIdToUpdate}, Value: '${messageIdToUpdate}'`);
+        console.log(`[DEBUG_DE_ROLL_PROMPT] GameData initiatorMention: ${gameData.initiatorMention}`);
 
-        // Ensure the options object is correctly structured for editMessageText
         const editOptions = {
-            chat_id: String(chatId), // Use 'chat_id' (snake_case) as per Telegram Bot API
-            message_id: Number(interactionMessageId),
+            chat_id: String(chatId),
+            message_id: Number(messageIdToUpdate),
             parse_mode: 'MarkdownV2',
             reply_markup: {} // Remove buttons while waiting for helper
         };
-
-        console.log('[DEBUG_DE_ROLL] editOptions:', JSON.stringify(editOptions)); // Log the options object
-
-        await bot.editMessageText(escapeMarkdownV2(promptMsg), editOptions); // Pass the structured options
+        console.log('[DEBUG_DE_ROLL_PROMPT] editOptions:', JSON.stringify(editOptions));
+        await bot.editMessageText(escapeMarkdownV2(promptMsg), editOptions);
 
     } else if (actionType === 'cashout') {
         const cashedOutScore = gameData.playerScore; // This is the net profit for the round
-        const totalReturnToPlayer = gameData.betAmount + cashedOutScore;
+        const totalReturnToPlayer = gameData.betAmount + cashedOutScore; // Return original bet + profit
 
         await updateUserBalance(userId, totalReturnToPlayer, `cashout_dice_escalator_player:${gameId}`, chatId);
-        
-        let cashoutMessage = `${gameData.initiatorMention} cashed out with a score of *${escapeMarkdownV2(String(cashedOutScore))}* credits, winning ${escapeMarkdownV2(formatCurrency(cashedOutScore))} (plus original bet of ${escapeMarkdownV2(formatCurrency(gameData.betAmount))} returned)! Your new balance is being updated.`;
-        gameData.status = 'player_cashed_out'; 
+
+        let cashoutMessage = `${gameData.initiatorMention} cashed out with a score of *${escapeMarkdownV2(String(cashedOutScore))}* credits! Your original bet of ${escapeMarkdownV2(formatCurrency(gameData.betAmount))} plus ${escapeMarkdownV2(formatCurrency(cashedOutScore))} winnings have been credited.`;
+        gameData.status = 'player_cashed_out';
         activeGames.set(gameId, gameData); // Save status
 
-        cashoutMessage += `\n\n🤖 Now it's the Bot's turn to try and beat your score of ${escapeMarkdownV2(String(cashedOutScore))}!`;
-        await bot.editMessageText(cashoutMessage, { chatId: String(chatId), message_id: Number(interactionMessageId), parse_mode: 'MarkdownV2', reply_markup: {} });
+        cashoutMessage += `\n\n🤖 Now it's the Bot's turn to try and beat your score of *${escapeMarkdownV2(String(cashedOutScore))}*!`;
+        await bot.editMessageText(cashoutMessage, { chatId: String(chatId), message_id: Number(messageIdToUpdate), parse_mode: 'MarkdownV2', reply_markup: {} });
         await sleep(2000); // Pause before bot plays
-        await processDiceEscalatorBotTurn(gameData, Number(interactionMessageId));
+        await processDiceEscalatorBotTurn(gameData, Number(messageIdToUpdate));
     } else {
         console.warn(`[DE_ACTION_ERR] Unknown actionType: ${actionType} for game ${gameId}`);
+        await safeSendMessage(userId, "Unknown action selected.", {});
     }
 }
 
