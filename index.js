@@ -400,7 +400,7 @@ async function updateGroupGameDetails(chatId, gameId, gameType, betAmount) {
 console.log("Part 2: Database Operations & Data Management - Complete.");
 
 // --- End of Part 2 ---
-//---------------------------------------------------------------------------
+// --- Start of Part 3 ---
 // index.js - Part 3: Telegram Helpers & Basic Game Utilities
 //---------------------------------------------------------------------------
 console.log("Loading Part 3: Telegram Helpers & Basic Game Utilities...");
@@ -460,22 +460,12 @@ function generateGameId() {
     return `game_${timestamp}_${randomSuffix}`;
 }
 
-// Simple asynchronous sleep function
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 // --- Dice Display Utilities ---
 
-// Map of dice roll values to their static Unicode emoji representation (can be kept for internal logic or other display needs)
-const diceEmojis = {
-    1: '⚀', // U+2680
-    2: '⚁', // U+2681
-    3: '⚂', // U+2682
-    4: '⚃', // U+2683
-    5: '⚄', // U+2684
-    6: '⚅'  // U+2685
-};
+// *** The 'diceEmojis' constant has been removed. ***
 
 // Formats an array of dice roll numbers into a string with a generic dice emoji and the number
+// This function is kept as it provides the "🎲 5" style formatting.
 function formatDiceRolls(rolls) {
     if (!Array.isArray(rolls) || rolls.length === 0) return '';
     // Using generic dice emoji + number for each roll
@@ -493,7 +483,7 @@ function rollDie(sides = 6) {
 
 console.log("Part 3: Telegram Helpers & Basic Game Utilities - Complete.");
 // --- End of Part 3 ---
-//---------------------------------------------------------------------------
+// --- Start of Part 4 ---
 // index.js - Part 4: Simplified Game Logic
 //---------------------------------------------------------------------------
 console.log("Loading Part 4: Simplified Game Logic...");
@@ -502,18 +492,26 @@ console.log("Loading Part 4: Simplified Game Logic...");
 function determineCoinFlipOutcome() {
     const isHeads = Math.random() < 0.5; // 50% chance for heads
     return isHeads
-           ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' }
-           : { outcome: 'tails', outcomeString: "Tails", emoji: '🪙' };
+            ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' }
+            : { outcome: 'tails', outcomeString: "Tails", emoji: '🪙' };
 }
 
 // --- Dice Logic (Internal for Bot's Turn) ---
 // Determines the outcome for the BOT's internal rolls (e.g., in Dice Escalator)
 // Uses the internal rollDie function defined in Part 3.
 function determineDieRollOutcome(sides = 6) {
+    // Ensure rollDie function is defined (expected in Part 3)
+    if (typeof rollDie !== 'function') {
+         console.error("[determineDieRollOutcome] Error: rollDie function is not defined.");
+         // Return a default or throw an error
+         return { roll: 1 }; // Default fallback roll
+    }
     sides = Number.isInteger(sides) && sides > 0 ? sides : 6; // Ensure valid sides
     const roll = rollDie(sides); // Use the internal function
-    // Use the diceEmojis map defined in Part 3 for display
-    return { roll: roll, emoji: diceEmojis[roll] || `🎲(${roll})` };
+    // --- THIS LINE IS UPDATED ---
+    return { roll: roll }; // <<< Updated line: Just return the roll number
+                           // The emoji part was removed as diceEmojis constant was deleted.
+                           // Display formatting is handled by formatDiceRolls in Part 3/5b.
 }
 
 // Constant defining the losing roll in Dice Escalator
