@@ -1,6 +1,6 @@
 {
   "name": "group-chat-casino-bot",
-  "version": "1.0.0-group",
+  "version": "2.0.2-db-dice-roll-full-complete",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "pg": "^8.11.5"
   },
   "engines": {
     "node": ">=18.x"
