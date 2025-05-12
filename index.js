@@ -277,104 +277,80 @@ bot.on('message', async (msg) => {
         console.log(`[RAW_MSG_INPUT] Received message. Text: "${msg.text || 'N/A'}", From ID: ${msg.from.id}, From Username: @${msg.from.username || 'N/A'}, Is Bot: ${msg.from.is_bot}`);
     } else if (msg) {
         console.log(`[RAW_MSG_INPUT] Received message with no 'from' field:`, JSON.stringify(msg).substring(0, 200));
+        return; // Can't process if no 'from'
     } else {
         console.log("[RAW_MSG_INPUT] Received an undefined 'msg' object in message handler.");
-        return; // Can't do anything with an undefined message
+        return;
     }
     // --- END TEMPORARY RAW MESSAGE LOG ---
 
+    // Simplified initial guard:
+    if (!msg.from) return; // Already handled by RAW_MSG_INPUT, but good to keep.
 
-    // Initial guard: We need 'msg.from' to identify the sender.
-    if (!msg.from) {
-        return;
-    }
-
-    // If the message is from any bot (including self, or the helper bot)
-    if (msg.from.is_bot) {
-        const isFromConfiguredHelperBotById = DICES_HELPER_BOT_ID && String(msg.from.id) === DICES_HELPER_BOT_ID;
-        const isFromConfiguredHelperBotByUsername = !DICES_HELPER_BOT_ID && DICES_HELPER_BOT_USERNAME && msg.from.username === DICES_HELPER_BOT_USERNAME;
-
-        if (!(isFromConfiguredHelperBotById || isFromConfiguredHelperBotByUsername)) {
-            // console.log(`[MSG_IGNORE] Ignoring message from other bot: @${msg.from.username || msg.from.id}`);
-            return;
-        }
-        if (!msg.text) { // Helper bot message MUST have text (the number)
-            console.log(`[MSG_IGNORE] Message from Helper Bot (@${msg.from.username || msg.from.id}) ignored: No text content.`);
-            return;
-        }
-    } else { // From a human
-        if (!msg.text) {
-            // console.log(`[MSG_IGNORE] Message from human user ${msg.from.id} ignored: No text content.`);
-            return;
-        }
-    }
-
-    const userId = String(msg.from.id);
+    const userId = String(msg.from.id); // This will be helper's ID if from helper, or user's ID
     const chatId = String(msg.chat.id);
-    const text = msg.text || ""; // Ensure text is always a string
+    const text = msg.text || "";
     const chatType = msg.chat.type;
     const messageId = msg.message_id;
 
-    // Log user messages here. Helper messages logged in their specific block.
-    if (!msg.from.is_bot) {
-        console.log(`[MSG RCV] Chat: ${chatId} (Type: ${chatType}), User: ${userId} (@${msg.from.username || 'N/A'}), Text: "${text}"`);
-    }
+    // --- VERY DIRECT HELPER BOT ID CHECK ---
+    // Ensure DICES_HELPER_BOT_ID is defined and holds the correct ID string in your env.
+    if (DICES_HELPER_BOT_ID && String(msg.from.id) === DICES_HELPER_BOT_ID) {
+        console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Message IS from configured Helper Bot ID: ${DICES_HELPER_BOT_ID}. Text: "${text}"`);
 
-    // Cooldown Check (only for user-initiated commands starting with '/')
-    const now = Date.now();
-    if (!msg.from.is_bot && text.startsWith('/') && userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
-        console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored due to cooldown.`);
-        return;
-    }
-
-    // --- Check if this message is specifically from our configured DicesHelperBot ---
-    const isFromHelperBotById = DICES_HELPER_BOT_ID && String(msg.from.id) === DICES_HELPER_BOT_ID;
-    const isFromHelperBotByUsername = !DICES_HELPER_BOT_ID && DICES_HELPER_BOT_USERNAME && msg.from.username === DICES_HELPER_BOT_USERNAME;
-
-    if (isFromHelperBotById || isFromHelperBotByUsername) {
-        console.log(`[HELPER_MSG_DETECTED] Message from DicesHelperBot (User ID: ${msg.from.id}, Username: @${msg.from.username || 'N/A'}) in chat ${chatId}. Text: "${text}"`);
-
-        const gameSession = await getGroupSession(chatId); // From Part 2
-        console.log(`[HELPER_MSG_DETECTED] Current gameSession for chat ${chatId}:`, gameSession ? `GameID: ${gameSession.currentGameId}, Type: ${gameSession.currentGameType}` : "No active gameSession object for this chat.");
-
+        // Now, let's just log the game state without immediately trying to process the roll,
+        // to ensure this block is even being entered.
+        const gameSession = await getGroupSession(chatId);
         if (gameSession && gameSession.currentGameId && activeGames.has(gameSession.currentGameId)) {
             const gameData = activeGames.get(gameSession.currentGameId);
-            console.log(`[HELPER_MSG_DETECTED] GameData for ${gameSession.currentGameId}: Type: ${gameData.type}, Status: ${gameData.status}, CurrentPlayer (human): ${gameData.currentPlayerId}`);
+            console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Active Game Data: Type=${gameData.type}, Status=${gameData.status}, Player=${gameData.currentPlayerId}`);
 
-            if (gameData.type === 'dice_escalator' &&
-                gameData.status === 'waiting_player_roll_via_helper' &&
-                gameData.currentPlayerId) { // currentPlayerId is the ID of the HUMAN player who was prompted
-
+            // Minimal processing attempt:
+            if (gameData.type === 'dice_escalator' && gameData.status === 'waiting_player_roll_via_helper') {
                 const rollValue = parseInt(text.trim(), 10);
-                if (!isNaN(rollValue) && rollValue >= 1 && rollValue <= 6) { // Assuming D6
-                    console.log(`[HELPER_ROLL_VALID] Helper bot rolled ${rollValue}. This roll is for human player ${gameData.currentPlayerId} in game ${gameData.gameId}`);
-                    // It's important that processDiceEscalatorPlayerRoll uses gameData.gameSetupMessageId to edit messages
-                    await processDiceEscalatorPlayerRoll(gameData, rollValue);
+                if (!isNaN(rollValue)) {
+                    console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Parsed roll value: ${rollValue}. Would call processDiceEscalatorPlayerRoll.`);
+                    // For now, just log. We can uncomment the actual call later.
+                    // await processDiceEscalatorPlayerRoll(gameData, rollValue);
                 } else {
-                    console.warn(`[HELPER_ROLL_ERR] Could not parse roll value "${text}" from helper bot for game ${gameData.gameId}. Expected a plain number.`);
-                    const helperBotName = DICES_HELPER_BOT_ID ? `Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : (DICES_HELPER_BOT_USERNAME ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
-                    // Notify the player whose turn it was
-                    await safeSendMessage(gameData.currentPlayerId, `There was an issue reading the roll ("${escapeMarkdownV2(text)}") from ${helperBotName}. Please click 'Prompt Roll' again if you wish to retry.`, {parse_mode: 'MarkdownV2'});
+                    console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Helper text "${text}" is not a number.`);
                 }
             } else {
-                 console.log(`[HELPER_MSG_STATE_MISMATCH] Helper message received, but game state is not expecting it for game ${gameSession.currentGameId}. GameType: ${gameData.type}, Status: ${gameData.status}, ExpectedPlayer (human): ${gameData.currentPlayerId}`);
+                console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Game state not ready for helper roll (Type: ${gameData.type}, Status: ${gameData.status})`);
             }
+
         } else {
-            console.log(`[HELPER_MSG_NO_GAME] Helper message received, but no active game session for chat ${chatId} or gameId ${gameSession ? gameSession.currentGameId : 'N/A'} not found in activeGames map.`);
+            console.log(`[DIRECT_HELPER_CHECK_SUCCESS] No active game found for this chat/gameId when helper message arrived.`);
         }
-        return; // IMPORTANT: Stop further processing for helper bot messages
+        return; // ALWAYS return after processing a helper message to avoid falling into user command logic.
+    }
+    // --- END OF VERY DIRECT HELPER BOT ID CHECK ---
+
+    // If it's not the helper bot, log user messages and check cooldowns etc.
+    if (!msg.from.is_bot) { // Only log and apply cooldown for human users
+        console.log(`[MSG RCV] User: ${userId} (@${msg.from.username || 'N/A'}), Chat: ${chatId}, Text: "${text}"`);
+        const now = Date.now();
+        if (text.startsWith('/') && userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
+            console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored.`);
+            return;
+        }
+        if (text.startsWith('/')) {
+            userCooldowns.set(userId, now);
+        }
     }
 
 
-    // --- Process User Commands (if not from helper bot and starts with '/') ---
-    if (text.startsWith('/')) {
-        userCooldowns.set(userId, now); // Update cooldown *after* passing helper check and confirming it's a command
-        const args = text.substring(1).split(' ');
-        const command = args.shift().toLowerCase();
-        console.log(`[CMD RCV] Chat: ${chatId}, User: ${userId}, Command: /${command}, Args: ${args.join(' ')}`);
-        await getUser(userId, msg.from.username); // Ensure user exists in our system
+    // User Commands (if not from helper bot and starts with '/')
+    if (text.startsWith('/') && !msg.from.is_bot) { // Added !msg.from.is_bot here again to be safe
+        // const args = text.substring(1).split(' '); // Already did this above
+        // const command = args.shift().toLowerCase();
+        const commandArgs = text.substring(1).split(' ');
+        const commandName = commandArgs.shift().toLowerCase();
 
-        switch (command) {
+        console.log(`[CMD RCV] Chat: ${chatId}, User: ${userId}, Command: /${commandName}, Args: ${commandArgs.join(' ')}`);
+        await getUser(userId, msg.from.username);
+
+        switch (commandName) { // Changed 'command' to 'commandName' for clarity
             case 'start':
             case 'help':
                 await handleHelpCommand(chatId, msg.from);
@@ -383,35 +359,34 @@ bot.on('message', async (msg) => {
             case 'bal':
                 await handleBalanceCommand(chatId, msg.from);
                 break;
+            // ... (rest of your switch(commandName) for user commands)
             case 'startcoinflip':
-                 if (chatType !== 'private') { // Ensure it's a group or supergroup
-                    let betAmountCF = args[0] ? parseInt(args[0],10) : 10; // Default bet
+                 if (chatType !== 'private') {
+                    let betAmountCF = commandArgs[0] ? parseInt(commandArgs[0],10) : 10;
                     if (isNaN(betAmountCF) || betAmountCF < MIN_BET_AMOUNT || betAmountCF > MAX_BET_AMOUNT) {
-                         await safeSendMessage(chatId, `Invalid bet. Amount must be between ${MIN_BET_AMOUNT} and ${MAX_BET_AMOUNT}. Usage: \`/startcoinflip <amount>\``, { parse_mode: 'MarkdownV2' });
-                         return;
+                         await safeSendMessage(chatId, `Invalid bet. Amount: ${MIN_BET_AMOUNT}-${MAX_BET_AMOUNT}. Usage: \`/startcoinflip <amount>\``, { parse_mode: 'MarkdownV2' }); return;
                     }
                     await handleStartGroupCoinFlipCommand(chatId, msg.from, betAmountCF, messageId);
                  } else {
-                    await safeSendMessage(chatId, "This Coinflip game is designed for group chats.", {});
+                    await safeSendMessage(chatId, "This Coinflip is for groups!");
                  }
                 break;
             case 'startrps':
-                 if (chatType !== 'private') { // Ensure it's a group or supergroup
-                    let betAmountRPS = args[0] ? parseInt(args[0],10) : 10; // Default bet
+                 if (chatType !== 'private') {
+                    let betAmountRPS = commandArgs[0] ? parseInt(commandArgs[0],10) : 10;
                     if (isNaN(betAmountRPS) || betAmountRPS < MIN_BET_AMOUNT || betAmountRPS > MAX_BET_AMOUNT) {
-                        await safeSendMessage(chatId, `Invalid bet. Amount must be between ${MIN_BET_AMOUNT} and ${MAX_BET_AMOUNT}. Usage: \`/startrps <amount>\``, { parse_mode: 'MarkdownV2' });
-                        return;
+                        await safeSendMessage(chatId, `Invalid bet. Amount: ${MIN_BET_AMOUNT}-${MAX_BET_AMOUNT}. Usage: \`/startrps <amount>\``, { parse_mode: 'MarkdownV2' }); return;
                     }
                     await handleStartGroupRPSCommand(chatId, msg.from, betAmountRPS, messageId);
                  } else {
-                    await safeSendMessage(chatId, "This Rock Paper Scissors game is designed for group chats.", {});
+                    await safeSendMessage(chatId, "This Rock Paper Scissors game is for group chats.", {});
                  }
                 break;
-            case 'startdiceescalator': // Ensure command is one word
+            case 'startdiceescalator':
                 if (chatType === 'group' || chatType === 'supergroup') {
-                    let betAmountDE = args[0] ? parseInt(args[0], 10) : 10;
+                    let betAmountDE = commandArgs[0] ? parseInt(commandArgs[0], 10) : 10;
                     if (isNaN(betAmountDE) || betAmountDE < MIN_BET_AMOUNT || betAmountDE > MAX_BET_AMOUNT) {
-                        await safeSendMessage(chatId, `Invalid bet for Dice Escalator. Amount must be between ${MIN_BET_AMOUNT} and ${MAX_BET_AMOUNT}. Usage: \`/startdiceescalator <amount>\``, { parse_mode: 'MarkdownV2' });
+                        await safeSendMessage(chatId, `Invalid bet for Dice Escalator. Amount: ${MIN_BET_AMOUNT}-${MAX_BET_AMOUNT}. Usage: \`/startdiceescalator <amount>\``, { parse_mode: 'MarkdownV2' });
                         return;
                     }
                     await handleStartDiceEscalatorCommand(chatId, msg.from, betAmountDE, messageId);
@@ -420,15 +395,11 @@ bot.on('message', async (msg) => {
                 }
                 break;
             default:
-                // Only send "Unknown command" if it's a group where the bot might be expected to have more commands,
-                // or if it's a private chat. For general group messages not starting with a known command,
-                // it's better to stay silent unless the bot is explicitly mentioned or involved in an active game.
                 if (chatType === 'private' || ((chatType === 'group' || chatType === 'supergroup') && text.startsWith('/'))) {
                     await safeSendMessage(chatId, "Unknown command. Try /help.", {});
                 }
         }
     }
-    // Non-command messages from users are ignored by this point unless specific stateful input handling is added later.
 });
 
 // --- Callback Query Handler ---
