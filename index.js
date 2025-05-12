@@ -648,22 +648,30 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
         gameData.status = 'waiting_player_roll_via_helper';
         activeGames.set(gameId, gameData); // Save state change
 
-        const helperBotNameToMention = DICES_HELPER_BOT_ID 
-            ? `the Helper Bot (ID: ${DICES_HELPER_BOT_ID})` 
-            : (DICES_HELPER_BOT_USERNAME !== "YourDiceHelperBotUsername" ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
-        
-        const promptMsg = `${gameData.initiatorMention}, please trigger ${helperBotNameToMention} to roll your dice (e.g., by typing \`/roll\` if that's its command).\n\n_Waiting for roll from helper..._`;
-        
-        console.log(`[DEBUG_DE_ROLL_PROMPT] Preparing to edit message. ChatID type: ${typeof chatId}, ChatID value: '${chatId}'`);
-        console.log(`[DEBUG_DE_ROLL_PROMPT] InteractionMessageId type: ${typeof interactionMessageId}, Value: '${interactionMessageId}'`);
-        console.log(`[DEBUG_DE_ROLL_PROMPT] GameData initiatorMention: ${gameData.initiatorMention}`);
+        const helperBotNameToMention = DICES_HELPER_BOT_ID
+            ? `the Helper Bot (ID: ${DICES_HELPER_BOT_ID})`
+            : (DICES_HELPER_BOT_USERNAME && DICES_HELPER_BOT_USERNAME !== "YourDiceHelperBotUsername" ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
 
-        await bot.editMessageText(escapeMarkdownV2(promptMsg), { 
-            chatId: String(chatId), 
-            message_id: Number(interactionMessageId), 
-            parse_mode: 'MarkdownV2', 
+        const promptMsg = `${gameData.initiatorMention}, please trigger ${helperBotNameToMention} to roll your dice (e.g., by typing \`/roll\` if that's its command).\n\n_Waiting for roll from helper..._`;
+
+        // --- DEBUG LOGS ---
+        console.log(`[DEBUG_DE_ROLL] Preparing to edit message. ChatID type: ${typeof chatId}, ChatID value: '${chatId}'`);
+        console.log(`[DEBUG_DE_ROLL] InteractionMessageId type: ${typeof interactionMessageId}, Value: '${interactionMessageId}'`);
+        console.log(`[DEBUG_DE_ROLL] GameData initiatorMention: ${gameData.initiatorMention}`);
+        // --- END DEBUG LOGS ---
+
+        // Ensure the options object is correctly structured for editMessageText
+        const editOptions = {
+            chat_id: String(chatId), // Use 'chat_id' (snake_case) as per Telegram Bot API
+            message_id: Number(interactionMessageId),
+            parse_mode: 'MarkdownV2',
             reply_markup: {} // Remove buttons while waiting for helper
-        });
+        };
+
+        console.log('[DEBUG_DE_ROLL] editOptions:', JSON.stringify(editOptions)); // Log the options object
+
+        await bot.editMessageText(escapeMarkdownV2(promptMsg), editOptions); // Pass the structured options
+
     } else if (actionType === 'cashout') {
         const cashedOutScore = gameData.playerScore; // This is the net profit for the round
         const totalReturnToPlayer = gameData.betAmount + cashedOutScore;
