@@ -1043,7 +1043,7 @@ async function handleRPSChoiceCallback(chatId, userObject, gameId, choice, inter
 // --- Dice Escalator Game Functions ---
 async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount, commandMessageId) {
     const initiatorId = String(initiatorUser.id);
-    const gameSession = await getGroupSession(chatId, msg.chat.title || "Group Chat"); // Use actual chat title
+    const gameSession = await getGroupSession(chatId, "Dice Escalator Group");
     const gameId = generateGameId();
 
     if (gameSession.currentGameId) {
