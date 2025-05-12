@@ -2,6 +2,11 @@
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
+// Ensure top-level imports are correct for ESM
+import 'dotenv/config';
+import TelegramBot from 'node-telegram-bot-api';
+import { Pool } from 'pg'; // For PostgreSQL
+
 console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities...");
 
 //---------------------------------------------------------------------------
@@ -54,6 +59,7 @@ console.log(`DB_REJECT_UNAUTHORIZED is: '${process.env.DB_REJECT_UNAUTHORIZED}' 
 const useSsl = process.env.DB_SSL === 'true';
 const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
 
+// Instantiating Pool - ESM compatible
 const pool = new Pool({
     connectionString: DATABASE_URL,
     max: parseInt(process.env.DB_POOL_MAX, 10),
@@ -63,6 +69,7 @@ const pool = new Pool({
     ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
 });
 
+// Attaching event listeners - ESM compatible
 pool.on('connect', client => {
     console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.');
 });
@@ -86,7 +93,7 @@ pool.on('error', (err, client) => {
 console.log("✅ PostgreSQL Pool created.");
 
 // --- Telegram Bot Instance ---
-// Ensure TelegramBot is imported at the top: import TelegramBot from 'node-telegram-bot-api';
+// Instantiating TelegramBot - ESM compatible
 const bot = new TelegramBot(BOT_TOKEN, { polling: true }); // Or configure for webhooks if needed
 console.log("Telegram Bot instance created and configured for polling.");
 
@@ -96,7 +103,6 @@ const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 // --- Global State Variables for Shutdown & Operation ---
 let isShuttingDown = false; // Flag to prevent multiple shutdown sequences
 // Note: SHUTDOWN_FAIL_TIMEOUT_MS is parsed from process.env above
-// Note: SHUTDOWN_QUEUE_TIMEOUT_MS is removed as queue logic is omitted for now
 
 // --- In-memory stores ---
 let activeGames = new Map(); // For active game state (Dice Escalator, Coinflip, RPS)
@@ -108,14 +114,14 @@ console.log(`Current system time: ${new Date().toISOString()}`);
 
 // --- Core Utility Functions ---
 
-// Escapes text for Telegram MarkdownV2 mode
+// Function definition - ESM compatible
 const escapeMarkdownV2 = (text) => {
     if (text === null || typeof text === 'undefined') return '';
     // Escape characters specifically required by Telegram MarkdownV2
     return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 
-// Safely sends a message, handling potential errors and length limits
+// Async function definition - ESM compatible
 async function safeSendMessage(chatId, text, options = {}) {
     // Added check to prevent sending during shutdown if needed, but admin notifications might still be desired
     // if (isShuttingDown && chatId !== ADMIN_USER_ID) {
@@ -140,6 +146,7 @@ async function safeSendMessage(chatId, text, options = {}) {
 
     // Apply escaping ONLY if MarkdownV2 is specified
     if (finalOptions.parse_mode === 'MarkdownV2') {
+        // Ensure escapeMarkdownV2 function is defined above
         messageToSend = escapeMarkdownV2(messageToSend);
         if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
              console.warn(`[safeSendMessage] Message for chat ${chatId} might still exceed length limit after escaping. Sending anyway.`);
@@ -155,6 +162,10 @@ async function safeSendMessage(chatId, text, options = {}) {
     }
 
     try {
+        // Ensure bot.sendMessage exists
+        if (typeof bot.sendMessage !== 'function') {
+             throw new Error("bot.sendMessage is not available.");
+        }
         const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
         return sentMessage;
     } catch (error) {
@@ -168,7 +179,7 @@ async function safeSendMessage(chatId, text, options = {}) {
     }
 }
 
-// Simple asynchronous sleep function (Moved from original Part 3 for self-sufficiency)
+// Function definition - ESM compatible
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities - Complete.");
