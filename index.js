@@ -1301,15 +1301,11 @@ async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate
             clearInterval(pollIntervalId); // Stop polling
             activeDbPolls.delete(gameId); // Clear polling tracker
 
-            // Handle timeout - Inform user, clean up game, maybe refund bet
-            // Ensure activeGames map exists (expected from Part 1)
             const gameData = activeGames.get(gameId);
             if (gameData) {
-                 // Ensure helper functions exist (getPlayerDisplayReference, escapeMarkdownV2, updateUserBalance, safeSendMessage, updateGroupGameDetails, queryDatabase)
-                 const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({ id: userId }) : `User ${userId}`);
+                 const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({ id: userId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName }) : `User ${userId}`);
                  const timeoutMsg = `⏳ Oh dear, ${playerRef}! We waited, but the dice roll result didn't arrive in time for game \`${escapeMarkdownV2(gameId)}\`. The game has been cancelled.`;
 
-                 // Refund only if it was the *first* roll attempt (playerScore 0) and betAmount exists
                  if (gameData.playerScore === 0 && gameData.betAmount && typeof updateUserBalance === 'function') {
                      await updateUserBalance(userId, gameData.betAmount, `refund_de_db_poll_timeout:${gameId}`, chatId)
                          .catch(e => console.error(`[DB_POLL_ERR] Failed refund on poll timeout for ${gameId}: ${e.message}`));
@@ -1317,18 +1313,11 @@ async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate
                  } else {
                      safeSendMessage(chatId, timeoutMsg + ` Your score was ${gameData.playerScore}.`, { parse_mode: 'MarkdownV2' });
                  }
-
-                 // Clean up game state
                  activeGames.delete(gameId);
-                 if (typeof updateGroupGameDetails === 'function') {
-                      await updateGroupGameDetails(chatId, null, null, null)
-                           .catch(e => console.error(`[DB_POLL_ERR] Failed updateGroupGameDetails on poll timeout for ${gameId}: ${e.message}`));
-                 }
-                 // Optionally try to delete the pending request from DB
+                 // No updateGroupGameDetails needed here as we're not managing single "current" game per chat for Dice Escalator
                  if (typeof queryDatabase === 'function') {
                       queryDatabase("DELETE FROM dice_roll_requests WHERE game_id = $1 AND status = 'pending'", [gameId]).catch(()=>{});
                  }
-
             } else {
                 console.warn(`[DB_POLL_WARN] Game ${gameId} not found in activeGames during timeout handling.`);
             }
@@ -1336,7 +1325,6 @@ async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate
         }
 
         // --- Check 2: Is the game still active and waiting? ---
-        // Ensure activeGames exists
         const currentGameData = activeGames.get(gameId);
         if (!currentGameData || currentGameData.status !== 'waiting_db_roll') {
              console.log(`[DB_POLL_STOP] Game ${gameId} is no longer active or not waiting for DB roll (Status: ${currentGameData?.status}). Stopping poll.`);
@@ -1345,15 +1333,12 @@ async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate
              return; // Exit interval callback
         }
 
-
         // --- Check 3: Query the Database ---
         try {
-            // Ensure queryDatabase function exists (expected from Part 2)
             if (typeof queryDatabase !== 'function') {
                  console.error("[DB_POLL_ERR] queryDatabase function is not available. Stopping poll.");
                  clearInterval(pollIntervalId);
                  activeDbPolls.delete(gameId);
-                 // Handle this critical error - maybe shutdown?
                  return;
             }
             const dbResult = await queryDatabase(
@@ -1366,36 +1351,24 @@ async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate
 
                 if (status === 'completed' && roll_value !== null && Number.isInteger(roll_value)) {
                     console.log(`[DB_POLL_SUCCESS] Received roll value ${roll_value} for game ${gameId}.`);
-                    clearInterval(pollIntervalId); // Stop polling
-                    activeDbPolls.delete(gameId); // Clear polling tracker
+                    clearInterval(pollIntervalId);
+                    activeDbPolls.delete(gameId);
 
-                    // --- Process the Roll ---
-                    // Ensure processDiceEscalatorPlayerRoll exists (defined later in this Part)
-                    // Pass the *latest* game data in case something changed while polling
                     const finalGameData = activeGames.get(gameId);
                      if (finalGameData && finalGameData.status === 'waiting_db_roll' && typeof processDiceEscalatorPlayerRoll === 'function') {
-                          // Optional: Update DB status to 'processed_by_bot' to prevent accidental re-processing?
-                          // queryDatabase("UPDATE dice_roll_requests SET status = 'processed_by_bot', processed_at = NOW() WHERE game_id = $1 AND status = 'completed'", [gameId]).catch(()=>{});
-
-                          // Call the function to handle the game logic with the received roll
                            await processDiceEscalatorPlayerRoll(finalGameData, roll_value, messageIdToUpdate);
                      } else if (!finalGameData || finalGameData.status !== 'waiting_db_roll') {
                           console.warn(`[DB_POLL_WARN] Game ${gameId} status changed or ended before processing roll ${roll_value}. Current Status: ${finalGameData?.status}`);
-                          // May need cleanup or refund logic here depending on game state
                      } else {
                           console.error("[DB_POLL_ERR] processDiceEscalatorPlayerRoll function is not defined. Cannot process roll.");
-                          // Handle critical error
                      }
-
                 } else if (status === 'error') {
                     console.error(`[DB_POLL_ERR] DB request for game ${gameId} has status 'error'.`);
-                    clearInterval(pollIntervalId); // Stop polling
-                    activeDbPolls.delete(gameId); // Clear polling tracker
-                    // Handle DB processing error - Inform user, clean up game, refund?
+                    clearInterval(pollIntervalId);
+                    activeDbPolls.delete(gameId);
                      const gameData = activeGames.get(gameId);
                      if(gameData) {
-                          // Ensure helper functions exist
-                          const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({ id: userId }) : `User ${userId}`);
+                          const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({ id: userId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName }) : `User ${userId}`);
                           const errorMsg = `⚙️ Uh oh, ${playerRef}! There was an issue generating the dice roll for game \`${escapeMarkdownV2(gameId)}\`. The game has been cancelled.`;
                            if (gameData.betAmount && typeof updateUserBalance === 'function') {
                                 await updateUserBalance(userId, gameData.betAmount, `refund_de_db_roll_error:${gameId}`, chatId)
@@ -1405,43 +1378,29 @@ async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate
                                 safeSendMessage(chatId, errorMsg, { parse_mode: 'MarkdownV2' });
                            }
                            activeGames.delete(gameId);
-                           if (typeof updateGroupGameDetails === 'function') {
-                                await updateGroupGameDetails(chatId, null, null, null)
-                                     .catch(e => console.error(`[DB_POLL_ERR] Failed updateGroupGameDetails on DB error for ${gameId}: ${e.message}`));
-                           }
+                           // No updateGroupGameDetails needed here
                      }
                 } else if (status === 'pending' || status === 'processing') {
-                    // Result not ready yet, continue polling...
-                     // console.log(`[DB_POLL_INFO] Roll for game ${gameId} still pending/processing...`); // Can be verbose
+                    // console.log(`[DB_POLL_INFO] Roll for game ${gameId} still pending/processing...`);
                 } else {
                     console.warn(`[DB_POLL_WARN] Unexpected status '${status}' for game ${gameId} in dice_roll_requests.`);
-                    // Optionally stop polling on unexpected status?
-                    // clearInterval(pollIntervalId);
-                    // activeDbPolls.delete(gameId);
                 }
             } else {
-                // Row not found - should not happen if insert succeeded, but handle defensively
                 console.error(`[DB_POLL_ERR] No row found for game_id ${gameId} in dice_roll_requests during polling.`);
                 clearInterval(pollIntervalId);
                 activeDbPolls.delete(gameId);
-                // Handle appropriately - maybe treat as timeout/error? Consider notifying user/admin.
                  const gameData = activeGames.get(gameId);
                  if (gameData) {
-                     const playerRef = gameData.playerReference || `User ${userId}`;
+                     const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({ id: userId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName }) : `User ${userId}`);
                      safeSendMessage(chatId, `⚠️ System hiccup for game ${escapeMarkdownV2(gameId)}, ${playerRef}. Couldn't track the dice roll request. Please try starting a new game. If this persists, contact admin.`, { parse_mode: 'MarkdownV2' });
-                     // Consider refunding and cleaning up game state here as well
                      activeGames.delete(gameId);
-                     await updateGroupGameDetails(chatId, null, null, null).catch(()=>{});
+                     // No updateGroupGameDetails needed here
                  }
             }
         } catch (dbError) {
             console.error(`[DB_POLL_ERR] Error querying database during poll for game ${gameId}:`, dbError.message);
-            // Decide if a DB error should stop polling or just skip this interval
-            // For now, we let it continue polling, but log the error. Could stop after N consecutive errors.
         }
     }, DB_POLLING_INTERVAL_MS);
-
-    // Store the intervalId to potentially clear it elsewhere if needed (e.g., game cancelled manually)
     activeDbPolls.set(gameId, pollIntervalId);
 }
 // --- End of startPollingForDbResult function definition ---
@@ -1454,27 +1413,33 @@ const DICE_ESCALATOR_BOT_ROLLS = 3; // Max rolls for the bot in Dice Escalator i
 // --- Dice Escalator Command Handler (/startdice) ---
 async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount, commandMessageId) {
     const initiatorId = String(initiatorUser.id);
-    let chatInfo = null;
-    // Ensure bot exists before calling getChat
-     if (bot && typeof bot.getChat === 'function') {
-          try { chatInfo = await bot.getChat(chatId); } catch (e) { console.warn(`[DE_START_WARN] Could not fetch chat info for chat ${chatId}: ${e.message}`); }
-     } else {
-          console.warn("[DE_START_WARN] Cannot fetch chat info, bot instance not available.");
-     }
-    const chatTitle = chatInfo?.title;
-    // Ensure getGroupSession and getPlayerDisplayReference exist
-    const gameSession = await getGroupSession(chatId, chatTitle || "Dice Escalator Group");
-    const gameId = generateGameId(); // Ensure generateGameId exists
+    // Store username and first_name from initiatorUser for consistent use in playerRef
+    const initiatorUsername = initiatorUser.username;
+    const initiatorFirstName = initiatorUser.first_name;
 
-    const playerRef = typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference(initiatorUser) : `User ${initiatorId}`; // Using new helper
-    const betFormatted = escapeMarkdownV2(formatCurrency(betAmount)); // Ensure formatCurrency and escapeMarkdownV2 exist
+    // We are removing the single-game-per-chat restriction for Dice Escalator.
+    // We might still use getGroupSession for chatTitle or other non-blocking info if needed,
+    // but it won't be used to prevent game starts here.
+    // let chatInfo = null;
+    // if (bot && typeof bot.getChat === 'function') {
+    //     try { chatInfo = await bot.getChat(chatId); } catch (e) { console.warn(`[DE_START_WARN] Could not fetch chat info for chat ${chatId}: ${e.message}`); }
+    // }
+    // const chatTitle = chatInfo?.title;
+    // const gameSession = await getGroupSession(chatId, chatTitle || "Dice Escalator Group"); // Get session for title, not for blocking
 
-    if (gameSession.currentGameId) {
-        await safeSendMessage(chatId, `Hold your horses! A game of *${escapeMarkdownV2(gameSession.currentGameType || 'Unknown')}* is already in progress. Please wait for it to conclude.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    // Ensure getUser exists
-    const initiator = await getUser(initiatorId); // User object needed for balance check etc.
+    // --- MODIFICATION: REMOVED single game check ---
+    // if (gameSession.currentGameId) {
+    //     await safeSendMessage(chatId, `Hold your horses! A game of *${escapeMarkdownV2(gameSession.currentGameType || 'Unknown')}* is already in progress. Please wait for it to conclude.`, { parse_mode: 'MarkdownV2' });
+    //     return;
+    // }
+    console.log(`[DE_START_INFO] Initiating new Dice Escalator game for user ${initiatorId} in chat ${chatId}. Multiple games allowed.`);
+    // --- END MODIFICATION ---
+
+    const gameId = generateGameId();
+    const playerRef = typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference(initiatorUser) : `User ${initiatorId}`;
+    const betFormatted = escapeMarkdownV2(formatCurrency(betAmount));
+
+    const initiator = await getUser(initiatorId);
     if (!initiator) {
          console.error(`[DE_START_ERR] Failed to get user data for initiator ${initiatorId}`);
          await safeSendMessage(chatId, `Error starting game: Could not retrieve your user data. Please try again.`, {});
@@ -1484,7 +1449,7 @@ async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount,
         await safeSendMessage(chatId, `${playerRef}, your current balance of ${escapeMarkdownV2(formatCurrency(initiator.balance))} isn't quite enough for a *${betFormatted}* wager. Top up and try again!`, { parse_mode: 'MarkdownV2' });
         return;
     }
-    // Ensure updateUserBalance exists
+
     const balanceUpdateResult = await updateUserBalance(initiatorId, -betAmount, `bet_placed_dice_escalator:${gameId}`, chatId);
     if (!balanceUpdateResult.success) {
         await safeSendMessage(chatId, `A slight hiccup, ${playerRef}. We couldn't place your bet due to: ${escapeMarkdownV2(balanceUpdateResult.error || 'Unknown reason')}. Please try again.`, { parse_mode: 'MarkdownV2' });
@@ -1492,95 +1457,81 @@ async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount,
     }
 
     const initialPlaceholderText = `🔥 *Dice Escalator: The Challenge Begins!* 🔥\n${playerRef} throws down the gauntlet with a daring bet of *${betFormatted}* against The House!\n\n_The dice are poised... summoning the first roll!_ ⏳`;
-    // Ensure safeSendMessage exists
     const sentPlaceholderMsg = await safeSendMessage(chatId, initialPlaceholderText, { parse_mode: 'MarkdownV2' });
 
     if (!sentPlaceholderMsg) {
         console.error(`[DE_START_ERR] Failed to send initial Dice Escalator message for game ${gameId}. Refunding bet.`);
         await updateUserBalance(initiatorId, betAmount, `refund_de_setup_fail:${gameId}`, chatId);
-        // No need to update group details if game failed setup
         return;
     }
 
     const gameData = {
         type: 'dice_escalator', gameId, chatId: String(chatId), initiatorId,
-        playerReference: playerRef, // Store the chosen display reference
+        initiatorUsername, // Storing for robust playerRef later
+        initiatorFirstName, // Storing for robust playerRef later
+        playerReference: playerRef,
         betAmount, playerScore: 0, botScore: 0,
-        status: 'waiting_db_roll', // Status indicates it needs a roll via DB
+        status: 'waiting_db_roll',
         currentPlayerId: initiatorId,
-        bustValue: DICE_ESCALATOR_BUST_ON, // Ensure this constant is defined (expected in Part 4)
+        bustValue: DICE_ESCALATOR_BUST_ON,
         creationTime: Date.now(), commandMessageId,
-        gameSetupMessageId: sentPlaceholderMsg.message_id // Store the message ID
+        gameSetupMessageId: sentPlaceholderMsg.message_id
     };
-    // Ensure activeGames map exists
     activeGames.set(gameId, gameData);
-    // Ensure updateGroupGameDetails exists
-    await updateGroupGameDetails(chatId, gameId, 'DiceEscalator', betAmount);
+
+    // --- MODIFICATION: REMOVED updateGroupGameDetails that sets a single current game ---
+    // await updateGroupGameDetails(chatId, gameId, 'DiceEscalator', betAmount);
+    // --- END MODIFICATION ---
 
     try {
         console.log(`[DB_ROLL_REQUEST] Inserting FIRST roll request for DE game ${gameId}, user ${initiatorId}, chat ${chatId}`);
-        // Ensure queryDatabase exists
         await queryDatabase(
             'INSERT INTO dice_roll_requests (game_id, chat_id, user_id, status, requested_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (game_id) DO UPDATE SET status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, roll_value = NULL, processed_at = NULL',
             [gameId, String(chatId), initiatorId, 'pending']
         );
         console.log(`[DB_ROLL_REQUEST] Successfully inserted/updated FIRST roll request for DE game ${gameId}.`);
-
-        // --- Call the newly defined polling function ---
-        // Ensure startPollingForDbResult is defined (it is, now, at the top of this Part)
         startPollingForDbResult(gameId, initiatorId, String(chatId), sentPlaceholderMsg.message_id);
-        // --- End of function call ---
-
     } catch (error) {
-         // This catch block now primarily handles DB insertion errors
         console.error(`[DE_START_ERR] Failed during DB interaction for FIRST roll request ${gameId}:`, error.message);
         const errorText = `🚧 Uh Oh! Game Start Glitch 🚧\n${playerRef}, we hit a snag initiating your Dice Escalator game. Your bet of *${betFormatted}* has been safely refunded. Please try again shortly!`;
-
-        // Edit the placeholder message to show error
-         // Ensure bot exists before editing message
         if (bot && typeof bot.editMessageText === 'function' && sentPlaceholderMsg) {
             bot.editMessageText(errorText, { chatId: String(chatId), message_id: sentPlaceholderMsg.message_id, parse_mode: 'MarkdownV2', reply_markup: {} }).catch(()=>{
-                // Fallback to sending new message if edit fails
                 safeSendMessage(String(chatId), errorText, {parse_mode:'MarkdownV2'});
             });
         } else {
-            // Fallback if placeholder wasn't sent or bot instance missing
              safeSendMessage(String(chatId), errorText, {parse_mode:'MarkdownV2'});
         }
-        // Refund and clean up game state
         await updateUserBalance(initiatorId, betAmount, `refund_de_first_roll_fail:${gameId}`, chatId);
         activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, null, null, null);
+        // No need to call updateGroupGameDetails to clear here
     }
 }
 
 // --- Processes the player's roll in Dice Escalator ---
-// (This function is called by startPollingForDbResult)
 async function processDiceEscalatorPlayerRoll(gameData, playerRoll, messageIdToUpdate) {
-    // Validate required gameData properties
      if (!gameData || !gameData.gameId || !gameData.chatId || !gameData.initiatorId) {
           console.error(`[ROLL_INVALID] Received incomplete gameData in processDiceEscalatorPlayerRoll:`, gameData);
-          // Cannot proceed without core data
           return;
      }
 
-    // Ensure helper functions exist
-    const playerRef = gameData.playerReference || `User ${gameData.initiatorId}`;
+    const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({ id: gameData.initiatorId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName }) : `User ${gameData.initiatorId}`);
     const betFormatted = typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(gameData.betAmount)) : `${gameData.betAmount} credits`;
     const diceFormatted = typeof formatDiceRolls === 'function' ? formatDiceRolls([playerRoll]) : `Roll: ${playerRoll}`;
     const bustDiceFormatted = typeof formatDiceRolls === 'function' ? formatDiceRolls([gameData.bustValue]) : `Roll: ${gameData.bustValue}`;
-    const playerScoreBeforeThisRollFormatted = escapeMarkdownV2(String(gameData.playerScore)); // Score *before* this roll
+    const playerScoreBeforeThisRollFormatted = escapeMarkdownV2(String(gameData.playerScore));
 
     if (typeof playerRoll !== 'number' || !Number.isInteger(playerRoll) || playerRoll < 1 || playerRoll > 6) {
         console.error(`[ROLL_INVALID] Invalid roll value: ${playerRoll} for game ${gameData.gameId}.`);
-        gameData.status = 'player_turn_prompt_action'; // Allow player to try again or cashout
+        gameData.status = 'player_turn_prompt_action';
         activeGames.set(gameData.gameId, gameData);
-        let invalidRollMsg = `🤔 Odd Roll Data!\nThat wasn't a standard dice result (${escapeMarkdownV2(String(playerRoll))}). Your score remains *${playerScoreBeforeThisRollFormatted}*. Try your luck again or cash out!`;
-        const kbInvalid = {inline_keyboard:[[{text:`🎲 Roll Again! (Score: ${gameData.playerScore})`,callback_data:`de_roll_prompt:${gameData.gameId}`}], [{text:`💰 Cashout ${escapeMarkdownV2(formatCurrency(gameData.playerScore))}!`,callback_data:`de_cashout:${gameData.gameId}`}]] };
-        // Ensure bot exists before editing
+        // --- MODIFICATION: Added playerRef to invalidRollMsg ---
+        let invalidRollMsg = `🤔 Odd Roll Data, ${playerRef}!\nThat wasn't a standard dice result (${escapeMarkdownV2(String(playerRoll))}). Your score remains *${playerScoreBeforeThisRollFormatted}*. Try your luck again or cash out!`;
+        // --- END MODIFICATION ---
+        const cashoutButtonTextInvalid = `💰 Cashout ${typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(gameData.playerScore)) : gameData.playerScore}!`;
+        const kbInvalid = {inline_keyboard:[[{text:`🎲 Roll Again! (Score: ${gameData.playerScore})`,callback_data:`de_roll_prompt:${gameData.gameId}`}], [{text:cashoutButtonTextInvalid, callback_data:`de_cashout:${gameData.gameId}`}]] };
         if (bot && typeof bot.editMessageText === 'function' && messageIdToUpdate) {
              bot.editMessageText(invalidRollMsg, {chat_id: String(gameData.chatId), message_id: Number(messageIdToUpdate), parse_mode: 'MarkdownV2', reply_markup: kbInvalid})
-               .catch(()=>{ safeSendMessage(String(gameData.chatId), invalidRollMsg, {parse_mode:'MarkdownV2', reply_markup: kbInvalid }); }); // Fallback send
+               .catch(()=>{ safeSendMessage(String(gameData.chatId), invalidRollMsg, {parse_mode:'MarkdownV2', reply_markup: kbInvalid }); });
         } else {
              safeSendMessage(String(gameData.chatId), invalidRollMsg, {parse_mode:'MarkdownV2', reply_markup: kbInvalid });
         }
@@ -1592,27 +1543,26 @@ async function processDiceEscalatorPlayerRoll(gameData, playerRoll, messageIdToU
 
     if (!msgId) {
         console.error(`[DE_PLAYER_ROLL_ERR] No messageId for game ${gameId} display update.`);
-        // Attempt to send a message even without the original ID
         safeSendMessage(String(chatId), `${playerRef}, roll result: ${diceFormatted} (Display Error - msgId missing)`, { parse_mode: 'MarkdownV2' });
-         // Game state might be stuck here, consider cleanup?
     }
 
     if (playerRoll === bustValue) {
         gameData.status = 'game_over_player_bust';
-        gameData.playerScore = 0; // Reset score on bust
+        gameData.playerScore = 0;
         const turnResMsg = `*Your Roll: ${diceFormatted}... Oh No!* 😱\n\n` +
                             `💥 *BUSTED!* 💥\n` +
                             `Ouch, ${playerRef}! Rolling a ${bustDiceFormatted} means your score crumbles to zero! The House claims your *${betFormatted}* bet this round.\n\n` +
                             `_Better luck next time!_`;
-        activeGames.delete(gameId); // Clean up game state immediately on bust
-        await updateGroupGameDetails(chatId, null, null, null); // Clean up session state
-
+        activeGames.delete(gameId);
+        // --- MODIFICATION: REMOVED updateGroupGameDetails ---
+        // await updateGroupGameDetails(chatId, null, null, null);
+        // --- END MODIFICATION ---
         if (msgId && bot && typeof bot.editMessageText === 'function') {
              try {
-                 await bot.editMessageText(turnResMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: {} }); // Remove buttons
+                 await bot.editMessageText(turnResMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: {} });
              } catch (e) {
                   console.error(`[DE_PROCESS_ROLL_EDIT_ERR_BUST] Edit fail ${msgId}: ${e.message}`);
-                  await safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2' }); // Fallback send
+                  await safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2' });
              }
         } else {
              await safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2' });
@@ -1620,115 +1570,93 @@ async function processDiceEscalatorPlayerRoll(gameData, playerRoll, messageIdToU
     } else {
         const scoreBeforeRoll = gameData.playerScore;
         gameData.playerScore += playerRoll;
-        gameData.status = 'player_turn_prompt_action'; // Update status to allow next player action
-        activeGames.set(gameId, gameData); // Save updated game state
-
+        gameData.status = 'player_turn_prompt_action';
+        activeGames.set(gameId, gameData);
         const newScoreFormatted = escapeMarkdownV2(String(gameData.playerScore));
         let turnResMsg = "";
-
-        if (scoreBeforeRoll === 0) { // First successful roll message
+        if (scoreBeforeRoll === 0) {
             turnResMsg = `🎲 *First Roll Revealed: ${diceFormatted}!* 🎲\n` +
                          `Alright, ${playerRef}! You're on the board with a starting score of *${newScoreFormatted}*!\n\n` +
                          `💰 Current Payout (Score): *${newScoreFormatted}*\n` +
                          `📈 _Keep climbing! But roll a ${bustDiceFormatted} and you BUST!_ 💥\n\n` +
                          `What's your move, high roller?`;
-        } else { // Subsequent successful roll message
+        } else {
             turnResMsg = `🎲 *Another One: ${diceFormatted}!* 🎲\n` +
                          `Nice roll, ${playerRef}! Your score escalates to *${newScoreFormatted}*!\n\n` +
                          `💰 Current Payout (Score): *${newScoreFormatted}*\n` +
                          `🔥 _The heat is on! Remember, a ${bustDiceFormatted} means BUST!_ 💥\n\n` +
                          `Feeling brave? Roll again or lock in those winnings?`;
         }
-
-        // Ensure formatCurrency is defined for button text
         const cashoutButtonText = `💰 Cashout ${typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(gameData.playerScore)) : gameData.playerScore}!`;
         const kb = { inline_keyboard: [
              [{ text: `🎲 Roll Again! (Score: ${gameData.playerScore})`, callback_data: `de_roll_prompt:${gameId}` }],
              [{ text: cashoutButtonText, callback_data: `de_cashout:${gameId}` }]
         ]};
-
-        console.log(`[DE_EDIT_ATTEMPT_DEBUG] Attempting edit after roll: msgId=${msgId}, chatId=${chatId}, type=${typeof chatId}`);
-        // console.log(`[DE_EDIT_ATTEMPT_DEBUG] Message Content Preview: ${turnResMsg.substring(0,100)}...`); // Optional preview
-
+        console.log(`[DE_EDIT_ATTEMPT_DEBUG] Attempting edit after roll: msgId=${msgId}, chatId=${chatId}`);
         if (msgId && bot && typeof bot.editMessageText === 'function') {
             try {
                 await bot.editMessageText(turnResMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: kb });
                 console.log(`[DE_PROCESS_ROLL_EDIT_OK] Successfully edited message ${msgId}.`);
             } catch (e) {
                 console.error(`[DE_PROCESS_ROLL_EDIT_ERR] Failed editing message ${msgId} game ${gameId} (chatId=${chatId}):`, e.message);
-                 // Fallback: Send new message if edit fails
                 await safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2', reply_markup: kb });
             }
         } else {
              console.warn(`[DE_PROCESS_ROLL_WARN] Cannot edit message (msgId: ${msgId}, bot available: ${!!bot}). Sending new message.`);
             await safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2', reply_markup: kb });
         }
-        // Note: activeGames.set(gameId, gameData) was already done above before sending message
     }
     console.log(`[ROLL_PROCESS_COMPLETE] Game ${gameData.gameId}`, { newStatus: gameData.status, playerScore: gameData.playerScore });
 }
 
-
 // --- Dice Escalator Callback Handler ---
-// (This function is called by the main callback_query listener in Part 5a)
 async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, interactionMessageId, chatId) {
-     // Ensure activeGames exists
     const gameData = activeGames.get(gameId);
     if (!gameData || gameData.chatId !== String(chatId) || gameData.type !== 'dice_escalator') {
         await safeSendMessage(userId, "This Dice Escalator game is not available or has ended.", {});
-        // Attempt to remove buttons from the interacted message
         if (interactionMessageId && bot && typeof bot.editMessageReplyMarkup === 'function') {
              bot.editMessageReplyMarkup({}, {chat_id:String(chatId), message_id:Number(interactionMessageId)}).catch(()=>{});
         }
         return;
     }
 
-    const playerRef = gameData.playerReference || `User ${userId}`;
+    const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({id: userId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName}) : `User ${userId}`);
     const playerScoreFormatted = escapeMarkdownV2(String(gameData.playerScore));
 
-    // Check if it's the correct player's turn
     if (gameData.currentPlayerId !== String(userId)) {
         await safeSendMessage(userId, "It's not your turn to act in this game.", {});
         return;
     }
-    // Check if the game is in the state where player action is expected
     if (gameData.status !== 'player_turn_prompt_action') {
         await safeSendMessage(userId, `You cannot perform this action now. Game status: ${escapeMarkdownV2(gameData.status)}`, {parse_mode:'MarkdownV2'});
-        // Remove buttons if action is invalid for current state
         if (interactionMessageId && bot && typeof bot.editMessageReplyMarkup === 'function') {
              bot.editMessageReplyMarkup({}, {chat_id:String(chatId), message_id:Number(interactionMessageId)}).catch(()=>{});
         }
         return;
     }
-
     const msgIdToUpdate = Number(interactionMessageId || gameData.gameSetupMessageId);
     if (!msgIdToUpdate) {
         console.error(`[DE_ACTION_ERR] No valid messageId for game ${gameId} action ${actionType}.`);
         await safeSendMessage(String(chatId), `Error updating game display. Please try again or contact support if the issue persists.`, {parse_mode:'MarkdownV2'});
-        return; // Cannot proceed without a message to update
+        return;
     }
 
-    // --- Handle Roll Action ---
     if (actionType === 'de_roll_prompt') {
-        gameData.status = 'waiting_db_roll'; // Update status
-        activeGames.set(gameId, gameData); // Save status change
-
+        gameData.status = 'waiting_db_roll';
+        activeGames.set(gameId, gameData);
         const promptMessageText = `🎲 _Rolling for ${playerRef}! Fetching that next roll..._ ⏳`;
-        // Edit message to show "rolling..." and remove buttons
         try {
             console.log(`[DE_ACTION_EDIT_DEBUG] Attempting MD edit for roll prompt: msgId=${msgIdToUpdate}, chatId=${chatId}`);
-            // Ensure bot exists
             if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available.");
             await bot.editMessageText(promptMessageText, {
                 chat_id: String(chatId),
                 message_id: msgIdToUpdate,
                 parse_mode: 'MarkdownV2',
-                reply_markup: {} // Remove buttons
+                reply_markup: {}
             });
             console.log(`[DE_ACTION_EDIT_DEBUG] MD edit OK for roll prompt msgId=${msgIdToUpdate}.`);
         } catch (editError) {
             console.error(`[DE_ACTION_ERR] Failed MD edit message ${msgIdToUpdate} for roll prompt (game ${gameId}, chatId=${chatId}):`, editError.message);
-            // Attempt plain text fallback edit
             const plainFallbackPrompt = `Requesting next roll for ${playerRef}... Please wait. ⏳`;
              try {
                   if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available for fallback.");
@@ -1737,244 +1665,164 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
                  console.log(`[DE_ACTION_EDIT_DEBUG] Plain text fallback edit OK for msgId=${msgIdToUpdate}.`);
              } catch (plainEditError) {
                  console.error(`[DE_ACTION_ERR] Failed plain text fallback edit for msgId=${msgIdToUpdate}:`, plainEditError.message);
-                 // If even plain edit fails, maybe send a new message?
-                 // safeSendMessage(chatId, plainFallbackPrompt, {});
              }
         }
-
-        // Request roll from DB
         try {
-             // Ensure queryDatabase exists
              if (typeof queryDatabase !== 'function') throw new Error("queryDatabase function not available.");
             console.log(`[DB_ROLL_REQUEST] Inserting SUBSEQUENT roll req ${gameId}, user ${userId}, chat ${chatId}`);
             await queryDatabase('INSERT INTO dice_roll_requests (game_id, chat_id, user_id, status, requested_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (game_id) DO UPDATE SET status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, roll_value = NULL, processed_at = NULL', [gameId, String(chatId), userId, 'pending']);
             console.log(`[DB_ROLL_REQUEST] Success insert SUBSEQUENT ${gameId}.`);
-
-            // Start polling for the result of this new request
-            // Ensure startPollingForDbResult exists
              if (typeof startPollingForDbResult !== 'function') throw new Error("startPollingForDbResult function not available.");
             startPollingForDbResult(gameId, userId, String(chatId), msgIdToUpdate);
-
         } catch (error) {
             console.error(`[DE_ACTION_ERR] DB insert/poll start fail for subsequent roll ${gameId}:`, error.message);
-            // Revert status and allow user to try again
             gameData.status = 'player_turn_prompt_action';
             activeGames.set(gameId, gameData);
             let errorRestoreMsg = `⚙️ Oops! Roll Request Failed ⚙️\nCouldn't process your roll request this time, ${playerRef}. Your score remains *${playerScoreFormatted}*. Ready to try again or cash out?`;
-             // Ensure formatCurrency exists for button
-             const cashoutButtonText = `💰 Cashout ${typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(gameData.playerScore)) : gameData.playerScore}!`;
+             const cashoutButtonTextError = `💰 Cashout ${typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(gameData.playerScore)) : gameData.playerScore}!`;
              const kbError = { inline_keyboard:[
                   [{text:`🎲 Roll Again! (Score: ${gameData.playerScore})`,callback_data:`de_roll_prompt:${gameId}`}],
-                  [{text:cashoutButtonText, callback_data:`de_cashout:${gameId}`}]
+                  [{text:cashoutButtonTextError, callback_data:`de_cashout:${gameId}`}]
              ]};
-            // Attempt to edit the message back to show options
              try {
                   if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available for error restore.");
                   await bot.editMessageText(errorRestoreMsg, {chat_id:String(chatId), message_id:msgIdToUpdate, parse_mode:'MarkdownV2', reply_markup:kbError});
              } catch (editErr) {
                   console.error(`[DE_ACTION_ERR] Failed to edit for DB insert error: ${editErr.message}`);
-                  safeSendMessage(String(chatId), errorRestoreMsg, {parse_mode:'MarkdownV2', reply_markup: kbError }); // Fallback send
+                  safeSendMessage(String(chatId), errorRestoreMsg, {parse_mode:'MarkdownV2', reply_markup: kbError });
              }
         }
-
-    // --- Handle Cashout Action ---
     } else if (actionType === 'de_cashout') {
         if (gameData.playerScore <= 0) {
              await safeSendMessage(userId, "You need a score greater than 0 to cash out!", {});
-             // No status change needed, user can just click again if they roll > 0 later
              return;
         }
         const scoreCashedOut = gameData.playerScore;
-        // Calculate payout (original bet returned + score)
         const totalReturnToBalance = gameData.betAmount + scoreCashedOut;
         const scoreCashedOutFormatted = escapeMarkdownV2(String(scoreCashedOut));
-        // Ensure formatCurrency exists
         const totalReturnFormatted = typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(totalReturnToBalance)) : `${totalReturnToBalance} credits`;
-
-        // Update balance FIRST
-        // Ensure updateUserBalance exists
         const balanceUpdateResult = await updateUserBalance(userId, totalReturnToBalance, `cashout_de_player:${gameId}`, chatId);
-
         if (!balanceUpdateResult.success) {
              console.error(`[DE_ACTION_ERR] Failed to update balance on cashout for game ${gameId}, user ${userId}. Error: ${balanceUpdateResult.error}`);
              await safeSendMessage(userId, `⚠️ Error processing cashout: ${escapeMarkdownV2(balanceUpdateResult.error || 'Balance update failed')}. Your score is still ${scoreCashedOut}. Please try cashing out again or contact admin.`, {parse_mode: 'MarkdownV2'});
-             // Do NOT change game status, allow retry
              return;
         }
-
-        // Balance updated, now update game state and message
-        gameData.status = 'player_cashed_out'; // Mark as cashed out before bot turn
-        activeGames.set(gameId, gameData); // Save status
-
+        gameData.status = 'player_cashed_out';
+        activeGames.set(gameId, gameData);
         let cashoutMsgText = `💰 *CHA-CHING! Cash Out Success!* 💰\nSmart move, ${playerRef}! You've cashed out with a score of *${scoreCashedOutFormatted}*!\nA total of *${totalReturnFormatted}* is now safely in your balance.\n\n` +
                              `🤖 *Now, The House Responds!* 🤖\nCan the Bot beat your impressive score of *${scoreCashedOutFormatted}*? Let's see...`;
-
-        // Edit message to show cashout success and remove buttons
         try {
              if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available for cashout message.");
-            await bot.editMessageText(cashoutMsgText, { chatId: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} }); // Remove buttons
+            await bot.editMessageText(cashoutMsgText, { chatId: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} });
         } catch (error) {
             console.error(`[DE_ACTION_ERR] Failed edit for cashout ${msgIdToUpdate}: ${error.message}`);
-            // If edit fails, send new message so user knows cashout happened
              await safeSendMessage(String(chatId), cashoutMsgText, { parse_mode: 'MarkdownV2' });
         }
-
-        // Wait briefly before starting bot turn for better flow
-        // Ensure sleep exists (expected in Part 1)
-        await sleep(2000);
-
-        // Start the Bot's turn
-        // Ensure processDiceEscalatorBotTurn exists (defined later in this Part)
+        await sleep(2000); // sleep from Part 1
         if (typeof processDiceEscalatorBotTurn === 'function') {
              await processDiceEscalatorBotTurn(gameData, msgIdToUpdate);
         } else {
              console.error("[DE_ACTION_ERR] processDiceEscalatorBotTurn function not defined. Cannot process bot turn.");
-             // Handle critical error - Bot turn won't happen. Maybe notify admin? Clean up game?
               activeGames.delete(gameId);
-              await updateGroupGameDetails(chatId, null, null, null).catch(()=>{});
+              // No updateGroupGameDetails here as we don't set a single current game
               safeSendMessage(chatId, "⚠️ System error: Could not process the Bot's turn after cashout. Game ended.", {});
         }
     }
-    // No default case needed as actionType comes from predefined buttons
 }
 
-
 // --- Processes the Bot's turn in Dice Escalator ---
-// (This is called after a player cashes out)
 async function processDiceEscalatorBotTurn(gameData, messageIdToUpdate) {
-     // Validate input
      if (!gameData || !gameData.gameId || !gameData.chatId || typeof gameData.playerScore === 'undefined' || !gameData.bustValue) {
          console.error(`[DE_BOT_TURN_ERR] Invalid gameData received:`, gameData);
-         // Attempt cleanup if possible
           if(gameData?.gameId) activeGames.delete(gameData.gameId);
-          if(gameData?.chatId) await updateGroupGameDetails(gameData.chatId, null, null, null).catch(()=>{});
+          // No updateGroupGameDetails
           safeSendMessage(String(gameData?.chatId || ADMIN_USER_ID || ''), `System error processing Bot turn for game ${gameData?.gameId || 'unknown'}. Game ended.`, {});
          return;
      }
     const { gameId, chatId, bustValue } = gameData;
-    const playerRef = gameData.playerReference || 'Player'; // Use stored reference
-    const playerCashedScore = gameData.playerScore; // This is the score the player secured
-
+    const playerRef = gameData.playerReference || (typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({id: gameData.initiatorId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName}) : `User ${gameData.initiatorId}`);
+    const playerCashedScore = gameData.playerScore;
     let botScore = 0;
     let botBusted = false;
     let rollsMadeByBot = 0;
     const playerCashedOutFormatted = escapeMarkdownV2(String(playerCashedScore));
-
-    // Base message structure (re-uses cashout success part for context)
     let botPlaysMsgBase = `💰 *CHA-CHING! Cash Out Success!* 💰\n${playerRef} cashed out with *${playerCashedOutFormatted}* points.\n_Balance Updated!_\n\n` +
                           `🤖 *Bot's Turn!* 🤖\nThe House must now beat *${playerCashedOutFormatted}*...`;
-
     const msgId = Number(messageIdToUpdate || gameData.gameSetupMessageId);
     if (!msgId) {
         console.error(`[DE_BOT_TURN_ERR] Invalid messageId (${messageIdToUpdate}/${gameData.gameSetupMessageId}) for game ${gameId} bot turn.`);
-        // Clean up game state even if message update fails
         activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, null, null, null);
+        // No updateGroupGameDetails
         await safeSendMessage(String(chatId), `A display error occurred during the bot's turn for game ${gameId}. Game ended. You keep your cashed out score of ${playerCashedScore}.`, { parse_mode: 'MarkdownV2' });
         return;
     }
-
-    // Initial message update before rolls start
     try {
          if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available for bot turn init.");
         await bot.editMessageText(botPlaysMsgBase + "\n\n_The Bot calculates its odds... Rolling now!_ 🎲", { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: {} });
     } catch (e) {
          console.error(`[DE_BOT_TURN_EDIT_ERR] Initial bot rolling edit ${gameId}, msg ${msgId}: ${e.message}`);
-         // Continue anyway, but the message might be stuck
     }
-    // Ensure sleep exists
     await sleep(2000);
-
     let rollLog = "";
-    // Bot rolling loop
-    // Ensure DICE_ESCALATOR_BOT_ROLLS is defined
     while (rollsMadeByBot < DICE_ESCALATOR_BOT_ROLLS && botScore <= playerCashedScore && !botBusted) {
         rollsMadeByBot++;
-        // Ensure determineDieRollOutcome exists (expected Part 4, updated version)
-        const botRollResult = determineDieRollOutcome(); // Gets { roll: number }
+        const botRollResult = determineDieRollOutcome();
         if (!botRollResult || typeof botRollResult.roll !== 'number') {
-             console.error(`[DE_BOT_TURN_ERR] Invalid result from determineDieRollOutcome() for bot roll ${rollsMadeByBot} game ${gameId}.`);
-             // How to handle? Maybe abort bot turn? For now, let's assume a roll of 1.
+             console.error(`[DE_BOT_TURN_ERR] Invalid result from determineDieRollOutcome() for bot roll ${rollsMadeByBot} game ${gameId}. Defaulting to roll 1.`);
              botRollResult = { roll: 1 };
         }
         const botRoll = botRollResult.roll;
-        // Ensure formatDiceRolls exists (expected Part 3)
-        const botDiceFormatted = formatDiceRolls([botRoll]); // Should be "🎲 X"
-
+        const botDiceFormatted = formatDiceRolls([botRoll]);
         if (botRoll === bustValue) {
             botBusted = true;
-            botScore = 0; // Bot score reset on bust
+            botScore = 0;
             rollLog += `\nBot Roll ${rollsMadeByBot}: ${botDiceFormatted} 🔮 → 💥 *BUSTED!*`;
-            // break; // Exit loop immediately on bust (optional, could show remaining roll attempts as skipped)
         } else {
             botScore += botRoll;
             const botScoreFormatted = escapeMarkdownV2(String(botScore));
             rollLog += `\nBot Roll ${rollsMadeByBot}: ${botDiceFormatted} 🔮 → Bot Score: *${botScoreFormatted}*`;
         }
-
-        // Update message after each roll (or bust)
         let currentDisplayMsg = botPlaysMsgBase + "\n" + rollLog;
         let nextPrompt = "";
         if (botScore <= playerCashedScore && rollsMadeByBot < DICE_ESCALATOR_BOT_ROLLS && !botBusted) {
             nextPrompt = "\n\n🤖 _The Bot pushes its luck... Rolling again!_";
         }
-
         try {
              if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available for bot turn update.");
             await bot.editMessageText(currentDisplayMsg + nextPrompt, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: {} });
         } catch (e) {
              console.error(`[DE_BOT_TURN_EDIT_ERR] Edit during bot roll ${rollsMadeByBot} game ${gameId}, msg ${msgId}: ${e.message}`);
         }
-
-        // Pause between rolls if not finished
         if (nextPrompt) await sleep(2500);
-        // Exit loop if busted
         if (botBusted) break;
     }
-    // End of bot rolling loop
-
-    // Final pause before result announcement
     await sleep(1500);
-
-    gameData.botScore = botScore; // Update gameData, though it's about to be deleted
-
+    gameData.botScore = botScore;
     const finalBotScoreFormatted = escapeMarkdownV2(String(botScore));
     let finalResultSection = "";
-
-    // Determine winner based on bot's final state
     if (botBusted || botScore <= playerCashedScore) {
-        // Player Wins (Bot busted or failed to beat player's score)
         finalResultSection = `\n\n--- 🎉 *YOU WIN! The House Crumbles!* 🎉 ---\n${playerRef}, The Bot ${botBusted ? "BUSTED spectacularly 💥" : `could only muster a score of *${finalBotScoreFormatted}*`}! It couldn't match your masterful cash-out score of *${playerCashedOutFormatted}*.\n\n` +
                              `*Final Standings:*\nYou (Cashed Out): *${playerCashedOutFormatted}* 🏆\nBot: *${finalBotScoreFormatted}* ${botBusted ? "💥" : "😥"}\n\n` +
                              `_Those winnings are all yours! Play again?_`;
-         // Note: Player balance was already updated on cashout. No further action needed.
     } else {
-        // Bot Wins (Bot did not bust AND beat player's score)
         finalResultSection = `\n\n--- 💀 *THE HOUSE WINS!* 💀 ---\nClose call, ${playerRef}! The Bot strategically rolled to a stunning *${finalBotScoreFormatted}*, just edging out your cash-out score of *${playerCashedOutFormatted}*.\n\n` +
                              `*Final Standings:*\nYou (Cashed Out): *${playerCashedOutFormatted}*\nBot: *${finalBotScoreFormatted}* 🏆\n\n` +
                              `_The casino always has an edge! Care for a rematch?_`;
-         // Note: Player already got paid bet + score. Bot winning doesn't change player balance further.
     }
-
-    // Construct final message
     const finalMsg = botPlaysMsgBase + "\n" + rollLog + finalResultSection;
-
-    // Update the message one last time
     try {
          if (!bot || typeof bot.editMessageText !== 'function') throw new Error("Bot instance or editMessageText not available for final bot turn message.");
-        await bot.editMessageText(finalMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: {} }); // Final message, no buttons
+        await bot.editMessageText(finalMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: {} });
     } catch (e) {
         console.error(`[DE_BOT_TURN_FINAL_EDIT_ERR] Final edit fail ${gameId}, msg ${msgId}: ${e.message}`);
-        // Fallback: Send final result as new message if edit fails
         await safeSendMessage(String(chatId), finalMsg, { parse_mode: 'MarkdownV2' });
     }
-
-    // Clean up game state after resolution
     activeGames.delete(gameId);
-    await updateGroupGameDetails(chatId, null, null, null);
+    // --- MODIFICATION: REMOVED updateGroupGameDetails ---
+    // await updateGroupGameDetails(chatId, null, null, null);
+    // --- END MODIFICATION ---
     console.log(`[DE_BOT_TURN_COMPLETE] Game ${gameId}. Player: ${playerCashedScore}, Bot: ${botScore}, Busted: ${botBusted}`);
 }
-
 
 console.log("Part 5b: Dice Escalator Game Logic - Complete.");
 // --- End of Part 5b ---
