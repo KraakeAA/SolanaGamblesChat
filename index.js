@@ -174,12 +174,12 @@ console.log("Loading Part 2: Database Operations & Data Management (DATABASE BAC
 
 // In-memory stores for non-critical/session data
 const groupGameSessions = new Map(); // Tracks active game per group (can be re-evaluated if needed)
-// userDatabase (in-memory map for balances) is now OBSOLETE. Balances are in PostgreSQL.
+// userDatabase (in-memory map for balances) is NOW OBSOLETE. Balances are in PostgreSQL.
 console.log("In-memory data stores (groupGameSessions) initialized.");
 
 
 // --- queryDatabase Helper Function ---
-// (This is your existing queryDatabase function, ensure 'pool' is defined in Part 1)
+// (Ensure 'pool' is defined in Part 1)
 async function queryDatabase(sql, params = [], dbClient = pool) {
     if (!dbClient) {
         const poolError = new Error("Database pool/client is not available for queryDatabase");
@@ -212,24 +212,30 @@ async function queryDatabase(sql, params = [], dbClient = pool) {
 
 // --- User and Balance Functions (DATABASE BACKED) ---
 
-// Ensure these constants are defined (likely in Part 1)
+// Constants for new user default balance (ensure it's defined, e.g., in Part 1 or here)
+// This should be in the smallest unit of your currency (e.g., Lamports for SOL).
+const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS || '100000000'); // Example: 100,000,000 units
+
+// Constants for jackpot (ensure they are defined, e.g., in Part 1)
 // const JACKPOT_CONTRIBUTION_PERCENT = 0.01; // Example: 1%
 // const MAIN_JACKPOT_ID = 'dice_escalator_main';
 
-// Default starting balance if a new user is created. Adjust as needed.
-// This should be in the smallest unit of your currency (e.g., Lamports for SOL).
-const DEFAULT_STARTING_BALANCE_LAMPORTS = 100000000; // Example: 100,000,000 units
 
 // Gets user data (from DB), creates if doesn't exist.
 // Returns user object including balance.
+// Does NOT expect telegram_username or telegram_first_name columns in wallets table.
 async function getUser(userId, username = null, firstName = null) {
     const userIdStr = String(userId);
-    const client = await pool.connect(); // Ensure 'pool' is defined in Part 1
+    const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        let userResult = await client.query('SELECT * FROM wallets WHERE user_id = $1', [userIdStr]);
-        let userWallet;
+        // Try to get wallet/user first (select only columns that exist)
+        let userResult = await client.query(
+            'SELECT user_id, referral_code, last_used_at FROM wallets WHERE user_id = $1', // Removed telegram_username, telegram_first_name
+            [userIdStr]
+        );
+        let userWalletData; // Will hold data from the 'wallets' table
         let isNewUser = false;
         let actualBalanceLamports;
 
@@ -237,12 +243,12 @@ async function getUser(userId, username = null, firstName = null) {
             // User does not exist in wallets, create them
             const newReferralCode = `ref${Date.now().toString(36)}${Math.random().toString(36).substring(2, 5)}`;
             const insertWalletQuery = `
-                INSERT INTO wallets (user_id, referral_code, created_at, last_used_at)
+                INSERT INTO wallets (user_id, referral_code, created_at, last_used_at) 
                 VALUES ($1, $2, NOW(), NOW())
-                RETURNING *;
-            `;
+                RETURNING user_id, referral_code, last_used_at; 
+            `; // Does not insert telegram_username/first_name
             userResult = await client.query(insertWalletQuery, [userIdStr, newReferralCode]);
-            userWallet = userResult.rows[0];
+            userWalletData = userResult.rows[0];
             isNewUser = true;
             console.log(`[DB_USER] New user wallet created for ${userIdStr}.`);
 
@@ -252,16 +258,17 @@ async function getUser(userId, username = null, firstName = null) {
             `;
             await client.query(insertBalanceQuery, [userIdStr, DEFAULT_STARTING_BALANCE_LAMPORTS.toString()]);
             console.log(`[DB_USER] Initial balance set for new user ${userIdStr}.`);
-            actualBalanceLamports = BigInt(DEFAULT_STARTING_BALANCE_LAMPORTS);
+            actualBalanceLamports = DEFAULT_STARTING_BALANCE_LAMPORTS;
         } else {
-            userWallet = userResult.rows[0];
+            userWalletData = userResult.rows[0];
+            // Update last_used_at. No other details to update in wallets table based on this function's inputs.
             await client.query('UPDATE wallets SET last_used_at = NOW() WHERE user_id = $1', [userIdStr]);
 
             const balanceResult = await client.query('SELECT balance_lamports FROM user_balances WHERE user_id = $1', [userIdStr]);
             if (balanceResult.rows.length === 0) {
                 console.warn(`[DB_USER_WARN] Wallet exists for ${userIdStr} but no balance record. Creating with default.`);
                 await client.query('INSERT INTO user_balances (user_id, balance_lamports, updated_at) VALUES ($1, $2, NOW())', [userIdStr, DEFAULT_STARTING_BALANCE_LAMPORTS.toString()]);
-                actualBalanceLamports = BigInt(DEFAULT_STARTING_BALANCE_LAMPORTS);
+                actualBalanceLamports = DEFAULT_STARTING_BALANCE_LAMPORTS;
             } else {
                 actualBalanceLamports = BigInt(balanceResult.rows[0].balance_lamports);
             }
@@ -269,18 +276,14 @@ async function getUser(userId, username = null, firstName = null) {
 
         await client.query('COMMIT');
 
-        // Construct a user object for game logic.
-        // Game logic might expect 'balance' as a Number for display or simple calcs,
-        // but all DB operations should use BigInt for lamports.
         return {
-            userId: userWallet.user_id,
-            username: username || userWallet.telegram_username || `User_${userIdStr}`, // Use provided, then DB, then fallback
-            firstName: firstName || userWallet.telegram_first_name, // Use provided, then DB
+            userId: userWalletData.user_id,
+            username: username || `User_${userIdStr}`, // Use provided username from Telegram, or fallback
+            firstName: firstName, // Use provided first name from Telegram (can be null)
             balance: Number(actualBalanceLamports), // For game logic convenience
             balanceLamports: actualBalanceLamports, // For precise operations
             isNew: isNewUser,
-            referral_code: userWallet.referral_code,
-            // groupStats can remain in-memory or be moved to DB if persistence is needed
+            referral_code: userWalletData.referral_code,
             groupStats: new Map(), // Placeholder for now
         };
 
@@ -294,14 +297,12 @@ async function getUser(userId, username = null, firstName = null) {
 }
 
 // Updates user balance IN THE DATABASE transactionally.
-// amountChangeLamports should be a BigInt or number.
-// client_ is an optional existing DB client to use an outer transaction.
 async function updateUserBalance(userId, amountChangeLamports, reason = "unknown_transaction", client_ = null, associatedGameId = null, chatIdForLog = null) {
     const userIdStr = String(userId);
-    const operationClient = client_ || await pool.connect(); // Use provided client or get new one
+    const operationClient = client_ || await pool.connect();
 
     try {
-        if (!client_) await operationClient.query('BEGIN'); // Start transaction only if we acquired the client here
+        if (!client_) await operationClient.query('BEGIN');
 
         const balanceSelectRes = await operationClient.query(
             'SELECT balance_lamports FROM user_balances WHERE user_id = $1 FOR UPDATE',
@@ -311,18 +312,20 @@ async function updateUserBalance(userId, amountChangeLamports, reason = "unknown
         if (balanceSelectRes.rows.length === 0) {
             if (!client_) await operationClient.query('ROLLBACK');
             console.warn(`[DB_BALANCE_ERR] Update balance called for non-existent user balance record: ${userIdStr}.`);
-            return { success: false, error: "User balance record not found. Please ensure user exists first (call getUser)." };
+            // It's better if getUser is always called before any operation that assumes a user exists.
+            // Trying to create the user here can complicate transaction management.
+            return { success: false, error: "User balance record not found. Ensure user exists via getUser first." };
         }
 
         const currentBalanceLamports = BigInt(balanceSelectRes.rows[0].balance_lamports);
         const change = BigInt(amountChangeLamports);
         let proposedBalanceLamports = currentBalanceLamports + change;
 
-        let jackpotContribution = 0n;
-        if (reason.startsWith('bet_placed_dice_escalator') && change < 0n && associatedGameId) { // Bet placed (negative change)
-            const betAmount = -change; // Absolute bet amount (as BigInt)
-            // Ensure JACKPOT_CONTRIBUTION_PERCENT and MAIN_JACKPOT_ID are defined (Part 1)
-            jackpotContribution = betAmount * BigInt(Math.round(JACKPOT_CONTRIBUTION_PERCENT * 100)) / 100n;
+        let jackpotContribution = 0n; // BigInt for consistency
+        // Ensure JACKPOT_CONTRIBUTION_PERCENT and MAIN_JACKPOT_ID are defined (e.g., in Part 1)
+        if (reason.startsWith('bet_placed_dice_escalator') && change < 0n && associatedGameId && typeof JACKPOT_CONTRIBUTION_PERCENT === 'number' && MAIN_JACKPOT_ID) {
+            const betAmount = -change;
+            jackpotContribution = betAmount * BigInt(Math.round(JACKPOT_CONTRIBUTION_PERCENT * 10000)) / 10000n; // More precision for percent
 
             if (jackpotContribution > 0n) {
                 await operationClient.query(
@@ -344,53 +347,58 @@ async function updateUserBalance(userId, amountChangeLamports, reason = "unknown
             [proposedBalanceLamports.toString(), userIdStr]
         );
         
-        // --- TRANSACTION LOGGING into 'bets' table ---
         const betDetails = { game_id: associatedGameId };
-        if (reason.startsWith('bet_placed_') && change < 0n && associatedGameId && chatIdForLog) {
+        let wagerAmountForLog = 0n;
+        if (change < 0n) wagerAmountForLog = -change; // Log wager as positive
+
+        if (reason.startsWith('bet_placed_') && wagerAmountForLog > 0n && associatedGameId && chatIdForLog) {
             const gameTypeFromReason = reason.substring('bet_placed_'.length).split(':')[0];
             if (jackpotContribution > 0n) {
                 betDetails.jackpot_contribution = jackpotContribution.toString();
             }
             await operationClient.query(
-                `INSERT INTO bets (user_id, chat_id, game_type, wager_amount_lamports, bet_details, status, created_at, processed_at)
-                 VALUES ($1, $2, $3, $4, $5, 'active', NOW(), NOW())`,
-                [userIdStr, String(chatIdForLog), gameTypeFromReason, (-change).toString(), betDetails]
+                `INSERT INTO bets (user_id, chat_id, game_type, wager_amount_lamports, bet_details, status, reason_tx, created_at, processed_at)
+                 VALUES ($1, $2, $3, $4, $5, 'active', $6, NOW(), NOW())`,
+                [userIdStr, String(chatIdForLog), gameTypeFromReason, wagerAmountForLog.toString(), betDetails, reason]
             );
         } else if (associatedGameId && (reason.startsWith('won_') || reason.startsWith('lost_') || reason.startsWith('push_') || reason.startsWith('cashout_') || reason.startsWith('refund_') || reason.startsWith('jackpot_win'))) {
-            let statusForLog = reason.split(':')[0]; // e.g., "won_de_vs_house", "lost_de_vs_house", "jackpot_win_de"
-            let payoutAmountForLog = change; // For wins/refunds, this is the amount credited. For losses, it's 0.
+            let statusForLog = reason.split(':')[0]; 
+            let payoutAmountForLog = change; 
             
-            if (statusForLog === "lost_de_vs_house") {
-                payoutAmountForLog = 0n; // Explicitly 0 for losses
-            } else if (statusForLog === "jackpot_win_de"){
-                 betDetails.jackpot_won = change.toString(); // 'change' is the jackpot amount
-                 statusForLog = 'jackpot_won_addon'; // Special status or update existing 'won' record
-                  // This logic assumes the main game win is logged separately or jackpot is an addon
-                 await operationClient.query(
-                     `UPDATE bets SET status = COALESCE(status || ', ' || $1, $1), payout_amount_lamports = COALESCE(payout_amount_lamports, 0) + $2, bet_details = bet_details || $3::jsonb, processed_at = NOW() 
-                      WHERE user_id = $4 AND bet_details->>'game_id' = $5 AND (status = 'won' OR status = 'active')`, // Update if 'won' or still 'active'
-                      [statusForLog, payoutAmountForLog.toString(), betDetails, userIdStr, associatedGameId]
-                 );
+            if (statusForLog.startsWith("lost_")) {
+                payoutAmountForLog = 0n; 
+            } else if (statusForLog.startsWith("push_")){
+                // For push, 'change' is the bet amount returned.
+            } else if (statusForLog.startsWith("won_") || statusForLog.startsWith("cashout_")) {
+                // For wins/cashouts, 'change' is the total amount credited (bet_back + profit)
             }
-            
-            // General update for non-jackpot addon outcomes
-            if (statusForLog !== 'jackpot_won_addon') {
+
+            if (statusForLog === "jackpot_win_de"){ // Specific reason for jackpot direct payout
+                 betDetails.jackpot_won = change.toString(); 
+                 statusForLog = 'jackpot_won_direct'; // Log as a direct jackpot payout type
+                 // This assumes jackpot payout is a separate transaction in bets table.
+                 // Or, it could update the original bet record.
                  await operationClient.query(
-                     `UPDATE bets SET status = $1, payout_amount_lamports = $2, processed_at = NOW() 
-                      WHERE user_id = $3 AND bet_details->>'game_id' = $4 AND status = 'active'`,
-                      [statusForLog, payoutAmountForLog.toString(), userIdStr, associatedGameId]
+                     `INSERT INTO bets (user_id, chat_id, game_type, wager_amount_lamports, payout_amount_lamports, bet_details, status, reason_tx, created_at, processed_at)
+                      VALUES ($1, $2, 'jackpot', '0', $3, $4, 'processed', $5, NOW(), NOW())`,
+                     [userIdStr, String(chatIdForLog || 'N/A'), payoutAmountForLog.toString(), betDetails, statusForLog, reason]
+                 );
+            } else { // For game outcomes updating an existing bet record
+                 await operationClient.query(
+                     `UPDATE bets SET status = $1, payout_amount_lamports = $2, reason_tx = $3, processed_at = NOW() 
+                      WHERE user_id = $4 AND bet_details->>'game_id' = $5 AND status = 'active'`,
+                      [statusForLog, payoutAmountForLog.toString(), reason, userIdStr, associatedGameId]
                  );
             }
         }
-        // --- END TRANSACTION LOGGING ---
 
         if (!client_) await operationClient.query('COMMIT');
         console.log(`[DB_BALANCE] User ${userIdStr} balance updated to: ${proposedBalanceLamports} (Change: ${change}, Reason: ${reason}, Game: ${associatedGameId || 'N/A'})`);
         
         return { 
             success: true, 
-            newBalance: Number(proposedBalanceLamports), // For convenience in game logic that doesn't need BigInt
-            newBalanceLamports: proposedBalanceLamports // The precise BigInt value
+            newBalance: Number(proposedBalanceLamports),
+            newBalanceLamports: proposedBalanceLamports 
         };
 
     } catch (error) {
@@ -405,20 +413,22 @@ async function updateUserBalance(userId, amountChangeLamports, reason = "unknown
 }
 
 
-// --- Group Session Functions (In-Memory - for non-critical session data like chat titles) ---
+// --- Group Session Functions (In-Memory) ---
 async function getGroupSession(chatId, chatTitle) {
     const chatIdStr = String(chatId);
     if (!groupGameSessions.has(chatIdStr)) {
         const newSession = {
             chatId: chatIdStr,
             chatTitle: chatTitle || `Group_${chatIdStr}`,
-            // currentGameId, currentGameType, currentBetAmount are no longer reliable for Dice Escalator
-            // if multiple games are allowed. They might still be used for 2-player games like Coinflip/RPS.
-            lastActivity: new Date(),
+            // These fields are mainly for single-instance-per-chat games like Coinflip/RPS
+            currentGameId: null, 
+            currentGameType: null, 
+            currentBetAmount: null, 
+            lastActivity: new Date(), 
         };
         groupGameSessions.set(chatIdStr, newSession);
         console.log(`[IN_MEM_SESS] New group session created: ${chatIdStr} (${newSession.chatTitle}).`);
-        return { ...newSession }; // Return a copy
+        return { ...newSession };
     }
     const session = groupGameSessions.get(chatIdStr);
     if (chatTitle && session.chatTitle !== chatTitle) {
@@ -426,35 +436,39 @@ async function getGroupSession(chatId, chatTitle) {
            console.log(`[IN_MEM_SESS] Updated title for session ${chatIdStr} to "${chatTitle}"`);
     }
     session.lastActivity = new Date();
-    return { ...session }; // Return a copy
+    return { ...session };
 }
 
-// This function's role changes if multiple Dice Escalator games are allowed.
-// It might still be used for Coinflip/RPS if those remain single-instance per chat.
-// For Dice Escalator, we are no longer setting/clearing a single gameId here.
 async function updateGroupGameDetails(chatId, gameId, gameType, betAmount) {
     const chatIdStr = String(chatId);
-    if (!groupGameSessions.has(chatIdStr)) {
-        console.warn(`[IN_MEM_SESS_WARN] Group session ${chatIdStr} not found for update. Attempting creation.`);
-        await getGroupSession(chatIdStr, null);
-    }
-    const session = groupGameSessions.get(chatIdStr);
-    if (!session) {
+    // Ensure session exists, creating if necessary
+    const session = await getGroupSession(chatIdStr, null); // getGroupSession handles creation
+
+    if (!session) { // Should not happen if getGroupSession works correctly
        console.error(`[IN_MEM_SESS_ERROR] Failed to get/create session for ${chatIdStr} during game details update.`);
        return false;
     }
 
-    // If this function is ONLY for single-instance games like Coinflip/RPS, this is fine.
-    // If Dice Escalator is multi-instance, it should not call this to set itself as the *only* game.
-    if (gameType !== 'DiceEscalator') { // Example: Only update for non-DiceEscalator games
+    // Only update if gameType is not DiceEscalator (as DiceEscalator allows multiple games)
+    // Or if clearing details (gameId is null)
+    if (gameType !== 'DiceEscalator' || gameId === null) {
         session.currentGameId = gameId;
         session.currentGameType = gameType;
         session.currentBetAmount = betAmount;
+         // Persist the change back to the map (since getGroupSession returns a copy)
+         groupGameSessions.set(chatIdStr, { ...session });
     }
+    // Update lastActivity regardless
     session.lastActivity = new Date();
+    groupGameSessions.set(chatIdStr, { ...session });
 
-    const betDisplay = (betAmount !== null && betAmount !== undefined && typeof formatCurrency === 'function') ? formatCurrency(betAmount) : 'N/A';
-    console.log(`[IN_MEM_SESS] Group ${chatIdStr} details updated. GameID: ${session.currentGameId || 'None'}, Type: ${session.currentGameType || 'None'}, Bet: ${betDisplay}`);
+
+    // Ensure formatCurrency exists (Part 3) for logging
+    const betDisplay = (betAmount !== null && betAmount !== undefined && typeof formatCurrency === 'function') 
+                       ? formatCurrency(betAmount) 
+                       : (betAmount !== null && betAmount !== undefined ? `${betAmount} credits` : 'N/A');
+
+    console.log(`[IN_MEM_SESS] Group ${chatIdStr} details updated. Active Game for Coinflip/RPS: ID: ${session.currentGameId || 'None'}, Type: ${session.currentGameType || 'None'}, Bet: ${betDisplay}`);
     return true;
 }
 
@@ -1772,7 +1786,7 @@ async function initializeDatabase() {
         console.log('⚙️ [DB Init] Transaction started for schema setup.');
 
         // Wallets Table
-        console.log('⚙️ [DB Init] Ensuring "wallets" table exists...');
+        console.log('⚙️ [DB Init] Ensuring "wallets" table exists (without telegram_username, telegram_first_name columns)...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
                 user_id VARCHAR(255) PRIMARY KEY,
@@ -1785,14 +1799,15 @@ async function initializeDatabase() {
                 total_wagered BIGINT NOT NULL DEFAULT 0,
                 last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
                 last_bet_amounts JSONB DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                telegram_username VARCHAR(255), -- Added for better user info storage
-                telegram_first_name VARCHAR(255) -- Added for better user info storage
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                -- telegram_username VARCHAR(255), -- REVERTED: Removed this column
+                -- telegram_first_name VARCHAR(255) -- REVERTED: Removed this column
             );
         `);
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_total_wagered ON wallets (total_wagered DESC);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_telegram_username ON wallets (telegram_username);');
+        // REVERTED: Removed index creation for telegram_username
+        // await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_telegram_username ON wallets (telegram_username);');
 
 
         // User Balances Table
@@ -1813,18 +1828,18 @@ async function initializeDatabase() {
                 user_id VARCHAR(255) NOT NULL REFERENCES wallets(user_id) ON DELETE CASCADE,
                 chat_id VARCHAR(255) NOT NULL,
                 game_type VARCHAR(50) NOT NULL,
-                bet_details JSONB, -- To store game_id, jackpot_contribution, jackpot_won etc.
-                wager_amount_lamports BIGINT NOT NULL CHECK (wager_amount_lamports >= 0), -- Allow 0 for free plays/refunds if needed, or >0 for actual bets
-                payout_amount_lamports BIGINT, -- Net amount credited back to user for this bet resolution (e.g., bet_back + winnings, or just bet_back for push)
-                status VARCHAR(50) NOT NULL DEFAULT 'active', -- e.g., active, won, lost, push, refunded, jackpot_won_addon
-                reason_tx TEXT, -- Store the reason string from updateUserBalance
+                bet_details JSONB, 
+                wager_amount_lamports BIGINT NOT NULL CHECK (wager_amount_lamports >= 0),
+                payout_amount_lamports BIGINT,
+                status VARCHAR(50) NOT NULL DEFAULT 'active',
+                reason_tx TEXT, 
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 processed_at TIMESTAMPTZ
             );
         `);
         await client.query('CREATE INDEX IF NOT EXISTS idx_bets_user_id_game_type ON bets (user_id, game_type);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_bets_status_created_at ON bets (status, created_at);');
-        await client.query('CREATE INDEX IF NOT EXISTS idx_bets_bet_details_game_id ON bets ((bet_details->>\'game_id\'));'); // Index on game_id within JSONB
+        await client.query('CREATE INDEX IF NOT EXISTS idx_bets_bet_details_game_id ON bets ((bet_details->>\'game_id\'));');
 
         // DICE ROLL REQUESTS TABLE
         console.log('⚙️ [DB Init] Ensuring "dice_roll_requests" table exists...');
@@ -1843,7 +1858,7 @@ async function initializeDatabase() {
         console.log('⚙️ [DB Init] Ensuring "dice_roll_requests" indexes...');
         await client.query('CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested_at ON dice_roll_requests (status, requested_at);');
 
-        // --- ADDED JACKPOT STATUS TABLE ---
+        // JACKPOT STATUS TABLE
         console.log('⚙️ [DB Init] Ensuring "jackpot_status" table exists...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS jackpot_status (
@@ -1855,7 +1870,6 @@ async function initializeDatabase() {
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
-        // Initialize the main Dice Escalator jackpot if it doesn't exist
         // MAIN_JACKPOT_ID should be defined in Part 1
         await client.query(`
             INSERT INTO jackpot_status (jackpot_id, current_amount_lamports, updated_at)
@@ -1863,9 +1877,8 @@ async function initializeDatabase() {
             ON CONFLICT (jackpot_id) DO NOTHING;
         `, [MAIN_JACKPOT_ID]);
         console.log(`⚙️ [DB Init] "jackpot_status" table ensured and initialized for ID: ${MAIN_JACKPOT_ID}.`);
-        // --- END JACKPOT STATUS TABLE ---
 
-        await client.query('COMMIT'); // Commit transaction
+        await client.query('COMMIT'); 
         console.log('✅ [DB Init] Database schema initialized/verified successfully.');
     } catch (err) {
         console.error('❌ CRITICAL DATABASE INITIALIZATION ERROR:', err);
@@ -1880,7 +1893,7 @@ async function initializeDatabase() {
         if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
             safeSendMessage(ADMIN_USER_ID, `🚨 CRITICAL DB INIT FAILED: ${escapeMarkdownV2(String(err.message || err))}. Bot cannot start. Check logs.`, {parse_mode:'MarkdownV2'}).catch(() => {});
         }
-        process.exit(2); // Exit with a specific code indicating DB init failure
+        process.exit(2); 
     } finally {
         if (client) {
             client.release();
@@ -1890,7 +1903,6 @@ async function initializeDatabase() {
 }
 
 // --- Optional Periodic Background Tasks ---
-// (This function was already updated for multiple Dice Escalator games)
 let backgroundTaskInterval = null; 
 async function runPeriodicBackgroundTasks() {
     console.log(`[BACKGROUND_TASK] [${new Date().toISOString()}] Running periodic background tasks...`);
@@ -1915,7 +1927,7 @@ async function runPeriodicBackgroundTasks() {
 
                 if (gameData.type === 'dice_escalator' && gameData.status === 'waiting_db_roll') {
                     staleMsgText += " \\(roll not processed\\)\\.";
-                    if (gameData.playerScore === 0n && gameData.initiatorId && gameData.betAmount) { // Compare with BigInt 0
+                    if (gameData.playerScore === 0n && gameData.initiatorId && gameData.betAmount) { 
                         await updateUserBalance(gameData.initiatorId, gameData.betAmount, refundReason, null, gameId, String(gameData.chatId))
                             .catch(e => console.error(`[BACKGROUND_TASK_ERR] Failed refund for stale dice game ${gameId}: ${e.message}`));
                         staleMsgText += " Bet refunded\\.";
@@ -1952,7 +1964,6 @@ async function runPeriodicBackgroundTasks() {
                    }
                 }
                 activeGames.delete(gameId);
-                // We are no longer clearing groupGameSession.currentGameId for DiceEscalator here
                 cleanedGames++;
             }
         }
@@ -1965,6 +1976,9 @@ async function runPeriodicBackgroundTasks() {
     let cleanedSessions = 0;
     try {
         for (const [chatId, sessionData] of groupGameSessions.entries()) {
+            // Check if this session was only relevant for single-instance games
+            // If DiceEscalator no longer uses currentGameId in session, this cleanup might need adjustment
+            // or be fine if other games (RPS/Coinflip) still use it.
             if (sessionData && !sessionData.currentGameId && sessionData.lastActivity instanceof Date && (now - sessionData.lastActivity.getTime()) > SESSION_CLEANUP_THRESHOLD_MS) {
                 console.log(`[BACKGROUND_TASK] Cleaning inactive group session for chat ${chatId}.`);
                 groupGameSessions.delete(chatId);
@@ -1999,7 +2013,7 @@ async function attemptRestartPolling(error) {
     console.warn(`[POLLING_RETRY] Polling error: ${error.code || 'N/A'} - ${error.message}. Restarting in ${retryPollingDelay / 1000}s...`);
 
     try {
-        if (bot?.isPolling?.()) { // Check bot and isPolling exist
+        if (bot?.isPolling?.()) { 
             await bot.stopPolling({ cancel: true });
             console.log('[POLLING_RETRY] Explicitly stopped polling before retry.');
         }
@@ -2066,18 +2080,14 @@ async function shutdown(signal) {
         await bot.stopPolling({ cancel: true })
             .then(() => console.log("✅ [Shutdown] Polling stopped."))
             .catch(e => console.error("❌ [Shutdown] Error stopping polling:", e.message));
-    } else if (bot && typeof bot.deleteWebHook === 'function' && !bot.options.polling) { // Check if webhook mode
+    } else if (bot && typeof bot.deleteWebHook === 'function' && !bot.options.polling) { 
          console.log("ℹ️ [Shutdown] In webhook mode. Attempting to delete webhook...");
-         await bot.deleteWebHook({ drop_pending_updates: false }) // Let pending updates try to process if queues exist
+         await bot.deleteWebHook({ drop_pending_updates: false }) 
               .then(() => console.log("✅ [Shutdown] Webhook deleted."))
               .catch(e => console.warn(`⚠️ [Shutdown] Non-critical error deleting webhook: ${e.message}`));
     } else {
         console.log("ℹ️ [Shutdown] Telegram bot instance not available or polling/webhook already off.");
     }
-
-    // console.log("🚦 [Shutdown] Closing HTTP server..."); // Uncomment if you add an HTTP server
-    // if (server) { /* ... server.close() logic ... */ }
-    // else { console.log("ℹ️ [Shutdown] HTTP server not running or N/A."); }
 
     console.log("🚦 [Shutdown] Stopping background intervals...");
     if (backgroundTaskInterval) clearInterval(backgroundTaskInterval); backgroundTaskInterval = null;
@@ -2146,7 +2156,7 @@ async function main() {
 
     process.on('unhandledRejection', async (reason, promise) => {
         console.error('\n🔥🔥🔥 UNHANDLED PROMISE REJECTION 🔥🔥🔥');
-        console.error('Reason:', reason); // Log the actual reason object for more details
+        console.error('Reason:', reason); 
         if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
             const reasonMsg = reason instanceof Error ? reason.message : String(reason);
             const stack = reason instanceof Error ? `\nStack: ${reason.stack}` : '';
@@ -2155,12 +2165,12 @@ async function main() {
     });
     console.log("✅ [Startup] Process handlers set up.");
 
-    await initializeDatabase(); // initializeDatabase is defined above in this Part
+    await initializeDatabase(); 
     console.log("Main Bot: Database initialization sequence completed.");
 
     try {
         console.log("Main Bot: Connecting to Telegram and setting up listeners...");
-        if (bot && typeof bot.getMe === 'function') { // Check bot and getMe exist
+        if (bot && typeof bot.getMe === 'function') { 
             bot.on('polling_error', async (error) => {
                  console.error(`\n🚫 MAIN BOT TELEGRAM POLLING ERROR 🚫 Code: ${error.code || 'N/A'} | Message: ${error.message}`);
                  if (String(error.message).includes('409 Conflict')) {
@@ -2186,7 +2196,7 @@ async function main() {
                  }
             });
 
-            bot.on('error', async (error) => {
+            bot.on('error', async (error) => { 
                  console.error('\n🔥 MAIN BOT GENERAL TELEGRAM LIBRARY ERROR EVENT 🔥:', error);
                   if (ADMIN_USER_ID && typeof safeSendMessage === "function") {
                      await safeSendMessage(ADMIN_USER_ID, `⚠️ BOT LIBRARY ERROR\n${escapeMarkdownV2(error.message || String(error))}`, {parse_mode: 'MarkdownV2'}).catch(()=>{});
@@ -2212,7 +2222,7 @@ async function main() {
         }
     } catch (error) {
         console.error("❌ CRITICAL STARTUP ERROR (Main Bot: Connection/Listener Setup):", error);
-        if (ADMIN_USER_ID && BOT_TOKEN && typeof escapeMarkdownV2 === 'function') {
+        if (ADMIN_USER_ID && BOT_TOKEN && typeof escapeMarkdownV2 === 'function' && typeof TelegramBot !== 'undefined') {
             try {
                 const tempBot = new TelegramBot(BOT_TOKEN, {});
                 await tempBot.sendMessage(ADMIN_USER_ID, `🆘 CRITICAL STARTUP FAILURE Main Bot v${BOT_VERSION}:\n${escapeMarkdownV2(error.message)}\nBot is exiting. Check logs.`, {parse_mode:'MarkdownV2'}).catch(() => {});
@@ -2220,8 +2230,11 @@ async function main() {
                 console.error("Main Bot: Failed create temp bot for failure notification:", tempBotError);
             }
         }
-        if (!isShuttingDown) {
+        if (!isShuttingDown && typeof startShutdownWatchdog === 'function') { // Check if function exists
             startShutdownWatchdog('STARTUP_FAILURE');
+            process.exit(1);
+        } else if (!isShuttingDown) {
+            console.error("STARTUP_FAILURE, watchdog not defined. Forcing exit.");
             process.exit(1);
         }
     }
@@ -2231,7 +2244,7 @@ async function main() {
 main().catch(error => {
     console.error("❌ MAIN ASYNC FUNCTION UNHANDLED ERROR (Should not happen if main() has good try/catch):", error);
     if(typeof startShutdownWatchdog === 'function') startShutdownWatchdog('MAIN_CATCH');
-    else console.error("Watchdog not defined, forcing exit immediately.");
+    else console.error("Watchdog not defined, forcing exit immediately from main catch.");
     process.exit(1);
 });
 
