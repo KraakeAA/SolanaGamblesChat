@@ -337,7 +337,7 @@ bot.on('message', async (msg) => {
     }
     // --- END EXTREMELY AGGRESSIVE RAW MESSAGE LOG ---
 
-    // !!!!! --- DIAGNOSTIC CHECK from previous step (kept as requested) --- !!!!!
+    // !!!!! --- DIAGNOSTIC CHECK --- !!!!!
     // Check if DICES_HELPER_BOT_ID is loaded and if the incoming message matches, REGARDLESS of game state
     if (DICES_HELPER_BOT_ID && msg.from && String(msg.from.id) === DICES_HELPER_BOT_ID) {
         console.log(`\n✅✅✅ DIAGNOSTIC: Message received from CONFIGURED HELPER BOT ID (${DICES_HELPER_BOT_ID}). Text: "${msg.text || 'N/A'}" ✅✅✅\n`);
@@ -353,8 +353,8 @@ bot.on('message', async (msg) => {
     const chatType = msg.chat.type; // 'private', 'group', 'supergroup', 'channel'
     const messageId = msg.message_id;
 
-    // --- User Request Step 2: Modified Helper Bot Detection Code ---
-    // --- HELPER BOT MESSAGE IDENTIFICATION AND PROCESSING ---
+    // --- Modified Helper Bot Message Identification ---
+    // (Incorporates User Request Step 2 from previous interactions)
     let isFromHelperBot = false;
     if (msg.from.is_bot) {
         console.log(`[HELPER_CHECK] Message from bot detected:`, {
@@ -379,19 +379,15 @@ bot.on('message', async (msg) => {
         const botInfo = await bot.getMe(); // Get self bot info
         if (!isFromHelperBot && String(msg.from.id) !== String(botInfo.id)) {
              console.log(`[MSG_IGNORE] Ignoring message from other bot (ID: ${msg.from.id}, User: @${msg.from.username||'N/A'}).`);
-             return; // Ignore messages from other bots
+             return; // Ignore messages from irrelevant bots
         }
-
-        // NOTE: The original code had processing logic here. It was removed as per implicit instruction
-        // because Step 5 adds similar logic before the command processing block.
-        // The 'return;' that was here previously if isFromHelperBot was true is now handled by Step 5's logic.
 
         // Logging validation result:
         if (isFromHelperBot) {
              console.log(`[HELPER_MSG_VALIDATED] Identified helper message for potential processing: "${msg.text}"`);
         }
     }
-    // --- End User Request Step 2 Modification ---
+    // --- End Modified Helper Bot Identification ---
 
 
     // --- Cooldown Check (Apply only to non-bot user commands) ---
@@ -399,54 +395,69 @@ bot.on('message', async (msg) => {
         const now = Date.now();
         if (text.startsWith('/') && userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
             console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored due to cooldown.`);
-            // Optionally notify the user they are on cooldown (can be spammy)
-            // await safeSendMessage(chatId, `${createUserMention(msg.from)}, please wait a moment before using another command.`, { parse_mode: 'MarkdownV2' });
             return; // Ignore command if user is on cooldown
         }
-        // Reset cooldown timestamp if the message is a command
         if (text.startsWith('/')) {
             userCooldowns.set(userId, now);
         }
     }
 
 
-    // --- User Request Step 5: Critical Fix for Message Handling ---
-    // Add this BEFORE the command processing section
-    if (isFromHelperBot && msg.text) { // Ensure helper flag is true and message has text
+    // --- Helper Bot Message Processing Logic ---
+    // (Modified to parse mention format: "@MainBotUsername <roll_value>")
+    if (isFromHelperBot && msg.text) {
         console.log(`[HELPER_MSG_PROCESSING] Handling helper message in chat ${chatId}: "${msg.text}"`);
-        const gameSession = await getGroupSession(chatId); // Fetch current session for the chat
+        
+        // Expected format: "@MainBotUsername <roll_value>" e.g., "@SolanaChatBot 5"
+        // We need to get the main bot's username to check the mention correctly.
+        const selfBotInfo = await bot.getMe(); // Already fetched earlier if msg.from.is_bot, but get again for safety if logic changes
+        const selfBotUsername = selfBotInfo.username; // e.g., "SolanaChatBot"
 
-        if (gameSession?.currentGameId) { // Check if there's an active game ID in the session
-            const gameData = activeGames.get(gameSession.currentGameId); // Get game data from active games map
+        const textParts = msg.text.trim().split(' '); // Split by space
+        let rollValue = NaN;
+        let mentionCorrect = false;
 
-            // Check if the active game is Dice Escalator and waiting for the helper's roll
-            if (gameData?.type === 'dice_escalator' && gameData.status === 'waiting_player_roll_via_helper') {
-                const rollValue = parseInt(msg.text.trim(), 10); // Parse the roll value from helper message text
+        // Check if the first part is a mention of our main bot
+        if (textParts.length >= 2 && selfBotUsername && textParts[0].toLowerCase() === `@${selfBotUsername.toLowerCase()}`) {
+            mentionCorrect = true;
+            rollValue = parseInt(textParts[1], 10); // The roll should be the second part
+        } else {
+            console.log(`[HELPER_MSG_FORMAT_ERR] Helper message "${msg.text}" does not correctly mention @${selfBotUsername || 'UnknownSelf'}.`);
+        }
 
-                if (!isNaN(rollValue) && rollValue >= 1 && rollValue <= 6) { // Validate the parsed roll
-                    console.log(`[HELPER_ROLL_VALID] Processing roll ${rollValue} for game ${gameData.gameId}`);
-                    // Ensure processDiceEscalatorPlayerRoll is defined and accessible
-                    await processDiceEscalatorPlayerRoll(gameData, rollValue);
-                    return; // Important: Skip further processing (like commands) if helper message handled
+        if (mentionCorrect) {
+            const gameSession = await getGroupSession(chatId);
+            if (gameSession?.currentGameId) {
+                const gameData = activeGames.get(gameSession.currentGameId);
+                if (gameData?.type === 'dice_escalator' && gameData.status === 'waiting_player_roll_via_helper') {
+                    if (!isNaN(rollValue) && rollValue >= 1 && rollValue <= 6) {
+                        console.log(`[HELPER_ROLL_VALID_MENTION] Processing roll ${rollValue} (from mention) for game ${gameData.gameId}`);
+                        await processDiceEscalatorPlayerRoll(gameData, rollValue);
+                        return; // Important: Skip further processing
+                    } else {
+                        console.log(`[HELPER_ROLL_INVALID_MENTION] Parsed roll value "${textParts[1]}" is not a valid number (1-6). Full text: "${msg.text}"`);
+                        const helperBotNameForError = DICES_HELPER_BOT_ID ? `Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : (DICES_HELPER_BOT_USERNAME ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
+                        if (gameData.currentPlayerId) {
+                            await safeSendMessage(gameData.currentPlayerId, `There was an issue reading the roll ("${escapeMarkdownV2(msg.text || 'empty')}") from ${helperBotNameForError}. Please click 'Prompt Roll' again.`, {parse_mode: 'MarkdownV2'});
+                        }
+                        gameData.status = 'player_turn_prompt_action';
+                        activeGames.set(gameData.gameId, gameData);
+                        console.log(`[GAME_STATE_RESET] Reset game ${gameData.gameId} status to 'player_turn_prompt_action' due to invalid roll from mention.`);
+                        return;
+                    }
                 } else {
-                     console.log(`[HELPER_ROLL_INVALID] Helper text "${msg.text}" not parseable or invalid roll. Game: ${gameData.gameId}`);
-                     // Optionally inform the player about the issue reading the roll
-                     const helperBotName = DICES_HELPER_BOT_ID ? `Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : (DICES_HELPER_BOT_USERNAME ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
-                     await safeSendMessage(gameData.currentPlayerId, `There was an issue reading the roll ("${escapeMarkdownV2(msg.text)}") from ${helperBotName}. Please click 'Prompt Roll' again if you wish to retry.`, {parse_mode: 'MarkdownV2'});
-                     // Do we need to reset the game status here? Maybe back to 'player_turn_prompt_action'?
-                     // gameData.status = 'player_turn_prompt_action'; // Example reset
-                     // activeGames.set(gameData.gameId, gameData);
-                     // Consider implications before uncommenting status reset
-                     return; // Still return to prevent command processing
+                    console.log(`[HELPER_MSG_IGNORE_MENTION] Ignored helper message (mention ok). Game state not ready. Type: ${gameData?.type}, Status: ${gameData?.status}`);
                 }
             } else {
-                 console.log(`[HELPER_MSG_IGNORE] Ignored helper message. Game state not ready or not Dice Escalator. Type: ${gameData?.type}, Status: ${gameData?.status}`);
+                console.log(`[HELPER_MSG_IGNORE_MENTION] Ignored helper message (mention ok). No active game ID in session for chat ${chatId}.`);
             }
-        } else {
-             console.log(`[HELPER_MSG_IGNORE] Ignored helper message. No active game ID found in session for chat ${chatId}.`);
         }
+        // If isFromHelperBot is true, but message wasn't processed (e.g., wrong format, wrong game state),
+        // return to prevent treating it as a user command.
+        console.log(`[HELPER_MSG_FALLTHROUGH_MENTION] Helper message from ${msg.from.id} (text: "${msg.text}") was not fully processed by game logic. Ignoring.`);
+        return;
     }
-    // --- End User Request Step 5 ---
+    // --- End Helper Bot Message Processing Logic ---
 
 
     // --- Command Processing (Only if message is not from helper bot or wasn't handled above) ---
@@ -458,7 +469,6 @@ bot.on('message', async (msg) => {
         // Ensure user exists in our system before processing command
         await getUser(userId, msg.from.username); // Pass username for potential updates
 
-        // --- User Request Step 6: Added 'debughelper' command ---
         switch (commandName) {
             case 'start':
             case 'help':
@@ -504,32 +514,33 @@ bot.on('message', async (msg) => {
                     await safeSendMessage(chatId, "Dice Escalator can only be started in a group or supergroup chat.", {});
                 }
                 break;
-            case 'debughelper': // Added command
-                // Check if ADMIN_USER_ID is set and matches the user sending the command
+            case 'debughelper':
                  if (ADMIN_USER_ID && String(msg.from.id) === ADMIN_USER_ID) {
                     const helperInfo = {
-                        configuredId: DICES_HELPER_BOT_ID, // Show currently loaded ID
-                        configuredUsername: DICES_HELPER_BOT_USERNAME, // Show currently loaded username
-                        // Get active Dice Escalator games (potentially across all chats)
-                        activeDiceEscalatorGames: Array.from(activeGames.values()).filter(g => g.type === 'dice_escalator')
+                        configuredId: DICES_HELPER_BOT_ID,
+                        configuredUsername: DICES_HELPER_BOT_USERNAME,
+                        activeDiceEscalatorGames: Array.from(activeGames.values())
+                           .filter(g => g.type === 'dice_escalator')
+                           .map(g => ({
+                               gameId: g.gameId,
+                               chatId: g.chatId,
+                               status: g.status,
+                               currentPlayerId: g.currentPlayerId,
+                               playerScore: g.playerScore
+                            }))
                     };
-                    // Send the debug info as a JSON string in a code block
                     await safeSendMessage(chatId, `*Helper Bot Debug Info:*\n\`\`\`json\n${JSON.stringify(helperInfo, null, 2)}\n\`\`\``, {parse_mode: 'MarkdownV2'});
                 } else {
-                     // Optionally inform non-admins they can't use it, or just ignore silently
                      console.log(`[CMD_IGNORE] User ${userId} tried to use /debughelper without admin privileges.`);
                 }
                 break;
-                // --- End User Request Step 6 ---
             default:
-                // Only reply for unknown commands in private chat or if they start with /
-                // Avoids replying to general group chat messages not meant for the bot.
                 if (chatType === 'private' || text.startsWith('/')) {
                     await safeSendMessage(chatId, "Unknown command. Try /help to see available commands.", {});
                 }
         }
     }
-});
+}); // End bot.on('message')
 
 // --- Callback Query Handler ---
 bot.on('callback_query', async (callbackQuery) => {
