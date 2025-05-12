@@ -1245,7 +1245,6 @@ console.log("Loading Part 5b: Dice Escalator Game Logic...");
 
 // Constants for Dice Escalator
 const DICE_ESCALATOR_BOT_ROLLS = 3; // Max rolls for the bot in Dice Escalator if player cashes out
-const DICE_ESCALATOR_BUST_ON = 1; // Define bust value here if not already defined globally
 
 // --- Dice Escalator Command Handler (/startdice) ---
 async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount, commandMessageId) {
