@@ -273,27 +273,30 @@ const DICE_ESCALATOR_BOT_ROLLS = 3; // How many times bot will attempt to roll i
 // --- Main Message Handler ---
 bot.on('message', async (msg) => {
     // --- START EXTREMELY AGGRESSIVE RAW MESSAGE LOG ---
-    // THIS IS THE VERY FIRST THING IN THE HANDLER
-    if (msg && msg.from && msg.chat) { // Ensure basic msg structure
+    if (msg && msg.from && msg.chat) {
         console.log(`[ULTRA_RAW_LOG] Text: "${msg.text || 'N/A'}", FromID: ${msg.from.id}, User: @${msg.from.username || 'N/A'}, IsBot: ${msg.from.is_bot}, ChatID: ${msg.chat.id}`);
     } else {
-        console.log(`[ULTRA_RAW_LOG] Received incomplete/malformed message object. Msg:`, JSON.stringify(msg).substring(0,200));
-        return; // Cannot proceed with malformed msg
+        console.log(`[ULTRA_RAW_LOG] Received incomplete/malformed message object. Msg:`, JSON.stringify(msg).substring(0, 200));
+        return; // Return if message is malformed
     }
     // --- END EXTREMELY AGGRESSIVE RAW MESSAGE LOG ---
 
-    // Initial guard: We absolutely need 'msg.from' to identify the sender.
-    // This was already checked by the ULTRA_RAW_LOG block, but fine as a double-check.
-    if (!msg.from) {
-        return;
+    // !!!!! --- NEW DIAGNOSTIC CHECK --- !!!!!
+    // Check if DICES_HELPER_BOT_ID is loaded and if the incoming message matches, REGARDLESS of anything else.
+    // Make sure DICES_HELPER_BOT_ID variable is accessible here (it should be from Part 1)
+    if (DICES_HELPER_BOT_ID && msg.from && String(msg.from.id) === DICES_HELPER_BOT_ID) {
+        console.log(`\n✅✅✅ DIAGNOSTIC: Message received from CONFIGURED HELPER BOT ID (${DICES_HELPER_BOT_ID}). Text: "${msg.text || 'N/A'}" ✅✅✅\n`);
     }
+    // !!!!! --- END NEW DIAGNOSTIC CHECK --- !!!!!
 
-    const userId = String(msg.from.id); // Will be helper's ID if from helper, or user's ID
+
+    if (!msg.from) return; // Return if no sender info
+
+    const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const text = msg.text || ""; // Ensure text is always a string for .startsWith and .trim
+    const text = msg.text || "";
     const chatType = msg.chat.type;
     const messageId = msg.message_id;
-
 
     // --- HELPER BOT MESSAGE IDENTIFICATION AND PROCESSING ---
     let isFromHelperBot = false;
