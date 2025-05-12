@@ -977,103 +977,175 @@ async function processDiceEscalatorBotTurn(gameData, messageIdToUpdate) {
 
 console.log("Part 5: Message & Callback Handling, Basic Game Flow - Complete.");
 // End of Part 5
+
 //---------------------------------------------------------------------------
 // index.js - Part 6: Startup, Shutdown, and Basic Error Handling
 //---------------------------------------------------------------------------
 console.log("Loading Part 6: Startup, Shutdown, and Basic Error Handling...");
 
-async function runPeriodicBackgroundTasks() { /* ... as before, maybe add dice_escalator to cleanup logic ... */
-    console.log(`[BACKGROUND_TASK] [${new Date().toISOString()}] Running periodic background tasks...`);
-    const now = Date.now();
-    const GAME_CLEANUP_THRESHOLD_MS = JOIN_GAME_TIMEOUT_MS * 5;
-    let cleanedGames = 0;
-    for (const [gameId, gameData] of activeGames.entries()) {
-        if (now - gameData.creationTime > GAME_CLEANUP_THRESHOLD_MS &&
-            (gameData.status === 'waiting_opponent' || gameData.status === 'waiting_choices' || gameData.status === 'waiting_player_roll_via_helper')) {
-            console.warn(`[BACKGROUND_TASK] Cleaning up stale game ${gameId} (${gameData.type}) in chat ${gameData.chatId}. Status: ${gameData.status}`);
-            if (gameData.initiatorId && gameData.betAmount > 0 && (gameData.status === 'waiting_opponent' || (gameData.type==='dice_escalator' && gameData.currentPlayerId === gameData.initiatorId && gameData.playerScore ===0 ))) {
-                await updateUserBalance(gameData.initiatorId, gameData.betAmount, `refund_stale_${gameData.type}:${gameId}`, gameData.chatId);
-                const staleMsg = `Game (ID: \`${gameId}\`) by ${gameData.initiatorMention} cleared due to inactivity. Bet refunded.`;
-                 if(gameData.gameSetupMessageId) bot.editMessageText(escapeMarkdownV2(staleMsg), {chat_id: gameData.chatId, message_id: gameData.gameSetupMessageId, parse_mode: 'MarkdownV2', reply_markup:{}}).catch(()=>{safeSendMessage(gameData.chatId, escapeMarkdownV2(staleMsg), {parse_mode:'MarkdownV2'})});
-                 else safeSendMessage(gameData.chatId, escapeMarkdownV2(staleMsg), {parse_mode:'MarkdownV2'});
-            }
-            activeGames.delete(gameId);
-            const groupSession = await getGroupSession(gameData.chatId);
-            if (groupSession && groupSession.currentGameId === gameId) await updateGroupGameDetails(gameData.chatId, null, null, null);
-            cleanedGames++;
-        }
-    }
-    if (cleanedGames > 0) console.log(`[BACKGROUND_TASK] Cleaned ${cleanedGames} stale game(s).`);
-    /* ... rest of cleanup as before ... */
+async function runPeriodicBackgroundTasks() {
+    console.log(`[BACKGROUND_TASK] [${new Date().toISOString()}] Running periodic background tasks...`);
+    const now = Date.now();
+    const GAME_CLEANUP_THRESHOLD_MS = JOIN_GAME_TIMEOUT_MS * 5; // Using constant from Part 5
+    let cleanedGames = 0;
+    for (const [gameId, gameData] of activeGames.entries()) {
+        if (now - gameData.creationTime > GAME_CLEANUP_THRESHOLD_MS && (gameData.status === 'waiting_opponent' || gameData.status === 'waiting_choices' || gameData.status === 'waiting_player_roll_via_helper')) {
+            console.warn(`[BACKGROUND_TASK] Cleaning stale game ${gameId} (${gameData.type}) in chat ${gameData.chatId}. Status: ${gameData.status}`);
+            if (gameData.initiatorId && gameData.betAmount > 0 && (gameData.status === 'waiting_opponent' || (gameData.type==='dice_escalator' && gameData.status === 'waiting_player_roll_via_helper' && gameData.playerScore === 0 ))) {
+                // Ensure updateUserBalance and other functions/constants are accessible here
+                await updateUserBalance(gameData.initiatorId, gameData.betAmount, `refund_stale_${gameData.type}:${gameId}`, gameData.chatId);
+                const staleMsg = `Game (ID: \`${gameId}\`) by ${gameData.initiatorMention} cleared due to inactivity. Bet refunded.`;
+                 if(gameData.gameSetupMessageId) {
+                    // Assuming 'bot' and 'escapeMarkdownV2' are accessible
+                    bot.editMessageText(escapeMarkdownV2(staleMsg), {chat_id: String(gameData.chatId), message_id: Number(gameData.gameSetupMessageId), parse_mode: 'MarkdownV2', reply_markup:{}}).catch(()=>{safeSendMessage(String(gameData.chatId), escapeMarkdownV2(staleMsg), {parse_mode:'MarkdownV2'})});
+                } else {
+                    safeSendMessage(String(gameData.chatId), escapeMarkdownV2(staleMsg), {parse_mode:'MarkdownV2'});
+                }
+            }
+            activeGames.delete(gameId);
+            // Ensure getGroupSession and updateGroupGameDetails are accessible
+            const groupSession = await getGroupSession(gameData.chatId);
+            if (groupSession && groupSession.currentGameId === gameId) await updateGroupGameDetails(gameData.chatId, null, null, null);
+            cleanedGames++;
+        }
+    }
+    if (cleanedGames > 0) console.log(`[BACKGROUND_TASK] Cleaned ${cleanedGames} stale game(s).`);
+
+    const SESSION_CLEANUP_THRESHOLD_MS = JOIN_GAME_TIMEOUT_MS * 20; // Using constant from Part 5
+    let cleanedSessions = 0;
+    for (const [chatId, sessionData] of groupGameSessions.entries()) {
+        if (!sessionData.currentGameId && sessionData.lastActivity && (now - sessionData.lastActivity.getTime()) > SESSION_CLEANUP_THRESHOLD_MS) {
+            console.log(`[BACKGROUND_TASK] Cleaning inactive group session for chat ${chatId}.`);
+            groupGameSessions.delete(chatId);
+            cleanedSessions++;
+        }
+    }
+    if (cleanedSessions > 0) console.log(`[BACKGROUND_TASK] Cleaned ${cleanedSessions} inactive group session entries.`);
+    console.log(`[BACKGROUND_TASK] Finished. Active games: ${activeGames.size}, Group sessions: ${groupGameSessions.size}.`);
 }
+// Note: The original code had the background task interval commented out. Keeping it that way unless needed.
 // const backgroundTaskInterval = setInterval(runPeriodicBackgroundTasks, 15 * 60 * 1000);
 
-
-process.on('uncaughtException', (error, origin) => { /* ... as before ... */
-    console.error(`\n🚨🚨 UNCAUGHT EXCEPTION AT: ${origin} 🚨🚨`, error);
-    if(ADMIN_USER_ID) safeSendMessage(ADMIN_USER_ID, `🆘 UNCAUGHT EXCEPTION:\nOrigin: ${origin}\nError: ${error.message}\nBot might be unstable.`, {}).catch();
-});
-process.on('unhandledRejection', (reason, promise) => { /* ... as before ... */
-    console.error(`\n🔥🔥 UNHANDLED REJECTION 🔥🔥`, reason, promise);
-    if(ADMIN_USER_ID) safeSendMessage(ADMIN_USER_ID, `♨️ UNHANDLED REJECTION:\nReason: ${escapeMarkdownV2(String(reason instanceof Error ? reason.message : reason))}`, {parse_mode:'MarkdownV2'}).catch();
+// --- Process-level Error Handling ---
+process.on('uncaughtException', (error, origin) => {
+    console.error(`\n🚨🚨 UNCAUGHT EXCEPTION AT: ${origin} 🚨🚨`, error);
+    // Ensure ADMIN_USER_ID and safeSendMessage are accessible
+    if(ADMIN_USER_ID) safeSendMessage(ADMIN_USER_ID, `🆘 UNCAUGHT EXCEPTION:\nOrigin: ${origin}\nError: ${error.message}`, {}).catch(()=>{});
 });
 
-let isShuttingDown = false;
-async function shutdown(signal) { /* ... as before ... */
-    if (isShuttingDown) return; isShuttingDown = true;
-    console.log(`\n🚦 ${signal}. Shutting down Group Casino Bot v${BOT_VERSION}...`);
-    if (bot && bot.isPolling()) { try { await bot.stopPolling({cancel:true}); console.log("Polling stopped."); } catch(e){console.error("Err stopping poll:",e.message);} }
-    // if (backgroundTaskInterval) clearInterval(backgroundTaskInterval);
-    if (ADMIN_USER_ID) await safeSendMessage(ADMIN_USER_ID, `ℹ️ Bot v${BOT_VERSION} shutting down (Signal: ${signal}).`).catch(()=>{});
-    console.log("✅ Shutdown complete. Exiting.");
-    process.exit(signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1);
+process.on('unhandledRejection', (reason, promise) => {
+    console.error(`\n🔥🔥 UNHANDLED REJECTION 🔥🔥`, reason, promise);
+    // Ensure ADMIN_USER_ID, safeSendMessage, and escapeMarkdownV2 are accessible
+    if(ADMIN_USER_ID) safeSendMessage(ADMIN_USER_ID, `♨️ UNHANDLED REJECTION:\nReason: ${escapeMarkdownV2(String(reason instanceof Error ? reason.message : reason))}`, {parse_mode:'MarkdownV2'}).catch();
+});
+
+// --- NEW: Telegram Bot Library Specific Error Handling ---
+// Ensure 'bot' instance is accessible here
+if (bot) { // Add a check to ensure bot is defined before attaching listeners
+    bot.on('polling_error', (error) => {
+        console.error(`\n🚫 POLLING ERROR 🚫 Code: ${error.code}`);
+        console.error(`Message: ${error.message}`);
+        console.error(error); // Log the full error object for detailed diagnostics
+    });
+
+    bot.on('error', (error) => {
+        console.error('\n🔥 BOT GENERAL ERROR EVENT 🔥:', error);
+    });
+
+    // You might also consider 'webhook_error' if you ever switch from polling
+    // bot.on('webhook_error', (error) => {
+    //   console.error(`\n🌐 WEBHOOK ERROR 🌐 Code: ${error.code}`);
+    //   console.error(`Message: ${error.message}`);
+    // });
+
+} else {
+    console.error("!!! CRITICAL ERROR: 'bot' instance not defined when trying to attach error handlers in Part 6 !!!");
+}
+// --- END NEW ---
+
+
+// --- Shutdown Handling ---
+let isShuttingDown = false; // Define isShuttingDown here if not defined globally earlier
+async function shutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n🚦 Received ${signal}. Shutting down Bot v${BOT_VERSION}...`); // Ensure BOT_VERSION is accessible
+    if (bot && bot.isPolling()) {
+        try {
+            await bot.stopPolling({cancel:true});
+            console.log("Polling stopped.");
+        } catch(e){
+            console.error("Error stopping polling:", e.message);
+        }
+    }
+    /* if (backgroundTaskInterval) clearInterval(backgroundTaskInterval); */ // Keep commented if original was commented
+    // Ensure ADMIN_USER_ID and safeSendMessage are accessible
+    if (ADMIN_USER_ID) {
+        await safeSendMessage(ADMIN_USER_ID, `ℹ️ Bot v${BOT_VERSION} shutting down (Signal: ${signal}).`).catch(()=>{});
+    }
+    console.log("✅ Shutdown complete. Exiting.");
+    process.exit(signal === 'SIGINT' || signal === 'SIGTERM' ? 0 : 1);
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-// --- Main Application Startup Function ---
+
+// --- Main Startup Function ---
 async function main() {
-    console.log(`\n🚀🚀🚀 Initializing Solana Group Chat Casino Bot v${BOT_VERSION} (Simplified Mode) 🚀🚀🚀`);
-    console.log(`Timestamp: ${new Date().toISOString()}`);
-    console.log("Attempting to connect to Telegram API...");
+    console.log(`\n🚀🚀🚀 Initializing Group Chat Casino Bot v${BOT_VERSION} 🚀🚀🚀`); // Ensure BOT_VERSION accessible
+    console.log(`Timestamp: ${new Date().toISOString()}`);
 
-    // TEMPORARY DEBUGGING LOG FOR RAILWAY:
-    const tokenForDebug = process.env.BOT_TOKEN;
-    if (tokenForDebug) {
-        console.log(`[DEBUG] Token being used by bot.getMe(): First 5 chars: '${tokenForDebug.substring(0, 5)}', Last 5 chars: '${tokenForDebug.substring(tokenForDebug.length - 5)}', Length: ${tokenForDebug.length}`);
-    } else {
-        console.log("[DEBUG] Token being used by bot.getMe() is UNDEFINED OR EMPTY at this point!");
-    }
-    // END TEMPORARY DEBUGGING LOG
+    // Ensure DICES_HELPER_BOT_USERNAME, DICES_HELPER_BOT_ID, bot are accessible
+    if (DICES_HELPER_BOT_USERNAME && !DICES_HELPER_BOT_ID) {
+        console.log(`[STARTUP_INFO] Attempting to fetch ID for helper bot @${DICES_HELPER_BOT_USERNAME}...`);
+        try {
+            const rollerBotInfo = await bot.getChat(`@${DICES_HELPER_BOT_USERNAME}`);
+            if (rollerBotInfo && rollerBotInfo.id) {
+                DICES_HELPER_BOT_ID = String(rollerBotInfo.id); // Ensure DICES_HELPER_BOT_ID is let/var if reassigned
+                console.log(`[STARTUP_INFO] Successfully fetched and set DICES_HELPER_BOT_ID: ${DICES_HELPER_BOT_ID} for @${DICES_HELPER_BOT_USERNAME}`);
+            } else {
+                console.warn(`[STARTUP_WARN] Could not fetch ID for @${DICES_HELPER_BOT_USERNAME}. Ensure username is correct and bot is accessible by this main bot.`);
+            }
+        } catch (error) {
+            console.error(`[STARTUP_ERROR] Failed to get chat info for @${DICES_HELPER_BOT_USERNAME}: ${error.message}.`);
+        }
+    } else if (DICES_HELPER_BOT_ID) {
+        console.log(`[STARTUP_INFO] Using pre-configured DICES_HELPER_BOT_ID: ${DICES_HELPER_BOT_ID}`);
+    } else {
+        console.warn(`[STARTUP_WARN] No Helper Bot ID or Username configured for Dice Escalator.`);
+    }
 
-    try {
-        const me = await bot.getMe(); // Verifies the BOT_TOKEN and connection
-        console.log(`✅ Successfully connected to Telegram! Bot Name: @${me.username}, Bot ID: ${me.id}`);
-        // ... rest of main function
-    } catch (error) {
-        console.error("❌ CRITICAL STARTUP ERROR (bot.getMe() failed):");
-        // TEMPORARY DEBUGGING LOG FOR RAILWAY (in case of error too):
-        const tokenInError = process.env.BOT_TOKEN;
-         if (tokenInError) {
-            console.log(`[DEBUG_ERROR] Token at time of error: First 5: '${tokenInError.substring(0, 5)}', Last 5: '${tokenInError.substring(tokenInError.length - 5)}', Length: ${tokenInError.length}`);
-        } else {
-            console.log("[DEBUG_ERROR] Token at time of error was UNDEFINED OR EMPTY!");
-        }
-        // END TEMPORARY DEBUGGING LOG
-        console.error(error); // This will print the ETELEGRAM 404 error
-        console.error("Please check your BOT_TOKEN on Railway, network connection, and Telegram API status.");
-        if (ADMIN_USER_ID && BOT_TOKEN) { // Check BOT_TOKEN here too
-            const tempBotForError = new TelegramBot(BOT_TOKEN, {});
-            tempBotForError.sendMessage(ADMIN_USER_ID, `🆘 CRITICAL STARTUP FAILURE v${BOT_VERSION} on Railway:\n${escapeMarkdownV2(error.message)}\nToken (ends): ...${tokenInError ? tokenInError.substring(tokenInError.length - 5) : 'N/A'}\nExiting.`).catch(e => console.error("Failed to send critical startup error admin notification:", e));
-        }
-        process.exit(1);
-    }
+    try {
+        const me = await bot.getMe();
+        console.log(`✅ Successfully connected to Telegram! Bot Name: @${me.username}, Bot ID: ${me.id}`);
+        // Ensure ADMIN_USER_ID, safeSendMessage, BOT_VERSION, process.env.HOSTNAME are accessible
+        if (ADMIN_USER_ID) {
+            await safeSendMessage(ADMIN_USER_ID, `🎉 Bot v${BOT_VERSION} started! Polling active. Host: ${process.env.HOSTNAME || 'local'}`, { parse_mode: 'MarkdownV2' });
+        }
+        console.log(`\n🎉 Bot operational! Waiting for messages...`);
+        // Run background tasks once shortly after startup
+        setTimeout(runPeriodicBackgroundTasks, 15000); // Ensure runPeriodicBackgroundTasks is defined
+    } catch (error) {
+        console.error("❌ CRITICAL STARTUP ERROR (getMe):", error);
+        // Ensure ADMIN_USER_ID, BOT_TOKEN, TelegramBot, BOT_VERSION, escapeMarkdownV2 are accessible
+        if (ADMIN_USER_ID && BOT_TOKEN) {
+            // Use a temporary bot instance ONLY for sending the failure message
+            try {
+                const tempBot = new TelegramBot(BOT_TOKEN, {}); // No polling for temp bot
+                await tempBot.sendMessage(ADMIN_USER_ID, `🆘 CRITICAL STARTUP FAILURE v${BOT_VERSION}:\n${escapeMarkdownV2(error.message)}\nBot is exiting.`).catch(e => console.error("Failed to send critical startup failure message:", e));
+            } catch (tempBotError) {
+                console.error("Failed to create temporary bot for failure notification:", tempBotError);
+            }
+        }
+        process.exit(1);
+    }
 }
 
+// --- Final Execution ---
 main().catch(error => {
-    console.error("❌ MAIN ASYNC UNHANDLED ERROR:", error);
-    process.exit(1);
+    console.error("❌ MAIN ASYNC FUNCTION UNHANDLED ERROR:", error);
+    process.exit(1);
 });
 
 console.log("Part 6: Startup, Shutdown, and Basic Error Handling - Complete.");
-// --- END OF index.js ---
+// --- END OF index.js --- // (Technically end of Part 6, ensure this doesn't conflict with file end)
