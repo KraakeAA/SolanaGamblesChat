@@ -272,26 +272,23 @@ const DICE_ESCALATOR_BOT_ROLLS = 3; // How many times bot will attempt to roll i
 
 // --- Main Message Handler ---
 bot.on('message', async (msg) => {
-    // --- START TEMPORARY RAW MESSAGE LOG ---
-    // This logs every message object the bot's "message" event receives
-    if (msg && msg.from) {
-        console.log(`[RAW_MSG_INPUT] Received message. Text: "${msg.text || 'N/A'}", From ID: ${msg.from.id}, From Username: @${msg.from.username || 'N/A'}, Is Bot: ${msg.from.is_bot}, Chat ID: ${msg.chat.id}`);
-    } else if (msg) {
-        console.log(`[RAW_MSG_INPUT] Received message with no 'from' field (or 'msg' itself is unusual):`, JSON.stringify(msg).substring(0, 300));
-        return; // Can't process if 'from' is missing
+    // --- START EXTREMELY AGGRESSIVE RAW MESSAGE LOG ---
+    // THIS IS THE VERY FIRST THING IN THE HANDLER
+    if (msg && msg.from && msg.chat) { // Ensure basic msg structure
+        console.log(`[ULTRA_RAW_LOG] Text: "${msg.text || 'N/A'}", FromID: ${msg.from.id}, User: @${msg.from.username || 'N/A'}, IsBot: ${msg.from.is_bot}, ChatID: ${msg.chat.id}`);
     } else {
-        console.log("[RAW_MSG_INPUT] Received an undefined 'msg' object in message handler. This should not happen.");
-        return;
+        console.log(`[ULTRA_RAW_LOG] Received incomplete/malformed message object. Msg:`, JSON.stringify(msg).substring(0,200));
+        return; // Cannot proceed with malformed msg
     }
-    // --- END TEMPORARY RAW MESSAGE LOG ---
+    // --- END EXTREMELY AGGRESSIVE RAW MESSAGE LOG ---
 
     // Initial guard: We absolutely need 'msg.from' to identify the sender.
-    // This was already checked by the RAW_MSG_INPUT block, but keeping it as a safeguard.
+    // This was already checked by the ULTRA_RAW_LOG block, but fine as a double-check.
     if (!msg.from) {
         return;
     }
 
-    const userId = String(msg.from.id); // This will be helper's ID if from helper, or user's ID
+    const userId = String(msg.from.id); // Will be helper's ID if from helper, or user's ID
     const chatId = String(msg.chat.id);
     const text = msg.text || ""; // Ensure text is always a string for .startsWith and .trim
     const chatType = msg.chat.type;
@@ -299,28 +296,33 @@ bot.on('message', async (msg) => {
 
 
     // --- HELPER BOT MESSAGE IDENTIFICATION AND PROCESSING ---
-    // This block specifically checks if the message is from our configured Helper Bot.
     let isFromHelperBot = false;
     if (msg.from.is_bot) { // Only proceed if the sender is a bot
-        if (DICES_HELPER_BOT_ID) { // Prioritize ID check if ID is configured
-            // Debug log for ID comparison
-            console.log(`[HELPER_CHECK_DEBUG] Comparing msg.from.id: '${String(msg.from.id)}' (Type: ${typeof msg.from.id}) WITH DICES_HELPER_BOT_ID: '${DICES_HELPER_BOT_ID}' (Type: ${typeof DICES_HELPER_BOT_ID})`);
+        // Debug log for ID comparison (will print for ANY bot message initially)
+        if (DICES_HELPER_BOT_ID) {
+            console.log(`[HELPER_CHECK_DEBUG] Comparing incoming bot msg.from.id: '${String(msg.from.id)}' (Type: ${typeof msg.from.id}) WITH configured DICES_HELPER_BOT_ID: '${DICES_HELPER_BOT_ID}' (Type: ${typeof DICES_HELPER_BOT_ID})`);
             if (String(msg.from.id) === DICES_HELPER_BOT_ID) {
                 isFromHelperBot = true;
             }
         } else if (DICES_HELPER_BOT_USERNAME) { // Fallback to username if ID is not configured
-             console.log(`[HELPER_CHECK_DEBUG] Comparing msg.from.username: '@${msg.from.username || 'N/A'}' (Type: ${typeof msg.from.username}) WITH DICES_HELPER_BOT_USERNAME: '${DICES_HELPER_BOT_USERNAME}' (Type: ${typeof DICES_HELPER_BOT_USERNAME})`);
-            if (msg.from.username === DICES_HELPER_BOT_USERNAME) {
+             console.log(`[HELPER_CHECK_DEBUG] Comparing incoming bot msg.from.username: '@${msg.from.username || 'N/A'}' (Type: ${typeof msg.from.username}) WITH configured DICES_HELPER_BOT_USERNAME: '${DICES_HELPER_BOT_USERNAME}' (Type: ${typeof DICES_HELPER_BOT_USERNAME})`);
+            if (msg.from.username && msg.from.username.toLowerCase() === DICES_HELPER_BOT_USERNAME.toLowerCase()) {
                 isFromHelperBot = true;
             }
         }
+        // If it's a bot but not our helper, ignore it (unless it's the bot itself for some reason - usually not needed)
+        if (!isFromHelperBot && String(msg.from.id) !== String(bot. stessaId)) { // bot.itselfId or a way to get self bot ID if needed
+            // console.log(`[MSG_IGNORE] Ignoring message from other bot: @${msg.from.username || msg.from.id}`);
+            return;
+        }
     }
+
 
     if (isFromHelperBot) {
         console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Message IS from configured Helper Bot (User ID: ${msg.from.id}, Username: @${msg.from.username || 'N/A'}). Text: "${text}"`);
 
-        if (!msg.text) { // Helper bot's message must contain text (the roll number)
-            console.log(`[HELPER_MSG_IGNORE] Helper Bot (@${msg.from.username || msg.from.id}) message ignored: No text content.`);
+        if (!text.trim()) { // Helper bot's message must contain text (the roll number)
+            console.log(`[HELPER_MSG_IGNORE] Helper Bot (@${msg.from.username || msg.from.id}) message ignored: Text content is empty or whitespace.`);
             return; // Stop processing if helper sent no text
         }
 
@@ -337,15 +339,16 @@ bot.on('message', async (msg) => {
 
                 const rollValue = parseInt(text.trim(), 10);
                 if (!isNaN(rollValue) && rollValue >= 1 && rollValue <= 6) { // Assuming D6
-                    console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Parsed roll value: ${rollValue}. Calling processDiceEscalatorPlayerRoll.`);
-                    await processDiceEscalatorPlayerRoll(gameData, rollValue);
+                    console.log(`[DIRECT_HELPER_CHECK_SUCCESS] Parsed roll value: ${rollValue}. GameID: ${gameData.gameId}. Player: ${gameData.currentPlayerId}. Would call processDiceEscalatorPlayerRoll.`);
+                    // For now, just log. We can uncomment the actual call later AFTER confirming this block is entered.
+                    // await processDiceEscalatorPlayerRoll(gameData, rollValue);
                 } else {
                     console.log(`[DIRECT_HELPER_CHECK_FAIL] Helper text "${text}" is not a parseable number for roll. GameID: ${gameData.gameId}`);
                     const helperBotName = DICES_HELPER_BOT_ID ? `Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : (DICES_HELPER_BOT_USERNAME ? `@${DICES_HELPER_BOT_USERNAME}` : "the Dice Helper Bot");
                     await safeSendMessage(gameData.currentPlayerId, `There was an issue reading the roll ("${escapeMarkdownV2(text)}") from ${helperBotName}. Please click 'Prompt Roll' again if you wish to retry.`, {parse_mode: 'MarkdownV2'});
                 }
             } else {
-                 console.log(`[DIRECT_HELPER_CHECK_FAIL] Game state not ready for helper roll (Type: ${gameData.type}, Status: ${gameData.status}). GameID: ${gameSession.currentGameId}`);
+                 console.log(`[DIRECT_HELPER_CHECK_FAIL] Game state not ready for helper roll (GameType: ${gameData.type}, Status: ${gameData.status}). GameID: ${gameSession.currentGameId}`);
             }
         } else {
             console.log(`[DIRECT_HELPER_CHECK_FAIL] No active game found for this chat/gameId when helper message arrived. Chat: ${chatId}, GameID in Session: ${gameSession ? gameSession.currentGameId : 'N/A'}`);
@@ -356,23 +359,21 @@ bot.on('message', async (msg) => {
 
 
     // If the message was NOT from our helper bot, proceed with user-related logic:
-    // Log user messages that are not commands (commands logged separately)
-    if (!msg.from.is_bot && !text.startsWith('/')) {
-        // console.log(`[USER_MSG_RCV] User: ${userId} (@${msg.from.username || 'N/A'}), Chat: ${chatId}, Text: "${text}"`);
-        // Decide if you want to do anything with non-command text from users. For now, we mostly ignore it.
-    }
-
-    // Cooldown Check for user commands
-    const now = Date.now();
-    if (!msg.from.is_bot && text.startsWith('/') && userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
-        console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored.`);
-        return;
+    if (!msg.from.is_bot) { // Only log and apply cooldown for human users
+        // User messages already logged by [RAW_MSG_INPUT] or [ULTRA_RAW_LOG], no need for another general [MSG RCV] here
+        const now = Date.now();
+        if (text.startsWith('/') && userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
+            console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored.`);
+            return;
+        }
+        if (text.startsWith('/')) {
+            userCooldowns.set(userId, now);
+        }
     }
 
 
     // --- Process User Commands (if it starts with '/' and was not from the helper bot) ---
     if (text.startsWith('/') && !msg.from.is_bot) {
-        userCooldowns.set(userId, now); // Update cooldown *after* passing helper check and confirming it's a user command
         const commandArgs = text.substring(1).split(' ');
         const commandName = commandArgs.shift().toLowerCase();
 
@@ -428,7 +429,7 @@ bot.on('message', async (msg) => {
                 }
         }
     }
-    // Non-command messages from users (that are not from the helper bot) are ignored by this point.
+    // Non-command messages from users (that are not from the helper bot and not starting with '/') are ignored by this point.
 });
 
 // --- Callback Query Handler ---
