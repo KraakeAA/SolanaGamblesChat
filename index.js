@@ -9,18 +9,22 @@ console.log("Loading Part 1: Core Imports & Basic Setup...");
 // index.js - Part 1: Core Imports & Basic Setup
 //---------------------------------------------------------------------------
 
-// --- Environment Variable Validation & Defaults (from your provided code) ---
+// --- Environment Variable Validation & Defaults ---
 const OPTIONAL_ENV_DEFAULTS = {
     'DB_POOL_MAX': '25',
     'DB_POOL_MIN': '5',
     'DB_IDLE_TIMEOUT': '30000', // in milliseconds
     'DB_CONN_TIMEOUT': '5000', // in milliseconds
-    'DB_SSL': 'true', // as string, will be parsed to boolean
-    'DB_REJECT_UNAUTHORIZED': 'true' // as string, will be parsed to boolean
+    'DB_SSL': 'true', // Default to SSL enabled
+    'DB_REJECT_UNAUTHORIZED': 'false', // <<< CRITICAL CHANGE FOR RAILWAY: Default to false
     // Add other non-DB defaults here if they were in your original snippet
 };
+
+// Apply defaults if not set in process.env
+// This ensures process.env.DB_SSL and process.env.DB_REJECT_UNAUTHORIZED have values
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
     if (process.env[key] === undefined) {
+        console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
         process.env[key] = defaultValue;
     }
 });
@@ -42,15 +46,21 @@ console.log("BOT_TOKEN loaded successfully.");
 if (ADMIN_USER_ID) console.log(`Admin User ID: ${ADMIN_USER_ID} loaded.`);
 else console.log("INFO: No ADMIN_USER_ID set (optional).");
 
-// --- PostgreSQL Pool Initialization (from your provided code) ---
+// --- PostgreSQL Pool Initialization ---
 console.log("⚙️ Setting up PostgreSQL Pool...");
+console.log(`DB_SSL is: '${process.env.DB_SSL}' (type: ${typeof process.env.DB_SSL})`);
+console.log(`DB_REJECT_UNAUTHORIZED is: '${process.env.DB_REJECT_UNAUTHORIZED}' (type: ${typeof process.env.DB_REJECT_UNAUTHORIZED})`);
+
+const useSsl = process.env.DB_SSL === 'true';
+const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
+
 const pool = new Pool({
     connectionString: DATABASE_URL,
     max: parseInt(process.env.DB_POOL_MAX, 10),
     min: parseInt(process.env.DB_POOL_MIN, 10),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
     connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.DB_REJECT_UNAUTHORIZED === 'true' } : false,
+    ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
 });
 
 pool.on('connect', client => {
@@ -77,15 +87,17 @@ console.log("✅ PostgreSQL Pool created.");
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log("Telegram Bot instance created and configured for polling.");
 
-const BOT_VERSION = '2.0.2-db-dice-roll-full-complete'; // Updated version marker
+const BOT_VERSION = '2.0.3-db-ssl-fix'; // Updated version marker
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-let activeGames = new Map(); // For in-memory game state (e.g., current players, scores for ongoing games)
+let activeGames = new Map(); // For in-memory game state
 let userCooldowns = new Map(); // For command cooldowns
 
 console.log(`Group Chat Casino Bot v${BOT_VERSION} initializing...`);
 console.log(`Current system time: ${new Date().toISOString()}`);
 
+// escapeMarkdownV2 and safeSendMessage must be defined before they are used by pool.on('error') if admin notifications are desired there.
+// Moved them up slightly.
 const escapeMarkdownV2 = (text) => {
     if (text === null || typeof text === 'undefined') return '';
     return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
@@ -99,18 +111,14 @@ async function safeSendMessage(chatId, text, options = {}) {
     let messageToSend = text;
     let finalOptions = { ...options };
 
-    // Apply MarkdownV2 escaping ONLY if that parse mode is explicitly set
-    // It's assumed the 'text' passed in is raw, unescaped text.
     if (finalOptions.parse_mode === 'MarkdownV2') {
         messageToSend = escapeMarkdownV2(text);
     }
 
     if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsis = "... (message truncated)";
-        // Escape ellipsis itself if using MarkdownV2
         let escapedEllipsis = (finalOptions.parse_mode === 'MarkdownV2') ? escapeMarkdownV2(ellipsis) : ellipsis;
         const truncateAt = MAX_MARKDOWN_V2_MESSAGE_LENGTH - escapedEllipsis.length;
-        // Ensure truncateAt is not negative, which could happen if ellipsis is very long
         messageToSend = (truncateAt > 0) ? messageToSend.substring(0, truncateAt) + escapedEllipsis : messageToSend.substring(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH);
         console.warn(`[safeSendMessage] Message for chat ${chatId} was truncated.`);
     }
@@ -124,7 +132,6 @@ async function safeSendMessage(chatId, text, options = {}) {
     }
 }
 console.log("Part 1: Core Imports & Basic Setup - Complete.");
-
 //---------------------------------------------------------------------------
 // index.js - Part 2: Database Operations & Data Management
 //---------------------------------------------------------------------------
