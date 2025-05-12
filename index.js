@@ -648,15 +648,16 @@ console.log("Part 4: Simplified Game Logic - Complete.");
 console.log("Loading Part 5a: Message & Callback Handling, Basic Game Flow...");
 
 // --- Game Constants & Configuration ---
-const COMMAND_COOLDOWN_MS = 2000; // 2 seconds between commands for a user
-const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS || '60000', 10); // 60 seconds for someone to join a game
-const MIN_BET_AMOUNT = parseInt(process.env.MIN_BET_AMOUNT || '5', 10);
-const MAX_BET_AMOUNT = parseInt(process.env.MAX_BET_AMOUNT || '1000', 10);
-// DICE_ESCALATOR specific constants (like TARGET_JACKPOT_SCORE, DICE_ESCALATOR_BOT_ROLLS) are in Part 5b or globally
+// These are typically defined in Part 1 or at the top of the script
+// const COMMAND_COOLDOWN_MS = 2000;
+// const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS || '60000', 10);
+// const MIN_BET_AMOUNT = parseInt(process.env.MIN_BET_AMOUNT || '5', 10);
+// const MAX_BET_AMOUNT = parseInt(process.env.MAX_BET_AMOUNT || '1000', 10);
+// Assuming TARGET_JACKPOT_SCORE is defined (e.g., in Part 5b or Part 1, e.g., const TARGET_JACKPOT_SCORE = 120;)
 
 // --- Main Message Handler (`bot.on('message')`) ---
 bot.on('message', async (msg) => {
-    if (isShuttingDown) { // Optional: Stop processing new messages during shutdown
+    if (isShuttingDown) {
         console.log("[MSG_HANDLER] Shutdown in progress, ignoring new message.");
         return;
     }
@@ -675,14 +676,17 @@ bot.on('message', async (msg) => {
 
     if (msg.from.is_bot) {
         try {
+            if (!bot || typeof bot.getMe !== 'function') {
+                console.error("[MSG_HANDLER_ERROR] Bot instance not available for self-check.");
+                return;
+            }
             const selfBotInfo = await bot.getMe();
             if (String(msg.from.id) !== String(selfBotInfo.id)) {
-                // console.log(`[MSG_IGNORE] Ignoring message from other bot (ID: ${msg.from.id}, User: @${msg.from.username || 'N/A'}).`);
                 return;
             }
         } catch (getMeError) {
             console.error("[MSG_HANDLER_ERROR] Failed to get self bot info to check message source:", getMeError.message);
-            return; 
+            return;
         }
     }
 
@@ -690,32 +694,32 @@ bot.on('message', async (msg) => {
     const chatId = String(msg.chat.id);
     const text = msg.text || "";
     const chatType = msg.chat.type;
-    const messageId = msg.message_id; // This is the ID of the user's command message
+    const messageId = msg.message_id;
 
-    // Ensure user exists in DB (getUser from Part 2 is now DB-backed)
-    // Do this early for non-command messages too if you might interact with non-commanding users later.
-    // For now, let's ensure it for command users.
+    let userForCommandProcessing; // To store user object after getUser
     if (text.startsWith('/')) {
-         try {
-             await getUser(userId, msg.from.username, msg.from.first_name);
-         } catch (e) {
-             console.error(`[MSG_HANDLER_ERR] Failed to ensure user ${userId} exists before command processing: ${e.message}`);
-             safeSendMessage(chatId, "Sorry, there was a problem accessing your user data. Please try again.");
-             return;
-         }
-    }
-
-
-    if (!msg.from.is_bot) {
-        const now = Date.now();
-        if (text.startsWith('/') && userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
-            console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored due to cooldown.`);
-            // Optionally notify, but carefully: await safeSendMessage(chatId, `${createUserMention(msg.from)}, please wait...`, {parse_mode: 'MarkdownV2'});
+        try {
+            // getUser is DB-backed (from Part 2)
+            userForCommandProcessing = await getUser(userId, msg.from.username, msg.from.first_name);
+            if (!userForCommandProcessing) { // Should not happen if getUser throws on critical failure
+                console.error(`[MSG_HANDLER_ERR] getUser returned null/undefined for ${userId}`);
+                await safeSendMessage(chatId, "Sorry, there was an issue accessing your user data.");
+                return;
+            }
+        } catch (e) {
+            console.error(`[MSG_HANDLER_ERR] Failed to ensure user ${userId} exists for command processing: ${e.message}`);
+            await safeSendMessage(chatId, "Sorry, there was a problem accessing your user data. Please try again.");
             return;
         }
-        if (text.startsWith('/')) {
-            userCooldowns.set(userId, now);
+    }
+
+    if (!msg.from.is_bot && text.startsWith('/')) {
+        const now = Date.now();
+        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
+            console.log(`[COOLDOWN] User ${userId} command ("${text}") ignored due to cooldown.`);
+            return;
         }
+        userCooldowns.set(userId, now);
     }
 
     if (text.startsWith('/') && !msg.from.is_bot) {
@@ -724,19 +728,16 @@ bot.on('message', async (msg) => {
 
         console.log(`[CMD RCV] Chat: ${chatId}, User: ${userId} (@${msg.from.username || 'N/A'}), Cmd: /${commandName}, Args: [${commandArgs.join(', ')}]`);
 
-        // User should already be ensured by the block above
-        // const userForCommand = await getUser(userId, msg.from.username || msg.from.first_name);
-        // if (!userForCommand) { /* Handle error, though getUser should throw if critical */ }
-
+        // userForCommandProcessing already fetched and validated if it was a command
 
         switch (commandName) {
             case 'start':
             case 'help':
-                await handleHelpCommand(chatId, msg.from);
+                await handleHelpCommand(chatId, msg.from); // msg.from is fine here as it's for display
                 break;
             case 'balance':
             case 'bal':
-                await handleBalanceCommand(chatId, msg.from);
+                await handleBalanceCommand(chatId, msg.from); // msg.from used to pass to getUser
                 break;
             case 'startcoinflip':
                 if (chatType !== 'private') {
@@ -745,7 +746,8 @@ bot.on('message', async (msg) => {
                         await safeSendMessage(chatId, `Invalid bet amount. Must be between ${MIN_BET_AMOUNT} and ${MAX_BET_AMOUNT}. Usage: \`/startcoinflip <amount>\``, { parse_mode: 'MarkdownV2' });
                         return;
                     }
-                    await handleStartGroupCoinFlipCommand(chatId, msg.from, betAmountCF, messageId);
+                    // Pass the user object fetched as userForCommandProcessing, or msg.from if direct
+                    await handleStartGroupCoinFlipCommand(chatId, userForCommandProcessing || msg.from, betAmountCF, messageId);
                 } else {
                     await safeSendMessage(chatId, "This Coinflip game is for group chats only.", {});
                 }
@@ -757,31 +759,31 @@ bot.on('message', async (msg) => {
                         await safeSendMessage(chatId, `Invalid bet amount. Must be between ${MIN_BET_AMOUNT} and ${MAX_BET_AMOUNT}. Usage: \`/startrps <amount>\``, { parse_mode: 'MarkdownV2' });
                         return;
                     }
-                    await handleStartGroupRPSCommand(chatId, msg.from, betAmountRPS, messageId);
+                    await handleStartGroupRPSCommand(chatId, userForCommandProcessing || msg.from, betAmountRPS, messageId);
                 } else {
                     await safeSendMessage(chatId, "This Rock Paper Scissors game is for group chats only.", {});
                 }
                 break;
-            case 'startdice': // For Dice Escalator
+            case 'startdice':
                 if (chatType !== 'private') {
-                    let betAmountDE = commandArgs[0] ? parseInt(commandArgs[0], 10) : 10; // Example default bet
+                    let betAmountDE = commandArgs[0] ? parseInt(commandArgs[0], 10) : 10;
                     if (isNaN(betAmountDE) || betAmountDE < MIN_BET_AMOUNT || betAmountDE > MAX_BET_AMOUNT) {
                         await safeSendMessage(chatId, `Invalid bet amount. Must be between ${MIN_BET_AMOUNT} and ${MAX_BET_AMOUNT}. Usage: \`/startdice <amount>\``, { parse_mode: 'MarkdownV2' });
                         return;
                     }
-                    // handleStartDiceEscalatorCommand is in Part 5b
-                    await handleStartDiceEscalatorCommand(chatId, msg.from, betAmountDE, messageId);
+                    if (typeof handleStartDiceEscalatorCommand === 'function') {
+                        await handleStartDiceEscalatorCommand(chatId, userForCommandProcessing || msg.from, betAmountDE, messageId);
+                    } else {
+                        console.error("[CMD_ERR] handleStartDiceEscalatorCommand function not found!");
+                        await safeSendMessage(chatId, "Error: Dice Escalator game module not loaded correctly.");
+                    }
                 } else {
                     await safeSendMessage(chatId, "The Dice Escalator game is for group chats only.", {});
                 }
                 break;
-            
-            // --- NEW COMMAND FOR JACKPOT ---
             case 'jackpot':
                 await handleJackpotCommand(chatId);
                 break;
-            // --- END NEW COMMAND ---
-
             default:
                 if (chatType === 'private' || text.startsWith('/')) {
                     await safeSendMessage(chatId, "Unknown command. Try /help to see available commands.", {});
@@ -792,39 +794,42 @@ bot.on('message', async (msg) => {
 
 // --- Callback Query Handler (`bot.on('callback_query')`) ---
 bot.on('callback_query', async (callbackQuery) => {
-    if (isShuttingDown) { // Optional: Stop processing callbacks during shutdown
+    if (isShuttingDown) {
         console.log("[CBQ_HANDLER] Shutdown in progress, ignoring callback.");
-        // Answer to remove loading state, but inform user action won't be processed
-        bot.answerCallbackQuery(callbackQuery.id, { text: "Bot is shutting down, please try again later." }).catch(() => {});
+        if (bot && typeof bot.answerCallbackQuery === 'function') {
+            bot.answerCallbackQuery(callbackQuery.id, { text: "Bot is shutting down, please try again later." }).catch(() => {});
+        }
         return;
     }
 
     const msg = callbackQuery.message;
-    const user = callbackQuery.from; // User who clicked the button
+    const userFromCb = callbackQuery.from; // User who clicked the button
     const callbackQueryId = callbackQuery.id;
     const data = callbackQuery.data;
 
-    if (!msg || !user || !data) {
+    if (!msg || !userFromCb || !data) {
         console.warn(`[CBQ_WARN] Received incomplete callback query. ID: ${callbackQueryId}, Data: ${data}`);
-        bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid callback data." }).catch(() => {});
+        if (bot && typeof bot.answerCallbackQuery === 'function') {
+            bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid callback data." }).catch(() => {});
+        }
         return;
     }
 
-    const userId = String(user.id);
+    const userId = String(userFromCb.id);
     const chatId = String(msg.chat.id);
-    const originalMessageId = msg.message_id; // ID of the message with the button
+    const originalMessageId = msg.message_id;
 
-    console.log(`[CBQ RCV] Chat: ${chatId}, User: ${userId} (@${user.username || 'N/A'}), Data: "${data}", OriginalMsgID: ${originalMessageId}`);
+    console.log(`[CBQ RCV] Chat: ${chatId}, User: ${userId} (@${userFromCb.username || 'N/A'}), Data: "${data}", OriginalMsgID: ${originalMessageId}`);
 
-    // Answer immediately to remove "loading" state on the button
-    bot.answerCallbackQuery(callbackQueryId).catch((err) => {
-        console.error(`[CBQ_ERROR] Failed to answer callback query ${callbackQueryId}: ${err.message}`);
-    });
+    if (bot && typeof bot.answerCallbackQuery === 'function') {
+        bot.answerCallbackQuery(callbackQueryId).catch((err) => {
+            console.error(`[CBQ_ERROR] Failed to answer callback query ${callbackQueryId}: ${err.message}`);
+        });
+    }
 
-    // Ensure user exists in DB before processing callback
     let userObjectForCallback;
     try {
-        userObjectForCallback = await getUser(userId, user.username, user.first_name);
+        userObjectForCallback = await getUser(userId, userFromCb.username, userFromCb.first_name); // DB-backed
         if (!userObjectForCallback) {
              throw new Error("User data could not be retrieved for callback action.");
         }
@@ -834,119 +839,120 @@ bot.on('callback_query', async (callbackQuery) => {
         return;
     }
 
-
     const [action, ...params] = data.split(':');
 
     try {
         switch (action) {
             case 'join_game':
                 if (!params[0]) throw new Error("Missing gameId for join_game action.");
-                await handleJoinGameCallback(chatId, user, params[0], originalMessageId); // user here is callbackQuery.from
+                await handleJoinGameCallback(chatId, userObjectForCallback, params[0], originalMessageId);
                 break;
             case 'cancel_game':
                 if (!params[0]) throw new Error("Missing gameId for cancel_game action.");
-                await handleCancelGameCallback(chatId, user, params[0], originalMessageId); // user here is callbackQuery.from
+                await handleCancelGameCallback(chatId, userObjectForCallback, params[0], originalMessageId);
                 break;
             case 'rps_choose':
                 if (params.length < 2) throw new Error("Missing parameters for rps_choose (expected gameId:choice).");
-                await handleRPSChoiceCallback(chatId, user, params[0], params[1], originalMessageId); // user here is callbackQuery.from
+                await handleRPSChoiceCallback(chatId, userObjectForCallback, params[0], params[1], originalMessageId);
                 break;
-            case 'de_roll_prompt': // Dice Escalator "Roll Again"
+            case 'de_roll_prompt': 
                 if (!params[0]) throw new Error("Missing gameId for de_roll_prompt action.");
-                // handleDiceEscalatorPlayerAction is in Part 5b
-                await handleDiceEscalatorPlayerAction(params[0], userId, action, originalMessageId, chatId);
+                if (typeof handleDiceEscalatorPlayerAction === 'function') {
+                    await handleDiceEscalatorPlayerAction(params[0], userId, action, originalMessageId, chatId);
+                } else {
+                    console.error("[CBQ_ERR] handleDiceEscalatorPlayerAction function not found!");
+                    throw new Error("Dice Escalator action handler not available.");
+                }
                 break;
-            case 'de_cashout': // Dice Escalator "Stand" (formerly cashout)
+            case 'de_cashout': 
                 if (!params[0]) throw new Error("Missing gameId for de_cashout action.");
-                // handleDiceEscalatorPlayerAction is in Part 5b
-                await handleDiceEscalatorPlayerAction(params[0], userId, action, originalMessageId, chatId);
+                if (typeof handleDiceEscalatorPlayerAction === 'function') {
+                    await handleDiceEscalatorPlayerAction(params[0], userId, action, originalMessageId, chatId);
+                } else {
+                    console.error("[CBQ_ERR] handleDiceEscalatorPlayerAction function not found!");
+                    throw new Error("Dice Escalator action handler not available.");
+                }
                 break;
-
-            // --- NEW CALLBACK CASE FOR PLAY AGAIN DICE ESCALATOR ---
             case 'play_again_de':
                 if (!params[0] || isNaN(parseInt(params[0], 10))) {
-                    console.error(`[CBQ_PLAY_AGAIN_ERR] Missing or invalid betAmount for play_again_de. Data: ${data}`);
+                    console.error(`[CBQ_PLAY_AGAIN_ERR] Missing or invalid betAmount. Data: ${data}`);
                     throw new Error("Missing or invalid betAmount for play_again_de action.");
                 }
                 const originalBetAmount = parseInt(params[0], 10);
-                // userObjectForCallback is already fetched above using callbackQuery.from details
+                // userObjectForCallback is already fetched and validated
 
-                console.log(`[CBQ_PLAY_AGAIN] User ${userId} (${userObjectForCallback.username}) initiating Dice Escalator again. Bet: ${originalBetAmount}, Chat: ${chatId}.`);
+                console.log(`[CBQ_PLAY_AGAIN] User ${userId} (${userObjectForCallback.username || userObjectForCallback.firstName || 'N/A'}) starting Dice Escalator again. Bet: ${originalBetAmount}, Chat: ${chatId}.`);
 
-                // Edit the message that contained the "Play Again" button to remove the buttons or indicate restart
                 try {
-                    await bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(originalMessageId) });
+                    if (bot && typeof bot.editMessageReplyMarkup === 'function') {
+                        await bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(originalMessageId) });
+                    }
                 } catch (editError) {
-                    console.warn(`[CBQ_PLAY_AGAIN_EDIT_ERR] Could not remove keyboard from previous game message ${originalMessageId}: ${editError.message}`);
+                    console.warn(`[CBQ_PLAY_AGAIN_EDIT_ERR] Could not remove keyboard from msg ${originalMessageId}: ${editError.message}`);
                 }
-                // A new game message will be sent by handleStartDiceEscalatorCommand.
-                // Pass originalMessageId as the 'commandMessageId' for context, though it's not a real command message.
-                // handleStartDiceEscalatorCommand is in Part 5b
-                await handleStartDiceEscalatorCommand(chatId, userObjectForCallback, originalBetAmount, originalMessageId);
+                
+                if (typeof handleStartDiceEscalatorCommand === 'function') {
+                    await handleStartDiceEscalatorCommand(chatId, userObjectForCallback, originalBetAmount, originalMessageId);
+                } else {
+                    console.error("[CBQ_ERR] handleStartDiceEscalatorCommand function not found!");
+                    throw new Error("Dice Escalator start handler not available.");
+                }
                 break;
-            // --- END NEW CALLBACK CASE ---
-
             default:
-                console.log(`[CBQ_INFO] Unknown callback query action: "${action}"`);
-                // No need to message user here, already answered callback query.
-                // If you want to show a specific message ON the button, use the 'text' field in answerCallbackQuery.
+                console.log(`[CBQ_INFO] Unknown callback query action received: "${action}" Data: ${data}`);
         }
     } catch (error) {
         console.error(`[CBQ_ERROR] Error processing callback data "${data}" for user ${userId} in chat ${chatId}:`, error);
-        // Inform user directly via a new message if a significant error occurs during action processing
         await safeSendMessage(userId, "Sorry, an error occurred while processing your action. Please try again or contact an admin if it persists.", {}).catch(() => {});
     }
 });
 
-
 // --- Command Handler Functions (Help, Balance, NEW Jackpot) ---
 
-async function handleHelpCommand(chatId, userObject) { // userObject is msg.from
-    // Ensure createUserMention function is available (expected from Part 3)
-    const userMention = typeof createUserMention === 'function' ? createUserMention(userObject) : (userObject.first_name || `User ${userObject.id}`);
-    // Ensure BOT_VERSION, MIN_BET_AMOUNT, MAX_BET_AMOUNT are available (Part 1)
+async function handleHelpCommand(chatId, userFromMessage) {
+    const userMention = typeof createUserMention === 'function' ? createUserMention(userFromMessage) : (userFromMessage.first_name || `User ${userFromMessage.id}`);
+    // TARGET_JACKPOT_SCORE is expected to be defined globally (e.g. Part 5b or Part 1)
+    const jackpotScoreInfo = typeof TARGET_JACKPOT_SCORE !== 'undefined' ? TARGET_JACKPOT_SCORE : 'a high';
     const helpTextParts = [
         `👋 Hello ${userMention}\\! Welcome to the Group Casino Bot v${BOT_VERSION}\\.`,
         `This bot allows you to play games in group chats\\.`,
         `\n*Available commands:*`,
         `▫️ \`/help\` \\- Shows this help message\\.`,
         `▫️ \`/balance\` or \`/bal\` \\- Check your current game credits\\.`,
-        `▫️ \`/startcoinflip <bet\\_amount>\` \\- Starts a Coinflip game for one opponent\\. Bet: ${MIN_BET_AMOUNT}\\-${MAX_BET_AMOUNT}\\. Example: \`/startcoinflip 10\``,
-        `▫️ \`/startrps <bet\\_amount>\` \\- Starts a Rock Paper Scissors game for one opponent\\. Bet: ${MIN_BET_AMOUNT}\\-${MAX_BET_AMOUNT}\\. Example: \`/startrps 5\``,
-        `▫️ \`/startdice <bet\\_amount>\` \\- Play Dice Escalator against the Bot\\! Bet: ${MIN_BET_AMOUNT}\\-${MAX_BET_AMOUNT}\\. Example: \`/startdice 10\``,
-        // --- ADDED JACKPOT COMMAND TO HELP ---
-        `▫️ \`/jackpot\` \\- Shows the current Dice Escalator jackpot amount\\.`,
-        // --- END ADDITION ---
+        `▫️ \`/startcoinflip <bet\\_amount>\` \\- Starts a Coinflip game\\. Bet: ${MIN_BET_AMOUNT}\\-${MAX_BET_AMOUNT}\\. Eg: \`/startcoinflip 10\``,
+        `▫️ \`/startrps <bet\\_amount>\` \\- Starts Rock Paper Scissors\\. Bet: ${MIN_BET_AMOUNT}\\-${MAX_BET_AMOUNT}\\. Eg: \`/startrps 5\``,
+        `▫️ \`/startdice <bet\\_amount>\` \\- Play Dice Escalator\\! Bet: ${MIN_BET_AMOUNT}\\-${MAX_BET_AMOUNT}\\. Eg: \`/startdice 10\``,
+        `▫️ \`/jackpot\` \\- Shows current Dice Escalator jackpot\\. Win it by standing with a score of *${jackpotScoreInfo}* or more and beating the Bot\\!`,
         `\n*Game Notes:*`,
-        `➡️ For Coinflip or RPS, click 'Join Game' when someone starts one\\!`,
-        `➡️ For Dice Escalator, roll until you Stand or Bust\\. Then the Bot tries to beat your score\\.`,
+        `➡️ Coinflip/RPS: Click 'Join Game'\\.`,
+        `➡️ Dice Escalator: Roll until you Stand or Bust\\. Bot plays if you Stand\\.`,
         `\nHave fun and play responsibly\\!`
     ];
     await safeSendMessage(chatId, helpTextParts.filter(Boolean).join('\n'), { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
-async function handleBalanceCommand(chatId, userObject) { // userObject is msg.from
-    // getUser from Part 2 (DB-backed)
-    const user = await getUser(String(userObject.id), userObject.username, userObject.first_name);
+async function handleBalanceCommand(chatId, userFromMessage) {
+    const user = await getUser(String(userFromMessage.id), userFromMessage.username, userFromMessage.first_name); // DB-backed
     if (!user) {
-         await safeSendMessage(chatId, `${createUserMention(userObject)}, could not retrieve your balance at this time.`, { parse_mode: 'MarkdownV2' });
+         await safeSendMessage(chatId, `${typeof createUserMention === 'function' ? createUserMention(userFromMessage) : userFromMessage.first_name}, could not retrieve your balance.`, { parse_mode: 'MarkdownV2' });
          return;
     }
-    // formatCurrency from Part 3, createUserMention from Part 3
-    const balanceMessage = `${createUserMention(userObject)}, your current balance is: *${formatCurrency(user.balance)}*\\.`; // user.balance is Number
+    const balanceMessage = `${typeof createUserMention === 'function' ? createUserMention(userFromMessage) : userFromMessage.first_name}, your current balance is: *${formatCurrency(user.balance)}*\\.`;
     await safeSendMessage(chatId, balanceMessage, { parse_mode: 'MarkdownV2' });
 }
 
-// --- NEW JACKPOT COMMAND HANDLER ---
 async function handleJackpotCommand(chatId) {
     try {
-        // Ensure queryDatabase (Part 2) and MAIN_JACKPOT_ID (Part 1) are available
+        if (typeof queryDatabase !== 'function' || typeof MAIN_JACKPOT_ID === 'undefined' || typeof TARGET_JACKPOT_SCORE === 'undefined' || typeof formatCurrency !== 'function' || typeof escapeMarkdownV2 !== 'function') {
+            console.error("[JACKPOT_CMD_ERR] Missing critical functions or constants for jackpot command.");
+            await safeSendMessage(chatId, "Jackpot system is currently unavailable (config error).", {});
+            return;
+        }
         const result = await queryDatabase('SELECT current_amount_lamports FROM jackpot_status WHERE jackpot_id = $1', [MAIN_JACKPOT_ID]);
         if (result.rows.length > 0) {
             const jackpotAmountLamports = BigInt(result.rows[0].current_amount_lamports);
-            // formatCurrency from Part 3
-            const jackpotDisplay = formatCurrency(Number(jackpotAmountLamports)); // Convert BigInt to Number for formatting
-            await safeSendMessage(chatId, `💰 The current Dice Escalator Jackpot is: *${escapeMarkdownV2(jackpotDisplay)}*!\nStand with a score of *${TARGET_JACKPOT_SCORE}* or more and win against the Bot to claim it!`, { parse_mode: 'MarkdownV2' });
+            const jackpotDisplay = formatCurrency(Number(jackpotAmountLamports));
+            await safeSendMessage(chatId, `💰 The current Dice Escalator Jackpot is: *${escapeMarkdownV2(jackpotDisplay)}*!\nTo win it, Stand with a score of *${TARGET_JACKPOT_SCORE}* or more in Dice Escalator and then win your round against the Bot!`, { parse_mode: 'MarkdownV2' });
         } else {
             console.warn(`[JACKPOT_CMD_WARN] Jackpot ID ${MAIN_JACKPOT_ID} not found in jackpot_status table.`);
             await safeSendMessage(chatId, "The jackpot information is currently unavailable. It might be initializing.", {});
@@ -956,123 +962,115 @@ async function handleJackpotCommand(chatId) {
         await safeSendMessage(chatId, "Sorry, couldn't fetch the jackpot amount right now due to a system error.", {});
     }
 }
-// --- END NEW JACKPOT COMMAND HANDLER ---
-
 
 // --- Group Game Flow Functions (Coinflip, RPS - Start, Join, Cancel, Choose) ---
-// These functions remain as they were in your original code, using the
-// DB-backed getUser and updateUserBalance where applicable.
-// Note: If Coinflip/RPS are also meant to have multiple concurrent instances,
-// their start logic would need similar changes to what we did for Dice Escalator
-// (i.e., not relying on groupGameSessions.currentGameId to block new games).
-// For now, I'm assuming their logic remains unchanged regarding concurrency.
+// These are your original functions, updated to use DB-backed user/balance functions
+// and pass necessary parameters for logging.
 
-async function handleStartGroupCoinFlipCommand(chatId, initiatorUser, betAmount, commandMessageId) {
-    const initiatorId = String(initiatorUser.id);
-    let chatInfo = null; try { chatInfo = await bot.getChat(chatId); } catch (e) { console.warn(`[COINFLIP_START_WARN] Could not fetch chat info for chat ${chatId}: ${e.message}`); }
+async function handleStartGroupCoinFlipCommand(chatId, initiatorUserObj, betAmount, commandMessageId) {
+    const initiatorId = String(initiatorUserObj.id);
+    let chatInfo = null; try { if (bot) chatInfo = await bot.getChat(chatId); } catch (e) { console.warn(`[COINFLIP_START_WARN] Could not fetch chat info for ${chatId}: ${e.message}`); }
     const chatTitle = chatInfo?.title;
     const gameSession = await getGroupSession(chatId, chatTitle || "Group Chat");
 
-    if (gameSession.currentGameId && gameType !== 'DiceEscalator') { // Only block if not DiceEscalator (or make more specific if needed)
-        await safeSendMessage(chatId, `A game is already active in this chat: *${escapeMarkdownV2(gameSession.currentGameType || 'Unknown Game')}* \\(ID: \`${escapeMarkdownV2(gameSession.currentGameId)}\`\\)\\. Please wait for it to finish\\.`, { parse_mode: 'MarkdownV2' });
+    // Coinflip/RPS can remain single-instance per chat if desired
+    if (gameSession.currentGameId) {
+        await safeSendMessage(chatId, `A game of *${escapeMarkdownV2(gameSession.currentGameType || 'Unknown Game')}* is already active. Please wait.`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
-    const initiator = await getUser(initiatorId, initiatorUser.username, initiatorUser.first_name);
-    if (initiator.balance < betAmount) {
-        await safeSendMessage(chatId, `${createUserMention(initiatorUser)}, your balance \\(${escapeMarkdownV2(formatCurrency(initiator.balance))}\\) is too low for a ${escapeMarkdownV2(formatCurrency(betAmount))} bet\\.`, { parse_mode: 'MarkdownV2' });
+    // initiatorUserObj already comes from getUser if it's a command, or from callbackQuery.from (then processed by getUser) if callback
+    const initiator = initiatorUserObj; // Assuming initiatorUserObj is already the full user object from getUser
+    if (initiator.balance < betAmount) { // balance is Number from getUser
+        await safeSendMessage(chatId, `${createUserMention(initiatorUserObj)}, your balance (${formatCurrency(initiator.balance)}) is too low for a ${formatCurrency(betAmount)} bet.`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
     const gameId = generateGameId();
     const balanceUpdateResult = await updateUserBalance(initiatorId, -betAmount, `bet_placed_group_coinflip_init:${gameId}`, null, gameId, String(chatId));
     if (!balanceUpdateResult.success) {
-        console.error(`[COINFLIP_START_ERR] Failed to deduct balance for initiator ${initiatorId} (Reason: ${balanceUpdateResult.error})`);
-        await safeSendMessage(chatId, `Error starting game: Could not place your bet\\. \\(${escapeMarkdownV2(balanceUpdateResult.error)}\\)`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `Error starting Coinflip: Could not place bet. (${escapeMarkdownV2(balanceUpdateResult.error || 'Unknown Error')})`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
     const gameDataCF = {
         type: 'coinflip', gameId, chatId: String(chatId), initiatorId,
-        initiatorMention: createUserMention(initiatorUser), betAmount,
-        participants: [{ userId: initiatorId, choice: null, mention: createUserMention(initiatorUser), betPlaced: true }],
+        initiatorMention: createUserMention(initiatorUserObj), betAmount,
+        participants: [{ userId: initiatorId, choice: null, mention: createUserMention(initiatorUserObj), betPlaced: true }],
         status: 'waiting_opponent', creationTime: Date.now(), commandMessageId, gameSetupMessageId: null
     };
     activeGames.set(gameId, gameDataCF);
     await updateGroupGameDetails(chatId, gameId, 'CoinFlip', betAmount);
 
-    const joinMsgCF = `${createUserMention(initiatorUser)} has started a *Coin Flip Challenge* for ${escapeMarkdownV2(formatCurrency(betAmount))}\\!\nAn opponent is needed\\. Click "Join Game" to accept\\!`;
+    const joinMsgCF = `${createUserMention(initiatorUserObj)} has started a *Coin Flip Challenge* for ${escapeMarkdownV2(formatCurrency(betAmount))}!\nAn opponent is needed. Click "Join Game" to accept!`;
     const kbCF = { inline_keyboard: [[{ text: "🪙 Join Coinflip!", callback_data: `join_game:${gameId}` }], [{ text: "❌ Cancel Game", callback_data: `cancel_game:${gameId}` }]] };
     const setupMsgCF = await safeSendMessage(chatId, joinMsgCF, { parse_mode: 'MarkdownV2', reply_markup: kbCF });
 
-    if (setupMsgCF) {
-        const gameToUpdate = activeGames.get(gameId);
-        if (gameToUpdate) gameToUpdate.gameSetupMessageId = setupMsgCF.message_id;
+    if (setupMsgCF && activeGames.has(gameId)) {
+        activeGames.get(gameId).gameSetupMessageId = setupMsgCF.message_id;
     } else {
-        console.error(`[COINFLIP_START_ERR] Failed to send setup message for game ${gameId}. Refunding bet for initiator ${initiatorId}.`);
+        console.error(`[COINFLIP_START_ERR] Failed to send setup message for ${gameId}. Refunding.`);
         await updateUserBalance(initiatorId, betAmount, `refund_coinflip_setup_fail:${gameId}`, null, gameId, String(chatId));
         activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, null, null, null);
+        await updateGroupGameDetails(chatId, null, null, null); // Clear from session
         return;
     }
 
     setTimeout(async () => {
         const gdCF = activeGames.get(gameId);
         if (gdCF && gdCF.status === 'waiting_opponent') {
-            console.log(`[GAME_TIMEOUT] Coinflip game ${gameId} in chat ${chatId} timed out.`);
+            console.log(`[GAME_TIMEOUT] Coinflip game ${gameId} timed out.`);
             await updateUserBalance(gdCF.initiatorId, gdCF.betAmount, `refund_coinflip_timeout:${gameId}`, null, gameId, String(chatId));
             activeGames.delete(gameId);
             await updateGroupGameDetails(chatId, null, null, null);
-            const timeoutMsgTextCF = `The Coin Flip game \\(ID: \`${escapeMarkdownV2(gameId)}\`\\) started by ${gdCF.initiatorMention} for ${escapeMarkdownV2(formatCurrency(gdCF.betAmount))} has expired\\. Bet refunded\\.`;
-            if (gdCF.gameSetupMessageId) {
+            const timeoutMsgTextCF = `The Coin Flip game (ID: \`${escapeMarkdownV2(gameId)}\`) by ${gdCF.initiatorMention} for ${escapeMarkdownV2(formatCurrency(gdCF.betAmount))} expired. Bet refunded.`;
+            if (gdCF.gameSetupMessageId && bot) {
                 bot.editMessageText(timeoutMsgTextCF, { chatId: String(chatId), message_id: Number(gdCF.gameSetupMessageId), parse_mode: 'MarkdownV2', reply_markup: {} })
-                    .catch(e => { console.warn(`[GAME_TIMEOUT_EDIT_ERR] Coinflip ${gameId}: ${e.message}. Sending new.`); safeSendMessage(chatId, timeoutMsgTextCF, { parse_mode: 'MarkdownV2' }); });
+                    .catch(e => { safeSendMessage(chatId, timeoutMsgTextCF, { parse_mode: 'MarkdownV2' }); });
             } else { safeSendMessage(chatId, timeoutMsgTextCF, { parse_mode: 'MarkdownV2' }); }
         }
     }, JOIN_GAME_TIMEOUT_MS);
 }
 
-async function handleStartGroupRPSCommand(chatId, initiatorUser, betAmount, commandMessageId) {
-    const initiatorId = String(initiatorUser.id);
-    let chatInfo = null; try { chatInfo = await bot.getChat(chatId); } catch (e) { console.warn(`[RPS_START_WARN] Could not fetch chat info for ${chatId}: ${e.message}`); }
+async function handleStartGroupRPSCommand(chatId, initiatorUserObj, betAmount, commandMessageId) {
+    const initiatorId = String(initiatorUserObj.id);
+    let chatInfo = null; try { if (bot) chatInfo = await bot.getChat(chatId); } catch (e) { console.warn(`[RPS_START_WARN] Could not fetch chat info for ${chatId}: ${e.message}`); }
     const chatTitle = chatInfo?.title;
     const gameSession = await getGroupSession(chatId, chatTitle || "Group Chat");
 
-    if (gameSession.currentGameId && gameType !== 'DiceEscalator') { // Only block if not DiceEscalator
-        await safeSendMessage(chatId, `A game is already active: *${escapeMarkdownV2(gameSession.currentGameType || 'Unknown Game')}*\\. Please wait\\.`, { parse_mode: 'MarkdownV2' });
+    if (gameSession.currentGameId) { // RPS remains single-instance per chat for now
+        await safeSendMessage(chatId, `A game of *${escapeMarkdownV2(gameSession.currentGameType || 'Unknown Game')}* is already active. Please wait.`, { parse_mode: 'MarkdownV2' });
         return;
     }
-    const initiator = await getUser(initiatorId, initiatorUser.username, initiatorUser.first_name);
+    const initiator = initiatorUserObj; // Assuming initiatorUserObj is already the full user object from getUser
     if (initiator.balance < betAmount) {
-        await safeSendMessage(chatId, `${createUserMention(initiatorUser)}, your balance \\(${escapeMarkdownV2(formatCurrency(initiator.balance))}\\) is too low for a ${escapeMarkdownV2(formatCurrency(betAmount))} bet\\.`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `${createUserMention(initiatorUserObj)}, your balance (${formatCurrency(initiator.balance)}) is too low for a ${formatCurrency(betAmount)} bet.`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
     const gameId = generateGameId();
     const balanceUpdateResult = await updateUserBalance(initiatorId, -betAmount, `bet_rps_init:${gameId}`, null, gameId, String(chatId));
     if (!balanceUpdateResult.success) {
-        console.error(`[RPS_START_ERR] Failed to deduct balance for initiator ${initiatorId}: ${balanceUpdateResult.error}`);
-        await safeSendMessage(chatId, `Error starting game: Could not place your bet\\. \\(${escapeMarkdownV2(balanceUpdateResult.error)}\\)`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `Error starting RPS: Could not place bet. (${escapeMarkdownV2(balanceUpdateResult.error || 'Unknown Error')})`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
     const gameDataRPS = {
-        type: 'rps', gameId, chatId: String(chatId), initiatorId, initiatorMention: createUserMention(initiatorUser),
-        betAmount, participants: [{ userId: initiatorId, choice: null, mention: createUserMention(initiatorUser), betPlaced: true }],
+        type: 'rps', gameId, chatId: String(chatId), initiatorId, initiatorMention: createUserMention(initiatorUserObj),
+        betAmount, participants: [{ userId: initiatorId, choice: null, mention: createUserMention(initiatorUserObj), betPlaced: true }],
         status: 'waiting_opponent', creationTime: Date.now(), commandMessageId, gameSetupMessageId: null
     };
     activeGames.set(gameId, gameDataRPS);
     await updateGroupGameDetails(chatId, gameId, 'RockPaperScissors', betAmount);
 
-    const joinMsgRPS = `${createUserMention(initiatorUser)} challenges someone to *Rock Paper Scissors* for ${escapeMarkdownV2(formatCurrency(betAmount))}\\!\nClick "Join Game" to play\\!`;
+    const joinMsgRPS = `${createUserMention(initiatorUserObj)} challenges someone to *Rock Paper Scissors* for ${escapeMarkdownV2(formatCurrency(betAmount))}!\nClick "Join Game" to play!`;
     const kbRPS = { inline_keyboard: [[{ text: "🪨📄✂️ Join RPS!", callback_data: `join_game:${gameId}` }], [{ text: "❌ Cancel Game", callback_data: `cancel_game:${gameId}` }]] };
     const setupMsgRPS = await safeSendMessage(chatId, joinMsgRPS, { parse_mode: 'MarkdownV2', reply_markup: kbRPS });
 
-    if (setupMsgRPS) {
-        const gameToUpdate = activeGames.get(gameId);
-        if (gameToUpdate) gameToUpdate.gameSetupMessageId = setupMsgRPS.message_id;
+    if (setupMsgRPS && activeGames.has(gameId)) {
+        activeGames.get(gameId).gameSetupMessageId = setupMsgRPS.message_id;
     } else {
-        console.error(`[RPS_START_ERR] Failed to send setup message for ${gameId}. Refunding bet.`);
+        console.error(`[RPS_START_ERR] Failed to send setup message for ${gameId}. Refunding.`);
         await updateUserBalance(initiatorId, betAmount, `refund_rps_setup_fail:${gameId}`, null, gameId, String(chatId));
         activeGames.delete(gameId);
         await updateGroupGameDetails(chatId, null, null, null);
@@ -1086,175 +1084,164 @@ async function handleStartGroupRPSCommand(chatId, initiatorUser, betAmount, comm
             await updateUserBalance(gdRPS.initiatorId, gdRPS.betAmount, `refund_rps_timeout:${gameId}`, null, gameId, String(chatId));
             activeGames.delete(gameId);
             await updateGroupGameDetails(chatId, null, null, null);
-            const timeoutMsgTextRPS = `The RPS game \\(ID: \`${escapeMarkdownV2(gameId)}\`\\) by ${gdRPS.initiatorMention} for ${escapeMarkdownV2(formatCurrency(gdRPS.betAmount))} expired\\. Bet refunded\\.`;
-            if (gdRPS.gameSetupMessageId) {
+            const timeoutMsgTextRPS = `The RPS game (ID: \`${escapeMarkdownV2(gameId)}\`) by ${gdRPS.initiatorMention} for ${escapeMarkdownV2(formatCurrency(gdRPS.betAmount))} expired. Bet refunded.`;
+            if (gdRPS.gameSetupMessageId && bot) {
                 bot.editMessageText(timeoutMsgTextRPS, { chatId: String(chatId), message_id: Number(gdRPS.gameSetupMessageId), parse_mode: 'MarkdownV2', reply_markup: {} })
-                    .catch(e => { console.warn(`[GAME_TIMEOUT_EDIT_ERR] RPS ${gameId}: ${e.message}. Sending new.`); safeSendMessage(chatId, timeoutMsgTextRPS, { parse_mode: 'MarkdownV2' }); });
+                    .catch(e => { safeSendMessage(chatId, timeoutMsgTextRPS, { parse_mode: 'MarkdownV2' }); });
             } else { safeSendMessage(chatId, timeoutMsgTextRPS, { parse_mode: 'MarkdownV2' }); }
         }
     }, JOIN_GAME_TIMEOUT_MS);
 }
 
-async function handleJoinGameCallback(chatId, joinerUser, gameId, interactionMessageId) {
-    const joinerId = String(joinerUser.id);
+
+async function handleJoinGameCallback(chatId, joinerUserObj, gameId, interactionMessageId) {
+    const joinerId = String(joinerUserObj.id); // joinerUserObj is the full user object from getUser
     const gameData = activeGames.get(gameId);
 
-    if (!gameData) {
-        await safeSendMessage(joinerId, "This game is no longer available or has expired.", {});
-        if (interactionMessageId && chatId) bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(interactionMessageId) }).catch(() => {});
+    if (!gameData) { /* ... game not found ... */ 
+        await safeSendMessage(joinerId, "This game is no longer available.", {});
+        if (interactionMessageId && chatId && bot) bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(interactionMessageId) }).catch(() => {});
         return;
     }
-    if (gameData.chatId !== String(chatId)) {
-        console.warn(`[JOIN_ERR] Game ${gameId} chat mismatch. Expected: ${gameData.chatId}, Got: ${chatId}`);
-        await safeSendMessage(joinerId, "Error joining game (chat mismatch).", {});
+    if (gameData.chatId !== String(chatId)) { /* ... chat mismatch ... */ 
+        await safeSendMessage(joinerId, "Error joining: chat mismatch.", {});
         return;
     }
-    if (gameData.initiatorId === joinerId) {
-        await safeSendMessage(joinerId, "You cannot join a game you started.", {});
+    if (gameData.initiatorId === joinerId) { /* ... cannot join own game ... */ 
+        await safeSendMessage(joinerId, "You can't join your own game.", {});
         return;
     }
-    if (gameData.status !== 'waiting_opponent') {
-        await safeSendMessage(joinerId, "This game is no longer waiting for an opponent.", {});
-        if (interactionMessageId && chatId && gameData.status !== 'waiting_opponent') {
-            bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(interactionMessageId) }).catch(() => {});
-        }
+    if (gameData.status !== 'waiting_opponent') { /* ... game not waiting ... */ 
+        await safeSendMessage(joinerId, "Game not waiting for opponent.", {});
+        if (interactionMessageId && chatId && bot) bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(interactionMessageId) }).catch(() => {});
         return;
     }
-    if (gameData.participants.length >= 2 && (gameData.type === 'coinflip' || gameData.type === 'rps')) {
-        await safeSendMessage(joinerId, "Sorry, this game already has enough players.", {});
-        bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(interactionMessageId) }).catch(() => {});
+    if (gameData.participants.length >= 2 && (gameData.type === 'coinflip' || gameData.type === 'rps')) { /* ... game full ... */ 
+        await safeSendMessage(joinerId, "Game is already full.", {});
+        if (interactionMessageId && chatId && bot) bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: Number(interactionMessageId) }).catch(() => {});
         return;
     }
 
-    const joiner = await getUser(joinerId, joinerUser.username, joinerUser.first_name);
-    if (joiner.balance < gameData.betAmount) {
-        await safeSendMessage(joinerId, `Your balance \\(${escapeMarkdownV2(formatCurrency(joiner.balance))}\\) is too low to join this ${escapeMarkdownV2(formatCurrency(gameData.betAmount))} game\\.`, { parse_mode: 'MarkdownV2' });
+    // joinerUserObj is already the result of getUser, so its balance is current
+    if (joinerUserObj.balance < gameData.betAmount) {
+        await safeSendMessage(joinerId, `Your balance (${formatCurrency(joinerUserObj.balance)}) is too low for this ${formatCurrency(gameData.betAmount)} game.`, { parse_mode: 'MarkdownV2' });
         return;
     }
     const balanceUpdateResult = await updateUserBalance(joinerId, -gameData.betAmount, `bet_placed_group_${gameData.type}_join:${gameId}`, null, gameId, String(chatId));
     if (!balanceUpdateResult.success) {
-        console.error(`[JOIN_ERR] Failed to deduct balance for joiner ${joinerId}: ${balanceUpdateResult.error}`);
-        await safeSendMessage(joinerId, `Error joining game: Could not place bet\\. \\(${escapeMarkdownV2(balanceUpdateResult.error)}\\)`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(joinerId, `Error joining: Could not place bet. (${escapeMarkdownV2(balanceUpdateResult.error || 'Unknown error')})`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
-    gameData.participants.push({ userId: joinerId, choice: null, mention: createUserMention(joinerUser), betPlaced: true });
+    gameData.participants.push({ userId: joinerId, choice: null, mention: createUserMention(joinerUserObj), betPlaced: true });
     activeGames.set(gameId, gameData);
 
     const messageToEditId = Number(interactionMessageId || gameData.gameSetupMessageId);
 
     if (gameData.type === 'coinflip' && gameData.participants.length === 2) {
-        gameData.status = 'playing';
+        gameData.status = 'playing'; // Or 'resolving'
         const p1 = gameData.participants[0];
         const p2 = gameData.participants[1];
-        p1.choice = 'heads'; p2.choice = 'tails'; // Arbitrary assignment
+        p1.choice = 'heads'; p2.choice = 'tails';
 
-        const cfResult = determineCoinFlipOutcome(); // determineCoinFlipOutcome from Part 4
+        const cfResult = determineCoinFlipOutcome(); // From Part 4
         let winner = (cfResult.outcome === p1.choice) ? p1 : p2;
-        const winnings = gameData.betAmount * 2; // Total pot (their bet + loser's bet)
-                                               // This means the winner gets their bet back, plus the opponent's bet amount.
-                                               // So, credit 'winnings' to winner. Loser's bet is already gone.
+        // Winner gets total pot (their bet + loser's bet). Player already paid their bet.
+        // So winner needs to be credited their original bet back + opponent's bet.
+        const winningsToCredit = gameData.betAmount + gameData.betAmount; // Bet back + opponent's bet
 
-        await updateUserBalance(winner.userId, winnings, `won_group_coinflip:${gameId}`, null, gameId, String(chatId));
+        await updateUserBalance(winner.userId, winningsToCredit, `won_group_coinflip:${gameId}`, null, gameId, String(chatId));
 
-        const resMsg = `*CoinFlip Resolved\\!* Bet: ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\n\n` +
-                       `${p1.mention} \\(Heads\\) vs ${p2.mention} \\(Tails\\)\n\n` +
-                       `Landed on: *${escapeMarkdownV2(cfResult.outcomeString)}* ${cfResult.emoji}\\!\n\n` +
-                       `🎉 ${winner.mention} wins ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\\!`; // Profit is opponent's bet
+        const resMsg = `*CoinFlip Resolved!* Bet: ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\n\n` +
+                       `${p1.mention} (Heads) vs ${p2.mention} (Tails)\n\n` +
+                       `Landed on: *${escapeMarkdownV2(cfResult.outcomeString)}* ${cfResult.emoji}!\n\n` +
+                       `🎉 ${winner.mention} wins ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}!`; // Profit is opponent's bet
 
-        if (messageToEditId) {
+        if (messageToEditId && bot) {
             bot.editMessageText(resMsg, { chatId: String(chatId), message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: {} })
-                .catch(e => { console.warn(`[COINFLIP_EDIT_ERR] ${e.message}`); safeSendMessage(chatId, resMsg, { parse_mode: 'MarkdownV2' }); });
+                .catch(e => { safeSendMessage(chatId, resMsg, { parse_mode: 'MarkdownV2' }); });
         } else { safeSendMessage(chatId, resMsg, { parse_mode: 'MarkdownV2' }); }
+        
         activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, null, null, null);
+        await updateGroupGameDetails(chatId, null, null, null); // Clear from single-game session tracker
 
     } else if (gameData.type === 'rps' && gameData.participants.length === 2) {
         gameData.status = 'waiting_choices';
-        const rpsPrompt = `${gameData.participants[0].mention} & ${gameData.participants[1].mention}, your RPS match for ${escapeMarkdownV2(formatCurrency(gameData.betAmount))} is set\\!\nEach player must click a button below to make their choice:`;
-        // RPS_EMOJIS, RPS_CHOICES from Part 4
+        const rpsPrompt = `${gameData.participants[0].mention} & ${gameData.participants[1].mention}, your RPS match for ${escapeMarkdownV2(formatCurrency(gameData.betAmount))} is set!\nEach player must click a button below to make their choice:`;
         const rpsKeyboard = { inline_keyboard: [[
             { text: `${RPS_EMOJIS.ROCK} Rock`, callback_data: `rps_choose:${gameId}:${RPS_CHOICES.ROCK}` },
             { text: `${RPS_EMOJIS.PAPER} Paper`, callback_data: `rps_choose:${gameId}:${RPS_CHOICES.PAPER}` },
             { text: `${RPS_EMOJIS.SCISSORS} Scissors`, callback_data: `rps_choose:${gameId}:${RPS_CHOICES.SCISSORS}` }
-        ]] };
-        if (messageToEditId) {
+        ]] }; // RPS_EMOJIS, RPS_CHOICES from Part 4
+        if (messageToEditId && bot) {
             bot.editMessageText(rpsPrompt, { chatId: String(chatId), message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: rpsKeyboard })
-                .catch(e => { console.warn(`[RPS_EDIT_ERR] ${e.message}`); safeSendMessage(chatId, rpsPrompt, { parse_mode: 'MarkdownV2', reply_markup: rpsKeyboard }); });
+                .catch(e => { safeSendMessage(chatId, rpsPrompt, { parse_mode: 'MarkdownV2', reply_markup: rpsKeyboard }); });
         } else { safeSendMessage(chatId, rpsPrompt, { parse_mode: 'MarkdownV2', reply_markup: rpsKeyboard }); }
         activeGames.set(gameId, gameData);
     }
 }
 
-async function handleCancelGameCallback(chatId, cancellerUser, gameId, interactionMessageId) {
-    const cancellerId = String(cancellerUser.id);
+async function handleCancelGameCallback(chatId, cancellerUserObj, gameId, interactionMessageId) {
+    const cancellerId = String(cancellerUserObj.id); // cancellerUserObj is from getUser
     const gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.chatId !== String(chatId)) {
-        await safeSendMessage(cancellerId, "Game not found or cannot be cancelled from this chat.", {}); return;
+    if (!gameData || gameData.chatId !== String(chatId)) { /* ... game not found ... */ 
+        await safeSendMessage(cancellerId, "Game not found or cannot be cancelled.", {}); return;
     }
-    if (gameData.initiatorId !== cancellerId) {
-        await safeSendMessage(cancellerId, `Only the initiator \\(${gameData.initiatorMention}\\) can cancel this game\\.`, { parse_mode: 'MarkdownV2' }); return;
+    if (gameData.initiatorId !== cancellerId) { /* ... not initiator ... */ 
+        await safeSendMessage(cancellerId, `Only initiator ${gameData.initiatorMention} can cancel.`, { parse_mode: 'MarkdownV2' }); return;
     }
     const cancellableStatuses = ['waiting_opponent', 'waiting_choices'];
-    if (!cancellableStatuses.includes(gameData.status)) {
-        await safeSendMessage(cancellerId, `This game cannot be cancelled in its current state \\(${escapeMarkdownV2(gameData.status)}\\)\\.`, { parse_mode: 'MarkdownV2' }); return;
+    if (!cancellableStatuses.includes(gameData.status)) { /* ... not cancellable state ... */ 
+        await safeSendMessage(cancellerId, `Game cannot be cancelled now (Status: ${gameData.status}).`, { parse_mode: 'MarkdownV2' }); return;
     }
 
-    console.log(`[GAME_CANCEL] Game ${gameId} in chat ${chatId} cancelled by ${cancellerId}.`);
+    console.log(`[GAME_CANCEL] Game ${gameId} cancelled by ${cancellerId}.`);
     for (const participant of gameData.participants) {
         if (participant.betPlaced) {
+            // Refund their original bet amount
             await updateUserBalance(participant.userId, gameData.betAmount, `refund_group_${gameData.type}_cancelled:${gameId}`, null, gameId, String(chatId));
         }
     }
 
     const gameTypeDisplay = gameData.type.charAt(0).toUpperCase() + gameData.type.slice(1);
-    const cancellationMessage = `${gameData.initiatorMention} has cancelled the ${escapeMarkdownV2(gameTypeDisplay)} game \\(Bet: ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\\)\\. All bets have been refunded\\.`;
+    const cancellationMessage = `${gameData.initiatorMention} has cancelled the ${escapeMarkdownV2(gameTypeDisplay)} game (Bet: ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}). All bets refunded.`;
     const messageToEditId = Number(interactionMessageId || gameData.gameSetupMessageId);
-    if (messageToEditId) {
+    if (messageToEditId && bot) {
         bot.editMessageText(cancellationMessage, { chatId: String(chatId), message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: {} })
-            .catch(e => { console.warn(`[CANCEL_EDIT_ERR] ${e.message}`); safeSendMessage(chatId, cancellationMessage, { parse_mode: 'MarkdownV2' }); });
+            .catch(e => { safeSendMessage(chatId, cancellationMessage, { parse_mode: 'MarkdownV2' }); });
     } else { safeSendMessage(chatId, cancellationMessage, { parse_mode: 'MarkdownV2' }); }
 
     activeGames.delete(gameId);
-    await updateGroupGameDetails(chatId, null, null, null);
+    await updateGroupGameDetails(chatId, null, null, null); // Clear from single-game session tracker
 }
 
-async function handleRPSChoiceCallback(chatId, userObject, gameId, choice, interactionMessageId) {
-    const userId = String(userObject.id);
+async function handleRPSChoiceCallback(chatId, userChoiceObj, gameId, choice, interactionMessageId) {
+    const userId = String(userChoiceObj.id); // userChoiceObj is from getUser
     const gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.chatId !== String(chatId) || gameData.type !== 'rps') {
-        await safeSendMessage(userId, "This RPS game isn't available or has ended.", {}); return;
-    }
-    if (gameData.status !== 'waiting_choices') {
-        await safeSendMessage(userId, "The game is not currently waiting for choices.", {}); return;
-    }
+    // ... (Validations: game exists, correct type, correct status) ...
+    if (!gameData || gameData.chatId !== String(chatId) || gameData.type !== 'rps') { await safeSendMessage(userId, "RPS game not found or ended.", {}); return; }
+    if (gameData.status !== 'waiting_choices') { await safeSendMessage(userId, "Not waiting for choices.", {}); return; }
     const participant = gameData.participants.find(p => p.userId === userId);
-    if (!participant) {
-        await safeSendMessage(userId, "You are not playing in this RPS game.", {}); return;
-    }
-    if (participant.choice) {
-        await safeSendMessage(userId, `You have already chosen ${RPS_EMOJIS[participant.choice]}\\. Waiting for opponent\\.`, { parse_mode: 'MarkdownV2' }); return;
-    }
+    if (!participant) { await safeSendMessage(userId, "You're not in this RPS game.", {}); return; }
+    if (participant.choice) { await safeSendMessage(userId, `You already chose ${RPS_EMOJIS[participant.choice]}. Waiting for opponent.`, { parse_mode: 'MarkdownV2' }); return; }
+    
     const normalizedChoiceKey = String(choice).toUpperCase();
-    if (!RPS_CHOICES[normalizedChoiceKey]) {
-        console.error(`[RPS_CHOICE_ERR] Invalid choice '${choice}' from user ${userId} for game ${gameId}.`);
-        await safeSendMessage(userId, `Invalid choice\\. Please click Rock, Paper, or Scissors\\.`, {parse_mode:'MarkdownV2'}); return;
-    }
+    if (!RPS_CHOICES[normalizedChoiceKey]) { /* ... invalid choice ... */ await safeSendMessage(userId, "Invalid choice for RPS.", {}); return; }
 
     participant.choice = RPS_CHOICES[normalizedChoiceKey];
-    await safeSendMessage(userId, `You chose ${RPS_EMOJIS[participant.choice]}\\! Waiting for your opponent\\.\\.\\.`, { parse_mode: 'MarkdownV2' });
+    await safeSendMessage(userId, `You chose ${RPS_EMOJIS[participant.choice]}! Waiting for opponent...`, { parse_mode: 'MarkdownV2' });
     console.log(`[RPS_CHOICE] User ${userId} chose ${participant.choice} for game ${gameId}`);
     activeGames.set(gameId, gameData);
 
     const otherPlayer = gameData.participants.find(p => p.userId !== userId);
-    let groupUpdateMsg = `${participant.mention} has made their choice\\!`;
-    let keyboardForUpdate = {}; // Default to removing keyboard
+    let groupUpdateMsg = `${participant.mention} has made their choice!`;
+    let keyboardForUpdate = {}; 
 
     if (otherPlayer && !otherPlayer.choice) {
-        groupUpdateMsg += ` Waiting for ${otherPlayer.mention}\\.\\.\\.`;
-        keyboardForUpdate = { inline_keyboard: [[ // Keep keyboard if opponent still needs to choose
+        groupUpdateMsg += ` Waiting for ${otherPlayer.mention}...`;
+        keyboardForUpdate = { inline_keyboard: [[
             { text: `${RPS_EMOJIS.ROCK} Rock`, callback_data: `rps_choose:${gameId}:${RPS_CHOICES.ROCK}` },
             { text: `${RPS_EMOJIS.PAPER} Paper`, callback_data: `rps_choose:${gameId}:${RPS_CHOICES.PAPER}` },
             { text: `${RPS_EMOJIS.SCISSORS} Scissors`, callback_data: `rps_choose:${gameId}:${RPS_CHOICES.SCISSORS}` }
@@ -1262,23 +1249,23 @@ async function handleRPSChoiceCallback(chatId, userObject, gameId, choice, inter
     }
 
     const messageToEditId = Number(interactionMessageId || gameData.gameSetupMessageId);
-    if (messageToEditId) {
+    if (messageToEditId && bot) {
         bot.editMessageText(groupUpdateMsg, { chatId: String(chatId), message_id: messageToEditId, parse_mode: 'MarkdownV2', reply_markup: keyboardForUpdate })
-            .catch((e) => {console.warn(`[RPS_EDIT_WARN] Failed to edit message ${messageToEditId}: ${e.message}`)});
+            .catch((e) => {console.warn(`[RPS_EDIT_WARN] Failed to edit msg ${messageToEditId}: ${e.message}`)});
     }
 
     const allChosen = gameData.participants.length === 2 && gameData.participants.every(p => p.choice);
     if (allChosen) {
-        console.log(`[RPS_RESOLVE] Both players have chosen for game ${gameId}.`);
+        console.log(`[RPS_RESOLVE] Both players chosen for game ${gameId}.`);
         gameData.status = 'game_over';
-        activeGames.set(gameId, gameData);
+        // activeGames.set(gameId, gameData); // Status updated, but game will be deleted soon
 
         const p1 = gameData.participants[0];
         const p2 = gameData.participants[1];
-        const rpsRes = determineRPSOutcome(p1.choice, p2.choice); // determineRPSOutcome from Part 4
+        const rpsRes = determineRPSOutcome(p1.choice, p2.choice); // From Part 4
 
         let winnerParticipant = null;
-        let resultText = `*Rock Paper Scissors Result\\!* Bet: ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\n\n` +
+        let resultText = `*Rock Paper Scissors Result!* Bet: ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\n\n` +
                          `${p1.mention}: ${RPS_EMOJIS[p1.choice]} vs ${p2.mention}: ${RPS_EMOJIS[p2.choice]}\n\n` +
                          `${escapeMarkdownV2(rpsRes.description)}\n\n`;
 
@@ -1286,28 +1273,29 @@ async function handleRPSChoiceCallback(chatId, userObject, gameId, choice, inter
         else if (rpsRes.result === 'win2') winnerParticipant = p2;
 
         if (winnerParticipant) {
-            const winnings = gameData.betAmount * 2; // Total pot
-            await updateUserBalance(winnerParticipant.userId, winnings, `won_rps:${gameId}`, null, gameId, String(chatId));
-            resultText += `🎉 ${winnerParticipant.mention} wins ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}\\!`;
+            const winningsToCredit = gameData.betAmount + gameData.betAmount; // Bet back + opponent's bet
+            await updateUserBalance(winnerParticipant.userId, winningsToCredit, `won_rps:${gameId}`, null, gameId, String(chatId));
+            resultText += `🎉 ${winnerParticipant.mention} wins ${escapeMarkdownV2(formatCurrency(gameData.betAmount))}!`;
         } else if (rpsRes.result === 'draw') {
+            // Refund original bet amounts
             await updateUserBalance(p1.userId, gameData.betAmount, `refund_rps_draw:${gameId}`, null, gameId, String(chatId));
             await updateUserBalance(p2.userId, gameData.betAmount, `refund_rps_draw:${gameId}`, null, gameId, String(chatId));
-            resultText += `It's a draw\\! Bets have been refunded\\.`;
-        } else { // Error case from determineRPSOutcome
-            console.error(`[RPS_RESOLVE_ERR] RPS determination error for game ${gameId}. Desc: ${rpsRes.description}`);
+            resultText += `It's a draw! Bets have been refunded.`;
+        } else { // Error case
+            console.error(`[RPS_RESOLVE_ERR] RPS error for ${gameId}: ${rpsRes.description}`);
             await updateUserBalance(p1.userId, gameData.betAmount, `refund_rps_error:${gameId}`, null, gameId, String(chatId));
             await updateUserBalance(p2.userId, gameData.betAmount, `refund_rps_error:${gameId}`, null, gameId, String(chatId));
-            resultText = `An unexpected error occurred resolving RPS\\. Bets have been refunded\\.`;
+            resultText = `An error occurred. Bets refunded.`;
         }
 
         const finalMsgIdToEdit = Number(interactionMessageId || gameData.gameSetupMessageId);
-        if (finalMsgIdToEdit) {
+        if (finalMsgIdToEdit && bot) {
             bot.editMessageText(resultText, { chatId: String(chatId), message_id: finalMsgIdToEdit, parse_mode: 'MarkdownV2', reply_markup: {} })
-                .catch(e => { console.warn(`[RPS_FINAL_EDIT_ERR] ${e.message}`); safeSendMessage(chatId, resultText, { parse_mode: 'MarkdownV2' }); });
+                .catch(e => { safeSendMessage(chatId, resultText, { parse_mode: 'MarkdownV2' }); });
         } else { safeSendMessage(chatId, resultText, { parse_mode: 'MarkdownV2' }); }
 
         activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, null, null, null);
+        await updateGroupGameDetails(chatId, null, null, null); // Clear from single-game session
     }
 }
 
@@ -1786,28 +1774,26 @@ async function initializeDatabase() {
         console.log('⚙️ [DB Init] Transaction started for schema setup.');
 
         // Wallets Table
-        console.log('⚙️ [DB Init] Ensuring "wallets" table exists (without telegram_username, telegram_first_name columns)...');
+        console.log('⚙️ [DB Init] Ensuring "wallets" table exists (referral_code as VARCHAR(20))...');
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallets (
                 user_id VARCHAR(255) PRIMARY KEY,
                 external_withdrawal_address VARCHAR(44),
                 linked_at TIMESTAMPTZ,
                 last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                referral_code VARCHAR(12) UNIQUE,
+                referral_code VARCHAR(20) UNIQUE, -- <<< MODIFIED TO VARCHAR(20)
                 referred_by_user_id VARCHAR(255) REFERENCES wallets(user_id) ON DELETE SET NULL,
                 referral_count INTEGER NOT NULL DEFAULT 0,
                 total_wagered BIGINT NOT NULL DEFAULT 0,
                 last_milestone_paid_lamports BIGINT NOT NULL DEFAULT 0,
                 last_bet_amounts JSONB DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                -- telegram_username VARCHAR(255), -- REVERTED: Removed this column
-                -- telegram_first_name VARCHAR(255) -- REVERTED: Removed this column
+                -- telegram_username and telegram_first_name columns were previously removed from this definition
+                -- as per your preference to not add them to your existing schema.
             );
         `);
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_referral_code ON wallets (referral_code);');
         await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_total_wagered ON wallets (total_wagered DESC);');
-        // REVERTED: Removed index creation for telegram_username
-        // await client.query('CREATE INDEX IF NOT EXISTS idx_wallets_telegram_username ON wallets (telegram_username);');
 
 
         // User Balances Table
@@ -1976,9 +1962,6 @@ async function runPeriodicBackgroundTasks() {
     let cleanedSessions = 0;
     try {
         for (const [chatId, sessionData] of groupGameSessions.entries()) {
-            // Check if this session was only relevant for single-instance games
-            // If DiceEscalator no longer uses currentGameId in session, this cleanup might need adjustment
-            // or be fine if other games (RPS/Coinflip) still use it.
             if (sessionData && !sessionData.currentGameId && sessionData.lastActivity instanceof Date && (now - sessionData.lastActivity.getTime()) > SESSION_CLEANUP_THRESHOLD_MS) {
                 console.log(`[BACKGROUND_TASK] Cleaning inactive group session for chat ${chatId}.`);
                 groupGameSessions.delete(chatId);
@@ -2230,7 +2213,7 @@ async function main() {
                 console.error("Main Bot: Failed create temp bot for failure notification:", tempBotError);
             }
         }
-        if (!isShuttingDown && typeof startShutdownWatchdog === 'function') { // Check if function exists
+        if (!isShuttingDown && typeof startShutdownWatchdog === 'function') { 
             startShutdownWatchdog('STARTUP_FAILURE');
             process.exit(1);
         } else if (!isShuttingDown) {
