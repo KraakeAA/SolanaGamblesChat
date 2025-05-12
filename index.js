@@ -1198,6 +1198,7 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
         await sleep(2000); // Pause before bot plays
         await processDiceEscalatorBotTurn(gameData, msgIdToUpdate); // Start bot's turn
     }
+}
 
 // --- User Request Step 4: Enhanced processDiceEscalatorPlayerRoll ---
 async function processDiceEscalatorPlayerRoll(gameData, playerRoll) {
