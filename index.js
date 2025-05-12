@@ -1477,14 +1477,17 @@ async function processDiceEscalatorPlayerRoll(gameData, playerRoll, messageIdToU
 // --- Dice Escalator Callback Handler ---
 async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, interactionMessageId, chatId) {
     const gameData = activeGames.get(gameId);
+
+    // --- Full Validation Block Start ---
+    // Basic validation
     if (!gameData || gameData.chatId !== String(chatId) || gameData.type !== 'dice_escalator') {
-        await safeSendMessage(userId, "This Dice Escalator game is no longer available or has ended.", {});
+        await safeSendMessage(userId, "This Dice Escalator game is not available or has ended.", {});
         if (interactionMessageId) bot.editMessageReplyMarkup({}, {chat_id:String(chatId), message_id:Number(interactionMessageId)}).catch(()=>{});
         return;
     }
 
-    const userMention = gameData.initiatorMention;
-    const playerScoreFormatted = escapeMarkdownV2(String(gameData.playerScore));
+    const userMention = gameData.initiatorMention; // Used in messages later
+    const playerScoreFormatted = escapeMarkdownV2(String(gameData.playerScore)); // Used in messages later
 
     if (gameData.currentPlayerId !== String(userId)) {
         await safeSendMessage(userId, "It's not your turn to act in this game.", {});
@@ -1492,50 +1495,68 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
     }
     if (gameData.status !== 'player_turn_prompt_action') {
         await safeSendMessage(userId, `You cannot perform this action now. Game status: ${escapeMarkdownV2(gameData.status)}`, {parse_mode:'MarkdownV2'});
+        // Remove buttons if game is not in actionable state for player
         if (interactionMessageId && gameData.status !== 'player_turn_prompt_action') {
             bot.editMessageReplyMarkup({}, {chat_id:String(chatId), message_id:Number(interactionMessageId)}).catch(()=>{});
         }
         return;
     }
+
     const msgIdToUpdate = Number(interactionMessageId || gameData.gameSetupMessageId);
     if (!msgIdToUpdate) {
         console.error(`[DE_ACTION_ERR] No valid messageId for game ${gameId} action ${actionType}.`);
         await safeSendMessage(String(chatId), `Error updating game display. Please try again or contact support if the issue persists.`, {parse_mode:'MarkdownV2'});
         return;
     }
+    // --- Full Validation Block End ---
 
     if (actionType === 'de_roll_prompt') {
         gameData.status = 'waiting_db_roll'; activeGames.set(gameId, gameData);
 
-        const promptMessageText = `🎲 _Spinning the Digital Dice!_\n${userMention}, fetching your next roll... ⏳`;
+        // Corrected "Spinning" to "Rolling":
+        const promptMessageText = `🎲 _Rolling for ${userMention}! Fetching that next roll..._ ⏳`;
+
         try {
             console.log(`[DE_ACTION_EDIT_DEBUG] Attempting MD edit for roll prompt: msgId=${msgIdToUpdate}, chatId=${chatId}`);
+            console.log(`[DE_ACTION_EDIT_DEBUG] MD Prompt Content: ${promptMessageText}`);
             await bot.editMessageText(promptMessageText, {
                 chat_id: String(chatId),
                 message_id: msgIdToUpdate,
                 parse_mode: 'MarkdownV2',
                 reply_markup: {}
             });
-             console.log(`[DE_ACTION_EDIT_DEBUG] MD edit OK for roll prompt msgId=${msgIdToUpdate}.`);
+            console.log(`[DE_ACTION_EDIT_DEBUG] MD edit OK for roll prompt msgId=${msgIdToUpdate}.`);
         } catch (editError) {
             console.error(`[DE_ACTION_ERR] Failed MD edit message ${msgIdToUpdate} for roll prompt (game ${gameId}, chatId=${chatId}):`, editError.message);
-             const plainPrompt = `Requesting next roll for ${userMention}... Please wait.`;
-             try {
+            // Fallback to a cleaner plain text if Markdown fails
+            // Escape the display name part of userMention for plain text if it contains special characters not intended as Markdown here.
+            // However, userMention is already a Markdown link. For plain text, we might want just the name.
+            // Let's use gameData.initiatorMention which should be the createUserMention(initiatorUser) output.
+            // To be safe in plain text, we extract and escape the name if possible or use a generic term.
+            // For simplicity now, we'll use the already generated userMention; if it contains MD, it will show as MD in plain text.
+            // A better plain text fallback might be: `Requesting next roll for User ${gameData.initiatorId}... Please wait. ⏳`
+            const plainFallbackPrompt = `Requesting next roll for ${userMention}... Please wait. ⏳`; // UserMention is already Markdown escaped
+            try {
                 console.log(`[DE_ACTION_EDIT_DEBUG] Attempting PLAIN TEXT fallback edit: msgId=${msgIdToUpdate}, chatId=${chatId}`);
-                await bot.editMessageText(plainPrompt, { chat_id: String(chatId), message_id: msgIdToUpdate, reply_markup: {} });
+                await bot.editMessageText(plainFallbackPrompt, { chat_id: String(chatId), message_id: msgIdToUpdate, reply_markup: {} }); // No parse_mode
                 console.log(`[DE_ACTION_EDIT_DEBUG] Plain text fallback edit OK for msgId=${msgIdToUpdate}.`);
-             } catch (plainEditError) {
+            } catch (plainEditError) {
                 console.error(`[DE_ACTION_ERR] Failed plain text fallback edit for msgId=${msgIdToUpdate}:`, plainEditError.message);
-             }
+            }
         }
 
+        // DB request logic
         try {
             console.log(`[DB_ROLL_REQUEST] Inserting SUBSEQUENT roll req ${gameId}, user ${userId}, chat ${chatId}`);
-            await queryDatabase('INSERT INTO dice_roll_requests (game_id, chat_id, user_id, status, requested_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (game_id) DO UPDATE SET status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, roll_value = NULL, processed_at = NULL', [gameId, String(chatId), userId, 'pending']);
-            console.log(`[DB_ROLL_REQUEST] Success insert SUBSEQUENT ${gameId}.`);
+            await queryDatabase(
+                 'INSERT INTO dice_roll_requests (game_id, chat_id, user_id, status, requested_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (game_id) DO UPDATE SET status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, roll_value = NULL, processed_at = NULL',
+                 [gameId, String(chatId), userId, 'pending']
+            );
+            console.log(`[DB_ROLL_REQUEST] Successfully inserted/updated SUBSEQUENT roll request for DE game ${gameId}.`);
             startPollingForDbResult(gameId, userId, String(chatId), msgIdToUpdate);
+
         } catch (error) {
-            console.error(`[DE_ACTION_ERR] DB insert fail ${gameId}:`, error.message);
+            console.error(`[DE_ACTION_ERR] Failed to insert SUBSEQUENT roll request into DB for game ${gameId}:`, error.message);
             gameData.status = 'player_turn_prompt_action'; activeGames.set(gameId, gameData);
             let errorRestoreMsg = `⚙️ Oops! Roll Request Failed ⚙️\nCouldn't process your roll request this time, ${userMention}. Your score remains *${playerScoreFormatted}*. Ready to try again or cash out?`;
             const kbError = { inline_keyboard:[[{text:`🎲 Roll Again! (Score: ${gameData.playerScore})`,callback_data:`de_roll_prompt:${gameId}`}], [{text:`💰 Cashout ${escapeMarkdownV2(formatCurrency(gameData.playerScore))}!`,callback_data:`de_cashout:${gameId}`}]] };
@@ -1554,7 +1575,12 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
         let cashoutMsgText = `💰 *CHA-CHING! Cash Out Success!* 💰\nSmart move, ${userMention}! You've cashed out with a score of *${scoreCashedOutFormatted}*!\nA total of *${totalReturnFormatted}* is now safely in your balance.\n\n` +
                              `🤖 *Now, The House Responds!* 🤖\nCan the Bot beat your impressive score of *${scoreCashedOutFormatted}*? Let's see...`;
 
-        try { await bot.editMessageText(cashoutMsgText, { chatId: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} }); } catch (error) { console.error(`[DE_ACTION_ERR] Failed edit for cashout ${msgIdToUpdate}: ${error.message}`); await safeSendMessage(String(chatId), cashoutMsgText, { parse_mode: 'MarkdownV2' });}
+        try {
+             await bot.editMessageText(cashoutMsgText, { chatId: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} });
+        } catch (error) {
+            console.error(`[DE_ACTION_ERR] Failed to edit message ${msgIdToUpdate} for cashout game ${gameId}: ${error.message}`);
+            await safeSendMessage(String(chatId), cashoutMsgText, { parse_mode: 'MarkdownV2' });
+        }
         await sleep(2000);
         await processDiceEscalatorBotTurn(gameData, msgIdToUpdate);
     }
