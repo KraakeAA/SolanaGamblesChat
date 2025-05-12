@@ -618,9 +618,22 @@ async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, inter
     if (actionType === 'roll_prompt') {
         gameData.status = 'waiting_player_roll_via_helper';
         activeGames.set(gameId, gameData);
-        const helperUsernameToMention = DICES_HELPER_BOT_ID ? `the Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : `@${DICES_HELPER_BOT_USERNAME}`;
+        const helperUsernameToMention = DICES_HELPER_BOT_ID ? `the Helper Bot (ID: ${DICES_HELPER_BOT_ID})` : (DICES_HELPER_BOT_USERNAME ? `@${DICES_HELPER_BOT_USERNAME}` : 'the Helper Bot');
         const promptMsg = `${gameData.initiatorMention}, please trigger ${helperUsernameToMention} to roll your dice (e.g., by typing \`/roll\` if that's its command).\n\n_Waiting for roll..._`;
-        await bot.editMessageText(escapeMarkdownV2(promptMsg), { chatId, message_id: interactionMessageId, parse_mode: 'MarkdownV2', reply_markup: {} });
+
+        // --- START DEBUG LOGS ---
+        console.log(`[DEBUG_DE_ROLL] Preparing to edit message. ChatID type: ${typeof chatId}, ChatID value: '${chatId}'`);
+        console.log(`[DEBUG_DE_ROLL] InteractionMessageId type: ${typeof interactionMessageId}, Value: '${interactionMessageId}'`);
+        console.log(`[DEBUG_DE_ROLL] GameData initiatorMention: ${gameData.initiatorMention}`);
+        // --- END DEBUG LOGS ---
+
+        await bot.editMessageText(escapeMarkdownV2(promptMsg), { 
+            chatId: String(chatId), // Explicitly ensure it's a string, though it should be from CB
+            message_id: Number(interactionMessageId), // Ensure it's a number
+            parse_mode: 'MarkdownV2', 
+            reply_markup: {} 
+        });
+    } 
     } else if (actionType === 'cashout') {
         const cashedOutAmount = gameData.playerScore;
         const netProfit = cashedOutAmount; // In this version, playerScore IS the net profit above the initial bet.
