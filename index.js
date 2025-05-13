@@ -1938,7 +1938,7 @@ console.log("Loading Part 5b: Dice Escalator Game Logic...");
 // --- Dice Escalator Constants ---
 // IMPORTANT: Ensure these constants are declared ONLY ONCE in your entire index.js file.
 // If they are also in Part 1 or elsewhere, remove the duplicate declarations.
-const DICE_ESCALATOR_BUST_ON = 1; // Rolling a 1 is a bust for the player
+
 const BOT_STAND_SCORE_DICE_ESCALATOR = BigInt(10); // Bot will stand on 10 or more in Dice Escalator
 // TARGET_JACKPOT_SCORE should be defined globally (e.g., in Part 1) or ensure it's loaded before this part.
 // Example: const TARGET_JACKPOT_SCORE = BigInt(process.env.TARGET_JACKPOT_SCORE || '120');
