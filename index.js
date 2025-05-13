@@ -1760,12 +1760,6 @@ async function processDice21BotTurn(gameData, messageIdToStartBotTurn) {
     console.log(`${LOG_PREFIX} Game ${gameId} concluded. Player: ${playerScore}, Bot: ${botScore}, BotBusted: ${botBusted}.`);
 }
 
-    const playAgainKeyboardOU7 = { inline_keyboard: [[{ text: `🎲 Play Over/Under 7 Again (${formatCurrency(Number(gameData.betAmount))})`, callback_data: `play_again_ou7:${gameData.betAmount}` }]] };
-    await bot.editMessageText(resultText, { chat_id: gameData.chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardOU7 });
-    
-    activeGames.delete(gameId);
-    console.log(`[OU7_END] Game ${gameId} ended. Choice: ${choice}, Total: ${total}, Win: ${playerWon}`);
-
 // --- END OF SEGMENT 1 for Part 5a -------
 // --- Start of Part 5a (Segment 2 of 2) ---
 // (This code directly follows the end of Part 5a, Segment 1)
