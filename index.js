@@ -1765,8 +1765,6 @@ async function processDice21BotTurn(gameData, messageIdToStartBotTurn) {
     
     activeGames.delete(gameId);
     console.log(`[OU7_END] Game ${gameId} ended. Choice: ${choice}, Total: ${total}, Win: ${playerWon}`);
-}
-
 
 // --- END OF SEGMENT 1 for Part 5a -------
 // --- Start of Part 5a (Segment 2 of 2) ---
