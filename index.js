@@ -1499,6 +1499,7 @@ async function handleStartDice21Command(chatId, userObj, betAmount, commandMessa
 }
 async function handleDice21Hit(gameId, userObj, originalMessageId) {
     const LOG_PREFIX = "[Dice21_Hit]";
+    // Use global stringifyWithBigInt if available
     const userObjStr = typeof stringifyWithBigInt === 'function' ? stringifyWithBigInt(userObj) : JSON.stringify(userObj);
     console.log(`${LOG_PREFIX} Player action 'Hit'. GameID: ${gameId}, User: ${userObjStr}, OrigMsgID: ${originalMessageId}`);
 
@@ -1538,7 +1539,9 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     const chatId = gameData.chatId;
     console.log(`${LOG_PREFIX} Player ${userId} hits in game ${gameId}. Current score: ${gameData.playerScore}.`);
 
-    await bot.editMessageText(`${escapeMarkdownV2(gameData.playerRef)} takes another card (die)... a moment of suspense!\nYour current score: *${escapeMarkdownV2(String(gameData.playerScore))}*`, {
+    // Escape dynamic parts for the intermediate message
+    const hittingMessage = `${escapeMarkdownV2(gameData.playerRef)} takes another card (die)... a moment of suspense!\nYour current score: *${escapeMarkdownV2(String(gameData.playerScore))}*`;
+    await bot.editMessageText(hittingMessage, { // Using the pre-escaped string
         chat_id: chatId, message_id: currentOriginalMessageId, parse_mode: 'MarkdownV2', reply_markup: {}
     }).catch(e => console.error(`${LOG_PREFIX} Error editing message to 'hitting': ${e.message}`, e));
     await sleep(1000);
@@ -1560,6 +1563,7 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
         newRoll = BigInt(rollDie());
         if (!gameData.playerHits) gameData.playerHits = [];
         gameData.playerHits.push(newRoll);
+        // Escape for this message too
         await safeSendMessage(chatId, `${escapeMarkdownV2(gameData.playerRef)}, your internal roll for the hit is a *${escapeMarkdownV2(String(newRoll))}*!`, { parse_mode: 'MarkdownV2' });
         console.log(`${LOG_PREFIX} Player ${userId} hit a ${newRoll} (internal) for game ${gameId}. Pausing.`);
         await sleep(1000);
@@ -1569,7 +1573,13 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     console.log(`${LOG_PREFIX} Player ${userId} new score in game ${gameId}: ${gameData.playerScore}.`);
 
     const combinedHand = [...(gameData.playerInitialDeal || []), ...(gameData.playerHits || []).map(Number)];
-    let messageText = `${escapeMarkdownV2(gameData.playerRef)}, you drew a ${formatDiceRolls([Number(newRoll)])}. Your hand is now ${formatDiceRolls(combinedHand)}, totaling *${escapeMarkdownV2(String(gameData.playerScore))}*.`;
+    // Construct message parts and escape them before joining
+    const part1 = `${escapeMarkdownV2(gameData.playerRef)}, you drew a ${formatDiceRolls([Number(newRoll)])}`; // formatDiceRolls should return safe characters
+    const part2 = `Your hand is now ${formatDiceRolls(combinedHand)}, totaling *${escapeMarkdownV2(String(gameData.playerScore))}*`;
+
+    // Escape the literal periods if they are at the end of these parts or before newlines
+    let messageText = escapeMarkdownV2(part1 + ".") + "\n" + escapeMarkdownV2(part2 + "."); // Escape periods here
+
     let buttons = [];
     let gameEndedThisTurn = false;
 
@@ -1581,23 +1591,25 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     }
     const targetScore = BigInt(DICE_21_TARGET_SCORE);
 
+    let outcomeText = "";
     if (gameData.playerScore > targetScore) {
-        messageText += `\n\n💥 BUST! Your score is over *${escapeMarkdownV2(String(targetScore))}*. The house claims your *${escapeMarkdownV2(formatCurrency(Number(gameData.betAmount)))}* wager.`;
+        outcomeText = `\n\n💥 BUST! Your score is over *${escapeMarkdownV2(String(targetScore))}*${escapeMarkdownV2(".")} The house claims your *${escapeMarkdownV2(formatCurrency(Number(gameData.betAmount)))}* wager${escapeMarkdownV2(".")}`;
         gameData.status = 'game_over_player_bust';
         gameEndedThisTurn = true;
         console.log(`${LOG_PREFIX} Player ${userId} busted after hit in game ${gameId}.`);
         await updateUserBalance(userId, 0n, `lost_dice21_hit_bust:${gameId}`, null, gameId, String(chatId));
         buttons.push({ text: `🎲 Play Dice 21 Again (${formatCurrency(Number(gameData.betAmount))})`, callback_data: `play_again_d21:${gameData.betAmount}` });
     } else if (gameData.playerScore === targetScore) {
-        messageText += `\n\n✨ A perfect *${escapeMarkdownV2(String(targetScore))}*! You stand. The Bot Dealer will now play.`;
+        outcomeText = `\n\n✨ A perfect *${escapeMarkdownV2(String(targetScore))}*! You stand${escapeMarkdownV2(".")} The Bot Dealer will now play${escapeMarkdownV2(".")}`;
         gameData.status = 'bot_turn';
         gameEndedThisTurn = true;
         console.log(`${LOG_PREFIX} Player ${userId} reached ${targetScore} after hit in game ${gameId}.`);
     } else {
-        messageText += `\n\nWhat's your next move, ${escapeMarkdownV2(gameData.playerRef)}? "Hit" or "Stand"?`;
+        outcomeText = `\n\nWhat's your next move, ${escapeMarkdownV2(gameData.playerRef)}? "Hit" or "Stand"?`;
         buttons.push({ text: "⤵️ Hit", callback_data: `d21_hit:${gameId}` });
         buttons.push({ text: `✅ Stand`, callback_data: `d21_stand:${gameId}` });
     }
+    messageText += outcomeText;
 
     const gameMessageOptions = { chat_id: chatId, message_id: currentOriginalMessageId, parse_mode: 'MarkdownV2' };
     if (buttons.length > 0) {
@@ -1605,8 +1617,13 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     }
     const gameMsgOptsStr = typeof stringifyWithBigInt === 'function' ? stringifyWithBigInt(gameMessageOptions) : JSON.stringify(gameMessageOptions);
     console.log(`${LOG_PREFIX} Composed message after hit for game ${gameId}: "${messageText}", Options: ${gameMsgOptsStr}`);
+
+    // Send the fully constructed and escaped message
     await bot.editMessageText(messageText, gameMessageOptions)
-             .catch(e => console.error(`${LOG_PREFIX} Failed to edit message after hit for game ${gameId}: ${e.message}`, e));
+             .catch(e => {
+                console.error(`${LOG_PREFIX} Failed to edit message after hit for game ${gameId}: ${e.message}. Full text attempted: "${messageText}"`, e);
+                // Fallback or further error handling if needed
+             });
 
     activeGames.set(gameId, gameData);
 
