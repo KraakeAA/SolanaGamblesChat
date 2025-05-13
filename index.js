@@ -799,10 +799,6 @@ console.log("Loading Part 5a: Message & Callback Handling, All Game Flows...");
 // Basic constants like COMMAND_COOLDOWN_MS, MIN_BET_AMOUNT, MAX_BET_AMOUNT, JOIN_GAME_TIMEOUT_MS are expected from Part 1
 // TARGET_JACKPOT_SCORE for Dice Escalator is expected from Part 5b or Part 1
 
-// --- CONSTANTS FOR DICE 21 ---
-const DICE_21_TARGET_SCORE = 21;
-const DICE_21_BOT_STAND_SCORE = 17;
-
 // --- CONSTANTS FOR OVER/UNDER 7 ---
 const OU7_PAYOUT_NORMAL = 1; // 1:1 profit (bet back + 1x bet)
 const OU7_PAYOUT_SEVEN = 4;  // 4:1 profit (bet back + 4x bet)
