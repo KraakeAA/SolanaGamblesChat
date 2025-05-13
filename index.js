@@ -1397,7 +1397,7 @@ async function handleStartDice21Command(chatId, userObj, betAmount, commandMessa
     let gameMessageOptions = { parse_mode: 'MarkdownV2' };
 
     // Ensure DICE_21_TARGET_SCORE is defined and accessible here
-    const targetScore = typeof DICE_21_TARGET_SCORE !== 'undefined' ? BigInt(DICE_21_TARGET_SCORE) : 21n;
+    // const targetScore = typeof DICE_21_TARGET_SCORE !== 'undefined' ? BigInt(DICE_21_TARGET_SCORE) : 21n;
 
 
     if (playerScore > targetScore) {
@@ -1513,7 +1513,7 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     let gameEndedThisTurn = false;
 
     // Ensure DICE_21_TARGET_SCORE is defined and accessible here
-    const targetScore = typeof DICE_21_TARGET_SCORE !== 'undefined' ? BigInt(DICE_21_TARGET_SCORE) : 21n;
+    // const targetScore = typeof DICE_21_TARGET_SCORE !== 'undefined' ? BigInt(DICE_21_TARGET_SCORE) : 21n;
 
     if (gameData.playerScore > targetScore) {
         messageText += `\n\n💥 BUST! Your score is over ${targetScore}. The house claims your ${escapeMarkdownV2(formatCurrency(Number(gameData.betAmount)))} wager.`;
