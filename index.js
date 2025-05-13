@@ -1960,11 +1960,19 @@ function stringifyWithBigInt(obj) {
  * - Sends initial message with "Roll" button.
  */
 async function handleStartDiceEscalatorCommand(chatId, userObj, betAmount, originalCommandMessageId) {
-    const userId = String(userObj.id);
+    // Correctly get userId from the userObj (which should be from getUser)
+    const userId = String(userObj.userId); // <--- THE FIX IS HERE
     const playerRef = getPlayerDisplayReference(userObj); // From Part 3
     const gameId = generateGameId(); // From Part 3
 
     console.log(`[DE_START_CMD] User ${userId} (${playerRef}) initiated Dice Escalator. Bet: ${betAmount}, Chat: ${chatId}, GameID: ${gameId}`);
+
+    // Ensure userId is not "undefined" before proceeding
+    if (!userId || userId === "undefined") {
+        console.error(`[DE_START_CMD_ERR] Critical error: userId is undefined for userObj: ${JSON.stringify(userObj)}. Cannot start game.`);
+        await safeSendMessage(chatId, `${playerRef}, there was an internal error getting your User ID. Please try again. If the problem persists, contact an admin.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
     const balanceUpdateResult = await updateUserBalance(
         userId,
@@ -1986,7 +1994,7 @@ async function handleStartDiceEscalatorCommand(chatId, userObj, betAmount, origi
         type: 'DiceEscalator',
         gameId,
         chatId: String(chatId),
-        userId,
+        userId, // This will now be the correct ID
         playerRef,
         betAmount: BigInt(betAmount),
         playerScore: 0n,
@@ -1998,7 +2006,9 @@ async function handleStartDiceEscalatorCommand(chatId, userObj, betAmount, origi
         lastInteractionTime: Date.now()
     };
     activeGames.set(gameId, gameData);
-    console.log(`[DE_START_CMD] Game ${gameId} created. Data: ${stringifyWithBigInt(gameData)}`);
+    // Use stringifyWithBigInt if you have it defined, or a simple JSON.stringify for this specific log if gameData is simple here.
+    console.log(`[DE_START_CMD] Game ${gameId} created. Data: ${typeof stringifyWithBigInt === 'function' ? stringifyWithBigInt(gameData) : JSON.stringify(gameData)}`);
+
 
     const initialMessageText = `${playerRef} started a Dice Escalator game with a bet of *${escapeMarkdownV2(formatCurrency(betAmount))}*!\nYour current score: *0*. Roll the dice!`;
     const keyboard = {
