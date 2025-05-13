@@ -1621,8 +1621,8 @@ async function processDice21BotTurn(gameData, messageIdToUpdate) {
     await sleep(1500);
 
     // Ensure DICE_21_BOT_STAND_SCORE is defined and accessible
-    const botStandScoreThreshold = typeof DICE_21_BOT_STAND_SCORE !== 'undefined' ? BigInt(DICE_21_BOT_STAND_SCORE) : 17n;
-    const targetScore = typeof DICE_21_TARGET_SCORE !== 'undefined' ? BigInt(DICE_21_TARGET_SCORE) : 21n;
+    // const botStandScoreThreshold = typeof DICE_21_BOT_STAND_SCORE !== 'undefined' ? BigInt(DICE_21_BOT_STAND_SCORE) : 17n;
+    // const targetScore = typeof DICE_21_TARGET_SCORE !== 'undefined' ? BigInt(DICE_21_TARGET_SCORE) : 21n;
 
 
     const maxBotRolls = 7;
