@@ -2326,21 +2326,6 @@ console.log("Part 5a: Message & Callback Handling (All Games & Features) - Compl
 //---------------------------------------------------------------------------
 console.log("Loading Part 5b: Dice Escalator Game Logic (Professional Casino Feel, Updated Stand Button, Jackpot Tip, Jackpot Button, UI enhancements, jackpot display, and DETAILED LOGGING)...");
 
-// Helper function for JSON.stringify to handle BigInts, undefined, and other types for comprehensive logging.
-function stringifyWithBigInt(obj) {
-  return JSON.stringify(obj, (key, value) => {
-    if (typeof value === 'bigint') {
-      return value.toString() + 'n';
-    }
-    if (typeof value === 'function') {
-      return `[Function: ${value.name || 'anonymous'}]`;
-    }
-    if (value === undefined) {
-      return 'undefined_value';
-    }
-    return value;
-  }, 2);
-}
 
 // --- Helper Function to get Jackpot Text for the Button ---
 async function getJackpotButtonText() {
