@@ -1930,428 +1930,482 @@ async function handleStartSlotCommand(chatId, userObj, betAmount, commandMessage
 
 console.log("Part 5a: Message & Callback Handling (All Games & Features) - Complete.");
 // --- End of Part 5a ---
-// --- Start of Part 5b ---
-// index.js - Part 5b: Dice Escalator Game Logic (Revised with Extensive Logging)
-//---------------------------------------------------------------------------
-console.log("Loading Part 5b: Dice Escalator Game Logic (Revised with Extensive Logging)...");
+// --- Start of Part 5b -- -
+// index.js - Part 5b: Dice Escalator Game Logic
+//-------------------------------------------------------------------------- -
+console.log("Loading Part 5b: Dice Escalator Game Logic...");
 
-// Constants for Dice Escalator DB Polling (Player's first roll)
-const DB_POLLING_INTERVAL_MS = 2000; 
-const DB_POLLING_TIMEOUT_MS = 30000; 
-const activeDbPolls = new Map(); 
+// --- Dice Escalator Constants ---
+// These might be defined in Part 1, or you can define/override them here if specific to DE.
+// const TARGET_JACKPOT_SCORE = BigInt(process.env.TARGET_JACKPOT_SCORE || '120'); // Example: Score to win Jackpot
+const DICE_ESCALATOR_BUST_ON = 1; // Rolling a 1 is a bust for the player
+const BOT_STAND_SCORE_DICE_ESCALATOR = BigInt(10); // Example: Bot will stand on 10 or more in Dice Escalator
 
-// Game Constants for Dice Escalator
-const DICE_ESCALATOR_BOT_ROLLS = 3; 
-// DICE_ESCALATOR_BUST_ON is defined in Part 4 (should be 1)
-const TARGET_JACKPOT_SCORE = 120; // Your chosen value for Jackpot eligibility
-
-// Assumed to be defined (e.g., in Part 1 or top of Part 2) for jackpot contribution:
-// const JACKPOT_CONTRIBUTION_PERCENT = 0.01; 
+// Ensure MAIN_JACKPOT_ID and JACKPOT_CONTRIBUTION_PERCENT are available from Part 1
 // const MAIN_JACKPOT_ID = 'dice_escalator_main';
+// const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT || '0.01');
 
-// --- Definition of the DB Polling Function (for player's rolls via Helper) ---
-async function startPollingForDbResult(gameId, userId, chatId, messageIdToUpdate) {
-    console.log(`[DE_LOG_POLL] Attempting to start polling for gameId: ${gameId}, userId: ${userId}`);
-    if (activeDbPolls.has(gameId)) {
-        console.log(`[DE_LOG_POLL_WARN] Polling already active for game ${gameId}. Ignoring duplicate start request.`);
-        return;
-    }
-    console.log(`[DE_LOG_POLL_START] Starting DB poll for player's roll (game ${gameId}, user ${userId}, chat ${chatId}). Message to update: ${messageIdToUpdate}`);
-    const pollingStartTime = Date.now();
-
-    const pollIntervalId = setInterval(async () => {
-        console.log(`[DE_LOG_POLL_TICK] Polling tick for gameId: ${gameId}`);
-        if (Date.now() - pollingStartTime > DB_POLLING_TIMEOUT_MS) {
-            console.error(`[DE_LOG_POLL_ERR] Timeout polling DB for game ${gameId}.`);
-            clearInterval(pollIntervalId);
-            activeDbPolls.delete(gameId);
-            const gameData = activeGames.get(gameId);
-            if (gameData) {
-                console.log(`[DE_LOG_POLL_TIMEOUT_HANDLER] Handling timeout for game ${gameId}. gameData found.`);
-                const playerRef = gameData.playerReference || `User ${userId}`;
-                const timeoutMsg = `⏳ Oh dear, ${playerRef}! We waited, but the dice roll result didn't arrive for game \`${escapeMarkdownV2(gameId)}\`. The game has been cancelled.`;
-                if (gameData.betAmount && typeof updateUserBalance === 'function') {
-                    await updateUserBalance(userId, gameData.betAmount, `refund_de_db_poll_timeout:${gameId}`, null, gameId, String(chatId))
-                        .catch(e => console.error(`[DE_LOG_POLL_ERR] Failed refund on poll timeout for ${gameId}: ${e.message}`));
-                    safeSendMessage(chatId, timeoutMsg + " Your bet has been refunded.", { parse_mode: 'MarkdownV2' });
-                } else {
-                    safeSendMessage(chatId, timeoutMsg, { parse_mode: 'MarkdownV2' });
-                }
-                activeGames.delete(gameId);
-                if (typeof queryDatabase === 'function') {
-                    queryDatabase("DELETE FROM dice_roll_requests WHERE game_id = $1 AND status = 'pending'", [gameId]).catch(() => {});
-                }
-            } else {
-                 console.warn(`[DE_LOG_POLL_WARN] Game ${gameId} not found in activeGames during timeout handling.`);
-            }
-            return;
-        }
-
-        const currentGameData = activeGames.get(gameId);
-        if (!currentGameData) {
-            console.log(`[DE_LOG_POLL_STOP] Game ${gameId} not found in activeGames. Stopping poll.`);
-            clearInterval(pollIntervalId);
-            activeDbPolls.delete(gameId);
-            return;
-        }
-        if (currentGameData.status !== 'waiting_db_roll') {
-            console.log(`[DE_LOG_POLL_STOP] Game ${gameId} no longer waiting for DB roll (Status: ${currentGameData.status}). Stopping poll.`);
-            clearInterval(pollIntervalId);
-            activeDbPolls.delete(gameId);
-            return;
-        }
-
-        try {
-            console.log(`[DE_LOG_POLL_QUERY] Querying DB for gameId: ${gameId}`);
-            const dbResult = await queryDatabase('SELECT roll_value, status FROM dice_roll_requests WHERE game_id = $1', [gameId]);
-            if (dbResult.rows.length > 0) {
-                const { roll_value, status } = dbResult.rows[0];
-                console.log(`[DE_LOG_POLL_DB_RESULT] Game ${gameId}: DB status='${status}', roll_value='${roll_value}'`);
-                if (status === 'completed' && roll_value !== null && Number.isInteger(roll_value)) {
-                    console.log(`[DE_LOG_POLL_SUCCESS] Received roll ${roll_value} for game ${gameId}. Stopping poll.`);
-                    clearInterval(pollIntervalId);
-                    activeDbPolls.delete(gameId);
-                    const finalGameData = activeGames.get(gameId); // Re-fetch latest gameData
-                    if (finalGameData && finalGameData.status === 'waiting_db_roll') {
-                        console.log(`[DE_LOG_POLL_SUCCESS_CALL] About to call processDiceEscalatorPlayerRoll for game ${finalGameData.gameId} with roll ${roll_value}`);
-                        await processDiceEscalatorPlayerRoll(finalGameData, roll_value, messageIdToUpdate);
-                    } else {
-                        console.warn(`[DE_LOG_POLL_WARN] Game ${gameId} status changed to '${finalGameData?.status}' before processing roll ${roll_value}.`);
-                    }
-                } else if (status === 'error') {
-                    console.error(`[DE_LOG_POLL_ERR] DB request for game ${gameId} has status 'error'. Stopping poll.`);
-                    clearInterval(pollIntervalId); activeDbPolls.delete(gameId);
-                    const gameData = activeGames.get(gameId);
-                    if (gameData) { /* ... refund and cleanup logic ... */ }
-                } else if (status === 'pending' || status === 'processing') {
-                     console.log(`[DE_LOG_POLL_INFO] Roll for game ${gameId} still '${status}'...`);
-                } else {
-                     console.warn(`[DE_LOG_POLL_WARN] Unexpected status '${status}' for game ${gameId}.`);
-                }
-            } else { 
-                console.error(`[DE_LOG_POLL_ERR] No row found for game_id ${gameId} during polling. Critical error. Stopping poll.`);
-                clearInterval(pollIntervalId); activeDbPolls.delete(gameId);
-                const gameData = activeGames.get(gameId);
-                if (gameData) { /* ... notify user, refund, cleanup ... */ }
-            }
-        } catch (dbError) {
-            console.error(`[DE_LOG_POLL_ERR] DB query error during poll for game ${gameId}:`, dbError.message);
-        }
-    }, DB_POLLING_INTERVAL_MS);
-    activeDbPolls.set(gameId, pollIntervalId);
+// Helper function for JSON.stringify to handle BigInts
+function stringifyWithBigInt(obj) {
+    return JSON.stringify(obj, (key, value) =>
+        typeof value === 'bigint' ? value.toString() + 'n' : value // Append 'n' to distinguish from numbers if needed, or just value.toString()
+    );
 }
 
-// --- Dice Escalator Command Handler (/startdice) ---
-async function handleStartDiceEscalatorCommand(chatId, initiatorUser, betAmount, commandMessageId) {
-    const initiatorId = String(initiatorUser.id);
-    const initiatorUsername = initiatorUser.username;
-    const initiatorFirstName = initiatorUser.first_name;
-    const gameId = generateGameId();
-    console.log(`[DE_LOG_START_CMD] Entered handleStartDiceEscalatorCommand. User: ${initiatorId}, Chat: ${chatId}, Bet: ${betAmount}, GameID: ${gameId}`);
+// --- Game Handler Functions for Dice Escalator ---
 
-    const playerRef = getPlayerDisplayReference(initiatorUser);
-    const betFormatted = formatCurrency(betAmount);
-    console.log(`[DE_LOG_START_CMD] PlayerRef: ${playerRef}, BetFormatted: ${betFormatted}`);
+/**
+ * Starts a new Dice Escalator game.
+ * - Deducts bet from user.
+ * - Adds game to activeGames.
+ * - Sends initial message with "Roll" button.
+ */
+async function handleStartDiceEscalatorCommand(chatId, userObj, betAmount, originalCommandMessageId) {
+    const userId = String(userObj.id);
+    const playerRef = getPlayerDisplayReference(userObj); // From Part 3
+    const gameId = generateGameId(); // From Part 3
 
-    const initiator = await getUser(initiatorId, initiatorUsername, initiatorFirstName);
-    if (!initiator) { 
-        console.error(`[DE_LOG_START_CMD_ERR] Failed to get user ${initiatorId}`);
-        await safeSendMessage(chatId, `${playerRef}, error retrieving your user data.`, {parse_mode: 'MarkdownV2'}); return; 
+    console.log(`[DE_START_CMD] User ${userId} (${playerRef}) initiated Dice Escalator. Bet: ${betAmount}, Chat: ${chatId}, GameID: ${gameId}`);
+
+    // 1. Check user balance and deduct bet (this also makes jackpot contribution via updateUserBalance)
+    const balanceUpdateResult = await updateUserBalance(
+        userId,
+        -betAmount, // Negative amount for deduction
+        `bet_placed_dice_escalator:${gameId}`,
+        null, // client_ - let updateUserBalance handle it
+        gameId,
+        String(chatId)
+    );
+
+    if (!balanceUpdateResult.success) {
+        await safeSendMessage(chatId, `${playerRef}, your bet of ${formatCurrency(betAmount)} for Dice Escalator failed. Reason: ${escapeMarkdownV2(balanceUpdateResult.error || "Unknown error")}.`, { parse_mode: 'MarkdownV2' });
+        console.error(`[DE_START_CMD_ERR] Bet placement failed for ${userId}. Error: ${balanceUpdateResult.error}`);
+        return;
     }
-    console.log(`[DE_LOG_START_CMD] Fetched initiator data. Balance: ${initiator.balance}`);
-    if (initiator.balance < betAmount) { 
-        console.log(`[DE_LOG_START_CMD_ERR] Insufficient balance for user ${initiatorId}.`);
-        await safeSendMessage(chatId, `${playerRef}, your balance of ${formatCurrency(initiator.balance)} is too low for *${escapeMarkdownV2(betFormatted)}* bet.`, { parse_mode: 'MarkdownV2' }); return; 
-    }
+    console.log(`[DE_START_CMD] Bet ${formatCurrency(betAmount)} placed successfully for ${userId}. New balance: ${balanceUpdateResult.newBalanceLamports !== undefined ? formatCurrency(Number(balanceUpdateResult.newBalanceLamports)) : 'N/A'}`);
 
-    const balanceUpdateResult = await updateUserBalance(initiatorId, -betAmount, `bet_placed_dice_escalator:${gameId}`, null, gameId, String(chatId));
-    if (!balanceUpdateResult.success) { 
-        console.error(`[DE_LOG_START_CMD_ERR] Failed to deduct balance for user ${initiatorId}: ${balanceUpdateResult.error}`);
-        await safeSendMessage(chatId, `${playerRef}, couldn't place bet: ${escapeMarkdownV2(balanceUpdateResult.error || 'Unknown')}.`, { parse_mode: 'MarkdownV2' }); return; 
-    }
-    console.log(`[DE_LOG_START_CMD] Balance updated for user ${initiatorId}. New balance (approx): ${balanceUpdateResult.newBalance}`);
-
-    let currentJackpotDisplay = "";
-    try {
-        const jackpotResult = await queryDatabase('SELECT current_amount_lamports FROM jackpot_status WHERE jackpot_id = $1', [MAIN_JACKPOT_ID]);
-        if (jackpotResult.rows.length > 0) {
-            const jackpotAmount = BigInt(jackpotResult.rows[0].current_amount_lamports);
-            if (jackpotAmount > 0n) currentJackpotDisplay = `\n\n💰 Current Jackpot: *${escapeMarkdownV2(formatCurrency(Number(jackpotAmount)))}*!`;
-        }
-    } catch (e) { console.warn("[DE_LOG_JACKPOT_DISPLAY_ERR] Could not fetch jackpot: ", e.message); }
-
-    const initialPlaceholderText = `🔥 *Dice Escalator: The Challenge Begins!* 🔥\n${playerRef} bets *${escapeMarkdownV2(betFormatted)}* against The House!${currentJackpotDisplay}\n\n_The dice are poised... summoning the first roll!_ ⏳`;
-    const sentPlaceholderMsg = await safeSendMessage(chatId, initialPlaceholderText, { parse_mode: 'MarkdownV2' });
-
-    if (!sentPlaceholderMsg) { 
-        console.error(`[DE_LOG_START_CMD_ERR] Failed to send initial DE message for ${gameId}. Refunding.`);
-        await updateUserBalance(initiatorId, betAmount, `refund_de_setup_fail:${gameId}`, null, gameId, String(chatId)); return; 
-    }
-    console.log(`[DE_LOG_START_CMD] Initial game message sent for ${gameId}. Message ID: ${sentPlaceholderMsg.message_id}`);
-
+    // 2. Create and store game data
     const gameData = {
-        type: 'dice_escalator', gameId, chatId: String(chatId), initiatorId,
-        initiatorUsername, initiatorFirstName, playerReference: playerRef,
-        betAmount: BigInt(betAmount), playerScore: 0n, botScore: 0n,
-        status: 'waiting_db_roll', currentPlayerId: initiatorId,
-        bustValue: DICE_ESCALATOR_BUST_ON, creationTime: Date.now(),
-        gameSetupMessageId: sentPlaceholderMsg.message_id
+        type: 'DiceEscalator',
+        gameId,
+        chatId: String(chatId),
+        userId,
+        playerRef,
+        betAmount: BigInt(betAmount),
+        playerScore: 0n,    // Player's current total score
+        playerRollCount: 0, // How many times player has rolled
+        botScore: 0n,
+        status: 'waiting_player_roll', // Initial status
+        gameMessageId: null, // ID of the message with game buttons/status
+        commandMessageId: originalCommandMessageId, // ID of the /startdice command message
+        lastInteractionTime: Date.now()
     };
     activeGames.set(gameId, gameData);
-    console.log(`[DE_LOG_START_CMD] Game ${gameId} data set in activeGames. Status: ${gameData.status}`);
+    console.log(`[DE_START_CMD] Game ${gameId} created and added to activeGames. Data: ${stringifyWithBigInt(gameData)}`);
 
-    try {
-        console.log(`[DE_LOG_DB_ROLL_REQ] Inserting FIRST roll request for DE game ${gameId}, emoji_type: '🎲'`);
-        await queryDatabase(
-            'INSERT INTO dice_roll_requests (game_id, chat_id, user_id, status, requested_at, emoji_type) VALUES ($1, $2, $3, $4, NOW(), $5) ON CONFLICT (game_id) DO UPDATE SET status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, roll_value = NULL, processed_at = NULL, emoji_type = EXCLUDED.emoji_type',
-            [gameId, String(chatId), initiatorId, 'pending', '🎲']
+    // 3. Send initial game message
+    const initialMessageText = `${playerRef} started a Dice Escalator game with a bet of *${escapeMarkdownV2(formatCurrency(betAmount))}*!\nYour current score: *0*. Roll the dice!`;
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🎲 Roll Dice", callback_data: `de_roll_prompt:${gameId}` }],
+            // No cashout on first roll / score 0
+        ]
+    };
+
+    const sentMessage = await safeSendMessage(chatId, initialMessageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+
+    if (sentMessage) {
+        gameData.gameMessageId = sentMessage.message_id;
+        activeGames.set(gameId, gameData); // Update gameData with message ID
+        console.log(`[DE_START_CMD] Initial game message sent for ${gameId}, msgID: ${sentMessage.message_id}`);
+    } else {
+        console.error(`[DE_START_CMD_ERR] Failed to send initial game message for ${gameId}. Refunding user.`);
+        await updateUserBalance(
+            userId,
+            betAmount, // Positive amount for refund
+            `refund_dice_escalator_setup_fail:${gameId}`,
+            null,
+            gameId,
+            String(chatId)
         );
-        console.log(`[DE_LOG_DB_ROLL_REQ_SUCCESS] Inserted roll request for ${gameId}. Calling startPollingForDbResult.`);
-        startPollingForDbResult(gameId, initiatorId, String(chatId), sentPlaceholderMsg.message_id);
-    } catch (error) { 
-        console.error(`[DE_LOG_START_CMD_ERR] DB interaction error for FIRST roll ${gameId}:`, error.message);
-        // ... (refund logic)
+        activeGames.delete(gameId); // Clean up
     }
 }
 
-// --- Processes the player's roll in Dice Escalator ---
-async function processDiceEscalatorPlayerRoll(gameData, playerRollValue, messageIdToUpdate) {
-    const playerRoll = BigInt(playerRollValue);
-    const { gameId, chatId, bustValue, initiatorId, initiatorUsername, initiatorFirstName, betAmount } = gameData;
-    console.log(`[DE_LOG_PROCESS_ROLL] Entered. Game: ${gameId}, PlayerRoll: ${playerRoll}, Current Score: ${gameData.playerScore}, Current Status: ${gameData.status}`);
 
-    const playerRef = gameData.playerReference || getPlayerDisplayReference({ id: initiatorId, username: initiatorUsername, first_name: initiatorFirstName });
-    const betFormatted = formatCurrency(Number(betAmount));
-    const diceFormatted = formatDiceRolls([Number(playerRoll)]);
-    const bustDiceFormatted = formatDiceRolls([bustValue]);
+/**
+ * Handles player actions from inline buttons (Roll or Cash Out/Stand).
+ */
+async function handleDiceEscalatorPlayerAction(gameId, userIdFromCallback, action, originalMessageId, chatIdFromCallback) {
+    const gameData = activeGames.get(gameId);
+    const now = Date.now();
 
-    if (playerRoll <= 0n || playerRoll > 6n) { 
-        console.error(`[DE_LOG_ROLL_INVALID] Invalid roll value ${playerRoll} from DB for game ${gameId}.`);
-        gameData.status = 'player_turn_prompt_action';
-        activeGames.set(gameId, gameData);
-        console.log(`[DE_LOG_ROLL_STATUS_SET] Game ${gameId} status set to: ${gameData.status} due to invalid roll.`);
-        let invalidRollMsg = `🤔 Odd Roll Data, ${playerRef}!\nReceived an invalid roll (${playerRoll}). Your score is *${gameData.playerScore}*. Try again or Stand.`;
-        const kbInvalid = { inline_keyboard: [[{ text: `🎲 Roll Again! (Score: ${gameData.playerScore})`, callback_data: `de_roll_prompt:${gameId}` }], [{ text: `✅ Stand (Score: ${gameData.playerScore})`, callback_data: `de_cashout:${gameId}` }]] };
-        console.log(`[DE_LOG_PROCESS_ROLL_MSG] About to send/edit invalid roll message for game ${gameId}`);
-        if (messageIdToUpdate && bot) bot.editMessageText(invalidRollMsg, { chat_id: String(chatId), message_id: Number(messageIdToUpdate), parse_mode: 'MarkdownV2', reply_markup: kbInvalid }).catch(() => safeSendMessage(String(chatId), invalidRollMsg, { parse_mode: 'MarkdownV2', reply_markup: kbInvalid }));
-        else safeSendMessage(String(chatId), invalidRollMsg, { parse_mode: 'MarkdownV2', reply_markup: kbInvalid });
-        console.log(`[DE_LOG_PROCESS_ROLL_MSG_SENT] Invalid roll message sent/edited for game ${gameId}`);
+    console.log(`[DE_ACTION_INPUT] Received action: ${action} for game ${gameId}, user: ${userIdFromCallback}. Game Message ID: ${originalMessageId}`);
+
+    if (!gameData) {
+        console.warn(`[DE_ACTION_WARN] Game ${gameId} not found in activeGames. Action: ${action}. Attempting to clear buttons on msg ${originalMessageId}`);
+        if (bot && originalMessageId && chatIdFromCallback) {
+            bot.editMessageReplyMarkup({}, { chat_id: String(chatIdFromCallback), message_id: Number(originalMessageId) })
+                .catch(e => console.error(`[DE_ACTION_ERR] Failed to clear buttons for non-existent game ${gameId} on msg ${originalMessageId}: ${e.message}`));
+        }
+        await safeSendMessage(String(chatIdFromCallback), "This Dice Escalator game session has expired or could not be found.", {});
         return;
     }
 
-    const msgId = Number(messageIdToUpdate || gameData.gameSetupMessageId);
-
-    if (playerRoll === BigInt(bustValue)) { // Player BUSTS
-        console.log(`[DE_LOG_PROCESS_ROLL] Player BUSTED in game ${gameId} with roll ${playerRoll}.`);
-        gameData.status = 'game_over_player_bust';
-        gameData.playerScore = 0n; 
-        const turnResMsg = `*Your Roll: ${diceFormatted}... Oh No!* 😱\n\n💥 *BUSTED!* 💥\nOuch, ${playerRef}! Rolling a ${bustDiceFormatted} means your score crumbles to zero! The House claims your *${escapeMarkdownV2(betFormatted)}* bet.\n\n_Better luck next time!_`;
-        activeGames.delete(gameId);
-        console.log(`[DE_LOG_PROCESS_ROLL] Game ${gameId} deleted from activeGames due to bust.`);
-        await queryDatabase( `UPDATE bets SET status = 'lost', processed_at = NOW() WHERE user_id = $1 AND bet_details->>'game_id' = $2 AND status = 'active'`, [initiatorId, gameId]).catch(e => console.error("[DE_LOG_PROCESS_ROLL_ERR] Error logging player bust:", e));
-        const playAgainKeyboard = { inline_keyboard: [[{ text: `🎲 Play Again (${betFormatted})`, callback_data: `play_again_de:${betAmount}` }]] };
-        console.log(`[DE_LOG_PROCESS_ROLL_MSG] About to send/edit BUST message for game ${gameId}`);
-        if (msgId && bot) bot.editMessageText(turnResMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboard }).catch(() => safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboard }));
-        else safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboard });
-        console.log(`[DE_LOG_PROCESS_ROLL_MSG_SENT] BUST message sent/edited for game ${gameId}`);
-    } else { // Player does NOT bust
-        gameData.playerScore += playerRoll;
-        gameData.status = 'player_turn_prompt_action';
-        activeGames.set(gameId, gameData);
-        console.log(`[DE_LOG_PROCESS_ROLL] Player roll ${playerRoll} successful for game ${gameId}. New Score: ${gameData.playerScore}. Status set to: ${gameData.status}`);
-        const scoreFormatted = escapeMarkdownV2(String(gameData.playerScore));
-        const turnResMsg = `🎲 *Roll Result: ${diceFormatted}!* 🎲\nNice roll, ${playerRef}! Your score is now *${scoreFormatted}*.\n\n💰 Current Score to Stand on: *${scoreFormatted}*\n🔥 _Remember, a ${bustDiceFormatted} means BUST!_ 💥\n\nWhat's your move?`;
-        const standButtonText = `✅ Stand (Score: ${gameData.playerScore})`;
-        const kb = { inline_keyboard: [ [{ text: `🎲 Roll Again! (Score: ${gameData.playerScore})`, callback_data: `de_roll_prompt:${gameId}` }], [{ text: standButtonText, callback_data: `de_cashout:${gameId}` }] ]};
-        console.log(`[DE_LOG_PROCESS_ROLL_MSG] About to send/edit roll success message for game ${gameId}`);
-        if (msgId && bot) bot.editMessageText(turnResMsg, { chatId: String(chatId), message_id: msgId, parse_mode: 'MarkdownV2', reply_markup: kb }).catch(() => safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2', reply_markup: kb }));
-        else safeSendMessage(String(chatId), turnResMsg, { parse_mode: 'MarkdownV2', reply_markup: kb });
-        console.log(`[DE_LOG_PROCESS_ROLL_MSG_SENT] Roll success message sent/edited for game ${gameId}`);
-    }
-    console.log(`[DE_LOG_ROLL_PROCESS_COMPLETE] Game ${gameId}: final status=${gameData.status}, final score=${gameData.playerScore}`);
-}
-
-// --- Dice Escalator Callback Handler (for "Roll Again" or "Stand") ---
-async function handleDiceEscalatorPlayerAction(gameId, userId, actionType, interactionMessageId, chatId) {
-    const gameData = activeGames.get(gameId); // Fetch once
-    console.log(`[DE_LOG_ACTION_ENTER] Game: ${gameId}, User: ${userId}, Action: ${actionType}, Current Game Status: ${gameData?.status}`);
-
-    if (!gameData || gameData.chatId !== String(chatId) || gameData.type !== 'dice_escalator' || gameData.initiatorId !== String(userId)) {
-        console.warn(`[DE_LOG_ACTION_WARN] Invalid action. GameData: ${JSON.stringify(gameData)}, Expected User: ${gameData?.initiatorId}, Actual User: ${userId}`);
-        await safeSendMessage(userId, "This game isn't available or it's not your turn.", {});
-        if (interactionMessageId && bot) bot.editMessageReplyMarkup({}, {chat_id:String(chatId), message_id:Number(interactionMessageId)}).catch(()=>{});
-        return;
-    }
-    const playerRef = gameData.playerReference || getPlayerDisplayReference({id: userId, username: gameData.initiatorUsername, first_name: gameData.initiatorFirstName});
-    const msgIdToUpdate = Number(interactionMessageId || gameData.gameSetupMessageId);
-    console.log(`[DE_LOG_ACTION_INFO] PlayerRef: ${playerRef}, MsgIdToUpdate: ${msgIdToUpdate}, Validated Game Status Check: ${gameData.status}`);
-
-    if (gameData.status !== 'player_turn_prompt_action') {
-        console.warn(`[DE_LOG_ACTION_WARN] Action '${actionType}' denied for game ${gameId}. Status is '${gameData.status}', expected 'player_turn_prompt_action'.`);
-        await safeSendMessage(userId, `You can't ${actionType === 'de_roll_prompt' ? 'roll again' : 'stand'} right now. Game status: ${escapeMarkdownV2(gameData.status)}`, {parse_mode:'MarkdownV2'});
+    // Verify the action is from the correct user
+    if (String(gameData.userId) !== String(userIdFromCallback)) {
+        console.warn(`[DE_ACTION_WARN] User ${userIdFromCallback} tried to interact with game ${gameId} belonging to ${gameData.userId}.`);
+        // Optionally send a private message to the interactor:
+        // await bot.answerCallbackQuery(callbackQueryId, { text: "This isn't your game!", show_alert: true });
         return;
     }
 
-    if (actionType === 'de_roll_prompt') { 
-        console.log(`[DE_LOG_ACTION_ROLL] User ${userId} chose to Roll Again for game ${gameId}.`);
-        gameData.status = 'waiting_db_roll';
-        activeGames.set(gameId, gameData); // Update status before async operations
-        console.log(`[DE_LOG_ACTION_ROLL_STATUS_SET] Game ${gameId} status set to: ${gameData.status}`);
-        const promptMessageText = `🎲 _Rolling again for ${playerRef}! Fetching that next roll..._ ⏳`;
-        if (msgIdToUpdate && bot) bot.editMessageText(promptMessageText, { chat_id: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} }).catch(()=>safeSendMessage(chatId, promptMessageText, {parse_mode:'MarkdownV2'}));
-        else safeSendMessage(chatId, promptMessageText, {parse_mode:'MarkdownV2'});
-        try {
-            console.log(`[DE_LOG_ACTION_DB_REQ] Inserting SUBSEQUENT roll request for DE game ${gameId}, emoji_type: '🎲'`);
-            await queryDatabase(
-                'INSERT INTO dice_roll_requests (game_id, chat_id, user_id, status, requested_at, emoji_type) VALUES ($1, $2, $3, $4, NOW(), $5) ON CONFLICT (game_id) DO UPDATE SET status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, roll_value = NULL, processed_at = NULL, emoji_type = EXCLUDED.emoji_type',
-                [gameId, String(chatId), userId, 'pending', '🎲']
-            );
-            console.log(`[DE_LOG_ACTION_DB_REQ_SUCCESS] Inserted roll request for ${gameId}. Calling startPollingForDbResult.`);
-            startPollingForDbResult(gameId, userId, String(chatId), msgIdToUpdate);
-        } catch (error) { 
-             console.error(`[DE_LOG_ACTION_ERR] DB insert/poll for subsequent roll ${gameId}:`, error.message);
-             gameData.status = 'player_turn_prompt_action'; 
-             activeGames.set(gameId, gameData);
-             const playerScoreFormatted = escapeMarkdownV2(String(gameData.playerScore));
-             const errorRestoreMsg = `⚙️ Oops, ${playerRef}! Couldn't process roll. Score: *${playerScoreFormatted}*. Try again or Stand.`;
-             const standButtonTextErr = `✅ Stand (Score: ${gameData.playerScore})`;
-             const kbError = { inline_keyboard:[[{text:`🎲 Roll Again! (Score: ${gameData.playerScore})`,callback_data:`de_roll_prompt:${gameId}`}], [{text:standButtonTextErr, callback_data:`de_cashout:${gameId}`}]] };
-             if (msgIdToUpdate && bot) bot.editMessageText(errorRestoreMsg, {chat_id:String(chatId), message_id:msgIdToUpdate, parse_mode:'MarkdownV2', reply_markup:kbError}).catch(()=>safeSendMessage(chatId, errorRestoreMsg, {parse_mode:'MarkdownV2', reply_markup:kbError}));
-             else safeSendMessage(chatId, errorRestoreMsg, {parse_mode:'MarkdownV2', reply_markup:kbError});
-        }
-    } else if (actionType === 'de_cashout') { // Player wants to Stand
-        console.log(`[DE_LOG_ACTION_STAND] User ${userId} chose to Stand for game ${gameId} with score ${gameData.playerScore}.`);
-        if (gameData.playerScore <= 0n) { 
-            console.log(`[DE_LOG_ACTION_STAND_ERR] User ${userId} tried to stand with score <= 0.`);
-            await safeSendMessage(userId, "You need a score greater than 0 to Stand!", {}); return; 
-        }
-        gameData.status = 'player_stood_waiting_bot'; 
-        activeGames.set(gameId, gameData); // Update status first
-        console.log(`[DE_LOG_ACTION_STAND_STATUS_SET] Game ${gameId} status set to: ${gameData.status}`);
-        const standMsgText = `✅ ${playerRef} stands with a score of *${gameData.playerScore}*!\n\n` + `🤖 *Now, The House Responds!* 🤖\nCan the Bot beat this score? Let's see...`;
-        if (msgIdToUpdate && bot) bot.editMessageText(standMsgText, { chatId: String(chatId), message_id: msgIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {} }).catch(()=>safeSendMessage(chatId, standMsgText, {parse_mode:'MarkdownV2'}));
-        else safeSendMessage(chatId, standMsgText, {parse_mode:'MarkdownV2'});
-        console.log(`[DE_LOG_ACTION_STAND_MSG_SENT] Stand message sent/edited for game ${gameId}. Triggering bot turn.`);
-        await sleep(1500); 
-        await processDiceEscalatorBotTurn(gameData, msgIdToUpdate);
+    // Ensure the originalMessageId matches the game's message ID if available
+    // This helps prevent acting on old messages if a new one was sent for the game.
+    if (gameData.gameMessageId && Number(gameData.gameMessageId) !== Number(originalMessageId)) {
+        console.warn(`[DE_ACTION_WARN] Action on old message for game ${gameId}. GameMsgID: ${gameData.gameMessageId}, ActionMsgID: ${originalMessageId}. Ignoring.`);
+        // await bot.answerCallbackQuery(callbackQueryId, { text: "Please use the latest game message.", show_alert: true });
+        return;
     }
-}
 
-// --- Processes the Bot's turn (ANIMATED ROLLS & REVISED PAYOUTS) ---
-async function processDiceEscalatorBotTurn(gameData, messageIdToUpdate) {
-    const { gameId, chatId, bustValue, initiatorId, initiatorUsername, initiatorFirstName, betAmount } = gameData;
-    const playerRef = gameData.playerReference || getPlayerDisplayReference({ id: initiatorId, username: initiatorUsername, first_name: initiatorFirstName });
-    const playerScoreStood = gameData.playerScore; 
-    console.log(`[DE_LOG_BOT_TURN_START] Bot starting turn for game ${gameId}. Player stood with ${playerScoreStood}. Bet: ${betAmount}. MessageToUpdate: ${messageIdToUpdate}`);
+    gameData.lastInteractionTime = now; // Update interaction time
 
-    let botScore = 0n; let botBusted = false; let rollsMadeByBot = 0; let botRollsLog = [];
-    await sleep(1000); 
+    console.log(`[DE_ACTION_PROCESS] Processing action '${action}' for game ${gameId}. Current status: ${gameData.status}. GameData: ${stringifyWithBigInt(gameData)}`);
 
-    while (rollsMadeByBot < DICE_ESCALATOR_BOT_ROLLS && botScore <= playerScoreStood && !botBusted) {
-        rollsMadeByBot++;
-        console.log(`[DE_LOG_BOT_ROLL_ATTEMPT] Bot attempt roll ${rollsMadeByBot} for game ${gameId}. Current bot score: ${botScore}`);
-        await safeSendMessage(chatId, `Bot Roll ${rollsMadeByBot}/${DICE_ESCALATOR_BOT_ROLLS}...`, {});
-        let currentRollValue = 0n;
-        try {
-            const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' }); 
-            currentRollValue = BigInt(diceMessage.dice.value);
-            console.log(`[DE_LOG_BOT_ROLL_ANIMATED] Bot animated dice for game ${gameId} showed: ${currentRollValue}`);
-            await sleep(2500); 
-        } catch (e) {
-            console.error(`[DE_LOG_BOT_TURN_ERR] sendDice failed for bot roll ${rollsMadeByBot}, game ${gameId}. Internal roll. Error: ${e.message}`);
-            const internalRollResult = determineDieRollOutcome(); currentRollValue = BigInt(internalRollResult.roll);
-            await safeSendMessage(chatId, `Bot (internal roll ${rollsMadeByBot}): ${formatDiceRolls([Number(currentRollValue)])}`); await sleep(1000);
-        }
-        botRollsLog.push(`Roll ${rollsMadeByBot}: ${formatDiceRolls([Number(currentRollValue)])}`);
-        if (currentRollValue === BigInt(bustValue)) { 
-            botBusted = true; botScore = 0n; botRollsLog[botRollsLog.length-1] += " → 💥 BUSTED!"; 
-            console.log(`[DE_LOG_BOT_ROLL_RESULT] Bot BUSTED on roll ${rollsMadeByBot}. Game: ${gameId}`);
-            break; 
-        }
-        else { 
-            botScore += currentRollValue; botRollsLog[botRollsLog.length-1] += ` → Total: ${botScore}`; 
-            console.log(`[DE_LOG_BOT_ROLL_RESULT] Bot roll ${rollsMadeByBot} value ${currentRollValue}. New bot score: ${botScore}. Game: ${gameId}`);
-        }
-        let tempBotTurnStatus = `🤖 *Bot's Turn Ongoing...*\nPlayer Stood Score: *${playerScoreStood}*\n\n${botRollsLog.join('\n')}`;
-        if (messageIdToUpdate && bot) bot.editMessageText(tempBotTurnStatus, { chatId:String(chatId), message_id: Number(messageIdToUpdate), parse_mode:'MarkdownV2', reply_markup:{} }).catch((e) => console.warn(`[DE_LOG_BOT_EDIT_WARN] Failed to edit message during bot roll ${rollsMadeByBot} for game ${gameId}: ${e.message}`));
-        if (botScore > playerScoreStood) { console.log(`[DE_LOG_BOT_TURN_STOP] Bot score ${botScore} > player score ${playerScoreStood}. Bot stops rolling.`); break; }
-        if (rollsMadeByBot < DICE_ESCALATOR_BOT_ROLLS && !botBusted) { console.log(`[DE_LOG_BOT_TURN_CONTINUE] Bot has more rolls. Current rolls: ${rollsMadeByBot}`); await sleep(1000); }
-    }
-    console.log(`[DE_LOG_BOT_TURN_ROLLS_END] Bot finished rolling for game ${gameId}. Final bot score: ${botScore}, Busted: ${botBusted}`);
-    await sleep(1500); 
-    
-    let finalResultSection = ""; let payoutAmount = 0n; let finalGameStatusForLog = "lost"; let jackpotActuallyWonAmount = 0n;
-    console.log(`[DE_LOG_BOT_TURN_DETERMINE_WINNER] Game ${gameId}. Player Stood: ${playerScoreStood}, Bot Score: ${botScore}, Bot Busted: ${botBusted}`);
-
-    if (botBusted || botScore < playerScoreStood) { 
-        finalGameStatusForLog = "won"; payoutAmount = betAmount + playerScoreStood; 
-        finalResultSection = `\n\n--- 🎉 *YOU WIN!* 🎉 ---\n${playerRef}, The Bot ${botBusted ? "BUSTED 💥" : `only scored *${botScore}*`}. You beat The House with *${playerScoreStood}*!\nYou receive *${formatCurrency(Number(payoutAmount))}*.`;
-        console.log(`[DE_LOG_BOT_TURN_PLAYER_WINS] Game ${gameId}. Payout (before jackpot): ${payoutAmount}`);
-        if (playerScoreStood >= BigInt(TARGET_JACKPOT_SCORE)) { 
-            console.log(`[DE_LOG_JACKPOT_CHECK] Game ${gameId}. Player score ${playerScoreStood} >= target ${TARGET_JACKPOT_SCORE}. Checking jackpot.`);
-            const client = await pool.connect(); 
-            try { 
-                await client.query('BEGIN'); 
-                const jackpotRes = await client.query('SELECT current_amount_lamports FROM jackpot_status WHERE jackpot_id = $1 FOR UPDATE', [MAIN_JACKPOT_ID]); 
-                if (jackpotRes.rows.length > 0 && BigInt(jackpotRes.rows[0].current_amount_lamports) > 0n) { 
-                    const currentJackpot = BigInt(jackpotRes.rows[0].current_amount_lamports); 
-                    jackpotActuallyWonAmount = currentJackpot; 
-                    console.log(`[DE_LOG_JACKPOT_HIT] Game ${gameId}. Current jackpot is ${currentJackpot}. Attempting to payout to user ${initiatorId}.`);
-                    const jackpotPayoutReason = `jackpot_win_de:${gameId}`; 
-                    const jackpotPayoutResult = await updateUserBalance(initiatorId, jackpotActuallyWonAmount, jackpotPayoutReason, client, gameId, String(chatId)); 
-                    if (jackpotPayoutResult.success) { 
-                        await client.query('UPDATE jackpot_status SET current_amount_lamports = 0, last_won_at = NOW(), last_won_by_user_id = $1, updated_at = NOW() WHERE jackpot_id = $2', [initiatorId, MAIN_JACKPOT_ID]); 
-                        finalResultSection += `\n\n🎉🎉🎉 *JACKPOT HIT!* 🎉🎉🎉\nCongrats! You also won Jackpot of *${formatCurrency(Number(jackpotActuallyWonAmount))}*!`; 
-                        console.log(`[DE_LOG_JACKPOT_WIN_SUCCESS] User ${initiatorId} won jackpot of ${jackpotActuallyWonAmount}. Game ${gameId}. Jackpot reset.`); 
-                        await client.query(`UPDATE bets SET status = $1, payout_amount_lamports = COALESCE(payout_amount_lamports, 0) + $2, bet_details = bet_details || $3::jsonb, processed_at = NOW() WHERE user_id = $4 AND bet_details->>'game_id' = $5 AND (status = 'won' OR status = 'active' OR status LIKE 'won%')`,['jackpot_won_addon', jackpotActuallyWonAmount.toString(), JSON.stringify({jackpot_won: jackpotActuallyWonAmount.toString()}), initiatorId, gameId] );
-                    } else { 
-                        jackpotActuallyWonAmount = 0n; 
-                        console.error(`[DE_LOG_JACKPOT_ERR] Failed payout for ${initiatorId}. Error: ${jackpotPayoutResult.error}. Jackpot NOT reset.`);
-                    } 
-                } else {
-                    console.log(`[DE_LOG_JACKPOT_CHECK] Game ${gameId}. No jackpot amount available or jackpot table issue.`);
+    switch (action) {
+        case 'de_roll_prompt':
+            if (gameData.status !== 'waiting_player_roll' && gameData.status !== 'player_turn_prompt_action') {
+                console.warn(`[DE_ACTION_ROLL_WARN] Roll attempted in invalid state '${gameData.status}' for game ${gameId}.`);
+                // Edit message to inform or remove buttons if state is terminal
+                if (gameData.status.startsWith('game_over') || gameData.status === 'bot_turn') {
+                    await bot.editMessageText(`Game ${gameId} is already concluded or in bot's turn. Current score: ${gameData.playerScore}.`, {
+                        chat_id: String(gameData.chatId),
+                        message_id: Number(gameData.gameMessageId || originalMessageId),
+                        parse_mode: 'MarkdownV2',
+                        reply_markup: (gameData.status.startsWith("game_over_player") ? { inline_keyboard: [[{ text: `🎲 Play Again (${formatCurrency(Number(gameData.betAmount))})`, callback_data: `play_again_de:${gameData.betAmount}` }]]} : {})
+                    }).catch(e => console.error(`[DE_ACTION_ERR] Failed to update message for invalid roll state: ${e.message}`));
                 }
-                await client.query('COMMIT'); 
-            } catch (error) { 
-                await client.query('ROLLBACK'); 
-                jackpotActuallyWonAmount = 0n; 
-                console.error(`[DE_LOG_JACKPOT_ERR] DB error for ${gameId}:`, error); 
-            } finally { client.release(); }
-        } else {
-            console.log(`[DE_LOG_JACKPOT_CHECK] Game ${gameId}. Player score ${playerScoreStood} < target ${TARGET_JACKPOT_SCORE}. No jackpot.`);
-        }
-    } else if (botScore === playerScoreStood && !botBusted) { 
-        finalGameStatusForLog = "push"; payoutAmount = betAmount; 
-        finalResultSection = `\n\n--- 😐 *PUSH!* 😐 ---\n${playerRef}, Bot also scored *${botScore}*! Bet of *${formatCurrency(Number(betAmount))}* returned.`;
-        console.log(`[DE_LOG_BOT_TURN_PUSH] Game ${gameId}. Payout: ${payoutAmount}`);
-    } else { 
-        finalGameStatusForLog = "lost"; payoutAmount = 0n;
-        finalResultSection = `\n\n--- 💀 *THE HOUSE WINS!* 💀 ---\n${playerRef}, Bot scored *${botScore}*, beating your *${playerScoreStood}*.\nBetter luck next time!`;
-        console.log(`[DE_LOG_BOT_TURN_HOUSE_WINS] Game ${gameId}. No payout to player.`);
-    }
+                return;
+            }
+            await processDiceEscalatorPlayerRoll(gameData);
+            break;
 
-    if (payoutAmount > 0n) { 
-        console.log(`[DE_LOG_BOT_TURN_PAYOUT] Crediting ${payoutAmount} to user ${initiatorId} for game ${gameId}, reason: ${finalGameStatusForLog}_de_vs_house:${gameId}`);
-        await updateUserBalance(initiatorId, payoutAmount, `${finalGameStatusForLog}_de_vs_house:${gameId}`, null, gameId, String(chatId)); 
-    } else if (finalGameStatusForLog === "lost") { 
-        console.log(`[DE_LOG_BOT_TURN_LOSS_LOG] Logging loss for user ${initiatorId}, game ${gameId}`);
-        await queryDatabase( `UPDATE bets SET status = 'lost', payout_amount_lamports = '0', reason_tx = $1, processed_at = NOW() WHERE user_id = $2 AND bet_details->>'game_id' = $3 AND status = 'active'`, [`${finalGameStatusForLog}_de_vs_house:${gameId}`, initiatorId, gameId]).catch(e => console.error("[DE_LOG_BOT_TURN_ERR] Error logging DE loss:", e)); 
-    }
-    
-    const botPlaysMsgBase = `🤖 *Bot's Turn Results for ${playerRef}* 🤖\nPlayer Stood Score: *${playerScoreStood}*\n\n${botRollsLog.join('\n')}`;
-    let finalStandings = `\n\n*Final Standings:*\nYou (Stood): *${playerScoreStood}* ${ (botBusted || botScore < playerScoreStood) ? '🏆' : '' }\nBot: *${botScore}* ${ (!botBusted && botScore > playerScoreStood) ? '🏆' : (botBusted ? '💥' : '') }`;
-    const finalMsg = botPlaysMsgBase + finalResultSection + finalStandings;
-    const playAgainKeyboard = { inline_keyboard: [[{ text: `🎲 Play Again (${formatCurrency(Number(betAmount))})`, callback_data: `play_again_de:${betAmount}` }]] };
+        case 'de_cashout': // Player chooses to Stand/Cash Out
+            if (gameData.status !== 'player_turn_prompt_action') {
+                console.warn(`[DE_ACTION_CASHOUT_WARN] Cashout attempted in invalid state '${gameData.status}' for game ${gameId}.`);
+                // Similar logic to edit message if needed
+                return;
+            }
+            if (gameData.playerScore <= 0n) {
+                console.warn(`[DE_ACTION_CASHOUT_WARN] Cashout attempted with score ${gameData.playerScore} for game ${gameId}. Not allowed.`);
+                 await safeSendMessage(String(gameData.chatId), `${gameData.playerRef}, you cannot cash out with a score of ${gameData.playerScore}. You need to roll at least once successfully.`, {parse_mode: 'MarkdownV2'});
+                return;
+            }
+            gameData.status = 'bot_turn';
+            activeGames.set(gameId, gameData); // Save status change
+            console.log(`[DE_ACTION_CASHOUT] Player ${gameData.userId} stands with score ${gameData.playerScore} in game ${gameId}. Bot's turn.`);
+            await bot.editMessageText(
+                `${gameData.playerRef} stands with a score of *${gameData.playerScore}*!\nBet: ${escapeMarkdownV2(formatCurrency(Number(gameData.betAmount)))}\n\n🤖 Bot is now playing...`,
+                {
+                    chat_id: String(gameData.chatId),
+                    message_id: Number(gameData.gameMessageId || originalMessageId),
+                    parse_mode: 'MarkdownV2',
+                    reply_markup: {} // Remove buttons
+                }
+            ).catch(e => console.error(`[DE_ACTION_CASHOUT_ERR] Failed to update message for cashout: ${e.message}`));
 
-    console.log(`[DE_LOG_BOT_TURN_FINAL_MSG] Sending final message for game ${gameId}. Message ID to edit: ${messageIdToUpdate}`);
-    if (messageIdToUpdate && bot) bot.editMessageText(finalMsg, { chatId: String(chatId), message_id: Number(messageIdToUpdate), parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboard }).catch(() => safeSendMessage(String(chatId), finalMsg, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboard }));
-    else safeSendMessage(String(chatId), finalMsg, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboard });
-    
-    activeGames.delete(gameId);
-    console.log(`[DE_LOG_BOT_TURN_COMPLETE] Game ${gameId} ended and deleted from activeGames. Player: ${playerScoreStood}, Bot Score: ${botScore}, Busted: ${botBusted}, Jackpot Won: ${jackpotActuallyWonAmount}`);
+            await sleep(1500); // Pause for dramatic effect
+            await processDiceEscalatorBotTurn(gameData);
+            break;
+
+        default:
+            console.error(`[DE_ACTION_ERR] Unknown action '${action}' for game ${gameId}.`);
+    }
+    // Any further update to activeGames for gameData changes will be within the called functions.
 }
 
-console.log("Part 5b: Dice Escalator Game Logic (Revised with Logging & Helper Bot emoji_type) - Complete.");
+/**
+ * Processes a player's dice roll.
+ * - Sends dice animation.
+ * - Updates player score.
+ * - Checks for bust.
+ * - Updates game message with new score and options.
+ */
+async function processDiceEscalatorPlayerRoll(gameData) {
+    const { gameId, chatId, userId, playerRef, betAmount } = gameData;
+    gameData.status = 'player_rolling'; // Intermediate status
+    activeGames.set(gameId, gameData);
+    console.log(`[DE_ROLL_PROCESS] Player ${userId} rolling for game ${gameId}. Current score: ${gameData.playerScore}. Message ID: ${gameData.gameMessageId}`);
+
+    // Edit message to show rolling in progress and remove buttons temporarily
+    await bot.editMessageText(
+        `${playerRef} (Bet: ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}) is rolling...\nCurrent Score: *${gameData.playerScore}*`, {
+        chat_id: String(chatId),
+        message_id: Number(gameData.gameMessageId),
+        parse_mode: 'MarkdownV2',
+        reply_markup: {}
+    }).catch(e => console.warn(`[DE_ROLL_WARN] Failed to update message to 'rolling...' for game ${gameId}: ${e.message}`));
+
+    await sleep(500); // Brief pause before sending dice
+
+    let playerRollValue;
+    try {
+        const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
+        playerRollValue = BigInt(diceMessage.dice.value);
+        console.log(`[DE_ROLL_SUCCESS] Player ${userId} rolled a ${playerRollValue} for game ${gameId} (animated).`);
+        await sleep(2000); // Wait for dice animation to be visible
+    } catch (diceError) {
+        console.error(`[DE_ROLL_ERR] Failed to send animated dice for ${gameId}. Error: ${diceError.message}. Using internal roll.`);
+        playerRollValue = BigInt(rollDie()); // rollDie() from Part 3
+        await safeSendMessage(chatId, `${playerRef} (internal roll): You rolled a *${playerRollValue}*`, { parse_mode: 'MarkdownV2' });
+        await sleep(1000);
+    }
+
+    gameData.playerRollCount += 1;
+
+    if (playerRollValue === BigInt(DICE_ESCALATOR_BUST_ON)) {
+        gameData.playerScore = 0n; // Reset score on bust
+        gameData.status = 'game_over_player_bust';
+        console.log(`[DE_ROLL_BUST] Player ${userId} BUSTED by rolling a ${DICE_ESCALATOR_BUST_ON} in game ${gameId}.`);
+
+        await updateUserBalance(userId, 0n, `lost_dice_escalator_bust:${gameId}`, null, gameId, String(chatId)); // Bet already taken, log loss
+
+        const bustMessage = `${playerRef} rolled a *${playerRollValue}*... BUST! 💥\nYour score is reset to 0. You lose your bet of ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}.`;
+        const bustKeyboard = { inline_keyboard: [[{ text: `🎲 Play Again (${formatCurrency(Number(betAmount))})`, callback_data: `play_again_de:${betAmount}` }]] };
+        
+        if(gameData.gameMessageId) {
+            await bot.editMessageText(bustMessage, {
+                chat_id: String(chatId),
+                message_id: Number(gameData.gameMessageId),
+                parse_mode: 'MarkdownV2',
+                reply_markup: bustKeyboard
+            }).catch(e => {
+                console.error(`[DE_ROLL_ERR] Failed to edit message for bust on game ${gameId}: ${e.message}. Sending new message.`);
+                safeSendMessage(chatId, bustMessage, { parse_mode: 'MarkdownV2', reply_markup: bustKeyboard });
+            });
+        } else {
+            safeSendMessage(chatId, bustMessage, { parse_mode: 'MarkdownV2', reply_markup: bustKeyboard });
+        }
+        activeGames.delete(gameId); // Game over, remove from active games
+    } else {
+        gameData.playerScore += playerRollValue;
+        gameData.status = 'player_turn_prompt_action'; // Player can roll again or cashout
+        console.log(`[DE_ROLL_SUCCESS] Player ${userId} roll ${playerRollValue} successful for game ${gameId}. New Score: ${gameData.playerScore}.`);
+
+        const successMessage = `${playerRef}, you rolled a *${playerRollValue}*!\nYour new score: *${gameData.playerScore}*.\nBet: ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}. What's next?`;
+        const successKeyboard = {
+            inline_keyboard: [
+                [
+                    { text: "🎲 Roll Again", callback_data: `de_roll_prompt:${gameId}` },
+                    { text: `💰 Stand (Cash Out ${gameData.playerScore})`, callback_data: `de_cashout:${gameId}` }
+                ]
+            ]
+        };
+        if(gameData.gameMessageId) {
+            await bot.editMessageText(successMessage, {
+                chat_id: String(chatId),
+                message_id: Number(gameData.gameMessageId),
+                parse_mode: 'MarkdownV2',
+                reply_markup: successKeyboard
+            }).catch(e => {
+                console.error(`[DE_ROLL_ERR] Failed to edit message for roll success on game ${gameId}: ${e.message}. Sending new message.`);
+                const newMsg = await safeSendMessage(chatId, successMessage, { parse_mode: 'MarkdownV2', reply_markup: successKeyboard });
+                if(newMsg) gameData.gameMessageId = newMsg.message_id;
+            });
+        } else {
+             const newMsg = await safeSendMessage(chatId, successMessage, { parse_mode: 'MarkdownV2', reply_markup: successKeyboard });
+             if(newMsg) gameData.gameMessageId = newMsg.message_id;
+        }
+    }
+    activeGames.set(gameId, gameData); // Persist changes (status, score) or deletion
+    console.log(`[DE_ROLL_PROCESS_COMPLETE] Game ${gameId} status: ${gameData.status}, final score for this roll: ${gameData.playerScore}`);
+}
+
+
+/**
+ * Processes the Bot's turn after a player stands.
+ * - Bot rolls dice until it stands or busts.
+ * - Determines game outcome and processes payout/loss.
+ * - Sends result message.
+ */
+async function processDiceEscalatorBotTurn(gameData) {
+    const { gameId, chatId, userId, playerRef, playerScore, betAmount } = gameData;
+    gameData.status = 'bot_rolling'; // Intermediate status
+    activeGames.set(gameId, gameData);
+
+    console.log(`[DE_BOT_TURN] Bot playing for game ${gameId}. Player score: ${playerScore}. Bet: ${betAmount}. Message ID: ${gameData.gameMessageId}`);
+
+    let botMessageAccumulator = `${playerRef} stood with *${playerScore}*.\nBet: ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}\n\n🤖 Bot's turn:\n`;
+    if (gameData.gameMessageId) {
+         await bot.editMessageText(botMessageAccumulator + "_Bot is thinking..._", {
+            chat_id: String(chatId),
+            message_id: Number(gameData.gameMessageId),
+            parse_mode: 'MarkdownV2',
+            reply_markup: {}
+        }).catch(e => console.warn(`[DE_BOT_WARN] Failed to update message to 'bot thinking' for game ${gameId}: ${e.message}`));
+    } else {
+        // If somehow gameMessageId is lost, send new and try to update gameData
+        const newMsg = await safeSendMessage(chatId, botMessageAccumulator + "_Bot is thinking..._", {parse_mode: 'MarkdownV2'});
+        if(newMsg) gameData.gameMessageId = newMsg.message_id;
+    }
+    await sleep(1000);
+
+    let botRollValue;
+    do {
+        try {
+            const diceMessage = await bot.sendDice(chatId, { emoji: '🎲' });
+            botRollValue = BigInt(diceMessage.dice.value);
+            console.log(`[DE_BOT_ROLL] Bot rolled a ${botRollValue} for game ${gameId} (animated).`);
+            await sleep(2000);
+        } catch (diceError) {
+            console.error(`[DE_BOT_ERR] Bot failed to send animated dice for ${gameId}. Error: ${diceError.message}. Using internal roll.`);
+            botRollValue = BigInt(rollDie());
+            await safeSendMessage(chatId, `🤖 Bot (internal roll): Rolled a *${botRollValue}*`, { parse_mode: 'MarkdownV2' });
+            await sleep(1000);
+        }
+
+        if (botRollValue === BigInt(DICE_ESCALATOR_BUST_ON)) {
+            gameData.botScore = 0n; // Bot busts
+            botMessageAccumulator += `Bot rolled a *${botRollValue}*... BUST! 💥\n`;
+            console.log(`[DE_BOT_BUST] Bot BUSTED by rolling a ${DICE_ESCALATOR_BUST_ON} in game ${gameId}.`);
+            break;
+        } else {
+            gameData.botScore += botRollValue;
+            botMessageAccumulator += `Bot rolled a *${botRollValue}*, new Bot score: *${gameData.botScore}*.\n`;
+            console.log(`[DE_BOT_ROLL] Bot roll ${botRollValue} successful. New Bot score: ${gameData.botScore} in game ${gameId}.`);
+        }
+
+        if (gameData.gameMessageId) {
+            await bot.editMessageText(botMessageAccumulator + (gameData.botScore < BOT_STAND_SCORE_DICE_ESCALATOR && gameData.botScore > 0 ? "_Bot rolls again..._" : "_Bot considers..._"), {
+                chat_id: String(chatId),
+                message_id: Number(gameData.gameMessageId),
+                parse_mode: 'MarkdownV2'
+            }).catch(e => console.warn(`[DE_BOT_WARN] Failed to update bot rolling message for ${gameId}: ${e.message}`));
+        }
+        await sleep(1500);
+
+    } while (gameData.botScore < BOT_STAND_SCORE_DICE_ESCALATOR && gameData.botScore > 0n); // Bot stands on BOT_STAND_SCORE_DICE_ESCALATOR or more, or if busted (score 0)
+
+    // Determine winner
+    let resultMessage;
+    let payoutAmount = 0n; // This is the total amount credited (bet back + winnings)
+    let outcomeReasonLog = "";
+    let jackpotWon = false;
+    const targetJackpotScoreValue = BigInt(TARGET_JACKPOT_SCORE || '9999'); // Fallback if not defined
+
+    if (gameData.botScore === 0n) { // Bot busted
+        resultMessage = `🎉 ${playerRef} WINS! Bot busted.`;
+        payoutAmount = betAmount + betAmount; // Player gets their bet back + equivalent amount as winnings
+        outcomeReasonLog = `won_dice_escalator_bot_bust:${gameId}`;
+        // Check for Jackpot
+        if (playerScore >= targetJackpotScoreValue) {
+            jackpotWon = true;
+        }
+    } else if (playerScore > gameData.botScore) {
+        resultMessage = `🎉 ${playerRef} WINS with *${playerScore}* vs Bot's *${gameData.botScore}*!`;
+        payoutAmount = betAmount + betAmount;
+        outcomeReasonLog = `won_dice_escalator_score:${gameId}`;
+        if (playerScore >= targetJackpotScoreValue) {
+            jackpotWon = true;
+        }
+    } else if (playerScore < gameData.botScore) {
+        resultMessage = `💀 Bot WINS with *${gameData.botScore}* vs Player's *${playerScore}*.`;
+        payoutAmount = 0n; // Player loses their bet (already deducted)
+        outcomeReasonLog = `lost_dice_escalator_score:${gameId}`;
+    } else { // Draw
+        resultMessage = `😐 It's a DRAW! Both Player and Bot have *${playerScore}*.`;
+        payoutAmount = betAmount; // Player gets their bet back
+        outcomeReasonLog = `push_dice_escalator:${gameId}`;
+    }
+
+    botMessageAccumulator += `\n${resultMessage}\n`;
+    gameData.status = `game_over_final_${outcomeReasonLog.split(':')[0]}`; // e.g., game_over_final_won_dice_escalator_bot_bust
+
+    // Handle Payouts / Logging Loss
+    if (payoutAmount > 0n) {
+        await updateUserBalance(userId, payoutAmount, outcomeReasonLog, null, gameId, String(chatId));
+        botMessageAccumulator += `You receive ${escapeMarkdownV2(formatCurrency(Number(payoutAmount)))}.`;
+        console.log(`[DE_BOT_PAYOUT] Player ${userId} paid ${payoutAmount} for game ${gameId}. Reason: ${outcomeReasonLog}`);
+    } else { // Loss already accounted for when bet was placed, log it explicitly.
+        await updateUserBalance(userId, 0n, outcomeReasonLog, null, gameId, String(chatId)); // Logs the 'lost_...' status to bets table
+        botMessageAccumulator += `You lost your bet of ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}.`;
+        console.log(`[DE_BOT_LOSS] Player ${userId} lost bet for game ${gameId}. Reason: ${outcomeReasonLog}`);
+    }
+
+    // Handle Jackpot Win
+    if (jackpotWon) {
+        console.log(`[DE_JACKPOT_WIN_CONDITION_MET] Player ${userId} met score condition for jackpot in game ${gameId} with score ${playerScore}.`);
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            // Get current jackpot amount and lock the row
+            const jackpotResult = await client.query(
+                'SELECT current_amount_lamports FROM jackpot_status WHERE jackpot_id = $1 FOR UPDATE',
+                [MAIN_JACKPOT_ID]
+            );
+
+            if (jackpotResult.rows.length > 0) {
+                const jackpotTotalLamports = BigInt(jackpotResult.rows[0].current_amount_lamports);
+                if (jackpotTotalLamports > 0n) {
+                    // Award jackpot to player
+                    const jackpotPayoutResult = await updateUserBalance(userId, jackpotTotalLamports, `jackpot_win_dice_escalator:${gameId}`, client, gameId, String(chatId));
+
+                    if(jackpotPayoutResult.success) {
+                        // Reset jackpot
+                        await client.query(
+                            'UPDATE jackpot_status SET current_amount_lamports = $1, last_won_at = NOW(), last_winner_user_id = $2, last_won_game_id = $3 WHERE jackpot_id = $4',
+                            ['0', userId, gameId, MAIN_JACKPOT_ID] // Reset to 0 or a base amount
+                        );
+                        await client.query('COMMIT');
+                        const jackpotWinMessage = `\n\n🏆🎉 CONGRATULATIONS ${playerRef}! You also won the Dice Escalator JACKPOT of *${escapeMarkdownV2(formatCurrency(Number(jackpotTotalLamports)))}*! 🎉🏆`;
+                        botMessageAccumulator += jackpotWinMessage;
+                        console.log(`[DE_JACKPOT_WIN_SUCCESS] Player ${userId} WON and was PAID the jackpot of ${jackpotTotalLamports} for game ${gameId}. Jackpot reset.`);
+                        // Announce jackpot win globally if desired
+                        // safeSendMessage(SOME_GLOBAL_ANNOUNCEMENT_CHAT_ID, jackpotWinMessage);
+                    } else {
+                        await client.query('ROLLBACK');
+                        console.error(`[DE_JACKPOT_WIN_ERR] Failed to pay jackpot to user ${userId} for game ${gameId}. Error: ${jackpotPayoutResult.error}`);
+                        botMessageAccumulator += `\n\n⚠️ There was an issue processing the jackpot payout. Admin has been notified.`;
+                    }
+                } else {
+                    await client.query('COMMIT'); // No jackpot to win, but commit any prior transaction state if any.
+                    console.log(`[DE_JACKPOT_WIN_INFO] Jackpot condition met for ${gameId}, but jackpot amount was 0.`);
+                }
+            } else {
+                await client.query('ROLLBACK');
+                console.error(`[DE_JACKPOT_WIN_ERR] Jackpot ID ${MAIN_JACKPOT_ID} not found for game ${gameId}.`);
+            }
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error(`[DE_JACKPOT_WIN_DB_ERR] Database error during jackpot processing for game ${gameId}: ${error.message}`, error);
+            botMessageAccumulator += `\n\n⚠️ A database error occurred with the jackpot. Admin has been notified.`;
+        } finally {
+            client.release();
+        }
+    }
+
+    const finalKeyboard = { inline_keyboard: [[{ text: `🎲 Play Dice Escalator Again (${formatCurrency(Number(betAmount))})`, callback_data: `play_again_de:${betAmount}` }]] };
+    
+    if (gameData.gameMessageId) {
+        await bot.editMessageText(botMessageAccumulator, {
+            chat_id: String(chatId),
+            message_id: Number(gameData.gameMessageId),
+            parse_mode: 'MarkdownV2',
+            reply_markup: finalKeyboard
+        }).catch(e => {
+            console.error(`[DE_BOT_ERR] Failed to edit final message for ${gameId}: ${e.message}. Sending new message.`);
+            safeSendMessage(chatId, botMessageAccumulator, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
+        });
+    } else {
+         safeSendMessage(chatId, botMessageAccumulator, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
+    }
+
+    activeGames.delete(gameId); // Game is over
+    console.log(`[DE_BOT_TURN_COMPLETE] Game ${gameId} concluded. Player: ${playerScore}, Bot: ${gameData.botScore}. Jackpot won: ${jackpotWon}`);
+}
+
+
+console.log("Part 5b: Dice Escalator Game Logic - Complete and Ready.");
 // --- End of Part 5b ---
 // --- Start of Part 6 ---
 // index.js - Part 6: Database Initialization, Startup, Shutdown, and Enhanced Error Handling
