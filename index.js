@@ -28,6 +28,7 @@ const OPTIONAL_ENV_DEFAULTS = {
     'COMMAND_COOLDOWN_MS': '2000', // Default command cooldown for users
     'JOIN_GAME_TIMEOUT_MS': '60000', // Default timeout for games waiting for players
     'DEFAULT_STARTING_BALANCE_LAMPORTS': '100000000' // Default starting balance for new users
+    'TARGET_JACKPOT_SCORE': '100'
 };
 
 // Apply defaults if not set in process.env
@@ -44,6 +45,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
 const MAIN_JACKPOT_ID = 'dice_escalator_main'; // ID for the primary Dice Escalator jackpot
+const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 
 // --- Crucial Game Play Constants ---
 const MIN_BET_AMOUNT = parseInt(process.env.MIN_BET_AMOUNT, 10);
