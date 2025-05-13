@@ -3,32 +3,30 @@
 //---------------------------------------------------------------------------
 
 // ESM-style imports
-import 'dotenv/config';
+import 'dotenv/config'; // Make sure this is at the very top to load your .env file
 import TelegramBot from 'node-telegram-bot-api';
-import { Pool } from 'pg'; // For PostgreSQL
+import { Pool } from 'pg';
 
 console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities...");
-
-//---------------------------------------------------------------------------
-// index.js - Part 1: Core Imports & Basic Setup
-//---------------------------------------------------------------------------
 
 // --- Environment Variable Validation & Defaults ---
 const OPTIONAL_ENV_DEFAULTS = {
     'DB_POOL_MAX': '25',
     'DB_POOL_MIN': '5',
-    'DB_IDLE_TIMEOUT': '30000', // in milliseconds
-    'DB_CONN_TIMEOUT': '5000', // in milliseconds
-    'DB_SSL': 'true', // Default to SSL enabled
-    'DB_REJECT_UNAUTHORIZED': 'false', // Default to false
-    'SHUTDOWN_FAIL_TIMEOUT_MS': '10000', // Timeout to force exit if shutdown hangs (e.g., 10s)
-    'JACKPOT_CONTRIBUTION_PERCENT': '0.01', // Default 1% contribution to jackpot from bets
-    'MIN_BET_AMOUNT': '5', // Default min bet for games
-    'MAX_BET_AMOUNT': '1000', // Default max bet for games
-    'COMMAND_COOLDOWN_MS': '2000', // Default command cooldown for users
-    'JOIN_GAME_TIMEOUT_MS': '60000', // Default timeout for games waiting for players
-    'DEFAULT_STARTING_BALANCE_LAMPORTS': '100000000' // Default starting balance for new users
-    'TARGET_JACKPOT_SCORE': '100'
+    'DB_IDLE_TIMEOUT': '30000',
+    'DB_CONN_TIMEOUT': '5000',
+    'DB_SSL': 'true',
+    'DB_REJECT_UNAUTHORIZED': 'false',
+    'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
+    'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
+    'MIN_BET_AMOUNT': '5',
+    'MAX_BET_AMOUNT': '1000',
+    'COMMAND_COOLDOWN_MS': '2000',
+    'JOIN_GAME_TIMEOUT_MS': '60000',
+    'DEFAULT_STARTING_BALANCE_LAMPORTS': '100000000',
+    'TARGET_JACKPOT_SCORE': '100' // <<< CORRECT: Added as a key-value pair *inside* this object
+                                  // Note the comma above if there are more entries after it.
+                                  // If it's the last one, the comma is optional.
 };
 
 // Apply defaults if not set in process.env
@@ -39,32 +37,33 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
     }
 });
 
+// --- Core Configuration Constants ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
-const MAIN_JACKPOT_ID = 'dice_escalator_main'; // ID for the primary Dice Escalator jackpot
-const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
+const MAIN_JACKPOT_ID = 'dice_escalator_main';
+// V V V  THIS IS WHERE YOU DEFINE THE CONSTANT THE BOT WILL USE V V V
+const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10); // <<< CORRECT: Defined as a constant
 
 // --- Crucial Game Play Constants ---
 const MIN_BET_AMOUNT = parseInt(process.env.MIN_BET_AMOUNT, 10);
 const MAX_BET_AMOUNT = parseInt(process.env.MAX_BET_AMOUNT, 10);
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
 const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS, 10);
-// DEFAULT_STARTING_BALANCE_LAMPORTS is defined in Part 2 where it's first used,
-// or can be defined here if needed more globally earlier.
-// For consistency with Part 2's usage, let's ensure it's parsed here too.
-// const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
-// This BigInt version is used in Part 2. For Part 1, if any non-BigInt use, keep as Number or ensure context.
-// Since no direct use in Part 1, the definition in Part 2 with BigInt() is fine.
 
+// --- Validations and Logging for Critical Variables ---
 if (!BOT_TOKEN) {
     console.error("FATAL ERROR: BOT_TOKEN is not defined.");
     process.exit(1);
 }
 if (!DATABASE_URL) {
     console.error("FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL.");
+    process.exit(1);
+}
+if (isNaN(TARGET_JACKPOT_SCORE)) { // Added a check here
+    console.error(`FATAL ERROR: TARGET_JACKPOT_SCORE is not a valid number. Value from env: ${process.env.TARGET_JACKPOT_SCORE}. Please check your .env file or the default in OPTIONAL_ENV_DEFAULTS.`);
     process.exit(1);
 }
 
