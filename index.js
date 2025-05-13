@@ -1938,7 +1938,6 @@ console.log("Loading Part 5b: Dice Escalator Game Logic...");
 // --- Dice Escalator Constants ---
 // These might be defined in Part 1, or you can define/override them here if specific to DE.
 // const TARGET_JACKPOT_SCORE = BigInt(process.env.TARGET_JACKPOT_SCORE || '120'); // Example: Score to win Jackpot
-const DICE_ESCALATOR_BUST_ON = 1; // Rolling a 1 is a bust for the player
 const BOT_STAND_SCORE_DICE_ESCALATOR = BigInt(10); // Example: Bot will stand on 10 or more in Dice Escalator
 
 // Ensure MAIN_JACKPOT_ID and JACKPOT_CONTRIBUTION_PERCENT are available from Part 1
