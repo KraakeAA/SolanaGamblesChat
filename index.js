@@ -1571,29 +1571,54 @@ async function handleDice21Stand(gameId, userObj, originalMessageIdFromCallback)
     console.log(`${LOG_PREFIX} Exiting for ${gameId}.`);
 }
 
-async function processDice21BotTurn(gameData, messageIdToUpdateWithBotActions) {
-    const LOG_PREFIX = "[Dice21_BotTurn_V3]";
-    console.log(`${LOG_PREFIX} Bot's turn for ${gameData.gameId}. Player score: ${gameData.playerScore}. Updating MsgID: ${messageIdToUpdateWithBotActions}`);
+async function processDice21BotTurn(gameData, messageIdToStartBotTurn) {
+    const LOG_PREFIX = "[Dice21_BotTurn_V4]";
+    const gameDataStr = typeof stringifyWithBigInt === 'function' ? stringifyWithBigInt(gameData) : JSON.stringify(gameData);
+    console.log(`${LOG_PREFIX} Bot's turn for ${gameData.gameId}. Player score: ${gameData.playerScore}. Initial MsgID to update/delete: ${messageIdToStartBotTurn}. GameData: ${gameDataStr}`);
 
     const { gameId, chatId, userId, playerRef, playerScore, betAmount } = gameData;
     let botScore = 0n;
     let botBusted = false;
-    let botHandRolls = [];
-    // This is the base message that will be EDITED during bot's rolls
-    let currentBotTurnMessage = `${escapeMarkdownV2(playerRef)} stands at *${escapeMarkdownV2(String(playerScore))}*${escapeMarkdownV2(".")}\nBot Dealer's turn${escapeMarkdownV2(".")} Playing hand${escapeMarkdownV2("...")}\n`;
-    
-    const currentMsgId = Number(messageIdToUpdateWithBotActions);
+    let botHandRolls = []; // To accumulate the visual of bot's hand
 
-    // Initial edit to the message passed from Stand/PlayerBlackjack
-    if (currentMsgId && bot) {
-        await bot.editMessageText(currentBotTurnMessage + `\n_The dealer draws its first die${escapeMarkdownV2("...")}_ 🎲`, {
-            chat_id: chatId, message_id: currentMsgId, parse_mode: 'MarkdownV2', reply_markup: {}
-        }).catch(e => console.warn(`${LOG_PREFIX} Initial edit for bot turn failed for ${gameId}: ${e.message}`));
+    // This is the ID of the message currently displaying the bot's turn progress.
+    // It starts as the message passed from handleDice21Stand (e.g., "Player stands... Bot's turn...").
+    let currentBotStatusMessageId = Number(messageIdToStartBotTurn);
+
+    // Initial message to show bot is starting its turn (this might be an edit or a new send from handleDice21Stand)
+    // For clarity, let's assume messageIdToStartBotTurn is the message we will edit first, then delete and resend.
+    let initialBotTurnMessageText = `${escapeMarkdownV2(playerRef)} stands at *${escapeMarkdownV2(String(playerScore))}*${escapeMarkdownV2(".")}\nBot Dealer's turn${escapeMarkdownV2(".")} Preparing to draw${escapeMarkdownV2("...")}`;
+    
+    if (currentBotStatusMessageId && bot) {
+        try {
+            await bot.editMessageText(initialBotTurnMessageText, {
+                chat_id: chatId, message_id: currentBotStatusMessageId, parse_mode: 'MarkdownV2', reply_markup: {}
+            });
+            console.log(`${LOG_PREFIX} Edited message ${currentBotStatusMessageId} to show bot is starting its turn for game ${gameId}.`);
+        } catch (e) {
+            console.warn(`${LOG_PREFIX} Failed to edit initial bot turn message ${currentBotStatusMessageId} for ${gameId}: ${e.message}. It might have been deleted already if player hit 21. Sending new one.`);
+            const newMsg = await safeSendMessage(chatId, initialBotTurnMessageText, { parse_mode: 'MarkdownV2' });
+            if (newMsg && newMsg.message_id) currentBotStatusMessageId = newMsg.message_id;
+            else {
+                console.error(`${LOG_PREFIX} CRITICAL: Could not send/edit initial bot turn message for ${gameId}. Aborting bot turn.`);
+                await safeSendMessage(chatId, `A display error occurred during the bot's turn. Please start a new game.`);
+                activeGames.delete(gameId); return;
+            }
+        }
+    } else { // If no messageId was passed (e.g., player blackjack on deal, direct to bot turn)
+        const newMsg = await safeSendMessage(chatId, initialBotTurnMessageText, { parse_mode: 'MarkdownV2' });
+        if (newMsg && newMsg.message_id) currentBotStatusMessageId = newMsg.message_id;
+        else {
+            console.error(`${LOG_PREFIX} CRITICAL: Could not send initial bot turn message for ${gameId}. Aborting bot turn.`);
+            await safeSendMessage(chatId, `A display error occurred starting the bot's turn. Please start a new game.`);
+            activeGames.delete(gameId); return;
+        }
     }
     await sleep(1500);
 
-    if (typeof DICE_21_BOT_STAND_SCORE === 'undefined' || typeof DICE_21_TARGET_SCORE === 'undefined') { /* ... critical error handling ... */ 
-        console.error(`${LOG_PREFIX} CRITICAL: Bot game rule constants undefined!`);
+
+    if (typeof DICE_21_BOT_STAND_SCORE === 'undefined' || typeof DICE_21_TARGET_SCORE === 'undefined') {
+        console.error(`${LOG_PREFIX} CRITICAL ERROR: Bot game rule constants undefined!`);
         await safeSendMessage(chatId, "Config error. Admin notified."); activeGames.delete(gameId); return;
     }
     const botStandScoreThreshold = BigInt(DICE_21_BOT_STAND_SCORE);
@@ -1601,17 +1626,28 @@ async function processDice21BotTurn(gameData, messageIdToUpdateWithBotActions) {
 
     const maxBotRolls = 7;
     for (let i = 0; i < maxBotRolls && botScore < botStandScoreThreshold && !botBusted; i++) {
-        console.log(`${LOG_PREFIX} Bot rolling die ${i + 1} for ${gameId}. Bot score: ${botScore}.`);
+        console.log(`${LOG_PREFIX} Bot rolling die ${i + 1} for ${gameId}. Current bot score: ${botScore}.`);
+        
+        // Delete previous bot status message (if it exists)
+        if (currentBotStatusMessageId) {
+            try {
+                await bot.deleteMessage(chatId, currentBotStatusMessageId);
+                console.log(`${LOG_PREFIX} Deleted previous bot status message ${currentBotStatusMessageId}.`);
+            } catch (delErr) {
+                console.warn(`${LOG_PREFIX} Failed to delete previous bot status message ${currentBotStatusMessageId}: ${delErr.message}`);
+            }
+        }
+
         let currentRollValue;
-        // Each bot die is a NEW message
+        // Bot's die roll (this sends a new message for the die itself)
         try {
             const diceMsg = await bot.sendDice(chatId, { emoji: '🎲' });
-            if (!diceMsg || !diceMsg.dice || typeof diceMsg.dice.value === 'undefined') throw new Error("Invalid dice API response.");
+            if (!diceMsg || !diceMsg.dice || typeof diceMsg.dice.value === 'undefined') throw new Error("Invalid dice API response for bot.");
             currentRollValue = BigInt(diceMsg.dice.value);
             botHandRolls.push(currentRollValue);
             console.log(`${LOG_PREFIX} Bot drew ${currentRollValue} (animated) for ${gameId}. Pausing.`);
-            await sleep(2000); 
-        } catch (e) { /* ... internal roll fallback ... */
+            await sleep(2000); // Let user see the die
+        } catch (e) {
             console.error(`${LOG_PREFIX} sendDice error for bot roll ${i+1}, game ${gameId}: ${e.message}. Internal roll.`, e);
             currentRollValue = BigInt(rollDie()); botHandRolls.push(currentRollValue);
             await safeSendMessage(chatId, `Bot Dealer (internal roll): reveals *${escapeMarkdownV2(String(currentRollValue))}*${escapeMarkdownV2("!")}`, { parse_mode: 'MarkdownV2' });
@@ -1619,42 +1655,51 @@ async function processDice21BotTurn(gameData, messageIdToUpdateWithBotActions) {
         }
         botScore += currentRollValue;
         
-        // Update the ACCUMULATOR part of the message
-        currentBotTurnMessage += `Bot Dealer draws ${formatDiceRolls([Number(currentRollValue)])} → Bot total: *${escapeMarkdownV2(String(botScore))}*${escapeMarkdownV2(".")}\n`;
+        // Compose NEW bot status message
+        let botTurnInProgressMessage = `${escapeMarkdownV2(playerRef)} stands at *${escapeMarkdownV2(String(playerScore))}*${escapeMarkdownV2(".")}\nBot Dealer's hand: ${formatDiceRolls(botHandRolls.map(Number))} (Total: *${escapeMarkdownV2(String(botScore))}*)${escapeMarkdownV2(".")}\n`;
         console.log(`${LOG_PREFIX} Bot score for ${gameId} now ${botScore}. Hand: ${botHandRolls.join(', ')}.`);
 
         let nextActionFeedback = "";
         if (botScore > targetScore) {
             botBusted = true;
-            nextActionFeedback = `💥 BOT BUSTED${escapeMarkdownV2("!")} Over *${escapeMarkdownV2(String(targetScore))}*${escapeMarkdownV2("!")}\n`;
+            nextActionFeedback = `💥 BOT BUSTED${escapeMarkdownV2("!")} Over *${escapeMarkdownV2(String(targetScore))}*${escapeMarkdownV2("!")}`;
         } else if (botScore >= botStandScoreThreshold) {
-            nextActionFeedback = `Bot Dealer stands with *${escapeMarkdownV2(String(botScore))}*${escapeMarkdownV2(".")}\n`;
+            nextActionFeedback = `Bot Dealer stands with *${escapeMarkdownV2(String(botScore))}*${escapeMarkdownV2(".")}`;
+        } else { // Bot hits again
+            nextActionFeedback = `_The dealer draws another${escapeMarkdownV2("...")}_ 🎲`;
+        }
+        botTurnInProgressMessage += nextActionFeedback;
+
+        // Send the NEW bot status message
+        const sentNewBotStatusMsg = await safeSendMessage(chatId, botTurnInProgressMessage, { parse_mode: 'MarkdownV2' });
+        if (sentNewBotStatusMsg && sentNewBotStatusMsg.message_id) {
+            currentBotStatusMessageId = sentNewBotStatusMsg.message_id; // Update to the ID of the new message
+            gameData.gameMessageId = currentBotStatusMessageId; // Keep gameData updated with the latest interactive message ID
+            activeGames.set(gameId, gameData);
+            console.log(`${LOG_PREFIX} NEW bot status message ${currentBotStatusMessageId} sent.`);
         } else {
-            nextActionFeedback = `\n_The dealer draws another${escapeMarkdownV2("...")}_ 🎲`;
+            console.error(`${LOG_PREFIX} CRITICAL: Failed to send NEW bot status message for game ${gameId}. Bot turn might be visually stuck.`);
+            // If this fails, the game is in a bad visual state. Maybe try to send a final error message.
+            await safeSendMessage(chatId, "A display error occurred during the bot's turn. The game result will be shown next.");
+            // We will still proceed to final result calculation below.
         }
 
-        // EDIT the main bot turn message
-        if (currentMsgId && bot) {
-            await bot.editMessageText(currentBotTurnMessage + nextActionFeedback, {
-                chat_id: chatId, message_id: currentMsgId, parse_mode: 'MarkdownV2', reply_markup: {}
-            }).catch(e => console.warn(`${LOG_PREFIX} Edit during bot roll ${i + 1} failed for ${gameId}: ${e.message}`));
-        }
-        if (botBusted || botScore >= botStandScoreThreshold) break;
-        await sleep(2500);
+        if (botBusted || botScore >= botStandScoreThreshold) break; // Exit loop
+        await sleep(2500); // Pause between bot actions if it continues
     }
     await sleep(1500); // Final pause before results
 
-    // Now, delete the message that was showing the bot's turn progress
-    if (currentMsgId) {
-        try { await bot.deleteMessage(chatId, currentMsgId); console.log(`${LOG_PREFIX} Deleted bot turn progress message ${currentMsgId}.`); }
-        catch (delError) { console.warn(`${LOG_PREFIX} Failed to delete bot turn progress message ${currentMsgId}: ${delError.message}`); }
+    // Delete the last bot turn progress message
+    if (currentBotStatusMessageId) {
+        try { await bot.deleteMessage(chatId, currentBotStatusMessageId); console.log(`${LOG_PREFIX} Deleted final bot turn progress message ${currentBotStatusMessageId}.`); }
+        catch (delError) { console.warn(`${LOG_PREFIX} Failed to delete final bot turn progress message ${currentBotStatusMessageId}: ${delError.message}`); }
     }
 
-    // And send a NEW message for the final result
+    // --- Final Result Calculation and Message ---
     let resultTextEnd = "";
     let payoutAmount = 0n;
     let outcomeReasonLog = "";
-    // ... (outcome logic as before) ...
+    // ... (outcome logic as before - this determines win/loss/push) ...
     if (botBusted) {
         resultTextEnd = `🎉 ${escapeMarkdownV2(playerRef)} WINS${escapeMarkdownV2("!")} The Bot Dealer busted${escapeMarkdownV2(".")} A fine victory${escapeMarkdownV2("!")}`;
         payoutAmount = betAmount + betAmount; outcomeReasonLog = `won_dice21_bot_bust:${gameId}`;
@@ -1664,27 +1709,29 @@ async function processDice21BotTurn(gameData, messageIdToUpdateWithBotActions) {
     } else if (botScore > playerScore) {
         resultTextEnd = `💀 The Bot Dealer takes the round (*${escapeMarkdownV2(String(botScore))}* vs${escapeMarkdownV2(".")} your *${escapeMarkdownV2(String(playerScore))}*)${escapeMarkdownV2(".")} Better luck next time${escapeMarkdownV2("!")}`;
         payoutAmount = 0n; outcomeReasonLog = `lost_dice21_score:${gameId}`;
-    } else {
+    } else { // Push
         resultTextEnd = `😐 A PUSH${escapeMarkdownV2("!")} Both have *${escapeMarkdownV2(String(playerScore))}*${escapeMarkdownV2(".")} Your wager of *${escapeMarkdownV2(formatCurrency(Number(betAmount)))}* is returned${escapeMarkdownV2(".")}`;
         payoutAmount = betAmount; outcomeReasonLog = `push_dice21:${gameId}`;
     }
-    resultTextEnd += `\nOriginal wager: *${escapeMarkdownV2(formatCurrency(Number(betAmount)))}*${escapeMarkdownV2(".")}`;
+    console.log(`${LOG_PREFIX} Game ${gameId} outcome: ${resultTextEnd}. Payout: ${payoutAmount}, Reason: ${outcomeReasonLog}.`);
+
+    // Build the final result message text, including a summary of bot's hand
+    let finalSummaryMessage = `${escapeMarkdownV2(playerRef)}'s score: *${escapeMarkdownV2(String(playerScore))}*${escapeMarkdownV2(".")}\n`;
+    finalSummaryMessage += `Bot Dealer's final hand: ${formatDiceRolls(botHandRolls.map(Number))} (Total: *${escapeMarkdownV2(String(botScore))}*)${escapeMarkdownV2(".")}\n\n${resultTextEnd}`;
+    finalSummaryMessage += `\nOriginal wager: *${escapeMarkdownV2(formatCurrency(Number(betAmount)))}*${escapeMarkdownV2(".")}`;
 
     if (payoutAmount > 0n) {
         const balUpd = await updateUserBalance(userId, payoutAmount, outcomeReasonLog, null, gameId, String(chatId));
-        if (balUpd.success) resultTextEnd += `\nPayout: *${escapeMarkdownV2(formatCurrency(Number(payoutAmount)))}* credited${escapeMarkdownV2(".")}`;
-        else resultTextEnd += `\nIssue crediting payout${escapeMarkdownV2(".")} Admin notified${escapeMarkdownV2(".")}`;
+        if (balUpd.success) finalSummaryMessage += `\nPayout: *${escapeMarkdownV2(formatCurrency(Number(payoutAmount)))}* credited${escapeMarkdownV2(".")}`;
+        else finalSummaryMessage += `\nIssue crediting payout${escapeMarkdownV2(".")} Admin notified${escapeMarkdownV2(".")}`;
     } else if (outcomeReasonLog.startsWith('lost_')) {
-        await updateUserBalance(userId, 0n, outcomeReasonLog, null, gameId, String(chatId));
+        await updateUserBalance(userId, 0n, outcomeReasonLog, null, gameId, String(chatId)); // Log loss
     }
 
-    // currentBotTurnMessage now holds the history of bot's rolls. Prepend it to final result.
-    const finalMessageText = `${currentBotTurnMessage}\n${resultTextEnd}`;
     const playAgainKeyboardD21 = { inline_keyboard: [[{ text: `🎲 Play Dice 21 Again (${formatCurrency(Number(gameData.betAmount))})`, callback_data: `play_again_d21:${gameData.betAmount}` }]] };
     
-    const finalSentMsg = await safeSendMessage(chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardD21 });
+    const finalSentMsg = await safeSendMessage(chatId, finalSummaryMessage, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardD21 });
     if (finalSentMsg && finalSentMsg.message_id) {
-        // Optional: store this new message ID if the game could continue, but for "Play Again" it's less critical.
         console.log(`${LOG_PREFIX} Final result message sent for ${gameId}, ID: ${finalSentMsg.message_id}.`);
     } else {
         console.error(`${LOG_PREFIX} CRITICAL: Failed to send final result message for ${gameId}.`);
