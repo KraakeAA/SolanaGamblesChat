@@ -22,7 +22,12 @@ const OPTIONAL_ENV_DEFAULTS = {
     'DB_SSL': 'true', // Default to SSL enabled
     'DB_REJECT_UNAUTHORIZED': 'false', // Default to false
     'SHUTDOWN_FAIL_TIMEOUT_MS': '10000', // Timeout to force exit if shutdown hangs (e.g., 10s)
-    'JACKPOT_CONTRIBUTION_PERCENT': '0.01' // Default 1% contribution to jackpot from bets
+    'JACKPOT_CONTRIBUTION_PERCENT': '0.01', // Default 1% contribution to jackpot from bets
+    'MIN_BET_AMOUNT': '5', // Default min bet for games
+    'MAX_BET_AMOUNT': '1000', // Default max bet for games
+    'COMMAND_COOLDOWN_MS': '2000', // Default command cooldown for users
+    'JOIN_GAME_TIMEOUT_MS': '60000', // Default timeout for games waiting for players
+    'DEFAULT_STARTING_BALANCE_LAMPORTS': '100000000' // Default starting balance for new users
 };
 
 // Apply defaults if not set in process.env
@@ -35,10 +40,22 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
-const DATABASE_URL = process.env.DATABASE_URL; // Crucial for DB connection
+const DATABASE_URL = process.env.DATABASE_URL;
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
-const MAIN_JACKPOT_ID = 'dice_escalator_main'; // ID for the primary jackpot
+const MAIN_JACKPOT_ID = 'dice_escalator_main'; // ID for the primary Dice Escalator jackpot
+
+// --- Crucial Game Play Constants ---
+const MIN_BET_AMOUNT = parseInt(process.env.MIN_BET_AMOUNT, 10);
+const MAX_BET_AMOUNT = parseInt(process.env.MAX_BET_AMOUNT, 10);
+const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
+const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS, 10);
+// DEFAULT_STARTING_BALANCE_LAMPORTS is defined in Part 2 where it's first used,
+// or can be defined here if needed more globally earlier.
+// For consistency with Part 2's usage, let's ensure it's parsed here too.
+// const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
+// This BigInt version is used in Part 2. For Part 1, if any non-BigInt use, keep as Number or ensure context.
+// Since no direct use in Part 1, the definition in Part 2 with BigInt() is fine.
 
 if (!BOT_TOKEN) {
     console.error("FATAL ERROR: BOT_TOKEN is not defined.");
@@ -53,6 +70,10 @@ console.log("BOT_TOKEN loaded successfully.");
 if (ADMIN_USER_ID) console.log(`Admin User ID: ${ADMIN_USER_ID} loaded.`);
 else console.log("INFO: No ADMIN_USER_ID set (optional).");
 console.log(`Jackpot Contribution Percent: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%`);
+console.log(`Bet Limits: ${MIN_BET_AMOUNT} - ${MAX_BET_AMOUNT}`);
+console.log(`Command Cooldown: ${COMMAND_COOLDOWN_MS}ms`);
+console.log(`Join Game Timeout: ${JOIN_GAME_TIMEOUT_MS}ms`);
+
 
 // --- PostgreSQL Pool Initialization ---
 console.log("⚙️ Setting up PostgreSQL Pool...");
@@ -95,14 +116,14 @@ console.log("✅ PostgreSQL Pool created.");
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log("Telegram Bot instance created and configured for polling.");
 
-const BOT_VERSION = '2.2.0-jackpot'; // Updated version marker
+const BOT_VERSION = '2.3.0-multi-game-final'; // Updated version marker
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
 // --- Global State Variables for Shutdown & Operation ---
 let isShuttingDown = false; // Flag to prevent multiple shutdown sequences
 
 // --- In-memory stores ---
-let activeGames = new Map(); // For active game state (Dice Escalator, Coinflip, RPS)
+let activeGames = new Map(); // For active game state
 let userCooldowns = new Map(); // For command cooldowns
 
 console.log(`Group Chat Casino Bot v${BOT_VERSION} initializing...`);
