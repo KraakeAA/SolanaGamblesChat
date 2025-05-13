@@ -1192,219 +1192,431 @@ async function handleRPSChoiceCallback(chatId, userChoiceObj, gameId, choice, in
     }
 }
 
-// --- DICE 21 GAME HANDLER FUNCTIONS ---
-async function handleStartDice21Command(chatId, userObj, betAmount, commandMessageId) {
-    const userId = String(userObj.id);
-    const playerRef = getPlayerDisplayReference(userObj);
-    const gameId = generateGameId();
+// --- DICE 21 GAME LOGIC (Full Implementation with Casino Feel) ---
+// This section is intended to replace/update your existing Dice 21 handlers in Part 5a.
 
-    const balanceUpdateResult = await updateUserBalance(userId, -betAmount, `bet_placed_dice21:${gameId}`, null, gameId, String(chatId));
-    if (!balanceUpdateResult.success) {
-        await safeSendMessage(chatId, `${playerRef}, bet failed for Dice 21: ${escapeMarkdownV2(balanceUpdateResult.error || "Unknown")}.`, { parse_mode: 'MarkdownV2' });
+// Helper function for JSON.stringify to handle BigInts for logging (if not already globally available)
+function stringifyWithBigInt(obj) {
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'bigint') {
+      return value.toString() + 'n';
+    }
+    if (typeof value === 'function') {
+      return `[Function: ${value.name || 'anonymous'}]`;
+    }
+    if (value === undefined) {
+      return 'undefined_value';
+    }
+    return value;
+  }, 2);
+}
+
+// Ensure these constants are defined, typically in Part 1 or a global constants file
+// const DICE_21_TARGET_SCORE = 21;
+// const DICE_21_BOT_STAND_SCORE = 17; // Bot stands on 17 or more
+
+console.log("Initializing Dice 21 Game Logic with Casino Feel...");
+
+async function handleStartDice21Command(chatId, userObj, betAmount, commandMessageId) {
+    const LOG_PREFIX = "[Dice21_Start]";
+    console.log(`${LOG_PREFIX} Initializing new game. ChatID: ${chatId}, User: ${stringifyWithBigInt(userObj)}, Bet: ${betAmount}, CmdMsgID: ${commandMessageId}`);
+
+    if (!userObj || typeof userObj.userId === 'undefined') {
+        console.error(`${LOG_PREFIX} CRITICAL: User object or userId is undefined. userObj: ${stringifyWithBigInt(userObj)}`);
+        await safeSendMessage(chatId, "There was an issue accessing your player profile. Please try again.");
         return;
     }
 
-    await safeSendMessage(chatId, `🎲 ${playerRef} starts Dice 21! Bet: ${formatCurrency(betAmount)}. Dealing first two dice...`, { parse_mode: 'MarkdownV2' });
-    await sleep(1000); 
+    const userId = String(userObj.userId);
+    const playerRef = getPlayerDisplayReference(userObj);
+    const gameId = generateGameId();
+
+    console.log(`${LOG_PREFIX} User ${userId} (${playerRef}) starting Dice 21. Wager: ${betAmount}, GameID: ${gameId}`);
+
+    const balanceUpdateResult = await updateUserBalance(userId, -betAmount, `bet_placed_dice21:${gameId}`, null, gameId, String(chatId));
+    console.log(`${LOG_PREFIX} Wager placement result for ${userId}: ${stringifyWithBigInt(balanceUpdateResult)}`);
+
+    if (!balanceUpdateResult || !balanceUpdateResult.success) {
+        const errMsg = balanceUpdateResult ? balanceUpdateResult.error : "could not be processed";
+        console.error(`${LOG_PREFIX} Wager placement failed for ${userId}. Reason: ${errMsg}`);
+        await safeSendMessage(chatId, `${playerRef}, your wager of ${escapeMarkdownV2(formatCurrency(betAmount))} for Dice 21 ${escapeMarkdownV2(errMsg)}. Please check your balance.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    console.log(`${LOG_PREFIX} Wager ${formatCurrency(betAmount)} accepted for ${userId}. New balance: ${formatCurrency(Number(balanceUpdateResult.newBalanceLamports))}`);
+
+    await safeSendMessage(chatId, `🎲 Welcome to the Dice 21 table, ${playerRef}! 🎲\nYour wager of *${escapeMarkdownV2(formatCurrency(betAmount))}* has been placed. Let's deal the initial dice...`, { parse_mode: 'MarkdownV2' });
+    await sleep(1500);
 
     let initialRollsValues = [];
     let playerScore = 0n;
-    for (let i = 0; i < 2; i++) {
+    const diceToDeal = 2;
+
+    console.log(`${LOG_PREFIX} Dealing ${diceToDeal} dice to player ${userId} for game ${gameId}.`);
+    for (let i = 0; i < diceToDeal; i++) {
         try {
+            console.log(`${LOG_PREFIX} Sending die ${i + 1}/${diceToDeal} for game ${gameId}.`);
             const diceMsg = await bot.sendDice(chatId, { emoji: '🎲' });
+            if (!diceMsg || !diceMsg.dice || typeof diceMsg.dice.value === 'undefined') {
+                throw new Error("Invalid dice message from Telegram API.");
+            }
             initialRollsValues.push(diceMsg.dice.value);
             playerScore += BigInt(diceMsg.dice.value);
-            await sleep(2000); 
+            console.log(`${LOG_PREFIX} Die ${i + 1} for game ${gameId} was ${diceMsg.dice.value}. Player score now ${playerScore}. Pausing.`);
+            await sleep(2000); // Pause for animation
         } catch (diceError) {
-            console.error(`[D21_START_ERR] Error sending dice animation, using internal roll: ${diceError.message}`);
-            const internalRoll = rollDie(); // from Part 3
+            console.error(`${LOG_PREFIX} Error sending animated die ${i + 1} for game ${gameId}: ${diceError.message}. Using internal roll.`, diceError);
+            const internalRoll = rollDie();
             initialRollsValues.push(internalRoll);
             playerScore += BigInt(internalRoll);
-            await safeSendMessage(chatId, `${playerRef} (internal roll ${i+1}): ${formatDiceRolls([internalRoll])}`);
+            await safeSendMessage(chatId, `${playerRef}, an internal roll was used for one of your dice: it's a *${internalRoll}*!`);
+            console.log(`${LOG_PREFIX} Internal die ${i + 1} for game ${gameId} was ${internalRoll}. Player score now ${playerScore}. Pausing.`);
             await sleep(1000);
         }
     }
 
     const gameData = {
-        type: 'dice21', gameId, chatId, userId, playerRef,
-        betAmount: BigInt(betAmount), playerScore, botScore: 0n,
-        status: 'player_turn', gameMessageId: null 
+        type: 'dice21', gameId, chatId: String(chatId), userId, playerRef,
+        betAmount: BigInt(betAmount), playerScore, botScore: 0n, playerInitialDeal: [...initialRollsValues], playerHits: [],
+        status: 'player_turn', gameMessageId: null
     };
+    console.log(`${LOG_PREFIX} Initial deal complete for game ${gameId}. Player score: ${playerScore}. Rolls: ${initialRollsValues.join(', ')}`);
 
-    let messageText = `${playerRef}, your rolls ${formatDiceRolls(initialRollsValues)} total: *${playerScore}*.`;
+    let messageText = `${playerRef}, your initial hand: ${formatDiceRolls(initialRollsValues)}, totaling *${escapeMarkdownV2(String(playerScore))}*.`;
     let buttons = [];
+    let gameMessageOptions = { parse_mode: 'MarkdownV2' };
 
     if (playerScore > BigInt(DICE_21_TARGET_SCORE)) {
-        messageText += `\n\n💥 BUST! Over ${DICE_21_TARGET_SCORE}. You lose ${formatCurrency(Number(betAmount))}.`;
+        messageText += `\n\n💥 Oh dear, that's a BUST! Over ${DICE_21_TARGET_SCORE}. The house takes the wager of ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}.`;
         gameData.status = 'game_over_player_bust';
-        await queryDatabase(
-            `UPDATE bets SET status = 'lost', processed_at = NOW() 
-             WHERE user_id = $1 AND bet_details->>'game_id' = $2 AND status = 'active'`,
-             [userId, gameId]
-        ).catch(e => console.error("[D21_START_ERR] Error logging player bust on deal:", e));
+        console.log(`${LOG_PREFIX} Player ${userId} busted on initial deal for game ${gameId}.`);
+        await updateUserBalance(userId, 0n, `lost_dice21_deal_bust:${gameId}`, null, gameId, String(chatId)); // Log loss
         buttons.push({ text: `🎲 Play Dice 21 Again (${formatCurrency(Number(betAmount))})`, callback_data: `play_again_d21:${betAmount}` });
     } else if (playerScore === BigInt(DICE_21_TARGET_SCORE)) {
-        messageText += `\n\n✨ Perfect ${DICE_21_TARGET_SCORE}! You Stand. Bot's turn...`;
-        gameData.status = 'bot_turn';
+        messageText += `\n\n✨ Blackjack! A perfect ${DICE_21_TARGET_SCORE}! You automatically stand. Now, let's see the Bot Dealer's hand...`;
+        gameData.status = 'bot_turn'; // Player stands on Blackjack
+        console.log(`${LOG_PREFIX} Player ${userId} hit Blackjack on initial deal for game ${gameId}.`);
     } else {
-        messageText += `\n\nHit or Stand?`;
-        buttons.push({ text: "⤵️ Hit (Roll Again)", callback_data: `d21_hit:${gameId}` });
-        buttons.push({ text: `✅ Stand (Score: ${playerScore})`, callback_data: `d21_stand:${gameId}` });
+        messageText += `\n\nYour move, ${playerRef}. Will you "Hit" for another die or "Stand"?`;
+        buttons.push({ text: "⤵️ Hit", callback_data: `d21_hit:${gameId}` });
+        buttons.push({ text: `✅ Stand`, callback_data: `d21_stand:${gameId}` });
     }
-    
-    const keyboard = { inline_keyboard: [buttons] };
-    const sentMsg = await safeSendMessage(chatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: (buttons.length > 0 ? keyboard : {}) });
-    
-    if (sentMsg) gameData.gameMessageId = sentMsg.message_id;
-    activeGames.set(gameId, gameData);
 
-    if (gameData.status === 'bot_turn') {
-        await sleep(1500);
-        if (typeof processDice21BotTurn === 'function') await processDice21BotTurn(gameData, gameData.gameMessageId);
-        else console.error("processDice21BotTurn not defined!");
+    if (buttons.length > 0) {
+        gameMessageOptions.reply_markup = { inline_keyboard: [buttons] };
+    }
+    console.log(`${LOG_PREFIX} Composed initial game message for game ${gameId}: "${messageText}", Options: ${stringifyWithBigInt(gameMessageOptions)}`);
+
+    const sentMsg = await safeSendMessage(chatId, messageText, gameMessageOptions);
+    if (sentMsg && sentMsg.message_id) {
+        gameData.gameMessageId = sentMsg.message_id;
+        console.log(`${LOG_PREFIX} Game message sent for ${gameId}, msgID: ${gameData.gameMessageId}.`);
+    } else {
+        console.error(`${LOG_PREFIX} Failed to send initial game message for ${gameId}. Attempting to refund.`);
+        // If message fails, game can't proceed. Refund.
+        await updateUserBalance(userId, betAmount, `refund_dice21_setup_fail:${gameId}`, null, gameId, String(chatId));
+        activeGames.delete(gameId); // Clean up
+        return; // Exit if no message sent
+    }
+
+    activeGames.set(gameId, gameData);
+    console.log(`${LOG_PREFIX} Game ${gameId} data stored: ${stringifyWithBigInt(gameData)}`);
+
+    if (gameData.status === 'bot_turn') { // If player got Blackjack on deal
+        console.log(`${LOG_PREFIX} Player Blackjack, proceeding to bot's turn for game ${gameId}.`);
+        await sleep(2000); // Dramatic pause
+        await processDice21BotTurn(gameData, gameData.gameMessageId);
     } else if (gameData.status.startsWith('game_over')) {
+        console.log(`${LOG_PREFIX} Game ${gameId} ended on deal (e.g., player bust). Cleaning up.`);
         activeGames.delete(gameId);
     }
+    console.log(`${LOG_PREFIX} Exiting handleStartDice21Command for game ${gameId}.`);
 }
 
 async function handleDice21Hit(gameId, userObj, originalMessageId) {
-    const gameData = activeGames.get(gameId);
-    const userId = String(userObj.id);
+    const LOG_PREFIX = "[Dice21_Hit]";
+    console.log(`${LOG_PREFIX} Player action 'Hit'. GameID: ${gameId}, User: ${stringifyWithBigInt(userObj)}, OrigMsgID: ${originalMessageId}`);
 
-    if (!gameData || gameData.userId !== userId || gameData.status !== 'player_turn') {
-        await safeSendMessage(userId, "Not your Dice 21 game or turn.", {}); return;
+    const gameData = activeGames.get(gameId);
+    if (!userObj || typeof userObj.userId === 'undefined') {
+        console.error(`${LOG_PREFIX} CRITICAL: User object or userId is undefined. userObj: ${stringifyWithBigInt(userObj)}`);
+        await safeSendMessage(originalMessageId ? (gameData ? gameData.chatId : undefined ): undefined, "Error processing your action due to user profile issue.");
+        return;
     }
+    const userId = String(userObj.userId);
+
+    if (!gameData) {
+        console.warn(`${LOG_PREFIX} Game ${gameId} not found for user ${userId}.`);
+        await safeSendMessage(userId, "That Dice 21 game could not be found. It might have timed out.", {});
+        if (originalMessageId && bot) bot.editMessageReplyMarkup({}, { chat_id: userObj.chatId || String(chatId), message_id: originalMessageId }).catch(() => {});
+        return;
+    }
+    console.log(`${LOG_PREFIX} Game ${gameId} found for user ${userId}. Current status: ${gameData.status}`);
+
+    if (gameData.userId !== userId || gameData.status !== 'player_turn') {
+        console.warn(`${LOG_PREFIX} Invalid action for game ${gameId}. User ${userId} (expected ${gameData.userId}) or status ${gameData.status} (expected player_turn).`);
+        await safeSendMessage(userId, "It's not your turn or this game is not active for a hit.", {});
+        return;
+    }
+    if (Number(gameData.gameMessageId) !== Number(originalMessageId)) {
+        console.warn(`${LOG_PREFIX} Hit action on stale message for game ${gameId}. GameMsgID: ${gameData.gameMessageId}, ActionMsgID: ${originalMessageId}.`);
+        return;
+    }
+
     const chatId = gameData.chatId;
-    await safeSendMessage(chatId, `${gameData.playerRef} hits! Rolling...`, {parse_mode: 'MarkdownV2'});
+    console.log(`${LOG_PREFIX} Player ${userId} hits in game ${gameId}. Current score: ${gameData.playerScore}.`);
+
+    await bot.editMessageText(`${gameData.playerRef} takes another card (die)... a moment of suspense!\nYour current score: *${escapeMarkdownV2(String(gameData.playerScore))}*`, {
+        chat_id: chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: {} // Remove buttons while rolling
+    }).catch(e => console.error(`${LOG_PREFIX} Error editing message to 'hitting': ${e.message}`, e));
+    await sleep(1000);
+
     let newRoll;
     try {
+        console.log(`${LOG_PREFIX} Sending die for hit in game ${gameId}.`);
         const diceMsg = await bot.sendDice(chatId, { emoji: '🎲' });
+         if (!diceMsg || !diceMsg.dice || typeof diceMsg.dice.value === 'undefined') {
+            throw new Error("Invalid dice message from Telegram API on hit.");
+        }
         newRoll = BigInt(diceMsg.dice.value);
+        gameData.playerHits.push(newRoll); // Track hits
+        console.log(`${LOG_PREFIX} Player ${userId} hit a ${newRoll} (animated) for game ${gameId}. Pausing.`);
+        await sleep(2000);
     } catch (e) {
-        console.error("[D21_HIT_ERR] sendDice failed, using internal roll:", e.message);
+        console.error(`${LOG_PREFIX} sendDice failed for hit in game ${gameId}: ${e.message}. Using internal roll.`, e);
         newRoll = BigInt(rollDie());
-        await safeSendMessage(chatId, `${gameData.playerRef} (internal roll): ${formatDiceRolls([Number(newRoll)])}`);
+        gameData.playerHits.push(newRoll);
+        await safeSendMessage(chatId, `${gameData.playerRef}, your internal roll for the hit is a *${newRoll}*!`);
+        console.log(`${LOG_PREFIX} Player ${userId} hit a ${newRoll} (internal) for game ${gameId}. Pausing.`);
+        await sleep(1000);
     }
-    gameData.playerScore += newRoll;
-    await sleep(2000); 
 
-    let messageText = `${gameData.playerRef} rolled ${formatDiceRolls([Number(newRoll)])}. Score: *${gameData.playerScore}*.`;
+    gameData.playerScore += newRoll;
+    console.log(`${LOG_PREFIX} Player ${userId} new score in game ${gameId}: ${gameData.playerScore}.`);
+
+    let messageText = `${gameData.playerRef}, you drew a ${formatDiceRolls([Number(newRoll)])}. Your hand is now ${formatDiceRolls([...gameData.playerInitialDeal, ...gameData.playerHits.map(Number)])}, totaling *${escapeMarkdownV2(String(gameData.playerScore))}*.`;
     let buttons = [];
+    let gameEndedThisTurn = false;
 
     if (gameData.playerScore > BigInt(DICE_21_TARGET_SCORE)) {
-        messageText += `\n\n💥 BUST! Over ${DICE_21_TARGET_SCORE}. You lose ${formatCurrency(Number(gameData.betAmount))}.`;
+        messageText += `\n\n💥 BUST! Your score is over ${DICE_21_TARGET_SCORE}. The house claims your ${escapeMarkdownV2(formatCurrency(Number(gameData.betAmount)))} wager.`;
         gameData.status = 'game_over_player_bust';
+        gameEndedThisTurn = true;
+        console.log(`${LOG_PREFIX} Player ${userId} busted after hit in game ${gameId}.`);
+        await updateUserBalance(userId, 0n, `lost_dice21_hit_bust:${gameId}`, null, gameId, String(chatId)); // Log loss
         buttons.push({ text: `🎲 Play Dice 21 Again (${formatCurrency(Number(gameData.betAmount))})`, callback_data: `play_again_d21:${gameData.betAmount}` });
-        await queryDatabase(
-            `UPDATE bets SET status = 'lost', processed_at = NOW() 
-             WHERE user_id = $1 AND bet_details->>'game_id' = $2 AND status = 'active'`,
-             [userId, gameId]
-        ).catch(e => console.error("[D21_HIT_ERR] Error logging player bust:", e));
     } else if (gameData.playerScore === BigInt(DICE_21_TARGET_SCORE)) {
-        messageText += `\n\n✨ Perfect ${DICE_21_TARGET_SCORE}! You Stand. Bot's turn...`;
-        gameData.status = 'bot_turn';
-    } else {
-        messageText += `\n\nHit or Stand?`;
-        buttons.push({ text: "⤵️ Hit (Roll Again)", callback_data: `d21_hit:${gameId}` });
-        buttons.push({ text: `✅ Stand (Score: ${gameData.playerScore})`, callback_data: `d21_stand:${gameId}` });
+        messageText += `\n\n✨ A perfect ${DICE_21_TARGET_SCORE}! You stand. The Bot Dealer will now play.`;
+        gameData.status = 'bot_turn'; // Player stands on 21
+        gameEndedThisTurn = true; // Player's turn ends
+        console.log(`${LOG_PREFIX} Player ${userId} reached ${DICE_21_TARGET_SCORE} after hit in game ${gameId}.`);
+    } else { // Score is < 21
+        messageText += `\n\nWhat's your next move, ${gameData.playerRef}? "Hit" or "Stand"?`;
+        buttons.push({ text: "⤵️ Hit", callback_data: `d21_hit:${gameId}` });
+        buttons.push({ text: `✅ Stand`, callback_data: `d21_stand:${gameId}` });
     }
-    
-    const keyboard = { inline_keyboard: [buttons] };
-    await bot.editMessageText(messageText, { chat_id: chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: (buttons.length > 0 ? keyboard : {}) });
-    
-    if (gameData.status.startsWith('game_over')) {
-        activeGames.delete(gameId);
-    } else {
-        activeGames.set(gameId, gameData);
+
+    const gameMessageOptions = { chat_id: chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2' };
+    if (buttons.length > 0) {
+        gameMessageOptions.reply_markup = { inline_keyboard: [buttons] };
+    }
+    console.log(`${LOG_PREFIX} Composed message after hit for game ${gameId}: "${messageText}", Options: ${stringifyWithBigInt(gameMessageOptions)}`);
+    await bot.editMessageText(messageText, gameMessageOptions)
+             .catch(e => console.error(`${LOG_PREFIX} Failed to edit message after hit for game ${gameId}: ${e.message}`, e));
+
+    activeGames.set(gameId, gameData); // Update game state
+
+    if (gameEndedThisTurn) {
         if (gameData.status === 'bot_turn') {
-             await sleep(1500);
-             if (typeof processDice21BotTurn === 'function') await processDice21BotTurn(gameData, originalMessageId);
-             else console.error("processDice21BotTurn not defined!");
+            console.log(`${LOG_PREFIX} Player reached ${DICE_21_TARGET_SCORE}, proceeding to bot's turn for game ${gameId}.`);
+            await sleep(2000);
+            await processDice21BotTurn(gameData, originalMessageId);
+        } else if (gameData.status.startsWith('game_over')) {
+            console.log(`${LOG_PREFIX} Game ${gameId} ended after hit (e.g. player bust). Cleaning up.`);
+            activeGames.delete(gameId);
         }
     }
+    console.log(`${LOG_PREFIX} Exiting handleDice21Hit for game ${gameId}.`);
 }
 
 async function handleDice21Stand(gameId, userObj, originalMessageId) {
+    const LOG_PREFIX = "[Dice21_Stand]";
+    console.log(`${LOG_PREFIX} Player action 'Stand'. GameID: ${gameId}, User: ${stringifyWithBigInt(userObj)}, OrigMsgID: ${originalMessageId}`);
+
     const gameData = activeGames.get(gameId);
-    const userId = String(userObj.id);
-    if (!gameData || gameData.userId !== userId || gameData.status !== 'player_turn') { /* ... */ return; }
+     if (!userObj || typeof userObj.userId === 'undefined') {
+        console.error(`${LOG_PREFIX} CRITICAL: User object or userId is undefined.`);
+        // Cannot reliably send message without chatId from gameData or userObj
+        return;
+    }
+    const userId = String(userObj.userId);
+
+    if (!gameData) {
+        console.warn(`${LOG_PREFIX} Game ${gameId} not found for user ${userId}.`);
+        await safeSendMessage(userId, "That Dice 21 game seems to have concluded or timed out.", {});
+        if (originalMessageId && bot) bot.editMessageReplyMarkup({}, { chat_id: String(chatId), message_id: originalMessageId }).catch(() => {});
+        return;
+    }
+    console.log(`${LOG_PREFIX} Game ${gameId} found for user ${userId}. Current status: ${gameData.status}`);
+
+    if (gameData.userId !== userId || gameData.status !== 'player_turn') {
+        console.warn(`${LOG_PREFIX} Invalid action for game ${gameId}. User ${userId} or status ${gameData.status}.`);
+        await safeSendMessage(userId, "You cannot stand in this game at this moment.", {});
+        return;
+    }
+     if (Number(gameData.gameMessageId) !== Number(originalMessageId)) {
+        console.warn(`${LOG_PREFIX} Stand action on stale message for game ${gameId}. GameMsgID: ${gameData.gameMessageId}, ActionMsgID: ${originalMessageId}.`);
+        return;
+    }
+
     gameData.status = 'bot_turn';
     activeGames.set(gameId, gameData);
-    const messageText = `${gameData.playerRef} stands with *${gameData.playerScore}*.\n\n🤖 Bot's turn...`;
-    await bot.editMessageText(messageText, { chat_id: gameData.chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: {} });
-    await sleep(1500);
-    if (typeof processDice21BotTurn === 'function') await processDice21BotTurn(gameData, originalMessageId);
-    else console.error("processDice21BotTurn not defined!");
+    console.log(`${LOG_PREFIX} Player ${userId} stands in game ${gameId} with score ${gameData.playerScore}. Status -> 'bot_turn'.`);
+
+    const messageText = `${gameData.playerRef} stands with a formidable score of *${escapeMarkdownV2(String(gameData.playerScore))}*.\nThe tension mounts! The Bot Dealer will now reveal its hand and play... 🤖`;
+    console.log(`${LOG_PREFIX} Composed 'stand' message for game ${gameId}: "${messageText}"`);
+    await bot.editMessageText(messageText, {
+        chat_id: gameData.chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: {} // Clear buttons
+    }).catch(e => console.error(`${LOG_PREFIX} Failed to edit message on stand for game ${gameId}: ${e.message}`, e));
+
+    console.log(`${LOG_PREFIX} Pausing 2s before bot's turn for game ${gameId}.`);
+    await sleep(2000); // Dramatic pause
+    await processDice21BotTurn(gameData, originalMessageId);
+    console.log(`${LOG_PREFIX} Exiting handleDice21Stand for game ${gameId}.`);
 }
 
-async function processDice21BotTurn(gameData, messageId) {
+async function processDice21BotTurn(gameData, messageIdToUpdate) {
+    const LOG_PREFIX = "[Dice21_BotTurn]";
+    console.log(`${LOG_PREFIX} Bot's turn for game ${gameData.gameId}. Player score: ${gameData.playerScore}. GameData: ${stringifyWithBigInt(gameData)}`);
+
     const { gameId, chatId, userId, playerRef, playerScore, betAmount } = gameData;
     let botScore = 0n;
     let botBusted = false;
-    let botRollsDisplayAccumulator = `${playerRef}'s score: *${playerScore}*\nBot is playing...\n`;
+    let botHandRolls = [];
+    let botMessageAccumulator = `Player ${playerRef} stands at *${escapeMarkdownV2(String(playerScore))}*.\nBot Dealer's turn. Revealing hand...\n`;
 
-    await bot.editMessageText(botRollsDisplayAccumulator + "\n_Bot is rolling..._ 🎲", {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(e => console.warn(`[D21_BOT] Initial editMessageText failed: ${e.message}`));
-    await sleep(1000);
-
-    for (let i=0; i < 10 && botScore < BigInt(DICE_21_BOT_STAND_SCORE) && !botBusted; i++) { // Bot takes max 10 rolls to prevent infinite loop
-        let currentRollValue;
-        try {
-            const diceMsg = await bot.sendDice(chatId, { emoji: '🎲' });
-            currentRollValue = BigInt(diceMsg.dice.value);
-        } catch (e) {
-            console.error("[D21_BOT_TURN_ERR] sendDice failed for bot, using internal:", e.message);
-            currentRollValue = BigInt(rollDie());
-            await safeSendMessage(chatId, `Bot (internal roll): ${formatDiceRolls([Number(currentRollValue)])}`);
-        }
-        botScore += currentRollValue;
-        botRollsDisplayAccumulator += `Bot rolled ${formatDiceRolls([Number(currentRollValue)])} → Bot score: *${botScore}*\n`;
-        
-        let nextActionMsg = (botScore < BigInt(DICE_21_BOT_STAND_SCORE) && botScore <= BigInt(DICE_21_TARGET_SCORE)) ? "\n_Bot hits..._ 🎲" : "";
-        if (botScore > BigInt(DICE_21_TARGET_SCORE)) {
-            botBusted = true;
-            botRollsDisplayAccumulator += "💥 Bot BUSTED!\n";
-            nextActionMsg = ""; // No next action if busted
-        } else if (botScore >= BigInt(DICE_21_BOT_STAND_SCORE)) {
-            botRollsDisplayAccumulator += `Bot stands with *${botScore}*.\n`;
-            nextActionMsg = ""; // No next action if standing
-        }
-        
-        await bot.editMessageText(botRollsDisplayAccumulator + nextActionMsg, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(e => console.warn(`[D21_BOT] editMessageText during roll ${i+1} failed: ${e.message}`));
-        await sleep(2500);
-        if (botBusted || botScore >= BigInt(DICE_21_BOT_STAND_SCORE)) break;
+    console.log(`${LOG_PREFIX} Initial bot turn message for game ${gameId}: "${botMessageAccumulator}"`);
+    if (messageIdToUpdate && bot) {
+        await bot.editMessageText(botMessageAccumulator + "\n_The dealer begins to draw..._ 🎲", {
+            chat_id: chatId, message_id: messageIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {}
+        }).catch(e => console.warn(`${LOG_PREFIX} Initial editMessageText failed for game ${gameId}: ${e.message}`, e));
     }
     await sleep(1500);
+
+    const maxBotRolls = 7; // Safety break for bot rolls
+    for (let i = 0; i < maxBotRolls && botScore < BigInt(DICE_21_BOT_STAND_SCORE) && !botBusted; i++) {
+        console.log(`${LOG_PREFIX} Bot rolling die ${i + 1} for game ${gameId}. Current bot score: ${botScore}.`);
+        let currentRollValue;
+        try {
+            console.log(`${LOG_PREFIX} Sending die for bot in game ${gameId}.`);
+            const diceMsg = await bot.sendDice(chatId, { emoji: '🎲' });
+            if (!diceMsg || !diceMsg.dice || typeof diceMsg.dice.value === 'undefined') {
+                throw new Error("Invalid dice message from Telegram API for bot's roll.");
+            }
+            currentRollValue = BigInt(diceMsg.dice.value);
+            botHandRolls.push(currentRollValue);
+            console.log(`${LOG_PREFIX} Bot drew a ${currentRollValue} (animated) for game ${gameId}. Pausing.`);
+            await sleep(2000);
+        } catch (e) {
+            console.error(`${LOG_PREFIX} sendDice failed for bot in game ${gameId}: ${e.message}. Using internal roll.`, e);
+            currentRollValue = BigInt(rollDie());
+            botHandRolls.push(currentRollValue);
+            await safeSendMessage(chatId, `Bot Dealer (internal roll): reveals a *${currentRollValue}*!`);
+            console.log(`${LOG_PREFIX} Bot drew a ${currentRollValue} (internal) for game ${gameId}. Pausing.`);
+            await sleep(1000);
+        }
+        botScore += currentRollValue;
+        botMessageAccumulator += `Bot Dealer draws ${formatDiceRolls([Number(currentRollValue)])} → Bot's hand totals *${escapeMarkdownV2(String(botScore))}*.\n`;
+        console.log(`${LOG_PREFIX} Bot score for game ${gameId} is now ${botScore}. Full hand: ${botHandRolls.join(', ')}.`);
+
+        let nextActionMsg = "";
+        if (botScore > BigInt(DICE_21_TARGET_SCORE)) {
+            botBusted = true;
+            botMessageAccumulator += "💥 BOT BUSTED! Over ${DICE_21_TARGET_SCORE}!\n";
+            console.log(`${LOG_PREFIX} Bot busted in game ${gameId}.`);
+            nextActionMsg = "";
+        } else if (botScore >= BigInt(DICE_21_BOT_STAND_SCORE)) {
+            botMessageAccumulator += `Bot Dealer stands with *${escapeMarkdownV2(String(botScore))}*.\n`;
+            console.log(`${LOG_PREFIX} Bot stands in game ${gameId} with score ${botScore}.`);
+            nextActionMsg = "";
+        } else { // Bot hits again
+            nextActionMsg = "\n_The dealer draws another..._ 🎲";
+        }
+
+        if (messageIdToUpdate && bot) {
+            console.log(`${LOG_PREFIX} Updating message for game ${gameId} with bot's roll. Next action: "${nextActionMsg}"`);
+            await bot.editMessageText(botMessageAccumulator + nextActionMsg, {
+                chat_id: chatId, message_id: messageIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: {}
+            }).catch(e => console.warn(`${LOG_PREFIX} editMessageText during bot roll ${i + 1} failed for game ${gameId}: ${e.message}`, e));
+        }
+        if (botBusted || botScore >= BigInt(DICE_21_BOT_STAND_SCORE)) break; // Exit loop if bot stands or busts
+        await sleep(2500); // Pause between bot actions
+    }
+    await sleep(1500); // Final pause before results
 
     let resultTextEnd = "";
     let payoutAmount = 0n;
     let outcomeReasonLog = "";
 
-    if (botBusted) { resultTextEnd = `🎉 ${playerRef} wins! Bot busted.`; payoutAmount = betAmount + betAmount; outcomeReasonLog = `won_dice21_bot_bust:${gameId}`; }
-    else if (playerScore > botScore) { resultTextEnd = `🎉 ${playerRef} wins (*${playerScore}* vs *${botScore}*)!`; payoutAmount = betAmount + betAmount; outcomeReasonLog = `won_dice21_score:${gameId}`; }
-    else if (botScore > playerScore) { resultTextEnd = `💀 Bot wins (*${botScore}* vs *${playerScore}*). Bet lost.`; payoutAmount = 0n; outcomeReasonLog = `lost_dice21_score:${gameId}`; }
-    else { resultTextEnd = `😐 Push! Both *${playerScore}*. Bet returned.`; payoutAmount = betAmount; outcomeReasonLog = `push_dice21:${gameId}`; }
-    
-    resultTextEnd += `\nBet: ${formatCurrency(Number(betAmount))}.`;
+    console.log(`${LOG_PREFIX} Determining final outcome for game ${gameId}. Player score: ${playerScore}, Bot score: ${botScore}, Bot busted: ${botBusted}.`);
+    if (botBusted) {
+        resultTextEnd = `🎉 ${playerRef} WINS! The Bot Dealer busted. A fine victory!`;
+        payoutAmount = betAmount + betAmount; // Bet back + 1x bet profit
+        outcomeReasonLog = `won_dice21_bot_bust:${gameId}`;
+    } else if (playerScore > botScore) {
+        resultTextEnd = `🎉 ${playerRef} WINS with a superior hand (*${escapeMarkdownV2(String(playerScore))}* vs. Bot's *${escapeMarkdownV2(String(botScore))}*)!`;
+        payoutAmount = betAmount + betAmount;
+        outcomeReasonLog = `won_dice21_score:${gameId}`;
+    } else if (botScore > playerScore) {
+        resultTextEnd = `💀 The Bot Dealer takes the round (*${escapeMarkdownV2(String(botScore))}* vs. your *${escapeMarkdownV2(String(playerScore))}*). Better luck next time!`;
+        payoutAmount = 0n; // Bet lost
+        outcomeReasonLog = `lost_dice21_score:${gameId}`;
+    } else { // Push
+        resultTextEnd = `😐 A PUSH! Both player and Bot Dealer have *${escapeMarkdownV2(String(playerScore))}*. Your wager of ${escapeMarkdownV2(formatCurrency(Number(betAmount)))} is returned.`;
+        payoutAmount = betAmount; // Bet returned
+        outcomeReasonLog = `push_dice21:${gameId}`;
+    }
+    console.log(`${LOG_PREFIX} Game ${gameId} outcome: ${resultTextEnd}. PayoutAmount: ${payoutAmount}, Reason: ${outcomeReasonLog}.`);
+
+    resultTextEnd += `\nYour original wager: ${escapeMarkdownV2(formatCurrency(Number(betAmount)))}.`;
 
     if (payoutAmount > 0n) {
-        await updateUserBalance(userId, payoutAmount, outcomeReasonLog, null, gameId, String(chatId));
-        resultTextEnd += ` You receive ${formatCurrency(Number(payoutAmount))}.`;
+        const balanceUpdateOutcome = await updateUserBalance(userId, payoutAmount, outcomeReasonLog, null, gameId, String(chatId));
+        console.log(`${LOG_PREFIX} Balance update for payout in game ${gameId}: ${stringifyWithBigInt(balanceUpdateOutcome)}`);
+        if (balanceUpdateOutcome.success) {
+            resultTextEnd += `\nYour payout of *${escapeMarkdownV2(formatCurrency(Number(payoutAmount)))}* has been credited.`;
+        } else {
+            resultTextEnd += `\nThere was an issue processing your payout. Admin has been notified.`;
+            console.error(`${LOG_PREFIX} Failed to credit payout for game ${gameId}: ${balanceUpdateOutcome.error}`);
+        }
     } else if (outcomeReasonLog.startsWith('lost_')) {
-        await queryDatabase(
-            `UPDATE bets SET status = 'lost', payout_amount_lamports = '0', reason_tx = $1, processed_at = NOW() WHERE user_id = $2 AND bet_details->>'game_id' = $3 AND status = 'active'`,
-            [outcomeReasonLog, userId, gameId]
-        ).catch(e => console.error("[D21_BOT_TURN_ERR] Error logging player loss:", e));
+        // Bet already deducted, this call ensures the 'bets' table is updated to 'lost' status.
+        await updateUserBalance(userId, 0n, outcomeReasonLog, null, gameId, String(chatId));
+        console.log(`${LOG_PREFIX} Loss logged for game ${gameId}.`);
     }
-    
-    const finalMessageText = botRollsDisplayAccumulator + "\n" + resultTextEnd;
+
+    const finalMessageText = botMessageAccumulator + "\n" + resultTextEnd;
     const playAgainKeyboardD21 = { inline_keyboard: [[{ text: `🎲 Play Dice 21 Again (${formatCurrency(Number(betAmount))})`, callback_data: `play_again_d21:${betAmount}` }]] };
-    
-    if (messageId && bot) await bot.editMessageText(finalMessageText, {chat_id: chatId, message_id: messageId, parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardD21 }).catch(() => safeSendMessage(chatId, finalMessageText, {parse_mode:'MarkdownV2', reply_markup: playAgainKeyboardD21}));
-    else await safeSendMessage(chatId, finalMessageText, {parse_mode:'MarkdownV2', reply_markup: playAgainKeyboardD21});
+    console.log(`${LOG_PREFIX} Composed final game message for ${gameId}: "${finalMessageText}", Keyboard: ${stringifyWithBigInt(playAgainKeyboardD21)}`);
+
+    if (messageIdToUpdate && bot) {
+        await bot.editMessageText(finalMessageText, {
+            chat_id: chatId, message_id: messageIdToUpdate, parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardD21
+        }).catch(async (e) => {
+            console.error(`${LOG_PREFIX} Failed to edit final message for game ${gameId}: ${e.message}. Sending new.`, e);
+            await safeSendMessage(chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardD21 });
+        });
+    } else {
+        console.warn(`${LOG_PREFIX} No messageIdToUpdate or bot instance for game ${gameId}. Sending new final message.`);
+        await safeSendMessage(chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: playAgainKeyboardD21 });
+    }
 
     activeGames.delete(gameId);
-    console.log(`[DICE21_END] Game ${gameId}. Player: ${playerScore}, Bot: ${botScore}, BotBusted: ${botBusted}`);
+    console.log(`${LOG_PREFIX} Game ${gameId} concluded and removed from activeGames. Player: ${playerScore}, Bot: ${botScore}, BotBusted: ${botBusted}.`);
 }
+
+console.log("Dice 21 Game Logic with Casino Feel fully loaded and ready.");
+
+// --- END OF DICE 21 GAME LOGIC ---
 
 // --- OVER/UNDER 7 GAME HANDLER FUNCTIONS ---
 async function handleStartOverUnder7Command(chatId, userObj, betAmount, commandMessageId) {
