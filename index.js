@@ -1539,11 +1539,17 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     const chatId = gameData.chatId;
     console.log(`${LOG_PREFIX} Player ${userId} hits in game ${gameId}. Current score: ${gameData.playerScore}.`);
 
-    // Escape dynamic parts for the intermediate message
-    const hittingMessage = `${escapeMarkdownV2(gameData.playerRef)} takes another card (die)... a moment of suspense!\nYour current score: *${escapeMarkdownV2(String(gameData.playerScore))}*`;
-    await bot.editMessageText(hittingMessage, { // Using the pre-escaped string
+    // --- THIS IS THE CORRECTED MESSAGE ---
+    const hittingMessage = `${escapeMarkdownV2(gameData.playerRef)} takes another card \\(die\\)${escapeMarkdownV2("...")} a moment of suspense!\nYour current score: *${escapeMarkdownV2(String(gameData.playerScore))}*`;
+    // Note the escaped parentheses: \\( and \\) and the escaped ellipsis ...
+    // Alternatively, for the ellipsis, you could use the actual ellipsis character … which doesn't need escaping, or escape each dot: \.\.\.
+    // Using escapeMarkdownV2("...") is safest if the ellipsis itself is what you want to ensure is literal.
+
+    await bot.editMessageText(hittingMessage, {
         chat_id: chatId, message_id: currentOriginalMessageId, parse_mode: 'MarkdownV2', reply_markup: {}
-    }).catch(e => console.error(`${LOG_PREFIX} Error editing message to 'hitting': ${e.message}`, e));
+    }).catch(e => console.error(`${LOG_PREFIX} Error editing message to 'hitting': ${e.message}. Message: "${hittingMessage}"`, e));
+    // --- END OF CORRECTION ---
+
     await sleep(1000);
 
     let newRoll;
@@ -1563,7 +1569,6 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
         newRoll = BigInt(rollDie());
         if (!gameData.playerHits) gameData.playerHits = [];
         gameData.playerHits.push(newRoll);
-        // Escape for this message too
         await safeSendMessage(chatId, `${escapeMarkdownV2(gameData.playerRef)}, your internal roll for the hit is a *${escapeMarkdownV2(String(newRoll))}*!`, { parse_mode: 'MarkdownV2' });
         console.log(`${LOG_PREFIX} Player ${userId} hit a ${newRoll} (internal) for game ${gameId}. Pausing.`);
         await sleep(1000);
@@ -1573,12 +1578,12 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     console.log(`${LOG_PREFIX} Player ${userId} new score in game ${gameId}: ${gameData.playerScore}.`);
 
     const combinedHand = [...(gameData.playerInitialDeal || []), ...(gameData.playerHits || []).map(Number)];
-    // Construct message parts and escape them before joining
-    const part1 = `${escapeMarkdownV2(gameData.playerRef)}, you drew a ${formatDiceRolls([Number(newRoll)])}`; // formatDiceRolls should return safe characters
-    const part2 = `Your hand is now ${formatDiceRolls(combinedHand)}, totaling *${escapeMarkdownV2(String(gameData.playerScore))}*`;
 
-    // Escape the literal periods if they are at the end of these parts or before newlines
-    let messageText = escapeMarkdownV2(part1 + ".") + "\n" + escapeMarkdownV2(part2 + "."); // Escape periods here
+    // Escape dynamic parts and ensure literal punctuation is also escaped if not part of Markdown syntax
+    const drawnPart = `you drew a ${formatDiceRolls([Number(newRoll)])}`;
+    const handPart = `Your hand is now ${formatDiceRolls(combinedHand)}, totaling *${escapeMarkdownV2(String(gameData.playerScore))}*`;
+
+    let messageText = `${escapeMarkdownV2(gameData.playerRef)}, ${escapeMarkdownV2(drawnPart + ".")}\n${escapeMarkdownV2(handPart + ".")}`;
 
     let buttons = [];
     let gameEndedThisTurn = false;
@@ -1618,11 +1623,9 @@ async function handleDice21Hit(gameId, userObj, originalMessageId) {
     const gameMsgOptsStr = typeof stringifyWithBigInt === 'function' ? stringifyWithBigInt(gameMessageOptions) : JSON.stringify(gameMessageOptions);
     console.log(`${LOG_PREFIX} Composed message after hit for game ${gameId}: "${messageText}", Options: ${gameMsgOptsStr}`);
 
-    // Send the fully constructed and escaped message
     await bot.editMessageText(messageText, gameMessageOptions)
              .catch(e => {
                 console.error(`${LOG_PREFIX} Failed to edit message after hit for game ${gameId}: ${e.message}. Full text attempted: "${messageText}"`, e);
-                // Fallback or further error handling if needed
              });
 
     activeGames.set(gameId, gameData);
