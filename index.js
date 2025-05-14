@@ -1214,9 +1214,10 @@ console.log("Part 4: Simplified Game Logic (Enhanced) - Complete.");
 console.log("Loading Part 5a, Section 1: Core Listeners, General Command Handlers & Payment UI Integration...");
 
 // --- Game Constants & Configuration (from Casino Bot's original Part 5a, Segment 1) ---
-// These are used by various command handlers (e.g., rules, help) and game handlers later.
-// MIN_BET_AMOUNT_CREDITS, MAX_BET_AMOUNT_CREDITS, COMMAND_COOLDOWN_MS, JOIN_GAME_TIMEOUT_MS,
+// MIN_BET_AMOUNT_LAMPORTS, MAX_BET_AMOUNT_LAMPORTS, COMMAND_COOLDOWN_MS, JOIN_GAME_TIMEOUT_MS,
 // TARGET_JACKPOT_SCORE, DEFAULT_STARTING_BALANCE_LAMPORTS, etc., are already defined in Part 1.
+// LAMPORTS_PER_SOL from Part 1 for bet parsing.
+// formatCurrency from Part 3 for displaying monetary values.
 
 // --- Game Identifiers (used for callback data, rules, game logic routing) ---
 const GAME_IDS = {
@@ -1252,10 +1253,7 @@ const LADDER_PAYOUTS = [ // Example Payout Tiers for Greed's Ladder
 ];
 
 // Slot Fruit Frenzy (Example Payouts)
-// SLOT_PAYOUTS and SLOT_DEFAULT_LOSS_MULTIPLIER are defined in Part 1 with other env-derived constants if they need to be configurable.
-// For simplicity here, let's assume they are accessible. If not, they'd be hardcoded or moved to Part 1.
-// We'll assume SLOT_PAYOUTS exists as a global const from Part 1, derived from env or hardcoded.
-
+// SLOT_PAYOUTS and SLOT_DEFAULT_LOSS_MULTIPLIER are defined in Part 1.
 
 // --- Main Message Handler (`bot.on('message')`) ---
 bot.on('message', async (msg) => {
@@ -1269,7 +1267,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Ignore messages from other bots (unless it's self, though usually self messages aren't commands)
   if (msg.from.is_bot) {
     try {
       if (!bot || typeof bot.getMe !== 'function') return;
@@ -1286,30 +1283,23 @@ bot.on('message', async (msg) => {
   const userId = String(msg.from.id);
   const chatId = String(msg.chat.id);
   const text = msg.text || "";
-  const chatType = msg.chat.type; // 'private', 'group', 'supergroup', 'channel'
+  const chatType = msg.chat.type;
 
-  // --- Stateful Input Handling (Payment System Integration) ---
-  // userStateCache is a global Map defined in Part 1
   if (userStateCache.has(userId) && !text.startsWith('/')) {
-      const currentState = userStateCache.get(userId);
-      // Route to the stateful input handler (defined in Part 7.4 or later in Part 5c)
-      // For now, assuming routeStatefulInput will be defined later.
-      if (typeof routeStatefulInput === 'function') {
-          console.log(`${LOG_PREFIX_MSG} User ${userId} has active state: ${currentState.state || currentState.action}. Routing to stateful handler.`);
-          await routeStatefulInput(msg, currentState);
-          return; // Input handled by stateful router
-      } else {
-          console.warn(`${LOG_PREFIX_MSG} User ${userId} in state ${currentState.state}, but routeStatefulInput is not defined. Clearing state.`);
-          userStateCache.delete(userId); // Prevent user from being stuck
-      }
+     const currentState = userStateCache.get(userId);
+     if (typeof routeStatefulInput === 'function') { // Defined in Part P3
+        console.log(`${LOG_PREFIX_MSG} User ${userId} has active state: ${currentState.state || currentState.action}. Routing to stateful handler.`);
+        await routeStatefulInput(msg, currentState);
+        return;
+     } else {
+        console.warn(`${LOG_PREFIX_MSG} User ${userId} in state ${currentState.state || currentState.action}, but routeStatefulInput is not defined. Clearing state.`);
+        userStateCache.delete(userId);
+     }
   }
-  // --- End Stateful Input Handling ---
-
 
   if (text.startsWith('/')) {
     let userForCommandProcessing;
     try {
-      // getOrCreateUser is the new unified function from Part 2
       userForCommandProcessing = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
       if (!userForCommandProcessing) {
         await safeSendMessage(chatId, "😕 Sorry, there was an issue accessing your player profile. Please try again shortly.", {});
@@ -1322,21 +1312,79 @@ bot.on('message', async (msg) => {
     }
 
     const now = Date.now();
-    // COMMAND_COOLDOWN_MS and userCooldowns from Part 1
     if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
-      return; // Cooldown active
+      return;
     }
     userCooldowns.set(userId, now);
 
-    const commandArgs = text.substring(1).split(/\s+/);
-    const commandName = commandArgs.shift()?.toLowerCase();
-    const originalMessageId = msg.message_id; // For potential deletion or context
+    let fullCommand = text.substring(1);
+    let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
+    const commandArgs = fullCommand.split(/\s+/).slice(1);
+    const originalMessageId = msg.message_id;
 
-    console.log(`${LOG_PREFIX_MSG} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${getPlayerDisplayReference(userForCommandProcessing)}`);
+    if (commandName.includes('@')) {
+        const selfBotInfo = await bot.getMe();
+        const botUsernameLower = selfBotInfo.username.toLowerCase();
+        if (commandName.endsWith(`@${botUsernameLower}`)) {
+            commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
+        } else {
+            if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+                 console.log(`${LOG_PREFIX_MSG} Command ${commandName} seems to be for a different bot. Ignoring.`);
+                 return; // Explicitly for another bot.
+            }
+            // If in PM, or if you want to allow commands without explicit @botname in groups,
+            // still strip any @ part.
+            commandName = commandName.split('@')[0];
+        }
+    }
+    
+    console.log(`${LOG_PREFIX_MSG} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${getPlayerDisplayReference(userForCommandProcessing)} (Chat: ${chatId}, Type: ${chatType})`);
 
-    // --- Command Routing ---
-    // Game initiation commands will be routed here but defined in later sections (5a S2, 5b S1, 5b S2 etc.)
-    // Payment UI commands are new and handled by functions from the payment system.
+    // Helper to parse bet amount for game commands
+    const parseBetAmount = async (arg) => {
+        let betLamports = MIN_BET_AMOUNT_LAMPORTS; // Default
+        if (arg) {
+            try {
+                let parsedValue;
+                // Try parsing as SOL (float) first
+                if (arg.includes('.')) {
+                    parsedValue = parseFloat(arg);
+                    if (!isNaN(parsedValue) && parsedValue > 0) {
+                        betLamports = BigInt(Math.floor(parsedValue * Number(LAMPORTS_PER_SOL)));
+                    } else {
+                        throw new Error("Invalid SOL float format.");
+                    }
+                } else {
+                    // Try parsing as lamports (BigInt)
+                    parsedValue = BigInt(arg);
+                     // If it's a very small number not ending in many zeros, it might have been intended as SOL
+                    if (parsedValue > 0 && parsedValue < 1000 && !arg.endsWith('00000')) { // Heuristic for accidental SOL as int
+                        const solAttempt = parseFloat(arg);
+                        if (!isNaN(solAttempt) && solAttempt > 0) {
+                             betLamports = BigInt(Math.floor(solAttempt * Number(LAMPORTS_PER_SOL)));
+                             console.log(`${LOG_PREFIX_MSG} Interpreted bet "${arg}" as ${solAttempt} SOL -> ${betLamports} lamports`);
+                        } else {
+                             betLamports = parsedValue; // Treat as lamports
+                        }
+                    } else {
+                        betLamports = parsedValue; // Treat as lamports
+                    }
+                }
+
+                if (betLamports <= 0n) throw new Error("Bet amount must be positive.");
+
+                if (betLamports < MIN_BET_AMOUNT_LAMPORTS || betLamports > MAX_BET_AMOUNT_LAMPORTS) {
+                    await safeSendMessage(chatId, `⚠️ Bet amount ${escapeMarkdownV2(formatCurrency(betLamports))} is outside the allowed limits (${escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS))} - ${escapeMarkdownV2(formatCurrency(MAX_BET_AMOUNT_LAMPORTS))}). Using default: ${escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS))}.`, { parse_mode: 'MarkdownV2' });
+                    betLamports = MIN_BET_AMOUNT_LAMPORTS;
+                }
+            } catch (e) {
+                await safeSendMessage(chatId, `🤔 Invalid bet amount format: "${escapeMarkdownV2(arg)}". Using default: ${escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS))}. Error: ${e.message}`, { parse_mode: 'MarkdownV2' });
+                betLamports = MIN_BET_AMOUNT_LAMPORTS;
+            }
+        }
+        return betLamports;
+    };
+
 
     switch (commandName) {
       // --- Casino Bot General Commands ---
@@ -1344,7 +1392,7 @@ bot.on('message', async (msg) => {
       case 'help':
         await handleHelpCommand(chatId, userForCommandProcessing);
         break;
-      case 'balance': // Merged: Casino Bot's command, now uses lamports/SOL
+      case 'balance':
       case 'bal':
         await handleBalanceCommand(chatId, userForCommandProcessing);
         break;
@@ -1356,124 +1404,156 @@ bot.on('message', async (msg) => {
         await handleJackpotCommand(chatId, userForCommandProcessing);
         break;
 
-      // --- Payment System UI Commands (New Integrations) ---
-      case 'wallet': // New command from payment system
-        // handleWalletCommand is defined later in this section (from payment system UI handlers)
+      // --- Payment System UI Commands ---
+      case 'wallet':
         await handleWalletCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, commandArgs);
         break;
-      case 'deposit': // New command from payment system
-        // handleDepositCommand is defined later in this section
+      case 'deposit':
         await handleDepositCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, commandArgs);
         break;
-      case 'withdraw': // New command from payment system
-        // handleWithdrawCommand is defined later in this section
+      case 'withdraw':
         await handleWithdrawCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, commandArgs);
         break;
-      case 'referral': // New command from payment system
-        // handleReferralCommand is defined later in this section
+      case 'referral':
         await handleReferralCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, commandArgs);
         break;
-      case 'history': // New command for bet/payment history
-        // handleHistoryCommand is defined later in this section
+      case 'history':
         await handleHistoryCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, commandArgs);
         break;
-      case 'leaderboards': // New command
-        // handleLeaderboardsCommand is defined later in this section
+      case 'leaderboards':
         await handleLeaderboardsCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, commandArgs);
         break;
-       case 'setwallet': // New command to link withdrawal address
+      case 'setwallet':
         if (commandArgs.length < 1) {
-            await safeSendMessage(chatId, "Usage: `/setwallet <YourSolanaAddress>`", { parse_mode: 'MarkdownV2' });
+          await safeSendMessage(chatId, "Usage: `/setwallet <YourSolanaAddress>`", { parse_mode: 'MarkdownV2' });
         } else {
-            // Call handleWalletCommand with the address as an argument
-            await handleWalletCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, ['/wallet', ...commandArgs]);
+          // Pass ['/wallet', newAddress] to make handleWalletCommand process it as a set attempt
+          await handleWalletCommand({ chat: msg.chat, from: msg.from, message_id: originalMessageId }, ['/wallet', commandArgs[0]]);
         }
         break;
 
-
-      // --- Admin Commands (Example from Casino Bot) ---
+      // --- Admin Commands ---
       case 'grant':
-        // ADMIN_USER_ID from Part 1
         if (ADMIN_USER_ID && userId === ADMIN_USER_ID) {
-            const amountToGrantLamports = commandArgs[0] ? BigInt(commandArgs[0]) : null;
-            const targetUserId = commandArgs[1] || userId; // Grant to self if no target user
-
-            if (amountToGrantLamports === null || amountToGrantLamports <= 0n) {
-                await safeSendMessage(chatId, "Usage: /grant <amount_lamports> [target_user_id]", {});
+          const amountToGrantLamports = commandArgs[0] ? BigInt(commandArgs[0]) : null;
+          const targetUserId = commandArgs[1] || userId;
+          if (amountToGrantLamports === null || amountToGrantLamports <= 0n) {
+            await safeSendMessage(chatId, "Usage: /grant <amount_lamports> [target_user_id]", {});
+            break;
+          }
+          let targetUser;
+          try {
+            targetUser = await getOrCreateUser(targetUserId);
+            if (!targetUser) throw new Error("Target user could not be fetched/created for grant.");
+          } catch (grantGetUserError) {
+            console.error(`${LOG_PREFIX_MSG} Admin Grant: Error fetching target user ${targetUserId}: ${grantGetUserError.message}`);
+            await safeSendMessage(chatId, `Could not find or create target user ${targetUserId} for grant.`, {});
+            break;
+          }
+          let grantClient = null;
+          try {
+            grantClient = await pool.connect();
+            await grantClient.query('BEGIN');
+            // Assuming updateUserBalanceAndLedger is defined and handles ledgering (e.g., in Part P2)
+            if (typeof updateUserBalanceAndLedger !== 'function') {
+                console.error("FATAL: updateUserBalanceAndLedger function is not defined for grant command.");
+                await safeSendMessage(chatId, "Internal error: Grant functionality unavailable.", {});
+                await grantClient.query('ROLLBACK'); // Rollback if function missing
                 break;
             }
-            let targetUser;
-            try {
-                targetUser = await getOrCreateUser(targetUserId); // getOrCreateUser from Part 2
-                if (!targetUser) throw new Error("Target user could not be fetched/created for grant.");
-            } catch (grantGetUserError) {
-                console.error(`${LOG_PREFIX_MSG} Admin Grant: Error fetching target user ${targetUserId}: ${grantGetUserError.message}`);
-                await safeSendMessage(chatId, `Could not find or create target user ${targetUserId} for grant.`, {});
-                break;
+            const grantResult = await updateUserBalanceAndLedger(
+              grantClient, targetUserId, amountToGrantLamports, 'admin_grant', {},
+              `Admin grant by ${userId} to ${targetUserId}`
+            );
+            if (grantResult.success) {
+              await grantClient.query('COMMIT');
+              await safeSendMessage(chatId, `✅ Successfully granted ${escapeMarkdownV2(formatCurrency(amountToGrantLamports))} to ${getPlayerDisplayReference(targetUser)}. New balance: ${escapeMarkdownV2(formatCurrency(grantResult.newBalanceLamports))}.`, { parse_mode: 'MarkdownV2' });
+            } else {
+              await grantClient.query('ROLLBACK');
+              await safeSendMessage(chatId, `❌ Failed to grant SOL: ${escapeMarkdownV2(grantResult.error || "Unknown error")}`, { parse_mode: 'MarkdownV2'});
             }
-
-            // Use updateUserBalanceAndLedger (from Payment System DB Ops, to be defined in Part 7.2 or integrated into Part 2)
-            // For now, assuming it will be available. This call needs a DB client if it's part of a transaction.
-            // Here, we'll assume it handles its own transaction or we acquire a client.
-            let grantClient = null;
-            try {
-                grantClient = await pool.connect(); // pool from Part 1
-                await grantClient.query('BEGIN');
-                // ensureUserExists might be called implicitly or explicitly by updateUserBalanceAndLedger
-                // await ensureUserExists(targetUserId, grantClient); // ensureUserExists from payment system DB ops
-
-                // This is a conceptual call, updateUserBalanceAndLedger needs to be properly integrated
-                const grantResult = await updateUserBalanceAndLedger( // This function needs to be defined/integrated
-                    grantClient,
-                    targetUserId,
-                    amountToGrantLamports,
-                    'admin_grant',
-                    {}, // relatedIds
-                    `Admin grant by ${userId} to ${targetUserId}` // notes
-                );
-
-                if (grantResult.success) {
-                    await grantClient.query('COMMIT');
-                    // formatCurrency from Part 3, updated for SOL
-                    await safeSendMessage(chatId, `✅ Successfully granted ${escapeMarkdownV2(formatCurrency(amountToGrantLamports, 'SOL'))} to ${getPlayerDisplayReference(targetUser)}. New balance: ${escapeMarkdownV2(formatCurrency(grantResult.newBalance, 'SOL'))}.`, { parse_mode: 'MarkdownV2' });
-                } else {
-                    await grantClient.query('ROLLBACK');
-                    await safeSendMessage(chatId, `❌ Failed to grant SOL: ${escapeMarkdownV2(grantResult.error || "Unknown error")}`, { parse_mode: 'MarkdownV2'});
-                }
-            } catch (grantError) {
-                if (grantClient) await grantClient.query('ROLLBACK').catch(()=>{});
-                console.error(`${LOG_PREFIX_MSG} Admin Grant DB Error: ${grantError.message}`);
-                await safeSendMessage(chatId, `❌ DB error during grant: ${escapeMarkdownV2(grantError.message)}`, { parse_mode: 'MarkdownV2'});
-            } finally {
-                if (grantClient) grantClient.release();
-            }
+          } catch (grantError) {
+            if (grantClient) await grantClient.query('ROLLBACK').catch(()=>{});
+            console.error(`${LOG_PREFIX_MSG} Admin Grant DB Error: ${grantError.message}`);
+            await safeSendMessage(chatId, `❌ DB error during grant: ${escapeMarkdownV2(grantError.message)}`, { parse_mode: 'MarkdownV2'});
+          } finally {
+            if (grantClient) grantClient.release();
+          }
         } else {
-            await safeSendMessage(chatId, "🤔 This command seems to be for administrators only.", {});
+          await safeSendMessage(chatId, "🤔 This command seems to be for administrators only.", {});
         }
         break;
 
-      // --- Game Initiation Commands (Handlers defined in later sections) ---
-      case 'coinflip': // For /coinflip <bet>
+      // --- Game Initiation Commands ---
+      case 'coinflip':
       case 'startcoinflip':
-        // Handler will be in Part 5a, Section 2
         if (typeof handleStartGroupCoinFlipCommand === 'function') {
-            let betCF = commandArgs[0] ? parseInt(commandArgs[0], 10) : MIN_BET_AMOUNT_CREDITS; // Using credits for now
-            // TODO: Convert betCF (credits) to lamports if needed or adjust game to use lamports
-            await handleStartGroupCoinFlipCommand(chatId, userForCommandProcessing, betCF, originalMessageId);
+          const betCF = await parseBetAmount(commandArgs[0]);
+          await handleStartGroupCoinFlipCommand(chatId, userForCommandProcessing, betCF, originalMessageId);
         } else console.error("handleStartGroupCoinFlipCommand not defined yet.");
         break;
-      case 'rps': // For /rps <bet>
+      case 'rps':
       case 'startrps':
         if (typeof handleStartGroupRPSCommand === 'function') {
-            let betRPS = commandArgs[0] ? parseInt(commandArgs[0], 10) : MIN_BET_AMOUNT_CREDITS;
-            await handleStartGroupRPSCommand(chatId, userForCommandProcessing, betRPS, originalMessageId);
+          const betRPS = await parseBetAmount(commandArgs[0]);
+          await handleStartGroupRPSCommand(chatId, userForCommandProcessing, betRPS, originalMessageId);
         } else console.error("handleStartGroupRPSCommand not defined yet.");
         break;
-      // ... other game commands like /diceescalator, /dice21 will be routed here ...
-      // Their handlers will be defined in Part 5b, etc.
+      case 'diceescalator':
+      case 'de': // Alias
+        if (typeof handleStartDiceEscalatorCommand === 'function') {
+          const betDE = await parseBetAmount(commandArgs[0]);
+          await handleStartDiceEscalatorCommand(chatId, userForCommandProcessing, betDE, originalMessageId);
+        } else console.error("handleStartDiceEscalatorCommand not defined yet.");
+        break;
+      case 'dice21':
+      case 'd21':
+      case 'blackjack':
+        if (typeof handleStartDice21Command === 'function') {
+          const betD21 = await parseBetAmount(commandArgs[0]);
+          await handleStartDice21Command(chatId, userForCommandProcessing, betD21, originalMessageId);
+        } else console.error("handleStartDice21Command not defined yet.");
+        break;
+      case 'ou7':
+      case 'overunder7':
+        if (typeof handleStartOverUnder7Command === 'function') {
+          const betOU7 = await parseBetAmount(commandArgs[0]);
+          await handleStartOverUnder7Command(chatId, userForCommandProcessing, betOU7, originalMessageId);
+        } else console.error("handleStartOverUnder7Command not defined yet.");
+        break;
+      case 'duel':
+      case 'highroller':
+        if (typeof handleStartDuelCommand === 'function') {
+          const betDuel = await parseBetAmount(commandArgs[0]);
+          await handleStartDuelCommand(chatId, userForCommandProcessing, betDuel, originalMessageId);
+        } else console.error("handleStartDuelCommand not defined yet.");
+        break;
+      case 'ladder':
+      case 'greedsladder':
+        if (typeof handleStartLadderCommand === 'function') {
+          const betLadder = await parseBetAmount(commandArgs[0]);
+          await handleStartLadderCommand(chatId, userForCommandProcessing, betLadder, originalMessageId);
+        } else console.error("handleStartLadderCommand not defined yet.");
+        break;
+      case 'sevenout':
+      case 's7':
+      case 'craps':
+        if (typeof handleStartSevenOutCommand === 'function') {
+          const betS7 = await parseBetAmount(commandArgs[0]);
+          await handleStartSevenOutCommand(chatId, userForCommandProcessing, betS7, originalMessageId);
+        } else console.error("handleStartSevenOutCommand not defined yet.");
+        break;
+      case 'slot':
+      case 'slots':
+      case 'slotfrenzy':
+        if (typeof handleStartSlotCommand === 'function') {
+          const betSlot = await parseBetAmount(commandArgs[0]);
+          await handleStartSlotCommand(chatId, userForCommandProcessing, betSlot, originalMessageId);
+        } else console.error("handleStartSlotCommand not defined yet.");
+        break;
 
       default:
-        if (chatType === 'private' || text.startsWith('/')) {
+        if (chatType === 'private' || text.startsWith(`/@${(await bot.getMe()).username}`)) { // Only respond if directly addressed in group, or in PM
           await safeSendMessage(chatId, `❓ Unknown command: \`/${escapeMarkdownV2(commandName || "")}\`\nType \`/help\` for a list of available commands.`, { parse_mode: 'MarkdownV2' });
         }
     }
@@ -1490,7 +1570,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
   const msg = callbackQuery.message;
   const userFromCb = callbackQuery.from;
-  const callbackQueryId = callbackQuery.id; // Store this to answer the query
+  const callbackQueryId = callbackQuery.id;
   const data = callbackQuery.data;
 
   if (!msg || !userFromCb || !data) {
@@ -1503,15 +1583,12 @@ bot.on('callback_query', async (callbackQuery) => {
   const chatId = String(msg.chat.id);
   const originalMessageId = msg.message_id;
 
-  // Default answer to acknowledge the button press.
-  // Specific handlers can override this with their own messages if needed.
   try { await bot.answerCallbackQuery(callbackQueryId); }
-  catch(e) { /* console.warn(`${LOG_PREFIX_CBQ} Non-critical: Failed to answer CBQ (already answered or other issue): ${e.message}`); */ }
-
+  catch(e) { /* console.warn(...); */ }
 
   let userObjectForCallback;
   try {
-    userObjectForCallback = await getOrCreateUser(userId, userFromCb.username, userFromCb.first_name); // getOrCreateUser from Part 2
+    userObjectForCallback = await getOrCreateUser(userId, userFromCb.username, userFromCb.first_name, userFromCb.last_name);
     if (!userObjectForCallback) {
       throw new Error("User data could not be fetched for callback processing.");
     }
@@ -1522,113 +1599,116 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   const [action, ...params] = data.split(':');
-  console.log(`${LOG_PREFIX_CBQ} User ${getPlayerDisplayReference(userObjectForCallback)} Action: "${action}", Params: [${params.join(', ')}]`);
+  console.log(`${LOG_PREFIX_CBQ} User ${getPlayerDisplayReference(userObjectForCallback)} Action: "${action}", Params: [${params.join(', ')}] (Chat: ${chatId}, OrigMsgID: ${originalMessageId})`);
 
-
-  // --- Stateful Input Cache Clearing for Cancel Actions ---
-  // If a general "cancel" or "back" button is pressed that should clear a pending input state.
   if (action === 'menu' && (params[0] === 'main' || params[0] === 'wallet' || params[0] === 'game_selection')) {
-      if (typeof clearUserState === 'function') { // clearUserState will be from payment UI Handlers Part
-          clearUserState(userId); // Clear any pending input state
-      } else {
-          console.warn(`${LOG_PREFIX_CBQ} clearUserState function not available, cannot clear state for menu action.`);
-      }
+     if (typeof clearUserState === 'function') { // Defined in Part P3
+        clearUserState(userId);
+     } else {
+        console.warn(`${LOG_PREFIX_CBQ} clearUserState function not available.`);
+     }
   }
-  // --- End Stateful Cache Clearing ---
-
 
   try {
-    // Route based on action prefix or full action string
-    // General Casino Bot Actions (Rules)
-    if (action.startsWith(RULES_CALLBACK_PREFIX.slice(0, -1))) { // e.g., 'rules_game'
-        const gameCodeForRule = params[0] || action.substring(RULES_CALLBACK_PREFIX.length -1); // Extract game code
-        if (!gameCodeForRule) throw new Error("Missing game_code for rules display.");
-        await handleDisplayGameRules(chatId, originalMessageId, gameCodeForRule, userObjectForCallback); // Defined later in this section
-        return;
+    if (action.startsWith(RULES_CALLBACK_PREFIX)) { // Corrected: RULES_CALLBACK_PREFIX ends with '_'
+      const gameCodeForRule = action.substring(RULES_CALLBACK_PREFIX.length); // Get part after prefix
+      if (!gameCodeForRule && params.length > 0) { // Fallback if prefix was used with colon
+          gameCodeForRule = params[0];
+      }
+      if (!gameCodeForRule) throw new Error("Missing game_code for rules display.");
+      await handleDisplayGameRules(chatId, originalMessageId, gameCodeForRule, userObjectForCallback);
+      return;
     }
-    if (action === 'show_rules_menu') { // From "Back to Rules Menu" button
-        await handleRulesCommand(chatId, userObjectForCallback, originalMessageId, true); // isEdit = true
-        return;
+    if (action === 'show_rules_menu') {
+      await handleRulesCommand(chatId, userObjectForCallback, originalMessageId, true);
+      return;
     }
-
-
-    // --- Payment System UI Callback Actions (New Integrations) ---
-    // These actions are typically handled by functions from the Payment UI Handlers part.
-    // For now, we'll put simplified handlers or placeholders.
-    // DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION from Part 1
 
     switch (action) {
-      case DEPOSIT_CALLBACK_ACTION: // Placeholder from Casino Bot, now calls payment system logic
-      case 'quick_deposit': // Common alias from payment system for quick deposit access
-        // handleDepositCommand is defined later in this section
-        await handleDepositCommand({ chat: msg.chat, from: userFromCb, message_id: originalMessageId }, [], userId); // Pass correctUserIdFromCb
+      case DEPOSIT_CALLBACK_ACTION:
+      case 'quick_deposit':
+        if (typeof handleDepositCommand === 'function') { // Defined in Part P3
+            await handleDepositCommand({ chat: msg.chat, from: userFromCb, message_id: originalMessageId }, [], userId);
+        } else console.error("handleDepositCommand not defined for callback.");
         break;
-      case WITHDRAW_CALLBACK_ACTION: // Placeholder, now calls payment system logic
-        // handleWithdrawCommand is defined later in this section
-        await handleWithdrawCommand({ chat: msg.chat, from: userFromCb, message_id: originalMessageId }, [], userId);
+      case WITHDRAW_CALLBACK_ACTION:
+        if (typeof handleWithdrawCommand === 'function') { // Defined in Part P3
+            await handleWithdrawCommand({ chat: msg.chat, from: userFromCb, message_id: originalMessageId }, [], userId);
+        } else console.error("handleWithdrawCommand not defined for callback.");
         break;
-
-      // Menu navigation callbacks (Payment System UI)
-      case 'menu': // Generic menu router
+      case 'menu':
         const menuType = params[0];
         const menuParams = params.slice(1);
-        // handleMenuAction will be defined later in this section (from payment system UI handlers)
-        if (typeof handleMenuAction === 'function') {
-            await handleMenuAction(userId, chatId, originalMessageId, menuType, menuParams, true); // isFromCallback = true
+        if (typeof handleMenuAction === 'function') { // Defined in Part P3
+          await handleMenuAction(userId, chatId, originalMessageId, menuType, menuParams, true);
         } else {
-            console.error(`${LOG_PREFIX_CBQ} handleMenuAction not defined for menu type ${menuType}.`);
-            await safeSendMessage(chatId, `Menu option "${escapeMarkdownV2(menuType)}" is currently unavailable.`, { parse_mode: 'MarkdownV2'});
+          console.error(`${LOG_PREFIX_CBQ} handleMenuAction not defined for menu type ${menuType}.`);
+          await safeSendMessage(chatId, `Menu option "${escapeMarkdownV2(menuType)}" is currently unavailable.`, { parse_mode: 'MarkdownV2'});
         }
         break;
-
-      case 'process_withdrawal_confirm': // From withdrawal confirmation message
-        const confirmation = params[0]; // 'yes' or 'no'
+      case 'process_withdrawal_confirm':
+        const confirmation = params[0];
         const stateForWithdrawal = userStateCache.get(userId);
-
         if (confirmation === 'yes' && stateForWithdrawal && stateForWithdrawal.state === 'awaiting_withdrawal_confirmation') {
-            const { linkedWallet, amountLamportsStr } = stateForWithdrawal.data;
-            // handleWithdrawalConfirmation defined later in this section (from payment UI handlers)
-            if (typeof handleWithdrawalConfirmation === 'function') {
-                await handleWithdrawalConfirmation(userId, chatId, stateForWithdrawal.messageId, linkedWallet, amountLamportsStr);
-            } else {
-                 console.error(`${LOG_PREFIX_CBQ} handleWithdrawalConfirmation is not defined!`);
-                 await safeSendMessage(chatId, "Error processing withdrawal confirmation internally.", {});
-            }
-            clearUserState(userId); // From payment UI handlers
+          const { linkedWallet, amountLamportsStr } = stateForWithdrawal.data;
+          if (typeof handleWithdrawalConfirmation === 'function') { // Defined in Part P3
+            await handleWithdrawalConfirmation(userId, chatId, stateForWithdrawal.messageId, linkedWallet, amountLamportsStr);
+          } else {
+            console.error(`${LOG_PREFIX_CBQ} handleWithdrawalConfirmation is not defined!`);
+            await safeSendMessage(chatId, "Error processing withdrawal confirmation internally.", {});
+          }
+          if(typeof clearUserState === 'function') clearUserState(userId); else console.warn("clearUserState not found after withdrawal confirm.");
         } else if (confirmation === 'no') {
-            await bot.editMessageText("Withdrawal cancelled.", { chat_id: chatId, message_id: originalMessageId, reply_markup: {} });
-            clearUserState(userId);
+          await bot.editMessageText("Withdrawal cancelled.", { chat_id: chatId, message_id: originalMessageId, reply_markup: {} });
+          if(typeof clearUserState === 'function') clearUserState(userId); else console.warn("clearUserState not found after withdrawal cancel.");
         } else if (!stateForWithdrawal || stateForWithdrawal.state !== 'awaiting_withdrawal_confirmation') {
-            await bot.editMessageText("Withdrawal confirmation has expired or is invalid. Please start again.", { chat_id: chatId, message_id: originalMessageId, reply_markup: {} });
-            clearUserState(userId);
+          await bot.editMessageText("Withdrawal confirmation has expired or is invalid. Please start again.", { chat_id: chatId, message_id: originalMessageId, reply_markup: {} });
+          if(typeof clearUserState === 'function') clearUserState(userId); else console.warn("clearUserState not found after withdrawal expiry.");
         }
         break;
 
-      // --- Game Specific Callbacks (Placeholders, handlers in later sections) ---
-      case 'join_game': // For Coinflip, RPS
-      case 'cancel_game': // For Coinflip, RPS
+      // --- Game Specific Callbacks ---
+      case 'join_game':
+      case 'cancel_game':
       case 'rps_choose':
-        // These will be handled in Part 5a, Section 2
-        if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, chatId);
-        else console.warn(`${LOG_PREFIX_CBQ} Game callback action ${action} received, but forwardGameCallback not defined yet.`);
+        if (typeof forwardGameCallback === 'function') { // Defined in Part 5a, Section 2
+             await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, chatId);
+        } else console.warn(`${LOG_PREFIX_CBQ} Game callback action ${action} received, but forwardGameCallback not defined yet.`);
         break;
-      case 'de_roll_prompt': // Dice Escalator
+      case 'de_roll_prompt':
       case 'de_cashout':
-      case 'jackpot_display_noop':
+      case 'jackpot_display_noop': // This now correctly passes gameId as params[0] if it was jackpot_display_noop:gameId
       case 'play_again_de':
-        // These will be handled in Part 5b, Section 1
-        if (typeof forwardDiceEscalatorCallback === 'function') await forwardDiceEscalatorCallback(action, params, userObjectForCallback, originalMessageId, chatId, callbackQueryId);
-        else console.warn(`${LOG_PREFIX_CBQ} Dice Escalator callback ${action} received, but forwarder not defined yet.`);
+        if (typeof forwardDiceEscalatorCallback === 'function') { // Defined in Part 5b, Section 1
+            await forwardDiceEscalatorCallback(action, params, userObjectForCallback, originalMessageId, chatId, callbackQueryId);
+        } else console.warn(`${LOG_PREFIX_CBQ} Dice Escalator callback ${action} received, but forwarder not defined yet.`);
         break;
-      // ... other game callback actions like d21_hit, ou7_choice etc. will be routed similarly ...
+      case 'd21_hit': // Added from Part 5b, Section 2 forwarder
+      case 'd21_stand':
+      case 'play_again_d21':
+         if (typeof forwardDice21Callback === 'function') { // Defined in Part 5b, Section 2
+            await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, chatId, callbackQueryId);
+         } else console.warn(`${LOG_PREFIX_CBQ} Dice 21 callback ${action} received, but forwarder not defined yet.`);
+         break;
+      // Callbacks for games in Part 5c
+      case 'ou7_choice':
+      case 'play_again_ou7':
+      case 'duel_roll':
+      case 'play_again_duel':
+      case 'play_again_ladder': // Ladder has no interactive roll, just play again
+      case 's7_roll':
+      case 'play_again_s7':
+      case 'play_again_slot': // Slot has no interactive roll, just play again
+         if (typeof forwardAdditionalGamesCallback === 'function') { // Defined in Part 5c
+            await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, chatId, callbackQueryId);
+         } else console.warn(`${LOG_PREFIX_CBQ} Additional Games callback ${action} received, but forwarder not defined yet.`);
+         break;
 
       default:
         console.log(`${LOG_PREFIX_CBQ} INFO: Unhandled callback action: "${action}" with params: [${params.join(', ')}]`);
-        // await bot.answerCallbackQuery(callbackQueryId, { text: "Action not recognized.", show_alert: false }); // Already answered by default
     }
   } catch (error) {
     console.error(`${LOG_PREFIX_CBQ} CRITICAL ERROR processing callback action "${action}": ${error.message}`, error.stack);
-    // Attempt to notify the user via a new message, as editing might fail or context is lost.
     await safeSendMessage(userId, "😕 Oops! Something went wrong while processing your action. Please try again or use a command.", {}).catch(() => {});
   }
 }); // End of bot.on('callback_query')
@@ -1637,23 +1717,16 @@ bot.on('callback_query', async (callbackQuery) => {
 // --- Command Handler Functions (General Casino Bot Commands) ---
 
 async function handleHelpCommand(chatId, userObj) {
-  const userMention = getPlayerDisplayReference(userObj); // From Part 3
-  const jackpotScoreInfo = TARGET_JACKPOT_SCORE ? escapeMarkdownV2(String(TARGET_JACKPOT_SCORE)) : 'a high'; // TARGET_JACKPOT_SCORE from Part 1
-  const botName = BOT_NAME || "Casino Bot"; // BOT_NAME from Part 1
-  // MIN_BET_AMOUNT_CREDITS, MAX_BET_AMOUNT_CREDITS from Part 1
-  // formatCurrency from Part 3 (now formats SOL)
+  const userMention = getPlayerDisplayReference(userObj);
+  const jackpotScoreInfo = TARGET_JACKPOT_SCORE ? escapeMarkdownV2(String(TARGET_JACKPOT_SCORE)) : 'a high';
+  const botNameEscaped = escapeMarkdownV2(BOT_NAME || "Casino Bot");
 
-  // Convert credit bet limits to SOL for display, assuming 1 credit = some lamports then to SOL
-  // This needs clarification: If MIN_BET_AMOUNT is still in "credits" and not lamports.
-  // For now, assume MIN_BET_AMOUNT_CREDITS is an abstract unit, and we need a SOL equivalent for display.
-  // Let's assume for help text, we display the original credit values and specify unit,
-  // or convert if a fixed credit-to-lamport mapping is defined.
-  // If bets are directly in SOL/lamports, then formatCurrency(MIN_BET_LAMPORTS_EQUIVALENT)
-  const minBetDisplay = `${MIN_BET_AMOUNT_CREDITS} credits`; // Or formatCurrency(MIN_BET_LAMPORTS_EQUIVALENT, 'SOL')
-  const maxBetDisplay = `${MAX_BET_AMOUNT_CREDITS} credits`; // Or formatCurrency(MAX_BET_LAMPORTS_EQUIVALENT, 'SOL')
+  // Using lamports directly for bet limits in help message
+  const minBetDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS));
+  const maxBetDisplay = escapeMarkdownV2(formatCurrency(MAX_BET_AMOUNT_LAMPORTS));
 
   const helpTextParts = [
-    `👋 Hello ${userMention}\\! Welcome to the **${escapeMarkdownV2(botName)} v${BOT_VERSION}**\\.`, // BOT_VERSION from Part 1
+    `👋 Hello ${userMention}\\! Welcome to the **${botNameEscaped} v${BOT_VERSION}**\\.`,
     `\nHere's a quick guide to our commands and games:`,
     `\n*Financial Commands:*`,
     `▫️ \`/balance\` or \`/bal\` \\- Check your SOL balance & access deposit/withdrawal\\.`,
@@ -1667,22 +1740,22 @@ async function handleHelpCommand(chatId, userObj) {
     `▫️ \`/rules\` or \`/info\` \\- View detailed rules for all games\\.`,
     `▫️ \`/jackpot\` \\- View the current Dice Escalator jackpot total \\(in SOL\\)\\.`,
     `\n*Available Games (Group Play Recommended):*`,
-    `▫️ \`/coinflip <bet_in_credits_or_SOL>\` \\- Classic coin toss\\.`, // Clarify bet unit
-    `▫️ \`/rps <bet>\` \\- Rock Paper Scissors duel\\.`,
-    `▫️ \`/diceescalator <bet>\` \\- Climb the score ladder\\. Hit the Jackpot\\!`,
-    `▫️ \`/dice21 <bet>\` \\(or \`/d21\`, \`/blackjack\`\\) \\- Dice Blackjack\\.`,
-    // ... other game commands from GAME_IDS ...
-    `▫️ \`/ou7 <bet>\` \\(or \`/overunder7\`\\) \\- Bet on sum of two dice\\.`,
-    `▫️ \`/duel <bet>\` \\(or \`/highroller\`\\) \\- Dice duel vs Bot\\.`,
-    `▫️ \`/ladder <bet>\` \\(or \`/greedsladder\`\\) \\- Risk it with 3 dice rolls\\.`,
-    `▫️ \`/sevenout <bet>\` \\(or \`/s7\`, \`/craps\`\\) \\- Simplified Craps\\.`,
-    `▫️ \`/slot <bet>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- Spin the Slot Machine\\!`,
+    `▫️ \`/coinflip <bet_in_sol_or_lamports>\` \\- Classic coin toss\\.`,
+    `▫️ \`/rps <bet_in_sol_or_lamports>\` \\- Rock Paper Scissors duel\\.`,
+    `▫️ \`/diceescalator <bet_in_sol_or_lamports>\` \\(or \`/de\`\\) \\- Climb the score ladder\\. Hit the Jackpot\\!`,
+    `▫️ \`/dice21 <bet_in_sol_or_lamports>\` \\(or \`/d21\`, \`/blackjack\`\\) \\- Dice Blackjack\\.`,
+    `▫️ \`/ou7 <bet_in_sol_or_lamports>\` \\(or \`/overunder7\`\\) \\- Bet on sum of two dice\\.`,
+    `▫️ \`/duel <bet_in_sol_or_lamports>\` \\(or \`/highroller\`\\) \\- Dice duel vs Bot\\.`,
+    `▫️ \`/ladder <bet_in_sol_or_lamports>\` \\(or \`/greedsladder\`\\) \\- Risk it with 3 dice rolls\\.`,
+    `▫️ \`/sevenout <bet_in_sol_or_lamports>\` \\(or \`/s7\`, \`/craps\`\\) \\- Simplified Craps\\.`,
+    `▫️ \`/slot <bet_in_sol_or_lamports>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- Spin the Slot Machine\\!`,
     `\n*Betting:*`,
-    `Specify your bet after the game command\\. Example: \`/d21 0.1\` \\(for 0\\.1 SOL\\) or \`/coinflip 10\` \\(for 10 credits, if applicable\\)\\. If no bet is specified, it defaults\\. Check game rules for specific bet units and limits \\(currently: ${minBetDisplay} to ${maxBetDisplay}\\)\\.`,
+    `Specify your bet after the game command\\. Example: \`/d21 0.1\` \\(for 0\\.1 SOL\\) or \`/coinflip 10000000\` \\(for 10,000,000 lamports / 0.01 SOL\\)\\. If no bet is specified, it defaults to the minimum\\.`,
+    `Current bet limits: ${minBetDisplay} to ${maxBetDisplay}\\.`,
     `\n*Dice Escalator Jackpot:*`,
     `🏆 Win by standing with a score of *${jackpotScoreInfo}\\+* AND beating the Bot Dealer in Dice Escalator\\!`,
     `\nRemember to play responsibly and have fun\\! 🎉`,
-    `For issues, contact admin\\. ${ADMIN_USER_ID ? `(Admin: ${escapeMarkdownV2(ADMIN_USER_ID)})` : ''}`
+    ADMIN_USER_ID ? `For issues, contact admin\\. (Admin ID: ${escapeMarkdownV2(ADMIN_USER_ID)})` : `For issues, please refer to group administrators.`
   ];
 
   await safeSendMessage(chatId, helpTextParts.filter(Boolean).join('\n'), { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
@@ -1690,21 +1763,18 @@ async function handleHelpCommand(chatId, userObj) {
 
 async function handleBalanceCommand(chatId, userObj) {
   const LOG_PREFIX_BAL = `[BalanceCmd UID:${userObj.telegram_id}]`;
-  const userMention = getPlayerDisplayReference(userObj); // from Part 3
-  // userObj comes from getOrCreateUser, which now includes balance in lamports
-  const currentBalanceLamports = BigInt(userObj.balance || 0n); // Ensure BigInt
-  // formatCurrency from Part 3, formats to SOL
-  const balanceMessage = `${userMention}, your current account balance is:\n💰 *${escapeMarkdownV2(formatCurrency(currentBalanceLamports, 'SOL'))}*`;
+  const userMention = getPlayerDisplayReference(userObj);
+  const currentBalanceLamports = BigInt(userObj.balance || 0n);
+  const balanceMessage = `${userMention}, your current account balance is:\n💰 *${escapeMarkdownV2(formatCurrency(currentBalanceLamports))}*`; // Default currency is SOL
 
   const keyboard = {
     inline_keyboard: [
       [
-        // DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION from Part 1 (global constants)
-        { text: "💰 Deposit SOL", callback_data: DEPOSIT_CALLBACK_ACTION },
+        { text: "💰 Deposit SOL", callback_data: DEPOSIT_CALLBACK_ACTION }, // Constants from Part 1
         { text: "💸 Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION }
       ],
-      [ { text: "📜 Transaction History", callback_data: "menu:history" } ], // Link to payment system's history handler
-      [ { text: "🔗 Manage Wallet", callback_data: "menu:wallet" } ]      // Link to payment system's wallet management
+      [ { text: "📜 Transaction History", callback_data: "menu:history" } ],
+      [ { text: "🔗 Manage Wallet", callback_data: "menu:wallet" } ]
     ]
   };
   await safeSendMessage(chatId, balanceMessage, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
@@ -1714,14 +1784,12 @@ async function handleJackpotCommand(chatId, userObj) {
     const LOG_PREFIX_JACKPOT = `[JackpotCmd UID:${userObj.telegram_id}]`;
     const userMention = getPlayerDisplayReference(userObj);
     try {
-        // queryDatabase from Part 2 (Casino Bot, now global via Payment System integration)
-        // MAIN_JACKPOT_ID, TARGET_JACKPOT_SCORE from Part 1
-        // formatCurrency from Part 3 (formats SOL)
+        // queryDatabase is now defined in Part 1
         const result = await queryDatabase('SELECT current_amount FROM jackpots WHERE jackpot_id = $1', [MAIN_JACKPOT_ID]);
         let jackpotMessage;
         if (result.rows.length > 0) {
             const jackpotAmountLamports = BigInt(result.rows[0].current_amount || '0');
-            const jackpotDisplay = formatCurrency(jackpotAmountLamports, "SOL");
+            const jackpotDisplay = formatCurrency(jackpotAmountLamports); // Defaults to SOL
             jackpotMessage = `Hey ${userMention}!\n\nThe current Dice Escalator Super Jackpot is a whopping:\n💎 *${escapeMarkdownV2(jackpotDisplay)}* 💎\n\nTo win it, achieve a score of *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}\\+* in Dice Escalator and win against the Bot\\! Good luck\\! 🍀`;
         } else {
             console.warn(`${LOG_PREFIX_JACKPOT} No jackpot record found for ID: ${MAIN_JACKPOT_ID}. This is unusual.`);
@@ -1734,7 +1802,6 @@ async function handleJackpotCommand(chatId, userObj) {
     }
 }
 
-// --- Rules Command System (from Casino Bot, adapted) ---
 async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdit = false) {
   const LOG_PREFIX_RULES = `[RulesCmd UID:${userObj.telegram_id}]`;
   const userMention = getPlayerDisplayReference(userObj);
@@ -1743,38 +1810,33 @@ async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdi
   const gameRuleButtons = Object.entries(GAME_IDS).map(([key, gameCode]) => {
     const gameName = key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
     let emoji = '❓';
-    // Assign emojis based on GAME_IDS (as in original Casino Bot)
     if (gameCode === GAME_IDS.COINFLIP) emoji = '🪙'; else if (gameCode === GAME_IDS.RPS) emoji = '✂️';
     else if (gameCode === GAME_IDS.DICE_ESCALATOR) emoji = '🎲'; else if (gameCode === GAME_IDS.DICE_21) emoji = '🃏';
     else if (gameCode === GAME_IDS.OVER_UNDER_7) emoji = '🎲'; else if (gameCode === GAME_IDS.DUEL) emoji = '⚔️';
     else if (gameCode === GAME_IDS.LADDER) emoji = '🪜'; else if (gameCode === GAME_IDS.SEVEN_OUT) emoji = '🎲';
     else if (gameCode === GAME_IDS.SLOT_FRENZY) emoji = '🎰';
-    // RULES_CALLBACK_PREFIX from Part 1
-    return { text: `${emoji} ${gameName}`, callback_data: `${RULES_CALLBACK_PREFIX}${gameCode}` };
+    return { text: `${emoji} ${gameName}`, callback_data: `${RULES_CALLBACK_PREFIX}${gameCode}` }; // RULES_CALLBACK_PREFIX from Part 1
   });
 
   const rows = [];
   for (let i = 0; i < gameRuleButtons.length; i += 2) { rows.push(gameRuleButtons.slice(i, i + 2)); }
-  // Add a back button if this menu itself was presented as an edit (e.g. from a specific rule page)
-   rows.push([{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]);
-
+  rows.push([{ text: '↩️ Back to Main Menu', callback_data: 'menu:main' }]);
 
   const keyboard = { inline_keyboard: rows };
   const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard };
 
   if (isEdit && messageIdToEdit) {
     try {
-        await bot.editMessageText(rulesIntroText, { chat_id: chatId, message_id: messageIdToEdit, ...options });
+      await bot.editMessageText(rulesIntroText, { chat_id: chatId, message_id: messageIdToEdit, ...options });
     } catch (e) {
-        if (!e.message || !e.message.includes("message is not modified")) {
-            console.warn(`${LOG_PREFIX_RULES} Failed to edit rules menu (ID: ${messageIdToEdit}), sending new. Error: ${e.message}`);
-            await safeSendMessage(chatId, rulesIntroText, options);
-        }
+      if (!e.message || !e.message.includes("message is not modified")) {
+        console.warn(`${LOG_PREFIX_RULES} Failed to edit rules menu (ID: ${messageIdToEdit}), sending new. Error: ${e.message}`);
+        await safeSendMessage(chatId, rulesIntroText, options);
+      }
     }
   } else {
-    // If it's a command /rules, and there was an original command message, delete it before sending the menu.
     if (!isEdit && messageIdToEdit && typeof bot !== 'undefined' && typeof bot.deleteMessage === 'function') {
-        await bot.deleteMessage(chatId, messageIdToEdit).catch(()=>{});
+      await bot.deleteMessage(chatId, messageIdToEdit).catch(()=>{});
     }
     await safeSendMessage(chatId, rulesIntroText, options);
   }
@@ -1782,44 +1844,80 @@ async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdi
 
 async function handleDisplayGameRules(chatId, originalMessageId, gameCode, userObj) {
   const LOG_PREFIX_RULES_DISP = `[RulesDisplay UID:${userObj.telegram_id} Game:${gameCode}]`;
-  let gameName = "Selected Game";
-  // Logic to fetch/format rules text for 'gameCode' (largely from Casino Bot's original handleDisplayGameRules)
-  // Ensure all constants like DICE_ESCALATOR_BUST_ON, BOT_STAND_SCORE_DICE_ESCALATOR, etc. are from Part 1.
-  // Ensure formatCurrency is used for any monetary values, displaying in SOL.
+  let rulesText = `📜 **Rules for ${escapeMarkdownV2(gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()))}** 📜\n\n`;
 
-  // (Full rules text switch statement from original Part 5a, Segment 2 would go here)
-  // For brevity, I'll use a placeholder:
-  let rulesText = `📜 **Rules for ${escapeMarkdownV2(gameCode.replace('_', ' ').toUpperCase())}** 📜\n\n`;
+  // MIN_BET_AMOUNT_LAMPORTS and MAX_BET_AMOUNT_LAMPORTS from Part 1
+  // formatCurrency from Part 3
+  const minBetFormatted = formatCurrency(MIN_BET_AMOUNT_LAMPORTS);
+  const maxBetFormatted = formatCurrency(MAX_BET_AMOUNT_LAMPORTS);
+  const defaultBetFormatted = formatCurrency(MIN_BET_AMOUNT_LAMPORTS); // Default to min if not specified
+
   switch (gameCode) {
-    case GAME_IDS.COINFLIP: rulesText += `A simple 50/50 coin toss game against another player. Winner takes the pot.`; break;
-    // ... add all other game rules from original Casino Bot Part 5a, Segment 2 ...
-    // Remember to update any currency mentions from "credits" to "SOL".
-    default: rulesText += `Rules for "${escapeMarkdownV2(gameCode)}" are not yet documented or this is an invalid game code.`;
+    case GAME_IDS.COINFLIP:
+      rulesText += `A classic 50/50 heads or tails game. Start a game by typing \`/coinflip <bet>\` (e.g., \`/coinflip 0.01\` for 0.01 SOL or \`/coinflip 10000000\` for lamports). Another player can then join. The winner takes the entire pot (2x their bet). Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.RPS:
+      rulesText += `Rock Paper Scissors. Start with \`/rps <bet>\`. Another player joins, then both choose Rock, Paper, or Scissors. Rock crushes Scissors, Scissors cuts Paper, Paper covers Rock. Winner takes the pot (2x their bet). Ties are a push (bet returned). Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.DICE_ESCALATOR:
+      rulesText += `Roll a die and accumulate score. Start with \`/diceescalator <bet>\` (or \`/de\`). Rolling a **${DICE_ESCALATOR_BUST_ON}** busts your score to 0 and you lose. Stand to let the bot play. If your score is higher than the bot's (or bot busts), you win 2x your bet. Bot stands on **${BOT_STAND_SCORE_DICE_ESCALATOR}** or more. **JACKPOT:** Win the round with a score of **${TARGET_JACKPOT_SCORE}+** to claim the current Super Jackpot! Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.DICE_21:
+      rulesText += `Dice Blackjack. Start with \`/dice21 <bet>\` (or \`/d21\`). Get closer to **${DICE_21_TARGET_SCORE}** than the bot without going over. Player is dealt two dice. "Hit" to get another die, "Stand" to keep your score. Bot stands on **${DICE_21_BOT_STAND_SCORE}** or more. Win 2x bet. Blackjack (21 on first two dice) pays 2.5x. Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.OVER_UNDER_7:
+      rulesText += `Bet on the sum of **${OU7_DICE_COUNT}** dice. Start with \`/ou7 <bet>\`. Choose "Under 7" (2-6), "Exactly 7", or "Over 7" (8-12). "Under 7" or "Over 7" wins pay 2x bet. "Exactly 7" wins pay ${OU7_PAYOUT_SEVEN + 1}x bet (i.e., ${OU7_PAYOUT_SEVEN}:1 profit). Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.DUEL:
+      rulesText += `High Roller Duel. Start with \`/duel <bet>\`. You and the bot both roll **${DUEL_DICE_COUNT}** dice. Highest total sum wins 2x bet. Ties are a push (bet returned). Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.LADDER:
+      rulesText += `Greed's Ladder. Start with \`/ladder <bet>\`. The bot rolls **${LADDER_ROLL_COUNT}** dice for you. Rolling a **${LADDER_BUST_ON}** on any die means you bust and lose. If no bust, your score is the sum of the dice. Payouts are tiered based on your total score. Check payout tiers with \`/ladder\` command help (if implemented) or refer to game announcements. Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      // You could list LADDER_PAYOUTS here for more detail
+      rulesText += "\nPayout Tiers for Greed's Ladder (Score : Multiplier of Bet):";
+      LADDER_PAYOUTS.forEach(p => {
+          rulesText += `\n  ${p.min}-${p.max} : ${p.multiplier}x profit (${p.label})`;
+      });
+      break;
+    case GAME_IDS.SEVEN_OUT:
+      rulesText += `Simplified Craps. Start with \`/sevenout <bet>\` (or \`/s7\`). Bot makes a "Come Out Roll" (2 dice). \n  - 7 or 11 on Come Out: You win 2x bet.\n  - 2, 3, or 12 on Come Out: You lose.\n  - Any other sum (4,5,6,8,9,10) becomes your "Point." Bot keeps rolling. If your Point is rolled again before a 7, you win 2x bet. If a 7 is rolled before your Point, you lose. Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      break;
+    case GAME_IDS.SLOT_FRENZY:
+      rulesText += `Spin the Slot Machine! Start with \`/slot <bet>\`. Match symbols for various payouts. Payouts are based on specific combinations derived from a dice roll (1-64). Check \`/slot\` command help (if implemented) or game announcements for specific paytable. Default bet is ${defaultBetFormatted}. Min bet: ${minBetFormatted}, Max bet: ${maxBetFormatted}.`;
+      // You could list SLOT_PAYOUTS here for more detail
+      rulesText += "\nExample High-Tier Payouts (Symbol : Multiplier of Bet):";
+      for(const key in SLOT_PAYOUTS){
+          if(SLOT_PAYOUTS[key].multiplier >= 10){ // Show some examples
+             rulesText += `\n  ${SLOT_PAYOUTS[key].symbols} : ${SLOT_PAYOUTS[key].multiplier}x profit (${SLOT_PAYOUTS[key].label})`;
+          }
+      }
+      break;
+    default:
+      rulesText += `Rules for "${escapeMarkdownV2(gameCode)}" are not yet documented or this is an invalid game code.`;
   }
   rulesText += `\n\nPlay responsibly!`;
 
   const keyboard = { inline_keyboard: [[{ text: "↩️ Back to Rules Menu", callback_data: "show_rules_menu" }]] };
   try {
     await bot.editMessageText(rulesText, {
-        chat_id: chatId, message_id: Number(originalMessageId),
-        parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true
+      chat_id: chatId, message_id: Number(originalMessageId),
+      parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true
     });
   } catch (e) {
-    console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit rules display for ${gameCode}, sending new. Error: ${e.message}`);
-    await safeSendMessage(chatId, rulesText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
+    if (!e.message || !e.message.includes("message is not modified")) { // Avoid error if message is identical
+        console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit rules display for ${gameCode}, sending new. Error: ${e.message}`);
+        await safeSendMessage(chatId, rulesText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
+    }
   }
 }
 
 // --- General Helper Functions (e.g., used by multiple game end flows) ---
-// createPostGameKeyboard from Casino Bot's original Part 5a, Segment 2
-// It now uses formatCurrency which defaults to SOL.
-function createPostGameKeyboard(gameCode, betAmountLamports) {
-    let playAgainCallback = `play_again_${gameCode}:${betAmountLamports}`;
+function createPostGameKeyboard(gameCode, betAmountLamports) { // betAmountLamports is BigInt
+    let playAgainCallback = `play_again_${gameCode}:${betAmountLamports.toString()}`; // Pass as string
     return {
         inline_keyboard: [
-            [{ text: `🔁 Play Again (${formatCurrency(BigInt(betAmountLamports), 'SOL')})`, callback_data: playAgainCallback }],
-            // QUICK_DEPOSIT_CALLBACK_ACTION from Part 1
-            [{ text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION },
+            [{ text: `🔁 Play Again (${formatCurrency(betAmountLamports)})`, callback_data: playAgainCallback }],
+            [{ text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }, // From Part 1
              { text: `📜 Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${gameCode}` }]
         ]
     };
