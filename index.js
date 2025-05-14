@@ -801,7 +801,7 @@ async function updateUserBalance(telegramId, newBalanceLamports, client = pool) 
  * Links a Solana wallet address to a user's account.
  * @param {number|string} telegramId The user's Telegram ID.
  * @param {string} solanaAddress The Solana wallet address to link.
- * @returns {Promise<boolean>} True if successful, false otherwise.
+ * @returns {Promise<{success: boolean, error?: string, message?: string}>} Result object.
  */
 async function linkUserWallet(telegramId, solanaAddress) {
     const LOG_PREFIX_LUW = `[linkUserWallet TG:${telegramId}]`;
@@ -811,40 +811,55 @@ async function linkUserWallet(telegramId, solanaAddress) {
         // Validate Solana address format (basic check)
         if (!solanaAddress || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(solanaAddress)) {
             console.warn(`${LOG_PREFIX_LUW} Invalid Solana address format: ${solanaAddress}`);
-            return false;
+            return { success: false, error: "Invalid Solana address format." };
         }
 
         // Check if address is already linked to another user
         const existingLink = await client.query('SELECT telegram_id FROM users WHERE solana_wallet_address = $1 AND telegram_id != $2', [solanaAddress, telegramId]);
         if (existingLink.rows.length > 0) {
-            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to user ${existingLink.rows[0].telegram_id}.`);
-            // Optionally notify the user trying to link, or the admin.
-            return false; // Or throw an error with a specific message
+            const linkedToExistingUserId = existingLink.rows[0].telegram_id;
+            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to user ${linkedToExistingUserId}.`);
+            return { success: false, error: `This wallet address is already linked to another user (ID ending ${String(linkedToExistingUserId).slice(-4)}).` };
         }
 
         const result = await client.query(
             'UPDATE users SET solana_wallet_address = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2',
             [solanaAddress, telegramId]
         );
+
         if (result.rowCount > 0) {
-            console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked.`);
+            console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked in DB.`);
             walletCache.set(telegramId.toString(), { solanaAddress }); // Update cache
-            return true;
+            return { success: true, message: `Wallet ${solanaAddress} successfully linked.` };
+        } else {
+            // If rowCount is 0, check if the user exists and if the address was already set
+            const currentUserState = await client.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [telegramId]);
+            if (currentUserState.rowCount === 0) {
+                console.error(`${LOG_PREFIX_LUW} User ${telegramId} not found. Cannot link wallet.`);
+                return { success: false, error: "User profile not found. Please /start the bot again." };
+            }
+            if (currentUserState.rows[0].solana_wallet_address === solanaAddress) {
+                console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} was already linked to this user. No DB change, but considered success.`);
+                walletCache.set(telegramId.toString(), { solanaAddress }); // Ensure cache is accurate
+                return { success: true, message: `Wallet ${solanaAddress} was already linked to your account.` };
+            }
+            console.warn(`${LOG_PREFIX_LUW} User ${telegramId} found, but wallet not updated (rowCount: ${result.rowCount}). This might be an unexpected issue.`);
+            return { success: false, error: "Failed to update wallet in database for an unknown reason." };
         }
-        console.warn(`${LOG_PREFIX_LUW} User not found, could not link wallet.`);
-        return false;
     } catch (error) {
         if (error.code === '23505') { // Unique constraint violation
-            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked (unique constraint violation). Potentially to this user or race condition.`);
-            // Verify if it's linked to *this* user already
+            // This case should ideally be caught by the explicit check above, but this is a safeguard.
+            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked (unique constraint). Verifying owner.`);
             const currentUserLink = await client.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [telegramId]);
             if (currentUserLink.rows.length > 0 && currentUserLink.rows[0].solana_wallet_address === solanaAddress) {
-                console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} was already linked to this user. No change needed.`);
-                return true; // Effectively successful or no-op
+                console.log(`${LOG_PREFIX_LUW} Wallet was already linked to this user (confirmed via unique constraint path).`);
+                walletCache.set(telegramId.toString(), { solanaAddress });
+                return { success: true, message: `Wallet ${solanaAddress} was already linked to your account.` };
             }
+            return { success: false, error: "This wallet address is already in use by another account." };
         }
         console.error(`${LOG_PREFIX_LUW} Error linking wallet ${solanaAddress}:`, error);
-        return false;
+        return { success: false, error: error.message || "An unexpected server error occurred during linking." };
     } finally {
         client.release();
     }
@@ -4248,43 +4263,54 @@ async function handleWalletAddressInput(msg, currentState) {
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_address') {
         console.error(`${logPrefix} Invalid state or data for wallet address input. State:`, currentState);
         clearUserState(userId);
-        await safeSendMessage(chatId, "Error processing address input. Please try linking your wallet again.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "Error processing address input. Please try linking your wallet again via the /wallet menu.", { parse_mode: 'MarkdownV2' });
         return;
     }
-    const { originalMessageId } = currentState.data;
+    const { originalMessageId } = currentState.data; // ID of the "Please reply with your address" message
 
     // Delete prompt and user input messages
     if (originalMessageId && bot) { await bot.deleteMessage(chatId, originalMessageId).catch(() => {}); }
     if (bot) { await bot.deleteMessage(chatId, msg.message_id).catch(() => {}); }
 
-    clearUserState(userId); // Clear state after processing
+    clearUserState(userId); // Clear state *before* processing to prevent re-entry on quick inputs
 
-    const linkingMsg = await safeSendMessage(chatId, `🔗 Linking wallet \`${escapeMarkdownV2(potentialNewAddress)}\`...`, { parse_mode: 'MarkdownV2' });
-    if (!linkingMsg || !linkingMsg.message_id) {
-        console.error(`${logPrefix} Failed to send 'Linking...' message.`);
-        await safeSendMessage(chatId, "⚠️ Error initiating wallet link. Please try again.", { parse_mode: 'MarkdownV2'});
-        return;
-    }
-    const resultMessageId = linkingMsg.message_id;
+    const linkingMsg = await safeSendMessage(chatId, `🔗 Validating and linking wallet \`${escapeMarkdownV2(potentialNewAddress)}\`...`, { parse_mode: 'MarkdownV2' });
+    const resultMessageId = linkingMsg ? linkingMsg.message_id : null;
 
     try {
-        // Validate address (PublicKey from @solana/web3.js - Part 1)
-        new PublicKey(potentialNewAddress);
-        // linkUserWallet from Part 2 (Casino Bot's user management)
-        const linkResult = await linkUserWallet(userId, potentialNewAddress);
+        // Basic client-side validation before calling linkUserWallet (which also validates)
+        new PublicKey(potentialNewAddress); // Will throw if format is clearly wrong
+
+        const linkResult = await linkUserWallet(userId, potentialNewAddress); // Calls MODIFIED linkUserWallet
 
         if (linkResult.success) {
-            const userDetails = await getPaymentSystemUserDetails(userId); // Fetches details including referral code
-            const refCode = userDetails?.referral_code || 'Not generated yet';
-            const successMsg = `✅ Wallet \`${escapeMarkdownV2(potentialNewAddress)}\` successfully linked.\nYour referral code: \`${escapeMarkdownV2(refCode)}\``;
-            await bot.editMessageText(successMsg, { chat_id: chatId, message_id: resultMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+            // const userDetails = await getPaymentSystemUserDetails(userId); // Fetch fresh details to confirm
+            // const currentLinkedAddress = userDetails?.solana_wallet_address || "Error fetching linked address";
+            // The linkResult.message already provides good feedback, or use potentialNewAddress on success.
+            const successMsg = `✅ ${escapeMarkdownV2(linkResult.message || `Wallet ${potentialNewAddress} successfully linked.`)}`;
+            if (resultMessageId && bot) {
+                await bot.editMessageText(successMsg, { chat_id: chatId, message_id: resultMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+            } else {
+                await safeSendMessage(chatId, successMsg, { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+            }
         } else {
-            throw new Error(linkResult.error || "Failed to link wallet in database.");
+            // Use error from linkResult
+            const errorText = `⚠️ Failed to link wallet: ${escapeMarkdownV2(linkResult.error || "Please ensure the address is valid and not in use by another account.")}`;
+            if (resultMessageId && bot) {
+                await bot.editMessageText(errorText, { chat_id: chatId, message_id: resultMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Try Again (Back to Wallet)', callback_data: 'menu:wallet' }]] }});
+            } else {
+                await safeSendMessage(chatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Try Again (Back to Wallet)', callback_data: 'menu:wallet' }]] }});
+            }
         }
-    } catch (e) {
+    } catch (e) { // Catches PublicKey validation error or other unexpected errors
         console.error(`${logPrefix} Error linking wallet ${potentialNewAddress}: ${e.message}`);
-        const errorText = `⚠️ Invalid Solana address or failed to save: "${escapeMarkdownV2(potentialNewAddress)}".\nError: ${escapeMarkdownV2(e.message)}\nPlease try again or use \`/setwallet <address>\`.`;
-        await bot.editMessageText(errorText, { chat_id: chatId, message_id: resultMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+        const errorTextToDisplay = e instanceof Error && e.message.includes("Invalid public key") ? "Invalid Solana address format." : (e.message || "An unexpected error occurred.");
+        const finalErrorMsg = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`.\nReason: ${escapeMarkdownV2(errorTextToDisplay)}\nPlease try again.`;
+        if (resultMessageId && bot) {
+            await bot.editMessageText(finalErrorMsg, { chat_id: chatId, message_id: resultMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+        } else {
+            await safeSendMessage(chatId, finalErrorMsg, { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+        }
     }
 }
 
@@ -4365,36 +4391,93 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 // (These are the full functions that were placeholders in Part 5a, Section 1)
 
 async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
-    // ... (Full implementation from your "Payment UI Handlers" code)
-    // This function should:
-    // 1. Get userId, chatId, messageIdToEdit, isFromCallback.
-    // 2. If args contain a new wallet address (e.g. from /setwallet <addr> or /wallet <addr>), call linkUserWallet.
-    // 3. Otherwise, fetch user balance and linked wallet (using Part 2 functions).
-    // 4. Display wallet info and buttons for Deposit, Withdraw, History, Link/Update Address.
-    // Example structure:
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
+    const messageIdToEditOrDelete = msgOrCbMsg.message_id; // ID of the message that triggered (/wallet, /setwallet, or callback button)
+    const isFromCallback = !!correctUserIdFromCb;
+
     clearUserState(userId);
-    console.log(`[WalletCmd User ${userId}] Called with args:`, args);
-    // Placeholder - replace with full logic
-    const userDetails = await getPaymentSystemUserDetails(userId); // from Part P2
-    const balance = userDetails ? userDetails.balance : 0n;
-    const address = userDetails ? userDetails.solana_wallet_address : null;
-    let text = `👤 *Your Wallet*\nBalance: ${escapeMarkdownV2(formatCurrency(balance))}\n`;
-    text += `Withdrawal Address: ${address ? `\`${escapeMarkdownV2(address)}\`` : 'Not set. Use `/setwallet <address>`'}\n`;
-    const kbd = { inline_keyboard: [
-        [{text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION}],
-        [{text: "💸 Withdraw SOL", callback_data: "menu:withdraw"}],
-        [{text: "📜 History", callback_data: "menu:history"}],
-        [{text: "🔗 Link/Update Address", callback_data: "menu:link_wallet_prompt"}],
-        [{text: "🤝 Referrals", callback_data: "menu:referral"}],
-        [{text: "🏆 Leaderboards", callback_data: "menu:leaderboards"}],
-        [{text: "↩️ Main Menu", callback_data: "menu:main"}]
-    ]};
-    if(msgOrCbMsg.message_id && correctUserIdFromCb) { // if from callback, edit
-        await bot.editMessageText(text, {chat_id: chatId, message_id: msgOrCbMsg.message_id, ...kbd, parse_mode: 'MarkdownV2'}).catch(()=>{ safeSendMessage(chatId, text, {parse_mode:'MarkdownV2', reply_markup: kbd});});
+    console.log(`[WalletCmd User ${userId}] Args: ${args.join(',')}. IsFromCallback: ${isFromCallback}`);
+
+    // Handling direct /setwallet <address> command
+    // args from /setwallet will be like ['/wallet', '<address_arg>'] due to current routing in Part 5a S1
+    if (!isFromCallback && args && args.length > 0 && args[0].toLowerCase() === '/wallet' && args[1]) {
+        const potentialNewAddress = args[1].trim();
+        const originalUserCommandMessageId = messageIdToEditOrDelete;
+
+        if (originalUserCommandMessageId && bot) {
+            await bot.deleteMessage(chatId, originalUserCommandMessageId).catch(e => console.warn(`[handleWalletCommand] Failed to delete user's /setwallet cmd: ${e.message}`));
+        }
+
+        const linkingStatusMsg = await safeSendMessage(chatId, `🔗 Attempting to link wallet \`${escapeMarkdownV2(potentialNewAddress)}\`... Please wait.`, { parse_mode: 'MarkdownV2' });
+        const displayMsgId = linkingStatusMsg ? linkingStatusMsg.message_id : null;
+
+        try {
+            new PublicKey(potentialNewAddress); // Basic validation
+            const linkResult = await linkUserWallet(userId, potentialNewAddress); // Calls MODIFIED linkUserWallet
+
+            if (linkResult.success) {
+                const successText = `✅ ${escapeMarkdownV2(linkResult.message || `Wallet ${potentialNewAddress} successfully linked.`)}`;
+                if (displayMsgId && bot) {
+                    await bot.editMessageText(successText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+                } else { /* Fallback send */ }
+            } else {
+                const failureText = `⚠️ Failed to link wallet: ${escapeMarkdownV2(linkResult.error || "Please check the address and try again.")}`;
+                if (displayMsgId && bot) {
+                    await bot.editMessageText(failureText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Try Again (Back to Wallet)', callback_data: 'menu:wallet' }]] }});
+                } else { /* Fallback send */ }
+            }
+        } catch (e) {
+            console.error(`[handleWalletCommand /setwallet] Error for ${potentialNewAddress} by ${userId}: ${e.message}`);
+            const errorText = `⚠️ Error: ${escapeMarkdownV2(e.message)}. Ensure it's a valid Solana public key.`;
+            if (displayMsgId && bot) {
+                await bot.editMessageText(errorText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
+            } else { /* Fallback send */ }
+        }
+        return; // Exit after /setwallet processing
+    }
+
+    // --- Standard Wallet Display Logic (if not a /setwallet command action or if it's a callback to show menu) ---
+    const userDetails = await getPaymentSystemUserDetails(userId); // From Part P2 - this fetches fresh DB data
+    const balanceLamports = userDetails ? BigInt(userDetails.balance) : 0n;
+    const linkedAddress = userDetails ? userDetails.solana_wallet_address : null;
+
+    const balanceDisplayUSD = await formatBalanceForDisplay(balanceLamports, 'USD'); // Uses new USD display
+    const balanceDisplaySOL = await formatBalanceForDisplay(balanceLamports, 'SOL');
+
+    let text = `👤 *Your Wallet Overview*\n\nApproximate Balance: *<span class="math-inline">\{escapeMarkdownV2\(balanceDisplayUSD\)\}\*\\n  Equivalent\: \(</span>{escapeMarkdownV2(balanceDisplaySOL)})\n\n`;
+    if (linkedAddress) {
+        text += `🔗 Linked Withdrawal Address:\n\`${escapeMarkdownV2(linkedAddress)}\`\n`;
     } else {
-        await safeSendMessage(chatId, text, {parse_mode:'MarkdownV2', reply_markup: kbd});
+        text += `🔗 Linked Withdrawal Address: Not set. Use \`/setwallet <YourSolanaAddress>\` or the button below.\n`;
+    }
+    text += `\nManage your funds or update your linked wallet below.`;
+
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "💰 Deposit SOL", callback_data: DEPOSIT_CALLBACK_ACTION }, { text: "💸 Withdraw SOL", callback_data: "menu:withdraw" }],
+            [{ text: "📜 Transaction History", callback_data: "menu:history" }],
+            linkedAddress
+                ? [{ text: "🔄 Update Linked Wallet", callback_data: "menu:link_wallet_prompt" }]
+                : [{ text: "🔗 Link Withdrawal Wallet", callback_data: "menu:link_wallet_prompt" }],
+            [{ text: "🤝 Referrals", callback_data: "menu:referral" }, { text: "🏆 Leaderboards", callback_data: "menu:leaderboards" }],
+            [{ text: "↩️ Main Help", callback_data: "menu:main" }] // Assuming menu:main shows help or a main menu
+        ]
+    };
+
+    if (isFromCallback && messageIdToEditOrDelete && bot) {
+        await bot.editMessageText(text, { chat_id: chatId, message_id: messageIdToEditOrDelete, parse_mode: 'MarkdownV2', reply_markup: keyboard }).catch(async (e) => {
+            if (!e.message || !e.message.includes("message is not modified")) { // Avoid error if message is identical
+                console.warn(`[handleWalletCommand] Edit failed (isFromCallback: ${isFromCallback}), sending new. Error: ${e.message}`);
+                await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+            }
+        });
+    } else {
+        // If triggered by a command like /wallet, delete the command message and send a new wallet menu
+        if (!isFromCallback && messageIdToEditOrDelete && bot) {
+            await bot.deleteMessage(chatId, messageIdToEditOrDelete).catch(()=>{});
+        }
+        await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
     }
 }
 
