@@ -1797,22 +1797,6 @@ async function handleDisplayGameRules(chatId, originalMessageId, gameCode, userO
   }
 }
 
-// --- Payment System UI Command Handlers (Definitions from Payment System Code) ---
-// These will be the functions like handleWalletCommand, handleDepositCommand, etc.
-// For brevity, I'm not pasting their full implementations here again, but this is where they'd reside.
-// They will use the updated getOrCreateUser, safeSendMessage, formatCurrency (for SOL), etc.
-
-// Placeholder for Payment UI command handlers - these would be the full functions from your payment system code.
-async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... full implementation from payment system ... */ console.log("Placeholder: handleWalletCommand called"); await safeSendMessage(msgOrCbMsg.chat.id, "Wallet command processing (placeholder)..."); }
-async function handleDepositCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... full implementation ... */ console.log("Placeholder: handleDepositCommand called"); await safeSendMessage(msgOrCbMsg.chat.id, "Deposit command processing (placeholder)...");}
-async function handleWithdrawCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... full implementation ... */ console.log("Placeholder: handleWithdrawCommand called"); await safeSendMessage(msgOrCbMsg.chat.id, "Withdraw command processing (placeholder)...");}
-async function handleReferralCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... full implementation ... */ console.log("Placeholder: handleReferralCommand called"); await safeSendMessage(msgOrCbMsg.chat.id, "Referral command processing (placeholder)...");}
-async function handleHistoryCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... full implementation ... */ console.log("Placeholder: handleHistoryCommand called"); await safeSendMessage(msgOrCbMsg.chat.id, "History command processing (placeholder)...");}
-async function handleLeaderboardsCommand(msgOrCbMsg, args, correctUserIdFromCb = null) { /* ... full implementation ... */ console.log("Placeholder: handleLeaderboardsCommand called"); await safeSendMessage(msgOrCbMsg.chat.id, "Leaderboards command processing (placeholder)...");}
-async function handleMenuAction(userId, chatId, messageId, menuType, params = [], isFromCallback = true) { /* ... full implementation ... */ console.log(`Placeholder: handleMenuAction called for ${menuType}`); await safeSendMessage(chatId, `Menu action ${menuType} (placeholder)...`);}
-async function handleWithdrawalConfirmation(userId, chatId, confirmationMessageId, recipientAddress, amountLamportsStr) { /* ... full implementation ... */ console.log(`Placeholder: handleWithdrawalConfirmation called`); await safeSendMessage(chatId, `Withdrawal confirmation processing (placeholder)...`);}
-
-
 // --- General Helper Functions (e.g., used by multiple game end flows) ---
 // createPostGameKeyboard from Casino Bot's original Part 5a, Segment 2
 // It now uses formatCurrency which defaults to SOL.
