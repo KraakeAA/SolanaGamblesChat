@@ -612,17 +612,20 @@ console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanc
 //---------------------------------------------------------------------------
 console.log("Loading Part 2: Database Schema Initialization & Core User Management (Integrated)...");
 
-// Assumes pool, DEFAULT_STARTING_BALANCE_LAMPORTS, stringifyWithBigInt, MAIN_JACKPOT_ID, queryDatabase
-// are available from Part 1.
+// Assumes pool, DEFAULT_STARTING_BALANCE_LAMPORTS, stringifyWithBigInt, MAIN_JACKPOT_ID, queryDatabase,
+// ADMIN_USER_ID, notifyAdmin, escapeMarkdownV2, PublicKey, Keypair (for linkUserWallet validation),
+// activeGames, userCooldowns, groupGameSessions, walletCache, activeDepositAddresses,
+// pendingReferrals, userStateCache, GAME_IDS (for deleteUserAccount cache clearing)
+// are available from Part 1 or other preceding parts.
 
 // --- Helper function for referral code generation ---
 const generateReferralCode = (length = 8) => {
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    return result;
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return result;
 };
 console.log("[User Management] generateReferralCode helper function defined.");
 
@@ -630,236 +633,241 @@ console.log("[User Management] generateReferralCode helper function defined.");
 // Database Schema Initialization
 //---------------------------------------------------------------------------
 async function initializeDatabaseSchema() {
-    console.log("🚀 Initializing database schema...");
-    const client = await pool.connect(); // pool is from Part 1
-    try {
-        await client.query('BEGIN');
+    console.log("🚀 Initializing database schema...");
+    const client = await pool.connect(); // pool is from Part 1
+    try {
+        await client.query('BEGIN');
 
-        // Users Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                telegram_id BIGINT PRIMARY KEY,
-                username VARCHAR(255),
-                first_name VARCHAR(255),
-                last_name VARCHAR(255),
-                balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
-                last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                is_banned BOOLEAN DEFAULT FALSE,
-                ban_reason TEXT,
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                solana_wallet_address VARCHAR(44) UNIQUE, 
-                referral_code VARCHAR(12) UNIQUE,
-                referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-                can_generate_deposit_address BOOLEAN DEFAULT TRUE,
-                last_deposit_address VARCHAR(44), 
-                last_deposit_address_generated_at TIMESTAMPTZ,
-                total_deposited_lamports BIGINT DEFAULT 0,
-                total_withdrawn_lamports BIGINT DEFAULT 0,
-                total_wagered_lamports BIGINT DEFAULT 0,
-                total_won_lamports BIGINT DEFAULT 0,
-                notes TEXT 
-            );
-        `);
-        console.log("  [DB Schema] 'users' table checked/created.");
-
-        // Jackpots Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS jackpots (
-                jackpot_id VARCHAR(255) PRIMARY KEY,
-                current_amount BIGINT DEFAULT 0,
-                last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-                last_won_timestamp TIMESTAMPTZ,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        console.log("  [DB Schema] 'jackpots' table checked/created.");
-        await client.query(
-            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID] // MAIN_JACKPOT_ID from Part 1
-        );
-        console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
-
-        // Games Table (Game Log)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS games (
-                game_log_id SERIAL PRIMARY KEY,
-                game_type VARCHAR(50) NOT NULL, 
-                chat_id BIGINT, 
-                initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-                participants_ids BIGINT[], 
-                bet_amount_lamports BIGINT,
-                outcome TEXT, 
-                jackpot_contribution_lamports BIGINT,
-                game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        console.log("  [DB Schema] 'games' table (game log) checked/created.");
-
-        // User Deposit Wallets Table (HD Generated Deposit Addresses)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_deposit_wallets (
-                wallet_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                public_key VARCHAR(44) NOT NULL UNIQUE, 
-                derivation_path VARCHAR(255) NOT NULL UNIQUE, 
-                is_active BOOLEAN DEFAULT TRUE, 
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMPTZ, 
-                swept_at TIMESTAMPTZ, 
-                balance_at_sweep BIGINT,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);
-            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);
-        `);
-        console.log("  [DB Schema] 'user_deposit_wallets' table checked/created.");
-
-        // Deposits Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS deposits (
-                deposit_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
-                transaction_signature VARCHAR(88) NOT NULL UNIQUE, 
-                source_address VARCHAR(44), 
-                deposit_address VARCHAR(44) NOT NULL,
-                amount_lamports BIGINT NOT NULL,
-                confirmation_status VARCHAR(20) DEFAULT 'pending', 
-                block_time BIGINT, 
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMPTZ, 
-                notes TEXT,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);
-            CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);
-            CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);
-        `);
-        console.log("  [DB Schema] 'deposits' table checked/created.");
-
-        // Withdrawals Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS withdrawals (
-                withdrawal_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                destination_address VARCHAR(44) NOT NULL, 
-                amount_lamports BIGINT NOT NULL,
-                fee_lamports BIGINT NOT NULL,
-                transaction_signature VARCHAR(88) UNIQUE, 
-                status VARCHAR(30) DEFAULT 'pending_verification', -- Added more specific statuses
-                error_message TEXT,
-                requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMPTZ, 
-                block_time BIGINT,
-                priority_fee_microlamports INT,
-                compute_unit_price_microlamports INT, 
-                compute_unit_limit INT,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);
-        `);
-        console.log("  [DB Schema] 'withdrawals' table checked/created.");
-
-        // Referrals Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS referrals (
-                referral_id SERIAL PRIMARY KEY,
-                referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE, -- Ensures a user can only be referred once
-                commission_type VARCHAR(20), -- e.g., 'first_deposit_percentage', 'fixed_signup'
-                commission_amount_lamports BIGINT, -- Actual commission paid for this specific referral link usage
-                transaction_signature VARCHAR(88), -- If commission was paid out on-chain
-                status VARCHAR(20) DEFAULT 'pending_criteria', -- e.g., 'pending_criteria', 'earned', 'paid_out', 'failed'
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        // Users Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id BIGINT PRIMARY KEY,
+                username VARCHAR(255),
+                first_name VARCHAR(255),
+                last_name VARCHAR(255),
+                balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
+                last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                is_banned BOOLEAN DEFAULT FALSE,
+                ban_reason TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);
-        `);
-        console.log("  [DB Schema] 'referrals' table checked/created.");
+                solana_wallet_address VARCHAR(44) UNIQUE, 
+                referral_code VARCHAR(12) UNIQUE,
+                referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+                can_generate_deposit_address BOOLEAN DEFAULT TRUE,
+                last_deposit_address VARCHAR(44), 
+                last_deposit_address_generated_at TIMESTAMPTZ,
+                total_deposited_lamports BIGINT DEFAULT 0,
+                total_withdrawn_lamports BIGINT DEFAULT 0,
+                total_wagered_lamports BIGINT DEFAULT 0,
+                total_won_lamports BIGINT DEFAULT 0,
+                notes TEXT 
+            );
+        `);
+        console.log("  [DB Schema] 'users' table checked/created.");
 
-        // Processed Sweeps Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS processed_sweeps (
-                sweep_id SERIAL PRIMARY KEY,
-                source_deposit_address VARCHAR(44) NOT NULL, 
-                destination_main_address VARCHAR(44) NOT NULL, 
-                amount_lamports BIGINT NOT NULL,
-                transaction_signature VARCHAR(88) UNIQUE NOT NULL,
-                swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);
-        `);
-        console.log("  [DB Schema] 'processed_sweeps' table checked/created.");
-        
-        // Ledger Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS ledger (
-                ledger_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                transaction_type VARCHAR(50) NOT NULL,
-                amount_lamports BIGINT NOT NULL,
-                balance_before_lamports BIGINT NOT NULL,
-                balance_after_lamports BIGINT NOT NULL,
-                deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
-                withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
-                game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
-                referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
-                related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
-                notes TEXT,
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);
-            CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);
-        `);
-        console.log("  [DB Schema] 'ledger' table (for financial tracking) checked/created.");
+        // Jackpots Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS jackpots (
+                jackpot_id VARCHAR(255) PRIMARY KEY,
+                current_amount BIGINT DEFAULT 0,
+                last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+                last_won_timestamp TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        console.log("  [DB Schema] 'jackpots' table checked/created.");
+        await client.query(
+            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
+            [MAIN_JACKPOT_ID] // MAIN_JACKPOT_ID from Part 1
+        );
+        console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
 
-        // Update function for 'updated_at' columns
-        await client.query(`
-            CREATE OR REPLACE FUNCTION trigger_set_timestamp()
-            RETURNS TRIGGER AS $$
-            BEGIN
-              NEW.updated_at = NOW();
-              RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-        `);
+        // Games Table (Game Log)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS games (
+                game_log_id SERIAL PRIMARY KEY,
+                game_type VARCHAR(50) NOT NULL, 
+                chat_id BIGINT, 
+                initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+                participants_ids BIGINT[], 
+                bet_amount_lamports BIGINT,
+                outcome TEXT, 
+                jackpot_contribution_lamports BIGINT,
+                game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        console.log("  [DB Schema] 'games' table (game log) checked/created.");
+
+        // User Deposit Wallets Table (HD Generated Deposit Addresses)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_deposit_wallets (
+                wallet_id SERIAL PRIMARY KEY,
+                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                public_key VARCHAR(44) NOT NULL UNIQUE, 
+                derivation_path VARCHAR(255) NOT NULL UNIQUE, 
+                is_active BOOLEAN DEFAULT TRUE, 
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ, 
+                swept_at TIMESTAMPTZ, 
+                balance_at_sweep BIGINT,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);
+            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);
+        `);
+        console.log("  [DB Schema] 'user_deposit_wallets' table checked/created.");
+
+        // Deposits Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS deposits (
+                deposit_id SERIAL PRIMARY KEY,
+                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
+                transaction_signature VARCHAR(88) NOT NULL UNIQUE, 
+                source_address VARCHAR(44), 
+                deposit_address VARCHAR(44) NOT NULL,
+                amount_lamports BIGINT NOT NULL,
+                confirmation_status VARCHAR(20) DEFAULT 'pending', 
+                block_time BIGINT, 
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMPTZ, 
+                notes TEXT,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);
+            CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);
+            CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);
+        `);
+        console.log("  [DB Schema] 'deposits' table checked/created.");
+
+        // Withdrawals Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                withdrawal_id SERIAL PRIMARY KEY,
+                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                destination_address VARCHAR(44) NOT NULL, 
+                amount_lamports BIGINT NOT NULL,
+                fee_lamports BIGINT NOT NULL,
+                transaction_signature VARCHAR(88) UNIQUE, 
+                status VARCHAR(30) DEFAULT 'pending_verification',
+                error_message TEXT,
+                requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMPTZ, 
+                block_time BIGINT,
+                priority_fee_microlamports INT,
+                compute_unit_price_microlamports INT, 
+                compute_unit_limit INT,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);
+        `);
+        console.log("  [DB Schema] 'withdrawals' table checked/created.");
+
+        // Referrals Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS referrals (
+                referral_id SERIAL PRIMARY KEY,
+                referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE, -- Ensures a user can only be referred once
+                commission_type VARCHAR(20), -- e.g., 'first_deposit_percentage', 'fixed_signup'
+                commission_amount_lamports BIGINT, -- Actual commission paid for this specific referral link usage
+                transaction_signature VARCHAR(88), -- If commission was paid out on-chain
+                status VARCHAR(20) DEFAULT 'pending_criteria', -- e.g., 'pending_criteria', 'earned', 'paid_out', 'failed'
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);
+        `);
+        console.log("  [DB Schema] 'referrals' table checked/created.");
+
+        // Processed Sweeps Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS processed_sweeps (
+                sweep_id SERIAL PRIMARY KEY,
+                source_deposit_address VARCHAR(44) NOT NULL, 
+                destination_main_address VARCHAR(44) NOT NULL, 
+                amount_lamports BIGINT NOT NULL,
+                transaction_signature VARCHAR(88) UNIQUE NOT NULL,
+                swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);
+        `);
+        console.log("  [DB Schema] 'processed_sweeps' table checked/created.");
+        
+        // Ledger Table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS ledger (
+                ledger_id SERIAL PRIMARY KEY,
+                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                transaction_type VARCHAR(50) NOT NULL,
+                amount_lamports BIGINT NOT NULL,
+                balance_before_lamports BIGINT NOT NULL,
+                balance_after_lamports BIGINT NOT NULL,
+                deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
+                withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
+                game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
+                referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
+                related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
+                notes TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);
+            CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);
+            CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);
+        `);
+        console.log("  [DB Schema] 'ledger' table (for financial tracking) checked/created.");
+
+        // Update function for 'updated_at' columns
+        await client.query(`
+            CREATE OR REPLACE FUNCTION trigger_set_timestamp()
+            RETURNS TRIGGER AS $$
+            BEGIN
+              NEW.updated_at = NOW();
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        `);
         // Tables that need the updated_at trigger
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
-        for (const tableName of tablesWithUpdatedAt) {
-            // Check if trigger exists before trying to drop/create to avoid errors if it's already correct
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
+        for (const tableName of tablesWithUpdatedAt) {
             const triggerExistsRes = await client.query(
                 `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = '${tableName}'::regclass;`
             );
             if (triggerExistsRes.rowCount === 0) {
-                await client.query(`
-                    CREATE TRIGGER set_timestamp
-                    BEFORE UPDATE ON ${tableName}
-                    FOR EACH ROW
-                    EXECUTE FUNCTION trigger_set_timestamp();
-                `).then(() => console.log(`  [DB Schema] 'updated_at' trigger created for '${tableName}'.`))
-                   .catch(err => console.warn(`  [DB Schema] Could not set update trigger for ${tableName} (may require permissions or function issue): ${err.message}`));
+                await client.query(`
+                    CREATE TRIGGER set_timestamp
+                    BEFORE UPDATE ON ${tableName}
+                    FOR EACH ROW
+                    EXECUTE FUNCTION trigger_set_timestamp();
+                `).then(() => console.log(`  [DB Schema] 'updated_at' trigger created for '${tableName}'.`))
+                  .catch(err => console.warn(`  [DB Schema] Could not set update trigger for ${tableName} (may require permissions or function issue): ${err.message}`));
             } else {
-                // console.log(`  [DB Schema] 'updated_at' trigger already exists for '${tableName}'.`);
+                // console.log(`  [DB Schema] 'updated_at' trigger already exists for '${tableName}'.`);
             }
-        }
-        console.log("  [DB Schema] 'updated_at' trigger function and assignments checked/created.");
+        }
+        console.log("  [DB Schema] 'updated_at' trigger function and assignments checked/created.");
 
-        await client.query('COMMIT');
-        console.log("✅ Database schema initialization complete.");
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ Error during database schema initialization:', e);
-        throw e; // Re-throw to halt startup if schema init fails
-    } finally {
-        client.release();
-    }
+        await client.query('COMMIT');
+        console.log("✅ Database schema initialization complete.");
+    } catch (e) {
+        await client.query('ROLLBACK');
+        // If the error is the specific syntax error, add more guidance
+        if (e.code === '42601' && e.message.includes('at or near ""') && e.position === '2') {
+             console.error('❌ Error during database schema initialization (Likely an empty or malformed query before the main DDL statements):', e);
+             console.error("Hint: This specific error ('syntax error at or near \"\"' at position 2) often means an empty string or a very short, malformed query (e.g., starting with just a quote) was executed. Please check for any client.query() calls between BEGIN and the first CREATE TABLE that might result in this, or invisible characters at the start of a query string.");
+        } else {
+            console.error('❌ Error during database schema initialization:', e);
+        }
+        throw e; // Re-throw to halt startup if schema init fails
+    } finally {
+        client.release();
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -867,27 +875,23 @@ async function initializeDatabaseSchema() {
 //---------------------------------------------------------------------------
 
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    // **FIX for telegramId: undefined (22P02 error)**
-    // Ensure telegramId is valid before proceeding.
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
         console.error(`[getOrCreateUser CRITICAL] Attempted to get or create user with invalid telegramId: '${telegramId}'. Aborting operation.`);
-        // Optionally, notify admin if this occurs unexpectedly.
-        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
+        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) { // ADMIN_USER_ID from Part 1
             notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}. Check calling function.`)
                 .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
         }
-        return null; // Return null to indicate failure due to invalid ID.
+        return null;
     }
 
-    const stringTelegramId = String(telegramId); // Ensure it's a string for consistency
+    const stringTelegramId = String(telegramId);
     const LOG_PREFIX_GOCU = `[getOrCreateUser TG:${stringTelegramId}]`;
-    console.log(`${LOG_PREFIX_GOCU} Attempting to get or create user. Username: ${username || 'N/A'}, Name: ${firstName || 'N/A'}`);
+    console.log(`${LOG_PREFIX_GOCU} Attempting to get or create user. Username: ${username || 'N/A'}, Name: ${firstName || 'N/A'}`);
 
     const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    try {
+        await client.query('BEGIN');
 
-        // Ensure referrerIdInput is a valid format for DB (BigInt or null)
         let referrerId = null;
         if (referrerIdInput !== null && referrerIdInput !== undefined) {
             try {
@@ -898,382 +902,403 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             }
         }
 
-        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0) {
-            const user = result.rows[0];
-            // Ensure numeric fields from DB are BigInt
+        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
             user.balance = BigInt(user.balance);
-            user.total_deposited_lamports = BigInt(user.total_deposited_lamports);
-            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports);
-            user.total_wagered_lamports = BigInt(user.total_wagered_lamports);
-            user.total_won_lamports = BigInt(user.total_won_lamports);
+            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
+            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
+            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
+            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
+            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
-            console.log(`${LOG_PREFIX_GOCU} User found. Balance: ${user.balance} lamports.`);
-            
-            let detailsChanged = false;
+
+            console.log(`${LOG_PREFIX_GOCU} User found. Balance: ${user.balance} lamports.`);
+            
+            let detailsChanged = false;
             const currentUsername = user.username || '';
             const currentFirstName = user.first_name || '';
             const currentLastName = user.last_name || '';
 
-            // Update only if new value is provided and different from current, or if current is null/empty and new is provided.
             if ((username && currentUsername !== username) || (!currentUsername && username)) detailsChanged = true;
             if ((firstName && currentFirstName !== firstName) || (!currentFirstName && firstName)) detailsChanged = true;
-            if ((lastName && currentLastName !== lastName) || (!currentLastName && lastName)) detailsChanged = true; // Only update last_name if new one is not null/empty
+            if ((lastName && currentLastName !== lastName) || (!currentLastName && lastName && lastName !== '')) detailsChanged = true;
 
-            if (detailsChanged) {
-                await client.query(
-                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
-                    [stringTelegramId, username || user.username, firstName || user.first_name, lastName || user.last_name] // Use new or fallback to existing
-                );
-                console.log(`${LOG_PREFIX_GOCU} User details updated.`);
-            } else {
-                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
-            }
-            await client.query('COMMIT');
-            // Return the potentially updated user object, ensuring BigInts are consistent
-            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+            if (detailsChanged) {
+                await client.query(
+                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
+                    [stringTelegramId, username || user.username, firstName || user.first_name, lastName || user.last_name]
+                );
+                console.log(`${LOG_PREFIX_GOCU} User details updated.`);
+            } else {
+                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+            }
+            await client.query('COMMIT');
+            // Return the potentially updated user object, ensuring BigInts are consistent
+            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]); // Re-fetch after commit
             const finalUser = updatedUserRow.rows[0];
             finalUser.balance = BigInt(finalUser.balance);
-            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports);
-            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports);
-            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports);
-            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports);
-            return finalUser;
-        } else {
-            console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user.`);
-            const newReferralCode = generateReferralCode();
-            const insertQuery = `
-                INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING *;
-            `;
-            const values = [stringTelegramId, username, firstName, lastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
-            result = await client.query(insertQuery, values);
-            const newUser = result.rows[0];
-            // Ensure numeric fields from DB are BigInt
+            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
+            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
+            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
+            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
+            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
+            return finalUser;
+        } else {
+            console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user.`);
+            const newReferralCode = generateReferralCode();
+            const insertQuery = `
+                INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING *;
+            `;
+            // DEFAULT_STARTING_BALANCE_LAMPORTS from Part 1
+            const values = [stringTelegramId, username, firstName, lastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
+            result = await client.query(insertQuery, values);
+            const newUser = result.rows[0];
+
             newUser.balance = BigInt(newUser.balance);
-            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports);
-            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports);
-            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports);
-            newUser.total_won_lamports = BigInt(newUser.total_won_lamports);
+            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
+            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
+            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
+            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
+            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
 
-            console.log(`${LOG_PREFIX_GOCU} New user created with ID ${newUser.telegram_id}, Balance: ${newUser.balance} lamports, Referral Code: ${newUser.referral_code}.`);
 
-            if (referrerId) {
-                console.log(`${LOG_PREFIX_GOCU} User was referred by ${referrerId}. Recording referral link.`);
-                try {
-                    await client.query(
-                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status) VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria') ON CONFLICT DO NOTHING`,
-                        [referrerId, newUser.telegram_id]
-                    );
-                    console.log(`${LOG_PREFIX_GOCU} Referral link recorded for ${referrerId} -> ${newUser.telegram_id}.`);
-                } catch (referralError) {
-                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
-                   // Don't let referral error stop user creation, but log it.
-                }
-            }
-            await client.query('COMMIT');
-            return newUser;
-        }
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}:`, stringifyWithBigInt(error));
-        return null; // Return null on error
-    } finally {
-        client.release();
-    }
+            console.log(`${LOG_PREFIX_GOCU} New user created with ID ${newUser.telegram_id}, Balance: ${newUser.balance} lamports, Referral Code: ${newUser.referral_code}.`);
+
+            if (referrerId) {
+                console.log(`${LOG_PREFIX_GOCU} User was referred by ${referrerId}. Recording referral link.`);
+                try {
+                    // Ensure the referred_telegram_id constraint in referrals table is `UNIQUE`
+                    await client.query(
+                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
+                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria', CURRENT_TIMESTAMP) 
+                         ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Handles both unique constraints (pair and just referred_id)
+                        [referrerId, newUser.telegram_id]
+                    );
+                    console.log(`${LOG_PREFIX_GOCU} Referral link recorded for ${referrerId} -> ${newUser.telegram_id}.`);
+                } catch (referralError) {
+                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
+                   // Don't let referral error stop user creation, but log it.
+                }
+            }
+            await client.query('COMMIT');
+            return newUser;
+        }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}:`, stringifyWithBigInt(error)); // stringifyWithBigInt from Part 1
+        return null;
+    } finally {
+        client.release();
+    }
 }
-console.log("[User Management] getOrCreateUser (with telegramId validation) defined.");
+console.log("[User Management] getOrCreateUser (with telegramId validation and BigInt handling) defined.");
 
 
 async function updateUserActivity(telegramId) {
     const stringTelegramId = String(telegramId);
-    try {
-        await pool.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
-    } catch (error) {
-        console.error(`[updateUserActivity TG:${stringTelegramId}] Error updating last active timestamp for telegramId ${stringTelegramId}:`, error);
-    }
+    try {
+        await pool.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+    } catch (error) {
+        console.error(`[updateUserActivity TG:${stringTelegramId}] Error updating last active timestamp for telegramId ${stringTelegramId}:`, error);
+    }
 }
 console.log("[User Management] updateUserActivity defined.");
 
 async function getUserBalance(telegramId) {
     const stringTelegramId = String(telegramId);
-    try {
-        const result = await pool.query('SELECT balance FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0) {
-            return BigInt(result.rows[0].balance); 
-        }
-        console.warn(`[getUserBalance TG:${stringTelegramId}] User not found, cannot retrieve balance.`);
-        return null; 
-    } catch (error) {
-        console.error(`[getUserBalance TG:${stringTelegramId}] Error retrieving balance for telegramId ${stringTelegramId}:`, error);
-        return null; // Return null on error
-    }
+    try {
+        const result = await pool.query('SELECT balance FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        if (result.rows.length > 0) {
+            return BigInt(result.rows[0].balance); 
+        }
+        console.warn(`[getUserBalance TG:${stringTelegramId}] User not found, cannot retrieve balance.`);
+        return null; 
+    } catch (error) {
+        console.error(`[getUserBalance TG:${stringTelegramId}] Error retrieving balance for telegramId ${stringTelegramId}:`, error);
+        return null;
+    }
 }
 console.log("[User Management] getUserBalance defined.");
 
-/**
- * ! IMPORTANT: This function directly sets the balance and BYPASSES the ledger.
- * ! It should ONLY be used in very specific scenarios like initial data migration
- * ! or direct admin corrections where ledgering is handled separately or intentionally skipped.
- * ! For all standard operations (bets, wins, deposits, withdrawals, fees),
- * ! use `updateUserBalanceAndLedger` (defined in Part P2) instead.
- */
 async function updateUserBalance(telegramId, newBalanceLamports, client = pool) {
-    const stringTelegramId = String(telegramId);
+    const stringTelegramId = String(telegramId);
     const LOG_PREFIX_UUB = `[updateUserBalance TG:${stringTelegramId}]`;
-    try {
-        if (typeof newBalanceLamports !== 'bigint') {
-            console.error(`${LOG_PREFIX_UUB} Invalid newBalanceLamports type: ${typeof newBalanceLamports}. Must be BigInt.`);
-            return false;
-        }
-        
-        if (newBalanceLamports < 0n) {
-            console.warn(`${LOG_PREFIX_UUB} Attempt to set negative balance (${newBalanceLamports}). Clamping to 0. This function bypasses ledger and should be used with extreme caution.`);
-            // newBalanceLamports = 0n; // Clamping behavior can be uncommented if strictly needed
-        }
+    try {
+        if (typeof newBalanceLamports !== 'bigint') {
+            console.error(`${LOG_PREFIX_UUB} Invalid newBalanceLamports type: ${typeof newBalanceLamports}. Must be BigInt.`);
+            return false;
+        }
+        
+        // This function deliberately allows setting negative balance for admin corrections, but logs a strong warning.
+        if (newBalanceLamports < 0n) {
+            console.warn(`${LOG_PREFIX_UUB} 🚨 CAUTION: Attempt to set negative balance (${newBalanceLamports.toString()}). This function bypasses ledger and should be used with EXTREME CAUTION for admin corrections ONLY.`);
+        }
 
-        // This function assumes the caller has ALREADY acquired the client if not using the default pool
-        // and will manage BEGIN/COMMIT/ROLLBACK outside if part of a larger transaction.
-        // If client === pool, it's a single operation.
-        const result = await client.query(
-            'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2',
-            [newBalanceLamports.toString(), stringTelegramId] 
-        );
-        if (result.rowCount > 0) {
-            console.warn(`${LOG_PREFIX_UUB} ⚠️ Balance directly set to ${newBalanceLamports} lamports. Ledger NOT updated by this specific function. This is for special use cases ONLY.`);
-            return true;
-        } else {
-            console.warn(`${LOG_PREFIX_UUB} User not found or balance not updated for telegramId ${stringTelegramId}.`);
-            return false;
-        }
-    } catch (error) {
-        console.error(`${LOG_PREFIX_UUB} Error updating balance for telegramId ${stringTelegramId} to ${newBalanceLamports}:`, error);
-        return false;
-    }
+        const result = await client.query(
+            'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2',
+            [newBalanceLamports.toString(), stringTelegramId] 
+        );
+        if (result.rowCount > 0) {
+            console.warn(`${LOG_PREFIX_UUB} ⚠️ Balance directly set to ${newBalanceLamports.toString()} lamports. LEDGER NOT UPDATED by this specific function. This is for special administrative use cases ONLY.`);
+            return true;
+        } else {
+            console.warn(`${LOG_PREFIX_UUB} User not found or balance not updated for telegramId ${stringTelegramId}.`);
+            return false;
+        }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_UUB} Error updating balance for telegramId ${stringTelegramId} to ${newBalanceLamports.toString()}:`, error);
+        return false;
+    }
 }
-console.log("[User Management] updateUserBalance (direct set, bypasses ledger - use with caution) defined.");
+console.log("[User Management] updateUserBalance (direct set, bypasses ledger - USE WITH CAUTION) defined.");
 
 
 async function linkUserWallet(telegramId, solanaAddress) {
-    const stringTelegramId = String(telegramId);
+    const stringTelegramId = String(telegramId);
     const LOG_PREFIX_LUW = `[linkUserWallet TG:${stringTelegramId}]`;
-    console.log(`${LOG_PREFIX_LUW} Attempting to link wallet ${solanaAddress}.`);
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        if (!solanaAddress || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(solanaAddress)) { // Basic Base58 check
-            console.warn(`${LOG_PREFIX_LUW} Invalid Solana address format provided: ${solanaAddress}`);
-            await client.query('ROLLBACK'); // No need to commit if input is invalid
-            return { success: false, error: "Invalid Solana address format. Please provide a valid Base58 encoded address." };
-        }
-        // Further validation if PublicKey class is available (it is from Part 1)
+    console.log(`${LOG_PREFIX_LUW} Attempting to link wallet ${solanaAddress}.`);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        // Basic Base58 check (improves upon simple regex by trying to construct PublicKey)
         try {
-            new PublicKey(solanaAddress); // Will throw if invalid format
+            new PublicKey(solanaAddress); // PublicKey from @solana/web3.js (Part 1)
         } catch (e) {
-            console.warn(`${LOG_PREFIX_LUW} Solana address ${solanaAddress} failed PublicKey constructor validation: ${e.message}`);
+            console.warn(`${LOG_PREFIX_LUW} Invalid Solana address format provided: ${solanaAddress}. Error: ${e.message}`);
             await client.query('ROLLBACK');
-            return { success: false, error: "Invalid Solana address. It might not be a valid public key." };
+            return { success: false, error: "Invalid Solana address format. Please provide a valid Base58 encoded public key." };
         }
 
+        const existingLink = await client.query('SELECT telegram_id FROM users WHERE solana_wallet_address = $1 AND telegram_id != $2', [solanaAddress, stringTelegramId]);
+        if (existingLink.rows.length > 0) {
+            const linkedToExistingUserId = existingLink.rows[0].telegram_id;
+            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to another user ID ${linkedToExistingUserId}.`);
+            await client.query('ROLLBACK');
+            return { success: false, error: `This wallet address is already associated with another player (ID ending with ${String(linkedToExistingUserId).slice(-4)}). Please use a different address.` };
+        }
 
-        const existingLink = await client.query('SELECT telegram_id FROM users WHERE solana_wallet_address = $1 AND telegram_id != $2', [solanaAddress, stringTelegramId]);
-        if (existingLink.rows.length > 0) {
-            const linkedToExistingUserId = existingLink.rows[0].telegram_id;
-            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to another user ID ${linkedToExistingUserId}.`);
-            await client.query('ROLLBACK');
-            return { success: false, error: `This wallet address is already associated with another player (ID ending ${String(linkedToExistingUserId).slice(-4)}). Please use a different address.` };
-        }
+        const result = await client.query(
+            'UPDATE users SET solana_wallet_address = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2 RETURNING solana_wallet_address',
+            [solanaAddress, stringTelegramId]
+        );
 
-        const result = await client.query(
-            'UPDATE users SET solana_wallet_address = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2 RETURNING solana_wallet_address',
-            [solanaAddress, stringTelegramId]
-        );
-
-        if (result.rowCount > 0) {
-            await client.query('COMMIT');
-            console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked in DB.`);
-            walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() }); // Update cache with timestamp
-            return { success: true, message: `Your Solana wallet \`${solanaAddress}\` has been successfully linked!` };
-        } else {
-            const currentUserState = await client.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
-            await client.query('ROLLBACK');
-            if (currentUserState.rowCount === 0) {
-                console.error(`${LOG_PREFIX_LUW} User ${stringTelegramId} not found. Cannot link wallet.`);
-                return { success: false, error: "Your player profile was not found. Please try /start again." };
-            }
-            if (currentUserState.rows[0].solana_wallet_address === solanaAddress) {
-                console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} was already linked to this user. No change.`);
-                walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() }); 
-                return { success: true, message: `Your wallet \`${solanaAddress}\` was already linked to your account.` };
-            }
-            console.warn(`${LOG_PREFIX_LUW} User ${stringTelegramId} found, but wallet not updated (rowCount: ${result.rowCount}). This might be an unexpected issue if address was different.`);
-            return { success: false, error: "Failed to update wallet in the database due to an unknown reason. Please try again." };
-        }
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LUW} Rollback error: ${rbErr.message}`));
-        if (error.code === '23505') { // Unique constraint violation (solana_wallet_address)
-            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to another user (unique constraint violation).`);
-            return { success: false, error: "This wallet address is already in use by another player. Please choose a different one." };
-        }
-        console.error(`${LOG_PREFIX_LUW} Error linking wallet ${solanaAddress}:`, error);
-        return { success: false, error: error.message || "An unexpected server error occurred while linking your wallet. Please try again." };
-    } finally {
-        client.release();
-    }
+        if (result.rowCount > 0) {
+            await client.query('COMMIT');
+            console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked in DB.`);
+            if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() }); // Update cache
+            return { success: true, message: `Your Solana wallet \`${escapeMarkdownV2(solanaAddress)}\` has been successfully linked!` }; // escapeMarkdownV2 from Part 1
+        } else {
+            const currentUserState = await client.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
+            await client.query('ROLLBACK'); // Rollback as no update occurred
+            if (currentUserState.rowCount === 0) {
+                console.error(`${LOG_PREFIX_LUW} User ${stringTelegramId} not found. Cannot link wallet.`);
+                return { success: false, error: "Your player profile was not found. Please try /start again." };
+            }
+            if (currentUserState.rows[0].solana_wallet_address === solanaAddress) {
+                console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} was already linked to this user. No change.`);
+                if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() });
+                return { success: true, message: `Your wallet \`${escapeMarkdownV2(solanaAddress)}\` was already linked to your account.` };
+            }
+            console.warn(`${LOG_PREFIX_LUW} User ${stringTelegramId} found, but wallet not updated (rowCount: ${result.rowCount}). Current DB wallet: ${currentUserState.rows[0].solana_wallet_address}, Attempted: ${solanaAddress}.`);
+            return { success: false, error: "Failed to update wallet in the database. It might be the same as your current one, or an unknown issue occurred. Please try again." };
+        }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LUW} Rollback error: ${rbErr.message}`));
+        if (error.code === '23505') { // Unique constraint violation
+            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to another user (unique constraint violation).`);
+            return { success: false, error: "This wallet address is already in use by another player. Please choose a different one." };
+        }
+        console.error(`${LOG_PREFIX_LUW} Error linking wallet ${solanaAddress}:`, error);
+        return { success: false, error: error.message || "An unexpected server error occurred while linking your wallet. Please try again." };
+    } finally {
+        client.release();
+    }
 }
-console.log("[User Management] linkUserWallet defined.");
+console.log("[User Management] linkUserWallet (with PublicKey validation) defined.");
 
 async function getUserLinkedWallet(telegramId) {
     const stringTelegramId = String(telegramId);
-    const cacheTTL = parseInt(process.env.WALLET_CACHE_TTL_MS, 10); // From Part 1 env defaults
-    const cachedData = walletCache.get(stringTelegramId);
-    if (cachedData && cachedData.solanaAddress && (Date.now() - (cachedData.timestamp || 0) < cacheTTL)) {
-        return cachedData.solanaAddress;
-    }
+    // WALLET_CACHE_TTL_MS from Part 1 env defaults
+    const cacheTTL = parseInt(process.env.WALLET_CACHE_TTL_MS || (15 * 60 * 1000).toString(), 10); 
+    
+    if (walletCache) { // walletCache from Part 1
+        const cachedData = walletCache.get(stringTelegramId);
+        if (cachedData && cachedData.solanaAddress && (Date.now() - (cachedData.timestamp || 0) < cacheTTL)) {
+            // console.log(`[getUserLinkedWallet TG:${stringTelegramId}] Cache hit for wallet.`);
+            return cachedData.solanaAddress;
+        }
+    }
 
-    try {
-        const result = await pool.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0 && result.rows[0].solana_wallet_address) {
-            walletCache.set(stringTelegramId, { solanaAddress: result.rows[0].solana_wallet_address, timestamp: Date.now() }); 
-            return result.rows[0].solana_wallet_address;
-        }
-        return null; // No wallet linked
-    } catch (error) {
-        console.error(`[getUserLinkedWallet TG:${stringTelegramId}] Error getting linked wallet:`, error);
-        return null; // Return null on error
-    }
+    try {
+        const result = await pool.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        if (result.rows.length > 0 && result.rows[0].solana_wallet_address) {
+            if (walletCache) walletCache.set(stringTelegramId, { solanaAddress: result.rows[0].solana_wallet_address, timestamp: Date.now() }); 
+            return result.rows[0].solana_wallet_address;
+        }
+        return null; // No wallet linked
+    } catch (error) {
+        console.error(`[getUserLinkedWallet TG:${stringTelegramId}] Error getting linked wallet:`, error);
+        return null;
+    }
 }
-console.log("[User Management] getUserLinkedWallet defined.");
+console.log("[User Management] getUserLinkedWallet (with cache) defined.");
 
-/**
- * Gets the next available address_index for a user's deposit address derivation.
- * The derivation path is m/44'/501'/USER_ACCOUNT_INDEX'/0'/ADDRESS_INDEX'
- * This function finds the highest ADDRESS_INDEX used so far for the user and returns next.
- * @param {string|number} userId The user's Telegram ID.
- * @param {import('pg').PoolClient} [dbClient=pool] Optional database client for transactions.
- * @returns {Promise<number>} The next address_index (e.g., 0 if none exist).
- */
 async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
-    const stringUserId = String(userId);
+    const stringUserId = String(userId);
     const LOG_PREFIX_GNAI = `[getNextAddressIndexForUser TG:${stringUserId}]`;
-    try {
-        const query = `
-            SELECT derivation_path
-            FROM user_deposit_wallets
-            WHERE user_telegram_id = $1
-            ORDER BY created_at DESC;
-        `;
-        const res = await queryDatabase(query, [stringUserId], dbClient); // queryDatabase from Part 1
-        let maxIndex = -1;
+    try {
+        const query = `
+            SELECT derivation_path
+            FROM user_deposit_wallets
+            WHERE user_telegram_id = $1
+            ORDER BY created_at DESC; 
+        `;
+        // queryDatabase from Part 1
+        const res = await queryDatabase(query, [stringUserId], dbClient); 
+        let maxIndex = -1;
 
-        if (res.rows.length > 0) {
-            for (const row of res.rows) {
-                const path = row.derivation_path;
-                const parts = path.split('/');
-                if (parts.length >= 6) { // Standard path m/44'/501'/X'/0'/Y' has 6 parts including 'm'
-                    const lastPart = parts[parts.length - 1];
-                    if (lastPart.endsWith("'")) {
-                        const indexStr = lastPart.substring(0, lastPart.length - 1);
-                        const currentIndex = parseInt(indexStr, 10);
-                        if (!isNaN(currentIndex) && currentIndex > maxIndex) {
-                            maxIndex = currentIndex;
-                        }
-                    } else {
-                        console.warn(`${LOG_PREFIX_GNAI} Malformed last part of derivation path (missing trailing quote): ${lastPart} in ${path}`);
-                    }
-                } else {
-                    console.warn(`${LOG_PREFIX_GNAI} Malformed derivation path (too short): ${path}`);
-                }
-            }
-        }
-        const nextIndex = maxIndex + 1;
-        console.log(`${LOG_PREFIX_GNAI} Determined next addressIndex: ${nextIndex}`);
-        return nextIndex;
-    } catch (error) {
-        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack);
-        throw error; // Re-throw to be handled by caller
-    }
+        if (res.rows.length > 0) {
+            for (const row of res.rows) {
+                const path = row.derivation_path;
+                const parts = path.split('/');
+                // Standard path m/44'/501'/USER_ACCOUNT_INDEX'/0'/ADDRESS_INDEX' has 6 parts (0-5) if 'm' is part 0
+                // We are interested in ADDRESS_INDEX', which is the last part.
+                if (parts.length >= 6) { 
+                    const lastPart = parts[parts.length - 1];
+                    if (lastPart.endsWith("'")) {
+                        const indexStr = lastPart.substring(0, lastPart.length - 1);
+                        const currentIndex = parseInt(indexStr, 10);
+                        if (!isNaN(currentIndex) && currentIndex > maxIndex) {
+                            maxIndex = currentIndex;
+                        }
+                    } else {
+                        console.warn(`${LOG_PREFIX_GNAI} Malformed last part of derivation path (missing trailing quote): ${lastPart} in ${path}`);
+                    }
+                } else {
+                    console.warn(`${LOG_PREFIX_GNAI} Malformed derivation path (too short): ${path}`);
+                }
+            }
+        }
+        const nextIndex = maxIndex + 1;
+        console.log(`${LOG_PREFIX_GNAI} Determined next addressIndex: ${nextIndex}`);
+        return nextIndex;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack);
+        throw error; // Re-throw for caller to handle (e.g., within a transaction)
+    }
 }
 console.log("[User Management] getNextAddressIndexForUserDB helper function defined.");
 
 
 async function deleteUserAccount(telegramId) {
-    const stringTelegramId = String(telegramId);
+    const stringTelegramId = String(telegramId);
     const LOG_PREFIX_DUA = `[deleteUserAccount TG:${stringTelegramId}]`;
-    console.warn(`${LOG_PREFIX_DUA} Attempting to delete user account and associated data for Telegram ID: ${stringTelegramId}.`);
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    console.warn(`${LOG_PREFIX_DUA} CRITICAL ACTION: Attempting to delete user account and associated data for Telegram ID: ${stringTelegramId}.`);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-        console.log(`${LOG_PREFIX_DUA} Anonymizing references in 'jackpots' table...`);
-        await client.query('UPDATE jackpots SET last_won_by_telegram_id = NULL WHERE last_won_by_telegram_id = $1', [stringTelegramId]);
-        
-        console.log(`${LOG_PREFIX_DUA} Anonymizing references in 'games' (game log) table...`);
-        await client.query('UPDATE games SET initiator_telegram_id = NULL WHERE initiator_telegram_id = $1', [stringTelegramId]);
-        // Participant array cleaning: This is complex. For now, leaving participants_ids as is.
-        // If GDPR or strict privacy requires, participant_ids would need to be filtered.
-        // Example for future: UPDATE games SET participants_ids = array_remove(participants_ids, $1) WHERE $1 = ANY(participants_ids);
-        // However, this only works if you delete users one by one and the array stores BIGINT.
+        console.log(`${LOG_PREFIX_DUA} Anonymizing references in 'jackpots' table...`);
+        await client.query('UPDATE jackpots SET last_won_by_telegram_id = NULL WHERE last_won_by_telegram_id = $1', [stringTelegramId]);
+        
+        console.log(`${LOG_PREFIX_DUA} Anonymizing initiator references in 'games' (game log) table...`);
+        await client.query('UPDATE games SET initiator_telegram_id = NULL WHERE initiator_telegram_id = $1', [stringTelegramId]);
+        
+        // For participants_ids (BIGINT[]): removing a specific ID from an array is more complex.
+        // If strict anonymization of this array is needed, it would require fetching rows, modifying arrays in JS, and updating.
+        // A simpler DB-side approach if okay with just nullifying if the user is the *only* participant (less common for group games):
+        // For now, we leave participants_ids as is, assuming game logs are for historical/statistical use, not direct user identification if primary links are cut.
+        // If GDPR requires full array filtering:
+        // const gamesToUpdate = await client.query('SELECT game_log_id, participants_ids FROM games WHERE $1 = ANY(participants_ids)', [BigInt(stringTelegramId)]);
+        // for (const game of gamesToUpdate.rows) {
+        //   const newParticipants = game.participants_ids.filter(id => String(id) !== stringTelegramId);
+        //   await client.query('UPDATE games SET participants_ids = $1 WHERE game_log_id = $2', [newParticipants, game.game_log_id]);
+        // }
+        // console.log(`${LOG_PREFIX_DUA} Filtered deleted user from 'games.participants_ids' if present.`);
 
-        console.log(`${LOG_PREFIX_DUA} Preparing to delete user from 'users' table, which will cascade to related financial records (deposits, withdrawals, ledger, user_deposit_wallets, referrals) as per schema foreign key constraints.`);
-        
-        const result = await client.query('DELETE FROM users WHERE telegram_id = $1', [stringTelegramId]);
 
-        await client.query('COMMIT');
+        console.log(`${LOG_PREFIX_DUA} Preparing to delete user from 'users' table. This will CASCADE to: user_deposit_wallets, deposits, withdrawals, ledger, referrals (where user is referrer or referred).`);
+        
+        const result = await client.query('DELETE FROM users WHERE telegram_id = $1', [stringTelegramId]);
 
-        if (result.rowCount > 0) {
-            console.log(`${LOG_PREFIX_DUA} User account ${stringTelegramId} and associated data deleted successfully from database.`);
-            // Clear in-memory caches associated with the user
-            activeGames.forEach((game, gameId) => { 
-                // Check if game object and players property exist
-                if (game && game.participants && Array.isArray(game.participants)) {
-                    // Filter out the deleted user from participants
-                    game.participants = game.participants.filter(p => String(p.userId) !== stringTelegramId);
-                    if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) { // Example: remove empty group games
-                        activeGames.delete(gameId);
+        await client.query('COMMIT');
+
+        if (result.rowCount > 0) {
+            console.log(`${LOG_PREFIX_DUA} User account ${stringTelegramId} and cascaded data deleted successfully from database.`);
+            
+            // Clear in-memory caches associated with the user
+            // activeGames, userCooldowns, etc. from Part 1
+            if (activeGames && activeGames instanceof Map) {
+                activeGames.forEach((game, gameId) => { 
+                    if (game && game.participants && Array.isArray(game.participants)) {
+                        game.participants = game.participants.filter(p => String(p.userId) !== stringTelegramId);
+                        // GAME_IDS assumed to be available (from Part 5a-S1 New)
+                        if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) { 
+                            activeGames.delete(gameId);
+                            console.log(`${LOG_PREFIX_DUA} Removed empty group game ${gameId} from activeGames cache.`);
+                        }
                     }
-                }
-                if (game && String(game.initiatorId) === stringTelegramId) activeGames.delete(gameId); // If user was initiator of a group game
-                if (game && String(game.userId) === stringTelegramId) activeGames.delete(gameId); // For single player games
-            });
-            userCooldowns.delete(stringTelegramId);
-            groupGameSessions.forEach((session, chatId) => {
-                // Assuming session.players is an object { userId: playerData }
-                if (session.players && session.players[stringTelegramId]) {
-                    delete session.players[stringTelegramId];
-                }
-                if (session.initiator === stringTelegramId && Object.keys(session.players || {}).length === 0) { // If initiator deleted and no players left
-                    groupGameSessions.delete(chatId);
-                } else if (session.initiator === stringTelegramId) { // If initiator deleted but other players remain, might need a new initiator or cancel game logic
-                    // For simplicity, just marking that session might be orphaned or need handling
-                    console.warn(`${LOG_PREFIX_DUA} Initiator ${stringTelegramId} of group game in chat ${chatId} deleted. Session may need manual resolution or will timeout.`);
-                }
-            });
-            walletCache.delete(stringTelegramId);
-            activeDepositAddresses.forEach((value, key) => {
-                if (String(value.userId) === stringTelegramId) {
-                    activeDepositAddresses.delete(key);
-                }
-            });
-            pendingReferrals.forEach((value, key) => { // Key: referredUserId, Value: { referrerId, timestamp }
-                if (String(key) === stringTelegramId) pendingReferrals.delete(key); // If user was referred
-                if (String(value.referrerId) === stringTelegramId) pendingReferrals.delete(key); // If user was referrer
-            });
-            userStateCache.delete(stringTelegramId);
-            console.log(`${LOG_PREFIX_DUA} Relevant in-memory caches cleared for user ${stringTelegramId}.`);
-            return true;
-        } else {
-            console.log(`${LOG_PREFIX_DUA} User ${stringTelegramId} not found, no account deleted.`);
-            return false;
-        }
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_DUA} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_DUA} Error deleting user account ${stringTelegramId}:`, error);
-        return false;
-    } finally {
-        client.release();
-    }
+                    if (game && String(game.initiatorId) === stringTelegramId) {
+                        activeGames.delete(gameId);
+                         console.log(`${LOG_PREFIX_DUA} Removed game ${gameId} (user was initiator) from activeGames cache.`);
+                    }
+                    if (game && String(game.userId) === stringTelegramId) { // For single player games vs bot
+                        activeGames.delete(gameId);
+                        console.log(`${LOG_PREFIX_DUA} Removed single-player game ${gameId} for deleted user from activeGames cache.`);
+                    }
+                });
+            }
+            if (userCooldowns && userCooldowns instanceof Map) userCooldowns.delete(stringTelegramId);
+            if (groupGameSessions && groupGameSessions instanceof Map) {
+                groupGameSessions.forEach((session, chatId) => {
+                    if (session.players && session.players[stringTelegramId]) {
+                        delete session.players[stringTelegramId];
+                    }
+                    if (session.initiator === stringTelegramId && Object.keys(session.players || {}).length === 0) {
+                        groupGameSessions.delete(chatId);
+                    } else if (session.initiator === stringTelegramId) {
+                        console.warn(`${LOG_PREFIX_DUA} Initiator ${stringTelegramId} of group game in chat ${chatId} deleted. Session state: ${JSON.stringify(session)}`);
+                        // Potentially mark session as needing cleanup or re-assignment of initiator if applicable to game type
+                    }
+                });
+            }
+            if (walletCache && walletCache instanceof Map) walletCache.delete(stringTelegramId);
+            if (activeDepositAddresses && activeDepositAddresses instanceof Map) {
+                activeDepositAddresses.forEach((value, key) => {
+                    if (String(value.userId) === stringTelegramId) {
+                        activeDepositAddresses.delete(key);
+                    }
+                });
+            }
+            if (pendingReferrals && pendingReferrals instanceof Map) { // pendingReferrals from Part 1
+                pendingReferrals.forEach((value, key) => {
+                    if (String(key) === stringTelegramId) pendingReferrals.delete(key); // User was referred
+                    if (value && String(value.referrerId) === stringTelegramId) pendingReferrals.delete(key); // User was referrer
+                });
+            }
+            if (userStateCache && userStateCache instanceof Map) userStateCache.delete(stringTelegramId);
+            
+            console.log(`${LOG_PREFIX_DUA} Relevant in-memory caches cleared for user ${stringTelegramId}.`);
+            return true;
+        } else {
+            console.log(`${LOG_PREFIX_DUA} User ${stringTelegramId} not found in 'users' table, no account deleted from DB.`);
+            return false;
+        }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_DUA} Rollback error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_DUA} Error deleting user account ${stringTelegramId}:`, error);
+        // Notify admin about failed deletion attempt if it's critical
+        if(typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
+            notifyAdmin(`🚨 User Account Deletion FAILED for ${stringTelegramId} 🚨\nError: ${escapeMarkdownV2(error.message)}`, {parse_mode:'MarkdownV2'});
+        }
+        return false;
+    } finally {
+        client.release();
+    }
 }
 console.log("[User Management] deleteUserAccount defined.");
 
