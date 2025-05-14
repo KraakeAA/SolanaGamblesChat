@@ -2,13 +2,12 @@
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System)
 //---------------------------------------------------------------------------
 
-// --- Core ESM-style Imports ---
-import 'dotenv/config'; // Ensure this is at the very top to load your .env file
+import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
-import { Pool } from 'pg'; // For PostgreSQL
-import express from 'express'; // For potential webhook server for payment confirmations
+import { Pool } from 'pg';
+import express from 'express';
 import {
-    Connection, // Solana
+    Connection,
     PublicKey,
     LAMPORTS_PER_SOL,
     Keypair,
@@ -19,83 +18,75 @@ import {
     SendTransactionError,
     TransactionExpiredBlockheightExceededError
 } from '@solana/web3.js';
-import bs58 from 'bs58'; // For Solana key encoding
-import * as crypto from 'crypto'; // Node.js crypto
-import { createHash } from 'crypto'; // Specific import for createHash if needed by payment utils
-import PQueue from 'p-queue'; // For managing concurrent tasks (payouts, deposits)
-import { Buffer } from 'buffer'; // Node.js Buffer
-import bip39 from 'bip39'; // For mnemonic seed phrases (Solana HD wallets)
-import { derivePath } from 'ed25519-hd-key'; // For Solana HD wallet derivation
-import nacl from 'tweetnacl'; // Cryptography library often used with Solana
+import bs58 from 'bs58';
+import * as crypto from 'crypto';
+import { createHash } from 'crypto';
+import PQueue from 'p-queue';
+import { Buffer } from 'buffer';
+import bip39 from 'bip39';
+import { derivePath } from 'ed25519-hd-key';
+import nacl from 'tweetnacl';
 
-// --- Custom Module Imports ---
-// Assuming RateLimitedConnection is a custom wrapper for Solana's Connection
-import RateLimitedConnection from './lib/solana-connection.js'; // Path relative to your project root
+import RateLimitedConnection from './lib/solana-connection.js'; // Expects updated version handling multiple RPCs
 
 console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated)...");
 
-// --- Helper function for JSON.stringify to handle BigInts (Defined ONCE Globally) ---
 function stringifyWithBigInt(obj) {
   return JSON.stringify(obj, (key, value) => {
     if (typeof value === 'bigint') {
-      return value.toString() + 'n'; // Suffix 'n' to clearly indicate BigInt in logs
+      return value.toString() + 'n';
     }
     if (typeof value === 'function') {
       return `[Function: ${value.name || 'anonymous'}]`;
     }
     if (value === undefined) {
-      return 'undefined_value'; // More explicit than null for debugging
+      return 'undefined_value';
     }
     return value;
-  }, 2); // Pretty print with 2-space indentation
+  }, 2);
 }
 console.log("[Global Utils] stringifyWithBigInt helper function defined.");
 
-//---------------------------------------------------------------------------
-// Environment Variable Validation & Defaults
-//---------------------------------------------------------------------------
-
-// Casino Bot Original Defaults
 const CASINO_ENV_DEFAULTS = {
-  'DB_POOL_MAX': '25', // Merged with payment system's DB_POOL_MAX
-  'DB_POOL_MIN': '5',  // Merged with payment system's DB_POOL_MIN
-  'DB_IDLE_TIMEOUT': '30000', // Merged
-  'DB_CONN_TIMEOUT': '5000',  // Merged
-  'DB_SSL': 'true', // Merged
-  'DB_REJECT_UNAUTHORIZED': 'true', // Merged
+  'DB_POOL_MAX': '25',
+  'DB_POOL_MIN': '5',
+  'DB_IDLE_TIMEOUT': '30000',
+  'DB_CONN_TIMEOUT': '5000',
+  'DB_SSL': 'true',
+  'DB_REJECT_UNAUTHORIZED': 'true',
   'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01', // 1%
-  'MIN_BET_AMOUNT': '5', // Note: This is in 'credits'. Payment system uses lamports. Conversion needed.
-  'MAX_BET_AMOUNT': '1000',// Note: This is in 'credits'.
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000', // 0.005 SOL
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
   'COMMAND_COOLDOWN_MS': '1500',
   'JOIN_GAME_TIMEOUT_MS': '120000',
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '100000000', // 100 SOL if 1 SOL = 1,000,000,000 lamports. Or 0.1 SOL if 1 unit = 1M lamports for display as credits.
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
   'TARGET_JACKPOT_SCORE': '100',
   'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
   'DICE_21_TARGET_SCORE': '21',
   'DICE_21_BOT_STAND_SCORE': '17',
   'RULES_CALLBACK_PREFIX': 'rules_game_',
-  'DEPOSIT_CALLBACK_ACTION': 'deposit_action', // Placeholder, will be enhanced by payment system UI
-  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action', // Placeholder
-  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action', // Placeholder
+  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
+  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
+  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
   'MAX_RETRY_POLLING_DELAY': '60000',
   'INITIAL_RETRY_POLLING_DELAY': '5000',
-  'BOT_NAME': 'Solana Casino Bot', // Added for help messages
+  'BOT_NAME': 'Solana Casino Bot',
 };
 
-// Payment System Specific Defaults (adapt as needed)
 const PAYMENT_ENV_DEFAULTS = {
-  'SOL_RPC_URLS': 'https://api.mainnet-beta.solana.com', // Default to mainnet, comma-separated for multiple
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', // Default single mainnet RPC
+  'RPC_URLS': '', // Comma-separated list for RateLimitedConnection pool (can be empty)
   'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed', // Solana confirmation level
-  'WITHDRAWAL_FEE_LAMPORTS': '5000', // Standard Solana transaction fee
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
+  'DEPOSIT_CONFIRMATIONS': 'confirmed',
+  'WITHDRAWAL_FEE_LAMPORTS': '5000',
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000',
   'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '1000',
   'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
   'PAYOUT_COMPUTE_UNIT_LIMIT': '200000',
   'PAYOUT_JOB_RETRIES': '3',
   'PAYOUT_JOB_RETRY_DELAY_MS': '5000',
-  'SWEEP_INTERVAL_MS': '300000', // 5 minutes
+  'SWEEP_INTERVAL_MS': '300000',
   'SWEEP_BATCH_SIZE': '20',
   'SWEEP_FEE_BUFFER_LAMPORTS': '15000',
   'SWEEP_ADDRESS_DELAY_MS': '750',
@@ -112,7 +103,7 @@ const PAYMENT_ENV_DEFAULTS = {
   'PAYOUT_QUEUE_TIMEOUT_MS': '60000',
   'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '4',
   'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '30000',
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', // For payment notifications, bot already has safeSendMessage
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1',
   'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050',
   'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
   'DEPOSIT_MONITOR_INTERVAL_MS': '20000',
@@ -121,17 +112,14 @@ const PAYMENT_ENV_DEFAULTS = {
   'WALLET_CACHE_TTL_MS': (10 * 60 * 1000).toString(),
   'DEPOSIT_ADDR_CACHE_TTL_MS': (61 * 60 * 1000).toString(),
   'MAX_PROCESSED_TX_CACHE': '5000',
-  'INIT_DELAY_MS': '5000', // For staggering background tasks
-  'ENABLE_PAYMENT_WEBHOOKS': 'false', // Default to false, explicit enable
+  'INIT_DELAY_MS': '5000',
+  'ENABLE_PAYMENT_WEBHOOKS': 'false',
   'PAYMENT_WEBHOOK_PORT': '3000',
-  // REFERRAL_PAYOUT_PRIVATE_KEY: if used, needs to be in .env, no default
-  // DEPOSIT_MASTER_SEED_PHRASE: CRITICAL, MUST BE IN .env, NO DEFAULT
-  // MAIN_BOT_PRIVATE_KEY: CRITICAL, MUST BE IN .env, NO DEFAULT (for withdrawals/sweeps)
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payment',
 };
 
 const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
 
-// Apply defaults if not set in process.env
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
   if (process.env[key] === undefined) {
     console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
@@ -139,19 +127,19 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
   }
 });
 
-// --- Core Configuration Constants (Bot & Payment System) ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID; // Optional, for admin notifications
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOT_NAME = process.env.BOT_NAME; // For display in messages
+const BOT_NAME = process.env.BOT_NAME;
 
-// Payment System Critical Env Vars
 const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-const MAIN_BOT_PRIVATE_KEY = process.env.MAIN_BOT_PRIVATE_KEY; // For withdrawals & sweeping deposit addresses
-const REFERRAL_PAYOUT_PRIVATE_KEY = process.env.REFERRAL_PAYOUT_PRIVATE_KEY; // Optional, for referral payouts from a separate wallet
-const SOL_RPC_URLS = (process.env.SOL_RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+const MAIN_BOT_PRIVATE_KEY = process.env.MAIN_BOT_PRIVATE_KEY;
+const REFERRAL_PAYOUT_PRIVATE_KEY = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
 
-// --- Crucial Game Play Constants & Settings (from Casino Bot) ---
+const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
+
+
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
@@ -161,8 +149,8 @@ const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE_ESCALATOR, 10);
 const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
 const DICE_21_BOT_STAND_SCORE = parseInt(process.env.DICE_21_BOT_STAND_SCORE, 10);
-const MIN_BET_AMOUNT_CREDITS = parseInt(process.env.MIN_BET_AMOUNT, 10); // Assuming this is in "credits" unit
-const MAX_BET_AMOUNT_CREDITS = parseInt(process.env.MAX_BET_AMOUNT, 10); // Assuming this is in "credits" unit
+const MIN_BET_AMOUNT_LAMPORTS = BigInt(process.env.MIN_BET_AMOUNT_LAMPORTS);
+const MAX_BET_AMOUNT_LAMPORTS = BigInt(process.env.MAX_BET_AMOUNT_LAMPORTS);
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
 const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS, 10);
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
@@ -171,24 +159,23 @@ const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
 const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION;
 const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
 
-// Payment System Configuration Constants (parsed from env)
-const SOL_DECIMALS = 9; // Standard for Solana
+const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
-// ... (other payment constants like PAYOUT_*, SWEEP_*, RPC_*, QUEUE_*, MONITOR_*, CACHE_*) ...
-// These will be used directly from process.env or parsed where needed in their respective modules.
 
-// --- Validations and Logging for Critical Variables ---
+
 if (!BOT_TOKEN) { console.error("FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 if (!MAIN_BOT_PRIVATE_KEY) { console.error("FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and sweeps will fail."); process.exit(1); }
-if (!SOL_RPC_URLS || SOL_RPC_URLS.length === 0) { console.error("FATAL ERROR: SOL_RPC_URLS are not defined. Cannot connect to Solana network."); process.exit(1); }
+if (RPC_URLS_LIST_FROM_ENV.length === 0 && !SINGLE_MAINNET_RPC_FROM_ENV) {
+    console.warn("WARNING: Neither RPC_URLS nor SOLANA_RPC_URL environment variables are set. RateLimitedConnection will use its internal hardcoded defaults or generic public RPC.");
+}
 
-// Casino Bot game score validations (remains the same)
+
 const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE };
 for (const [key, value] of Object.entries(criticalGameScores)) {
     if (isNaN(value)) {
@@ -196,27 +183,26 @@ for (const [key, value] of Object.entries(criticalGameScores)) {
         process.exit(1);
     }
 }
-if (MIN_BET_AMOUNT_CREDITS < 1 || isNaN(MIN_BET_AMOUNT_CREDITS)) {
-    console.error(`FATAL ERROR: MIN_BET_AMOUNT (${MIN_BET_AMOUNT_CREDITS}) must be a positive number.`);
+if (MIN_BET_AMOUNT_LAMPORTS < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS))) { // Check as BigInt
+    console.error(`FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS (${MIN_BET_AMOUNT_LAMPORTS}) must be a positive number.`);
     process.exit(1);
 }
-if (MAX_BET_AMOUNT_CREDITS < MIN_BET_AMOUNT_CREDITS || isNaN(MAX_BET_AMOUNT_CREDITS)) {
-    console.error(`FATAL ERROR: MAX_BET_AMOUNT (${MAX_BET_AMOUNT_CREDITS}) must be greater than or equal to MIN_BET_AMOUNT and be a number.`);
+if (MAX_BET_AMOUNT_LAMPORTS < MIN_BET_AMOUNT_LAMPORTS || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS))) {
+    console.error(`FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS (${MAX_BET_AMOUNT_LAMPORTS}) must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`);
     process.exit(1);
 }
 
 console.log("BOT_TOKEN loaded successfully.");
 if (ADMIN_USER_ID) console.log(`Admin User ID: ${ADMIN_USER_ID} loaded.`);
 else console.log("INFO: No ADMIN_USER_ID set (optional, for admin alerts).");
-console.log(`Payment System: DEPOSIT_MASTER_SEED_PHRASE and MAIN_BOT_PRIVATE_KEY are set (values not logged). RPC URLs: ${SOL_RPC_URLS.join(', ')}`);
+console.log(`Payment System: DEPOSIT_MASTER_SEED_PHRASE and MAIN_BOT_PRIVATE_KEY are set (values not logged).`);
+console.log(`Using RPC_URLS_LIST_FROM_ENV: [${RPC_URLS_LIST_FROM_ENV.join(', ')}] and SINGLE_MAINNET_RPC_FROM_ENV: ${SINGLE_MAINNET_RPC_FROM_ENV}`);
 if (REFERRAL_PAYOUT_PRIVATE_KEY) console.log("Payment System: REFERRAL_PAYOUT_PRIVATE_KEY is set.");
 
-
 console.log("--- Game Settings Loaded ---");
-// ... (Casino Bot's game settings logging, ensure it uses the new constant names if changed, e.g. MIN_BET_AMOUNT_CREDITS)
 console.log(`Dice Escalator - Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Bot Stand Score: ${BOT_STAND_SCORE_DICE_ESCALATOR}, Jackpot Contribution: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%`);
 console.log(`Dice 21 - Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand Score: ${DICE_21_BOT_STAND_SCORE}`);
-console.log(`Bet Limits (Credits): ${MIN_BET_AMOUNT_CREDITS} - ${MAX_BET_AMOUNT_CREDITS}`); // Clarify unit
+console.log(`Bet Limits: ${MIN_BET_AMOUNT_LAMPORTS} - ${MAX_BET_AMOUNT_LAMPORTS} lamports`);
 console.log(`Default Starting Balance: ${DEFAULT_STARTING_BALANCE_LAMPORTS} lamports`);
 console.log(`Command Cooldown: ${COMMAND_COOLDOWN_MS}ms`);
 console.log(`Join Game Timeout: ${JOIN_GAME_TIMEOUT_MS}ms`);
@@ -225,8 +211,6 @@ console.log(`Min Withdrawal: ${MIN_WITHDRAWAL_LAMPORTS} lamports, Withdrawal Fee
 console.log(`Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes`);
 console.log("-----------------------------");
 
-
-// --- PostgreSQL Pool Initialization (Single Instance) ---
 console.log("⚙️ Setting up PostgreSQL Pool...");
 const useSsl = process.env.DB_SSL === 'true';
 const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
@@ -243,141 +227,126 @@ const pool = new Pool({
 
 pool.on('connect', client => {
   console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.');
-  // Optional: Set timezone for new connections if necessary, e.g., client.query("SET TIME ZONE 'UTC'");
 });
-pool.on('error', (err, client) => { // This error handler from Casino Bot is good.
+pool.on('error', (err, client) => {
   console.error('❌ Unexpected error on idle PostgreSQL client', err);
   if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
     safeSendMessage(ADMIN_USER_ID, `🚨 DATABASE POOL ERROR (Idle Client): ${escapeMarkdownV2(err.message || String(err))}`)
       .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
   } else {
-    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage, escapeMarkdownV2, or ADMIN_USER_ID might not be available yet)`);
+    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)}`);
   }
 });
 console.log("✅ PostgreSQL Pool created.");
 
-// --- Solana Connection Initialization ---
 console.log("⚙️ Setting up Solana Connection...");
-const solanaConnection = new RateLimitedConnection(SOL_RPC_URLS, {
-    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
-    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
-    maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
-    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
-    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
-    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
-    commitment: process.env.RPC_COMMITMENT, // Solana confirmation level
-    // httpHeaders: { 'User-Agent': `CasinoBot/${BOT_VERSION}` }, // Example User-Agent
-    // clientId: `CasinoBotPayment/${BOT_VERSION}`
-});
-console.log(`✅ Solana Connection initialized to RPCs: ${SOL_RPC_URLS.join(', ')} with commitment ${process.env.RPC_COMMITMENT}.`);
+const solanaConnection = new RateLimitedConnection(
+    RPC_URLS_LIST_FROM_ENV,
+    SINGLE_MAINNET_RPC_FROM_ENV,
+    {
+        commitment: process.env.RPC_COMMITMENT,
+        maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
+        retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
+        maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
+        rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
+        retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
+        retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
+        // wsEndpoint: process.env.EXPLICIT_WSS_ENDPOINT // If you want an explicit WSS override
+    }
+);
+console.log(`✅ Solana Connection initialized (RateLimitedConnection).`);
 
-
-// --- Telegram Bot Instance ---
-const bot = new TelegramBot(BOT_TOKEN, {
-    polling: true, // Assuming polling mode. If webhook, this needs to change.
-    // request: { timeout: 30000 }
-});
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log("Telegram Bot instance created and configured for polling.");
 
-// --- Express App Initialization (for Webhooks, if enabled) ---
-let app = null; // Initialize to null
+let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
-    app.use(express.json()); // Middleware to parse JSON request bodies
+    app.use(express.json());
     console.log("🚀 Express app initialized for payment webhooks.");
 } else {
     console.log("ℹ️ Payment webhooks are disabled via ENABLE_PAYMENT_WEBHOOKS env var.");
 }
 
-
-const BOT_VERSION = '3.1.0-solana-payments'; // Updated version marker
+const BOT_VERSION = '3.1.0-solana-payments';
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-// --- Global State Variables ---
-let isShuttingDown = false; // Flag to prevent multiple shutdown sequences
+let isShuttingDown = false;
 
-// In-memory stores (Casino Bot)
-let activeGames = new Map(); // <gameId, gameDataObject>
-let userCooldowns = new Map(); // <userId, timestamp>
-let groupGameSessions = new Map(); // <chatId, sessionObject> (Initialized in Part 2 of original, can be here)
+let activeGames = new Map();
+let userCooldowns = new Map();
+let groupGameSessions = new Map();
 
-// In-memory Caches (Payment System)
-const walletCache = new Map(); // Cache for linked wallet addresses and referral codes
-const activeDepositAddresses = new Map(); // Cache for tracking pending deposit addresses and their expiry
-const processedDepositTxSignatures = new Set(); // Cache to prevent reprocessing transactions
-const pendingReferrals = new Map(); // Cache for tracking pending referral links
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // TTL for pending referrals (example)
-const userStateCache = new Map(); // For stateful UI interactions from payment system
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
+const processedDepositTxSignatures = new Set();
+const pendingReferrals = new Map();
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
+const userStateCache = new Map(); // For stateful UI interactions
+
+// Game specific constants (can also be here or further down with game logic if not configurable by env)
+const DICE_ESCALATOR_BUST_ON = 1; // Example, make configurable if needed
 
 console.log(`Initializing ${BOT_NAME || 'Casino Bot'} v${BOT_VERSION}...`);
 console.log(`Current system time: ${new Date().toISOString()}`);
 console.log(`Node.js Version: ${process.version}`);
 
-// --- Core Utility Functions (from Casino Bot, to be used by Payment System as well) ---
-
-// Escapes text for Telegram MarkdownV2 mode
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 
-// Safely sends a message, handling potential errors and length limits
 async function safeSendMessage(chatId, text, options = {}) {
   const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
   if (!chatId || typeof text !== 'string') {
     console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
     return undefined;
   }
-
   let messageToSend = text;
   let finalOptions = { ...options };
-
   if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
     const ellipsis = "... (message truncated)";
     const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsis.length);
     messageToSend = messageToSend.substring(0, truncateAt) + ellipsis;
-    console.warn(`${LOG_PREFIX_SSM} Message was pre-truncated due to length > ${MAX_MARKDOWN_V2_MESSAGE_LENGTH}.`);
+    console.warn(`${LOG_PREFIX_SSM} Message pre-truncated > ${MAX_MARKDOWN_V2_MESSAGE_LENGTH}.`);
   }
-
   if (finalOptions.parse_mode === 'MarkdownV2') {
     messageToSend = escapeMarkdownV2(messageToSend);
     if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsisMarkdown = escapeMarkdownV2("... (message re-truncated)");
         const truncateAtMarkdown = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisMarkdown.length);
         messageToSend = messageToSend.substring(0, truncateAtMarkdown) + ellipsisMarkdown;
-        console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) re-truncated AFTER escaping due to length > ${MAX_MARKDOWN_V2_MESSAGE_LENGTH}.`);
+        console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) re-truncated AFTER escaping.`);
     }
   }
-
   if (!bot) {
-    console.error(`${LOG_PREFIX_SSM} Error: Telegram 'bot' instance is not available. Cannot send message.`);
+    console.error(`${LOG_PREFIX_SSM} Error: Telegram 'bot' instance not available.`);
     return undefined;
   }
-
   try {
     if (typeof bot.sendMessage !== 'function') {
-      throw new Error("'bot.sendMessage' is not a function. Bot instance might be improperly initialized.");
+      throw new Error("'bot.sendMessage' is not a function.");
     }
     const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
     return sentMessage;
   } catch (error) {
-    console.error(`${LOG_PREFIX_SSM} Failed to send message. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
+    console.error(`${LOG_PREFIX_SSM} Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
     if (error.response && error.response.body) {
-      console.error(`${LOG_PREFIX_SSM} API Response Body: ${stringifyWithBigInt(error.response.body)}`);
+      console.error(`${LOG_PREFIX_SSM} API Response: ${stringifyWithBigInt(error.response.body)}`);
       if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.includes("can't parse entities")) {
-        console.error(`${LOG_PREFIX_SSM} MarkdownV2 parsing error. Original unescaped text (approx first 200 chars): "${text.substring(0,200)}"`);
-        console.warn(`${LOG_PREFIX_SSM} Attempting to send message as plain text due to MarkdownV2 parse error.`);
+        console.error(`${LOG_PREFIX_SSM} MarkdownV2 parse error. Original (approx 200 chars): "${text.substring(0,200)}"`);
+        console.warn(`${LOG_PREFIX_SSM} Attempting plain text fallback.`);
         try {
             delete finalOptions.parse_mode;
-            let plainText = text;
-            if (plainText.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+            let plainText = text; // Use original unescaped text
+            if (plainText.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Re-truncate original if needed
               const ellipsis = "... (message truncated)";
               const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsis.length);
               plainText = plainText.substring(0, truncateAt) + ellipsis;
             }
             return await bot.sendMessage(chatId, plainText, finalOptions);
         } catch (fallbackError) {
-            console.error(`${LOG_PREFIX_SSM} Failed to send message as plain text fallback. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
+            console.error(`${LOG_PREFIX_SSM} Plain text fallback failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
             return undefined;
         }
       }
@@ -386,10 +355,19 @@ async function safeSendMessage(chatId, text, options = {}) {
   }
 }
 
-// Simple asynchronous sleep function
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- Payment Processing Queues (defined here after env vars, used by background tasks & UI handlers) ---
+// --- Global Admin Notifier ---
+async function notifyAdmin(message, options = {}) {
+    if (ADMIN_USER_ID) {
+        return safeSendMessage(ADMIN_USER_ID, `🔔 ADMIN ALERT 🔔\n${message}`, { parse_mode: 'MarkdownV2', ...options });
+    } else {
+        console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message: ${message}`);
+        return null;
+    }
+}
+
+
 const payoutProcessorQueue = new PQueue({
     concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
     timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
@@ -400,10 +378,18 @@ const depositProcessorQueue = new PQueue({
     timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
     throwOnTimeout: true
 });
-// Telegram Send Queue (if payment system needs its own separate notification queue)
-// Note: Casino Bot's safeSendMessage already handles retries and Markdown, might be sufficient.
-// For now, let's assume safeSendMessage is used directly by payment modules.
-// const telegramSendQueue = new PQueue(...) // if needed
+
+// SLOT_PAYOUTS and other game-specific, less configurable constants might be defined here
+// or closer to their game logic in Part 5 if they are not derived from ENV.
+// For now, assuming critical SLOT_PAYOUTS might be defined as a const object if not from ENV.
+const SLOT_PAYOUTS = { // Example, should be configurable or more extensive
+    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, // Triple Diamond (BAR on Telegram)
+    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },  // Triple Grape (777 on Telegram)
+    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },   // Triple Lemon
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },    // Triple BAR (Bell on Telegram)
+};
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
+
 
 console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated) - Complete.");
 // --- End of Part 1 ---
