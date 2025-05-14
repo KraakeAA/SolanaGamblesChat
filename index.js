@@ -239,6 +239,33 @@ pool.on('error', (err, client) => {
 });
 console.log("✅ PostgreSQL Pool created.");
 
+// --- Database Query Helper ---
+/**
+ * Executes a database query using the global pool or a provided client.
+ * @param {string} sql The SQL query string.
+ * @param {Array<any>} [params=[]] Optional array of parameters for the query.
+ * @param {import('pg').PoolClient | import('pg').Pool} [dbClient=pool] Optional DB client or pool. Defaults to global pool.
+ * @returns {Promise<import('pg').QueryResult<any>>} The query result.
+ * @throws Error if query fails.
+ */
+async function queryDatabase(sql, params = [], dbClient = pool) {
+    const logPrefix = '[queryDatabase]';
+    try {
+        // For more detailed logging during development, you can uncomment these lines:
+        // console.debug(`${logPrefix} SQL: ${sql.substring(0, 100)}... Params:`, params);
+        
+        const result = await dbClient.query(sql, params);
+        
+        // console.debug(`${logPrefix} Result: ${result.rowCount} rows affected/returned.`);
+        return result;
+    } catch (error) {
+        console.error(`${logPrefix} Error executing query. SQL (start): "${sql.substring(0,100)}..." Params: [${params.join(', ')}] Error: ${error.message}`);
+        // Re-throw the error so the calling function can handle it appropriately (e.g., rollback a transaction)
+        throw error; 
+    }
+}
+console.log("[Global Utils] queryDatabase helper function defined.");
+
 console.log("⚙️ Setting up Solana Connection...");
 const solanaConnection = new RateLimitedConnection(
     RPC_URLS_LIST_FROM_ENV,
