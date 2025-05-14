@@ -9087,154 +9087,204 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
 console.log("[Deposit Monitor] processDepositTransaction defined.");
 
 
-// --- Deposit Address Sweeping Logic --- (Implementation remains largely the same as original, now uses refined sendSol and DB ops)
-// ... (startSweepingProcess, stopSweepingProcess, sweepDepositAddresses function definitions from original Part P4,
-//      but ensure they use the updated sendSol from P1 and transactional DB ops from P2 where applicable)
+// --- Deposit Address Sweeping Logic ---
 function startSweepingProcess() {
-    let intervalMs = parseInt(process.env.SWEEP_INTERVAL_MS, 10);
-    if (isNaN(intervalMs) || intervalMs <= 0) {
-        console.warn("🧹 [Sweeper] Fund sweeping is disabled (SWEEP_INTERVAL_MS not set or invalid).");
-        return;
-    }
-    if (intervalMs < 60000) { intervalMs = 60000; console.warn(`🧹 [Sweeper] SWEEP_INTERVAL_MS too low, enforcing minimum ${intervalMs}ms.`); }
-    
-    if (sweepIntervalId) { clearInterval(sweepIntervalId); console.log('🔄 [Sweeper] Restarting fund sweeper...'); }
-    else { console.log(`⚙️ [Sweeper] Starting Fund Sweeper (Interval: ${intervalMs / 1000 / 60} minutes)...`); }
-    
-    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 15000; // Stagger after other startups
-    console.log(`[Sweeper] Scheduling first sweep run in ${initialDelay/1000}s...`);
+    let intervalMs = parseInt(process.env.SWEEP_INTERVAL_MS, 10);
+    if (isNaN(intervalMs) || intervalMs <= 0) {
+        console.warn("🧹 [Sweeper] Fund sweeping is disabled (SWEEP_INTERVAL_MS not set or invalid).");
+        return;
+    }
+    if (intervalMs < 60000) { // Minimum 1 minute interval
+        intervalMs = 60000;
+        console.warn(`🧹 [Sweeper] SWEEP_INTERVAL_MS too low, enforcing minimum ${intervalMs / 1000}s.`);
+    }
+    
+    if (sweepIntervalId) {
+        clearInterval(sweepIntervalId);
+        console.log('🔄 [Sweeper] Restarting fund sweeper...');
+    } else {
+        console.log(`⚙️ [Sweeper] Starting Fund Sweeper (Interval: ${intervalMs / 1000 / 60} minutes)...`);
+    }
+    
+    // Initialize isRunning property if it's the first time
+    if (typeof sweepDepositAddresses.isRunning === 'undefined') {
+        sweepDepositAddresses.isRunning = false;
+    }
 
-    setTimeout(() => {
+    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 15000; // Stagger start
+    console.log(`[Sweeper] Scheduling first sweep run in ${initialDelay / 1000}s...`);
+
+    setTimeout(() => {
         if (isShuttingDown) return;
-        console.log(`[Sweeper] Executing first sweep run...`);
-        sweepDepositAddresses().catch(err => console.error("❌ [Initial Sweep Run] Error:", err.message, err.stack));
-        sweepIntervalId = setInterval(sweepDepositAddresses, intervalMs);
-        if (sweepIntervalId.unref) sweepIntervalId.unref();
-        console.log(`✅ [Sweeper] Recurring sweep interval (ID: ${sweepIntervalId ? 'Set' : 'Not Set - Error?'}) set.`);
-    }, initialDelay);
+        console.log(`[Sweeper] Executing first sweep run...`);
+        sweepDepositAddresses().catch(err => console.error("❌ [Initial Sweep Run] Error:", err.message, err.stack));
+        
+        sweepIntervalId = setInterval(() => {
+            sweepDepositAddresses().catch(err => console.error("❌ [Recurring Sweep Run] Error:", err.message, err.stack));
+        }, intervalMs);
+
+        if (sweepIntervalId && sweepIntervalId.unref) sweepIntervalId.unref(); // Allow program to exit if this is the only timer
+        console.log(`✅ [Sweeper] Recurring sweep interval (ID: ${sweepIntervalId ? 'Set' : 'Not Set - Error?'}) set.`);
+    }, initialDelay);
 }
 
 function stopSweepingProcess() {
-    if (sweepIntervalId) {
-        clearInterval(sweepIntervalId);
-        sweepIntervalId = null;
-        sweepDepositAddresses.isRunning = false;
-        console.log("🛑 [Sweeper] Fund sweeping stopped.");
-    }
+    if (sweepIntervalId) {
+        clearInterval(sweepIntervalId);
+        sweepIntervalId = null;
+        sweepDepositAddresses.isRunning = false; // Reset running state
+        console.log("🛑 [Sweeper] Fund sweeping stopped.");
+    }
 }
 
 async function sweepDepositAddresses() {
-    const logPrefix = '[SweepDepositAddresses]';
-    if (isShuttingDown) { console.log(`${logPrefix} Shutdown in progress, skipping sweep cycle.`); return; }
-    if (sweepDepositAddresses.isRunning) { console.log(`${logPrefix} Sweep already in progress. Skipping cycle.`); return; }
-    sweepDepositAddresses.isRunning = true;
-    console.log(`🧹 ${logPrefix} Starting new sweep cycle...`);
+    const logPrefix = '[SweepDepositAddresses]';
+    if (isShuttingDown) {
+        console.log(`${logPrefix} Shutdown in progress, skipping sweep cycle.`);
+        return;
+    }
+    if (sweepDepositAddresses.isRunning) {
+        console.log(`${logPrefix} Sweep already in progress. Skipping cycle.`);
+        return;
+    }
+    sweepDepositAddresses.isRunning = true;
+    console.log(`🧹 ${logPrefix} Starting new sweep cycle...`);
 
-    let addressesProcessed = 0;
-    let totalSweptLamports = 0n;
-    const sweepBatchSize = parseInt(process.env.SWEEP_BATCH_SIZE, 10) || 10;
-    const sweepAddressDelayMs = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10) || 1500;
-    const sweepFeeBuffer = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS || 20000); // Increased buffer
-    const minBalanceToSweep = sweepFeeBuffer + 5000n; // Must be more than fee buffer + base tx fee
-    const sweepTargetAddress = MAIN_BOT_KEYPAIR.publicKey.toBase58();
+    let addressesProcessedThisCycle = 0;
+    let totalSweptThisCycle = 0n;
+    const sweepBatchSize = parseInt(process.env.SWEEP_BATCH_SIZE, 10) || 10;
+    const sweepAddressDelayMs = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10) || 1500;
+    const sweepFeeBuffer = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS || '20000');
+    const minBalanceToSweep = sweepFeeBuffer + 5000n; // Min balance: base tx fee + buffer
+    const sweepTargetAddress = MAIN_BOT_KEYPAIR.publicKey.toBase58();
 
-    let dbOperationClient = null; // Use one client for the batch of DB updates if possible, or per address
-    try {
-        const addressesToConsiderRes = await queryDatabase(
-            `SELECT wallet_id, public_key, derivation_path, user_telegram_id
-             FROM user_deposit_wallets 
-             WHERE swept_at IS NULL 
-             AND (is_active = FALSE OR expires_at < NOW() - INTERVAL '5 minutes') -- Sweep expired or explicitly inactive
-             ORDER BY created_at ASC 
-             LIMIT $1`,
-            [sweepBatchSize]
-        );
+    let addressesToConsiderRes = null; // Define here to be accessible in finally
 
-        if (addressesToConsiderRes.rowCount === 0) {
-            // console.log(`${logPrefix} No addresses found requiring a sweep in this cycle.`);
-        } else {
+    try {
+        const addressesQuery = `SELECT wallet_id, public_key, derivation_path, user_telegram_id
+            FROM user_deposit_wallets 
+            WHERE swept_at IS NULL 
+            AND (is_active = FALSE OR expires_at < NOW() - INTERVAL '5 minutes')
+            ORDER BY created_at ASC 
+            LIMIT $1`;
+        addressesToConsiderRes = await queryDatabase(addressesQuery, [sweepBatchSize]);
+
+        if (!addressesToConsiderRes || !addressesToConsiderRes.rows) {
+            console.error(`${logPrefix} Failed to fetch addresses to consider or received invalid response. Ending sweep cycle.`);
+            sweepDepositAddresses.isRunning = false;
+            return;
+        }
+
+        if (addressesToConsiderRes.rowCount === 0) {
+            // console.log(`${logPrefix} No addresses found requiring a sweep in this cycle.`);
+        } else {
             console.log(`${logPrefix} Found ${addressesToConsiderRes.rowCount} potential addresses to check for sweeping.`);
         }
 
-        dbOperationClient = await pool.connect(); // Use one client for all DB ops in this sweep cycle for efficiency
+        for (const addrData of addressesToConsiderRes.rows) {
+            if (isShuttingDown) {
+                console.log(`${logPrefix} Shutdown initiated during address processing, aborting sweep cycle.`);
+                break;
+            }
+            
+            const addrLogPrefix = `[Sweep Addr:${addrData.public_key.slice(0, 6)}.. WID:${addrData.wallet_id} UID:${String(addrData.user_telegram_id).slice(0,4)}..]`;
+            let depositKeypair;
+            let clientForThisAddress = null; // DB client for individual address operations
 
-        for (const addrData of addressesToConsiderRes.rows) {
-            if (isShuttingDown) { console.log(`${logPrefix} Shutdown initiated, aborting sweep.`); break; }
-            
-            const addrLogPrefix = `[Sweep Addr:${addrData.public_key.slice(0,6)}.. WID:${addrData.wallet_id}]`;
-            let depositKeypair;
-            try {
-                depositKeypair = deriveSolanaKeypair(DEPOSIT_MASTER_SEED_PHRASE, addrData.derivation_path);
-                if (!depositKeypair || depositKeypair.publicKey.toBase58() !== addrData.public_key) {
-                    console.error(`${addrLogPrefix} ❌ Key derivation mismatch for path ${addrData.derivation_path}. Marking as unsweepable.`);
-                    await dbOperationClient.query("UPDATE user_deposit_wallets SET swept_at = NOW(), notes = COALESCE(notes, '') || ' Sweep Error: Key derivation mismatch.' WHERE wallet_id = $1", [addrData.wallet_id]);
-                    continue;
-                }
-            } catch (derivError) {
-                console.error(`${addrLogPrefix} ❌ Critical error deriving key for sweep: ${derivError.message}. Skipping.`);
-                await dbOperationClient.query("UPDATE user_deposit_wallets SET swept_at = NOW(), notes = COALESCE(notes, '') || ' Sweep Error: Key derivation exception.' WHERE wallet_id = $1", [addrData.wallet_id]);
-                continue;
-            }
+            try {
+                clientForThisAddress = await pool.connect(); // Get a client for this address's operations
+                await clientForThisAddress.query('BEGIN');
 
-            const balanceLamports = await getSolBalance(addrData.public_key);
-            if (balanceLamports === null) { // Error fetching balance
-                console.warn(`${addrLogPrefix} Could not fetch balance. Skipping for now.`);
-                continue;
-            }
-
-            if (balanceLamports >= minBalanceToSweep) {
-                const amountToSweep = balanceLamports - sweepFeeBuffer;
-                console.log(`${addrLogPrefix} Balance: ${balanceLamports}. Attempting to sweep ${amountToSweep} to ${sweepTargetAddress.slice(0,6)}..`);
-
-                await dbOperationClient.query('BEGIN'); // Transaction for this specific sweep's DB updates
-                
-                const sweepPriorityFee = parseInt(process.env.SWEEP_PRIORITY_FEE_MICROLAMPORTS, 10) || 5000;
-                const sweepComputeUnits = parseInt(process.env.SWEEP_COMPUTE_UNIT_LIMIT, 10) || 25000;
-                const sendResult = await sendSol(depositKeypair, sweepTargetAddress, amountToSweep, `Sweep from ${addrData.public_key.slice(0,4)}..${addrData.public_key.slice(-4)}`, sweepPriorityFee, sweepComputeUnits);
-
-                if (sendResult.success && sendResult.signature) {
-                    totalSweptLamports += amountToSweep;
-                    addressesProcessed++;
-                    console.log(`${addrLogPrefix} ✅ Sweep successful! TX: ${sendResult.signature}. Amount: ${amountToSweep}`);
-                    await recordSweepTransactionDB(dbOperationClient, addrData.public_key, sweepTargetAddress, amountToSweep, sendResult.signature);
-                    await markDepositAddressInactiveDB(dbOperationClient, addrData.wallet_id, true, balanceLamports);
-                    await dbOperationClient.query('COMMIT');
-                } else {
-                    await dbOperationClient.query('ROLLBACK');
-                    console.error(`${addrLogPrefix} ❌ Sweep failed: ${sendResult.error}. Error Type: ${sendResult.errorType}`);
-                    if (sendResult.errorType === "InsufficientFundsError") {
-                        // Balance might have changed or not enough for fee buffer
-                        await queryDatabase("UPDATE user_deposit_wallets SET swept_at = NOW(), notes = COALESCE(notes, '') || ' Sweep Attempted: Insufficient for fee buffer.' WHERE wallet_id = $1", [addrData.wallet_id], pool); // Use main pool for this isolated update
-                    } else if (sendResult.isRetryable === false) {
-                        // Mark as failed if sendSol determined it's not retryable
-                        await queryDatabase("UPDATE user_deposit_wallets SET swept_at = NOW(), notes = COALESCE(notes, '') || ' Sweep Failed (Non-Retryable): " + escapeMarkdownV2(sendResult.error || '').substring(0,50) + "' WHERE wallet_id = $1", [addrData.wallet_id], pool);
+                try {
+                    depositKeypair = deriveSolanaKeypair(DEPOSIT_MASTER_SEED_PHRASE, addrData.derivation_path);
+                    if (!depositKeypair || depositKeypair.publicKey.toBase58() !== addrData.public_key) {
+                        console.error(`${addrLogPrefix} ❌ Key derivation mismatch for path ${addrData.derivation_path}. Marking as unsweepable.`);
+                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, null); // Mark swept with error
+                        await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Error: Key derivation mismatch.' WHERE wallet_id = $1", [addrData.wallet_id]);
+                        await clientForThisAddress.query('COMMIT');
+                        continue; // Next address
                     }
-                }
-            } else if (balanceLamports > 0n) { // Has dust, but not enough to sweep
-                console.log(`${addrLogPrefix} Balance ${balanceLamports} is below sweep threshold (${minBalanceToSweep}). Marking as swept (dust).`);
-                await markDepositAddressInactiveDB(dbOperationClient, addrData.wallet_id, true, balanceLamports);
-            } else { // Zero balance
-                await markDepositAddressInactiveDB(dbOperationClient, addrData.wallet_id, true, 0n);
-            }
-            await sleep(sweepAddressDelayMs);
-        }
+                } catch (derivError) {
+                    console.error(`${addrLogPrefix} ❌ Critical error deriving key for sweep: ${derivError.message}. Skipping.`);
+                    await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, null); // Mark swept with error
+                    await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Error: Key derivation exception.' WHERE wallet_id = $1", [addrData.wallet_id]);
+                    await clientForThisAddress.query('COMMIT');
+                    continue; // Next address
+                }
 
-    } catch (error) {
-        // Rollback any pending transaction if dbOperationClient was in one (though individual sweeps are now self-contained)
-        // This catch is for errors in the main loop itself (e.g., fetching addresses)
-        console.error(`❌ ${logPrefix} Critical error during sweep cycle: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === 'function') await notifyAdmin(`🚨 *ERROR in Fund Sweeping Cycle* 🚨\n\n\`${escapeMarkdownV2(String(error.message || error))}\`\nCheck logs for details\\. Sweeping may be impaired\\.`, {parse_mode: 'MarkdownV2'});
-    } finally {
-        if (dbOperationClient) dbOperationClient.release();
-        sweepDepositAddresses.isRunning = false;
-        if (addressesProcessed > 0) {
-            console.log(`🧹 ${logPrefix} Sweep cycle finished. Processed ${addressesProcessed} addresses, swept total of ${formatCurrency(totalSweptLamports, 'SOL')}.`);
-        } else if (addressesToConsiderRes && addressesToConsiderRes.rowCount > 0) {
-            console.log(`🧹 ${logPrefix} Sweep cycle finished. No funds swept from ${addressesToConsiderRes.rowCount} considered addresses.`);
+                const balanceLamports = await getSolBalance(addrData.public_key);
+                if (balanceLamports === null) {
+                    console.warn(`${addrLogPrefix} Could not fetch balance. Skipping for now.`);
+                    await clientForThisAddress.query('ROLLBACK'); // Rollback if balance check fails
+                    continue; // Next address
+                }
+
+                if (balanceLamports >= minBalanceToSweep) {
+                    const amountToSweep = balanceLamports - sweepFeeBuffer;
+                    if (amountToSweep <= 0n) { // Ensure amount to sweep is positive
+                        console.log(`${addrLogPrefix} Balance ${balanceLamports} after buffer ${sweepFeeBuffer} is not positive (${amountToSweep}). Marking as swept (dust).`);
+                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports);
+                        await clientForThisAddress.query('COMMIT');
+                        continue;
+                    }
+
+                    console.log(`${addrLogPrefix} Balance: ${balanceLamports}. Attempting to sweep ${amountToSweep} to ${sweepTargetAddress.slice(0, 6)}..`);
+                    const sweepPriorityFee = parseInt(process.env.SWEEP_PRIORITY_FEE_MICROLAMPORTS, 10) || 5000;
+                    const sweepComputeUnits = parseInt(process.env.SWEEP_COMPUTE_UNIT_LIMIT, 10) || 25000;
+                    
+                    const sendResult = await sendSol(depositKeypair, sweepTargetAddress, amountToSweep, `Sweep from ${addrData.public_key.slice(0,4)}..${addrData.public_key.slice(-4)}`, sweepPriorityFee, sweepComputeUnits);
+
+                    if (sendResult.success && sendResult.signature) {
+                        totalSweptThisCycle += amountToSweep;
+                        addressesProcessedThisCycle++;
+                        console.log(`${addrLogPrefix} ✅ Sweep successful! TX: ${sendResult.signature}. Amount: ${amountToSweep}`);
+                        await recordSweepTransactionDB(clientForThisAddress, addrData.public_key, sweepTargetAddress, amountToSweep, sendResult.signature);
+                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports); // True for swept, balance at time of sweep
+                    } else {
+                        console.error(`${addrLogPrefix} ❌ Sweep failed: ${sendResult.error}. Error Type: ${sendResult.errorType}. Retryable by sendSol: ${sendResult.isRetryable}`);
+                        // If sendSol failed permanently or for specific reasons, mark it so it's not picked up again.
+                        if (sendResult.errorType === "InsufficientFundsError" || sendResult.isRetryable === false) {
+                             await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports); // Mark as swept even if failed, to avoid retrying certain errors
+                             await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Failed: " + escapeMarkdownV2(sendResult.error || '').substring(0,100) + "' WHERE wallet_id = $1", [addrData.wallet_id]);
+                        }
+                    }
+                } else if (balanceLamports > 0n) { // Has dust, but not enough to sweep
+                    console.log(`${addrLogPrefix} Balance ${balanceLamports} is below sweep threshold (${minBalanceToSweep}). Marking as swept (dust).`);
+                    await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports);
+                } else { // Zero balance
+                    console.log(`${addrLogPrefix} Zero balance. Marking as swept.`);
+                    await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, 0n);
+                }
+                await clientForThisAddress.query('COMMIT'); // Commit successful operations for this address
+            } catch (addrError) {
+                if (clientForThisAddress) await clientForThisAddress.query('ROLLBACK').catch(rbErr => console.error(`${addrLogPrefix} Rollback error for address: ${rbErr.message}`));
+                console.error(`${addrLogPrefix} ❌ Error processing address ${addrData.public_key}: ${addrError.message}`, addrError.stack);
+                // Optionally, update notes for this wallet_id to indicate processing error for investigation
+            } finally {
+                if (clientForThisAddress) clientForThisAddress.release();
+            }
+            await sleep(sweepAddressDelayMs); // Delay between processing each address
         }
-    }
+    } catch (cycleError) {
+        // This catches errors from the initial queryDatabase or other setup before the loop
+        console.error(`❌ ${logPrefix} Critical error in sweep cycle setup: ${cycleError.message}`, cycleError.stack);
+        if (typeof notifyAdmin === 'function') await notifyAdmin(`🚨 *ERROR in Fund Sweeping Cycle Setup* 🚨\n\n\`${escapeMarkdownV2(String(cycleError.message || cycleError))}\`\nCheck logs for details. Sweeping cycle aborted.`, {parse_mode: 'MarkdownV2'});
+    } finally {
+        sweepDepositAddresses.isRunning = false; // Reset flag
+        if (addressesProcessedThisCycle > 0) {
+            console.log(`🧹 ${logPrefix} Sweep cycle finished. Processed ${addressesProcessedThisCycle} addresses, swept total of ${formatCurrency(totalSweptThisCycle, 'SOL')}.`);
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🧹 Sweep Successful: Swept ${formatCurrency(totalSweptThisCycle, 'SOL')} from ${addressesProcessedThisCycle} addresses.`, {parse_mode: 'MarkdownV2'});
+        } else if (addressesToConsiderRes && addressesToConsiderRes.rowCount > 0) {
+            console.log(`🧹 ${logPrefix} Sweep cycle finished. No funds swept from ${addressesToConsiderRes.rowCount} considered addresses.`);
+        } else if (!addressesToConsiderRes) {
+            // This means the initial query itself failed. The error would have been logged in the catch block.
+             console.log(`🧹 ${logPrefix} Sweep cycle finished. Could not fetch addresses to process.`);
+        } else {
+             // console.log(`🧹 ${logPrefix} Sweep cycle finished. No addresses met criteria for sweeping.`);
+        }
+    }
 }
-console.log("[Sweeper] sweepDepositAddresses, start/stop defined.");
+console.log("[Sweeper] sweepDepositAddresses, startSweepingProcess, stopSweepingProcess (with ReferenceError fix and improved structure) defined.");
 
 // --- Payout Job Processing Logic ---
 async function addPayoutJob(jobData) {
