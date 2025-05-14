@@ -8931,13 +8931,13 @@ async function monitorDepositsPolling() {
         const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10) || 10;
 
         const pendingAddressesRes = await queryDatabase(
-            `SELECT wallet_id, public_key, user_telegram_id, derivation_path, expires_at
-             FROM user_deposit_wallets
-             WHERE is_active = TRUE AND expires_at > NOW() 
-             ORDER BY created_at ASC 
-             LIMIT $1`,
-            [batchSize]
-        );
+    `SELECT wallet_id, public_key, user_telegram_id, derivation_path, expires_at
+FROM user_deposit_wallets
+WHERE is_active = TRUE AND expires_at > NOW()
+ORDER BY created_at ASC
+LIMIT $1`,
+    [batchSize]
+);
 
         if (pendingAddressesRes.rowCount === 0) {
             // This log can be verbose if there are often no active addresses. Consider conditional logging.
