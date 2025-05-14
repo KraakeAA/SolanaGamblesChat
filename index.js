@@ -1074,661 +1074,113 @@ console.log("[Payment Utils] generateInternalPaymentTxId helper function defined
 
 console.log("Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities (Integrated) - Complete.");
 // --- End of Part 3 ---
-// --- Start of Part P4 ---
-// index.js - Part P4: Payment System Background Tasks & Webhook Handling
-// (Integrates "Payment Background Tasks" code and webhook logic,
-// and includes starter functions for deposit monitoring and sweeping)
+// --- Start of Part 4 ---
+// index.js - Part 4: Simplified Game Logic (Enhanced)
 //---------------------------------------------------------------------------
-console.log("Loading Part P4: Payment System Background Tasks & Webhook Handling...");
+console.log("Loading Part 4: Simplified Game Logic (Enhanced)...");
 
-// Note: This part assumes global constants (DEPOSIT_MONITOR_INTERVAL_MS, SWEEP_INTERVAL_MS, etc.),
-// the Solana connection (`solanaConnection`), DB pool (`pool`), processing queues (`depositProcessorQueue`, `payoutProcessorQueue`),
-// and various utility/DB functions from Part P1, P2, P3 are available.
-// Functions like `notifyAdmin`, `safeSendMessage`, `escapeMarkdownV2`, `formatCurrency` (for SOL) are global.
-// The `isRunning` flags for polling and sweeping are defined just before their respective functions from original Part P4.
-
-// --- Global State for Background Task Control (from Payment System code) ---
-// Interval IDs are typically managed in the main startup/shutdown logic (Part 6)
-// by being assigned the return value of setInterval.
-// For this part, we define the functions that will be called by those intervals.
-// let depositMonitorIntervalId = null; // Managed in Part 6 by assigning result of setInterval
-// let sweepIntervalId = null;          // Managed in Part 6
-// let leaderboardManagerIntervalId = null; // Managed in Part 6
-
-// --- Starter function for Deposit Monitoring ---
-function startDepositMonitor() {
-    let intervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
-    if (isNaN(intervalMs) || intervalMs < 5000) {
-        intervalMs = 20000; // Default from original PAYMENT_ENV_DEFAULTS
-        console.warn(`[DepositMonitor] Invalid DEPOSIT_MONITOR_INTERVAL_MS, using default ${intervalMs}ms.`);
-    }
-    // Assuming global.depositMonitorIntervalId is used by Part 6 to store the interval ID
-    if (global.depositMonitorIntervalId) {
-        clearInterval(global.depositMonitorIntervalId);
-        console.log('🔄 [DepositMonitor] Restarting deposit monitor...');
-    } else {
-        console.log(`⚙️ [DepositMonitor] Starting Deposit Monitor (Polling Interval: ${intervalMs / 1000}s)...`);
-    }
-    const initialDelay = parseInt(process.env.INIT_DELAY_MS, 10) || 3000;
-    console.log(`[DepositMonitor] Scheduling first monitor run in ${initialDelay/1000}s...`);
-
-    setTimeout(() => {
-        try {
-            console.log(`[DepositMonitor] Executing first monitor run...`);
-            // monitorDepositsPolling is the function defined in the original Part P4, compatible with Part 2 schema
-            monitorDepositsPolling().catch(err => console.error("❌ [Initial Deposit Monitor Run] Error:", err.message, err.stack));
-            global.depositMonitorIntervalId = setInterval(monitorDepositsPolling, intervalMs);
-            if (global.depositMonitorIntervalId.unref) global.depositMonitorIntervalId.unref(); // Allow process to exit if only interval remains
-            console.log(`✅ [DepositMonitor] Recurring monitor interval set.`);
-        } catch (initialRunError) {
-            console.error("❌ [DepositMonitor] CRITICAL ERROR during initial monitor setup/run:", initialRunError);
-            if (typeof notifyAdmin === "function" && typeof escapeMarkdownV2 === "function") {
-                 notifyAdmin(`🚨 CRITICAL ERROR setting up Deposit Monitor interval: ${escapeMarkdownV2(String(initialRunError.message || initialRunError))}`).catch(()=>{});
-            }
-        }
-    }, initialDelay);
+// --- Coinflip Logic ---
+// Returns an object with the outcome, a display string, and an emoji.
+function determineCoinFlipOutcome() {
+  const isHeads = Math.random() < 0.5; // 50% chance for heads
+  return isHeads
+    ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' } // Using a standard coin emoji
+    : { outcome: 'tails', outcomeString: "Tails", emoji: '🪙' };
 }
 
-// --- Starter function for Deposit Sweeping ---
-function startDepositSweeper() {
-    let intervalMs = parseInt(process.env.SWEEP_INTERVAL_MS, 10);
-    if (isNaN(intervalMs) || intervalMs <= 0) {
-        console.warn("⚠️ [DepositSweeper] Sweeping is disabled (SWEEP_INTERVAL_MS not set or zero).");
-        return;
-    }
-    if (intervalMs < 60000) { // Example minimum
-        intervalMs = 60000;
-        console.warn(`⚠️ [DepositSweeper] SWEEP_INTERVAL_MS too low, enforcing minimum ${intervalMs}ms.`);
-    }
-    // Assuming global.sweepIntervalId is used by Part 6
-    if (global.sweepIntervalId) {
-        clearInterval(global.sweepIntervalId);
-        console.log('🔄 [DepositSweeper] Restarting deposit sweeper...');
-    } else {
-        console.log(`⚙️ [DepositSweeper] Starting Deposit Sweeper (Interval: ${intervalMs / 1000}s)...`);
-    }
+// --- Dice Logic (Internal for Bot's Turn or Fallback) ---
+// This determines the outcome for the BOT's internal rolls or when `bot.sendDice` fails.
+// It uses the internal `rollDie` function defined in Part 3.
+function determineDieRollOutcome(sides = 6) {
+  // Ensure rollDie function is defined (expected in Part 3)
+  if (typeof rollDie !== 'function') {
+     console.error("[determineDieRollOutcome] CRITICAL Error: rollDie function is not defined from Part 3.");
+     // Fallback to a predictable, safe roll if rollDie is missing, though this indicates a serious issue.
+     return { roll: 1, emoji: '🎲' }; // Default fallback roll
+  }
+  sides = Number.isInteger(sides) && sides > 1 ? sides : 6; // Ensure valid sides (at least 2)
+  const roll = rollDie(sides); // Use the internal function
 
-    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 10000; // Stagger slightly
-    console.log(`⚙️ [DepositSweeper] Scheduling first sweep run in ${initialDelay/1000}s...`);
-
-    setTimeout(() => {
-        try {
-            console.log(`⚙️ [DepositSweeper] Executing first sweep run...`);
-            // sweepDepositAddresses is the function defined in the original Part P4, compatible with Part 2 schema
-            sweepDepositAddresses().catch(err => console.error("❌ [Initial Sweep Run] Error:", err.message, err.stack));
-            global.sweepIntervalId = setInterval(sweepDepositAddresses, intervalMs);
-            if (global.sweepIntervalId.unref) global.sweepIntervalId.unref();
-            console.log(`✅ [DepositSweeper] Recurring sweep interval set.`);
-        } catch (initialRunError) {
-            console.error("❌ [DepositSweeper] CRITICAL ERROR during initial sweep setup/run:", initialRunError);
-            if (typeof notifyAdmin === "function" && typeof escapeMarkdownV2 === "function") {
-                notifyAdmin(`🚨 CRITICAL ERROR setting up Deposit Sweeper interval: ${escapeMarkdownV2(String(initialRunError.message || initialRunError))}`).catch(()=>{});
-            }
-        }
-    }, initialDelay);
+  // The emoji here is for potential direct use if not formatting via formatDiceRolls,
+  // but generally, formatDiceRolls will handle the display.
+  return { roll: roll, emoji: '🎲' }; // Return the roll number and a generic dice emoji
+                                        // Display formatting (e.g., "🎲 5") is best handled by formatDiceRolls.
 }
 
-// --- Starter function for Leaderboard Management ---
-// Note: updateLeaderboardsCycle function is not defined in the provided documents.
-// This starter assumes it would be defined elsewhere, likely in Part P2 (DB Ops) or a new specific leaderboard part.
-function startLeaderboardManager() {
-    const logPrefix = '[LeaderboardManager Start]';
-    console.log(`⚙️ ${logPrefix} Initializing Leaderboard Manager...`);
-    const intervalMs = parseInt(process.env.LEADERBOARD_UPDATE_INTERVAL_MS, 10); // Ensure this ENV var is defined in Part 1
+// Constant defining the losing roll in Dice Escalator (from Part 1, but good to acknowledge its use here)
+// const DICE_ESCALATOR_BUST_ON = 1; (This is defined in Part 1 and used in Part 5 game logic)
 
-    if (isNaN(intervalMs) || intervalMs <= 0) {
-        console.warn(`⚠️ ${logPrefix} Leaderboard updates are disabled (LEADERBOARD_UPDATE_INTERVAL_MS not set or invalid).`);
-        return;
-    }
-    // Assuming global.leaderboardManagerIntervalId is used by Part 6
-    if (global.leaderboardManagerIntervalId) {
-        clearInterval(global.leaderboardManagerIntervalId);
-        console.log(`🔄 ${logPrefix} Restarting leaderboard manager...`);
-    }
+// --- Rock Paper Scissors (RPS) Logic ---
+const RPS_CHOICES = {
+  ROCK: 'rock',
+  PAPER: 'paper',
+  SCISSORS: 'scissors'
+};
+const RPS_EMOJIS = {
+  [RPS_CHOICES.ROCK]: '🪨',     // Rock emoji
+  [RPS_CHOICES.PAPER]: '📄',    // Paper emoji
+  [RPS_CHOICES.SCISSORS]: '✂️' // Scissors emoji
+};
+// Defines what each choice beats and the verb for the action.
+const RPS_RULES = {
+  [RPS_CHOICES.ROCK]: { beats: RPS_CHOICES.SCISSORS, verb: "crushes" },
+  [RPS_CHOICES.PAPER]: { beats: RPS_CHOICES.ROCK, verb: "covers" },
+  [RPS_CHOICES.SCISSORS]: { beats: RPS_CHOICES.PAPER, verb: "cuts" }
+};
 
-    const initialDelayMs = (parseInt(process.env.INIT_DELAY_MS, 10) || 5000) + 7000; // Stagger
-    console.log(`⚙️ [LeaderboardManager Start] Scheduling first leaderboard update run in ${initialDelayMs / 1000}s...`);
-
-    if (typeof updateLeaderboardsCycle !== 'function') { // updateLeaderboardsCycle needs to be defined
-        console.warn(`${logPrefix} updateLeaderboardsCycle function not available, leaderboard manager cannot start effectively.`);
-        // To prevent errors, we won't schedule it if the core logic function is missing.
-        // You might want to create a placeholder for updateLeaderboardsCycle if it doesn't exist yet.
-        return;
-    }
-
-    setTimeout(() => {
-        updateLeaderboardsCycle().catch(err => console.error("❌ [Initial Leaderboard Update Run] Error:", err.message, err.stack));
-        global.leaderboardManagerIntervalId = setInterval(updateLeaderboardsCycle, intervalMs);
-        if (global.leaderboardManagerIntervalId.unref) global.leaderboardManagerIntervalId.unref();
-        console.log(`✅ [LeaderboardManager Start] Leaderboard updates scheduled every ${intervalMs / (1000 * 60)} minutes.`);
-    }, initialDelayMs);
+// Gets a random RPS choice for the bot or an opponent if needed.
+function getRandomRPSChoice() {
+  const choicesArray = Object.values(RPS_CHOICES);
+  const randomChoiceKey = choicesArray[Math.floor(Math.random() * choicesArray.length)];
+  return { choice: randomChoiceKey, emoji: RPS_EMOJIS[randomChoiceKey] };
 }
 
+// Determines the outcome of an RPS match given two choices (e.g., RPS_CHOICES.ROCK).
+// Returns a detailed result object.
+function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey) {
+  const LOG_PREFIX_RPS_OUTCOME = "[RPS_Outcome]";
+  // Validate inputs against defined choices (case-insensitive for input flexibility, but uses canonical keys internally)
+  const p1c = String(player1ChoiceKey).toLowerCase();
+  const p2c = String(player2ChoiceKey).toLowerCase();
 
-// --- Deposit Monitoring Logic (from original Part P4, uses schema from Part 2) ---
-// Prevent overlapping runs
-monitorDepositsPolling.isRunning = false;
-async function monitorDepositsPolling() {
-    const logPrefix = '[DepositMonitor Polling]';
-    if (monitorDepositsPolling.isRunning) {
-        console.log(`${logPrefix} Run skipped, previous run still active.`);
-        return;
-    }
-    monitorDepositsPolling.isRunning = true;
-    // let batchUpdateClient = null; // Not used in this version
+  if (!Object.values(RPS_CHOICES).includes(p1c) || !Object.values(RPS_CHOICES).includes(p2c)) {
+    console.warn(`${LOG_PREFIX_RPS_OUTCOME} Invalid choices: P1='${player1ChoiceKey}', P2='${player2ChoiceKey}'`);
+    return {
+        result: 'error',
+        description: "Invalid choices were made.",
+        player1: { choice: player1ChoiceKey, emoji: '❓' },
+        player2: { choice: player2ChoiceKey, emoji: '❓' }
+    };
+  }
 
-    try {
-        const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10);
-        const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10);
+  const p1Emoji = RPS_EMOJIS[p1c];
+  const p2Emoji = RPS_EMOJIS[p2c];
 
-        // Query `user_deposit_wallets` for active, non-expired addresses (Schema from Part 2)
-        const pendingAddressesRes = await queryDatabase( // queryDatabase from Part 2
-            `SELECT wallet_id, public_key, user_telegram_id, derivation_path, expires_at
-             FROM user_deposit_wallets
-             WHERE is_active = TRUE AND expires_at > NOW()
-             ORDER BY created_at ASC -- Or some other logic like last_checked_at
-             LIMIT $1`,
-            [batchSize]
-        );
+  let resultDescription;
+  let outcome; // 'win_player1', 'win_player2', 'draw'
 
-        if (pendingAddressesRes.rowCount === 0) {
-            monitorDepositsPolling.isRunning = false;
-            return;
-        }
-        console.log(`${logPrefix} Found ${pendingAddressesRes.rowCount} active addresses to check.`);
+  if (p1c === p2c) { // Draw case
+    outcome = 'draw';
+    resultDescription = `${p1Emoji} ${p1c.charAt(0).toUpperCase() + p1c.slice(1)} vs ${p2Emoji} ${p2c.charAt(0).toUpperCase() + p2c.slice(1)}. It's a Draw!`;
+  } else if (RPS_RULES[p1c]?.beats === p2c) { // Player 1 wins
+    outcome = 'win_player1';
+    resultDescription = `${p1Emoji} ${p1c.charAt(0).toUpperCase() + p1c.slice(1)} ${RPS_RULES[p1c].verb} ${p2Emoji} ${p2c.charAt(0).toUpperCase() + p2c.slice(1)}. Player 1 wins!`;
+  } else { // Player 2 wins (since it's not a draw and P1 didn't win, implies P2's choice beats P1's)
+    outcome = 'win_player2';
+    // It's good practice to ensure player2's winning rule is also defined, even if logically implied here
+    resultDescription = `${p2Emoji} ${p2c.charAt(0).toUpperCase() + p2c.slice(1)} ${RPS_RULES[p2c]?.verb || 'beats'} ${p1Emoji} ${p1c.charAt(0).toUpperCase() + p1c.slice(1)}. Player 2 wins!`;
+  }
 
-        for (const row of pendingAddressesRes.rows) {
-            const depositAddress = row.public_key;
-            const userDepositWalletId = row.wallet_id; // from user_deposit_wallets
-            const userId = row.user_telegram_id;
-            const addrLogPrefix = `[Monitor Addr:${depositAddress.slice(0, 6)}.. WalletID:${userDepositWalletId} User:${userId}]`;
-
-            try {
-                const pubKey = new PublicKey(depositAddress); // PublicKey from Part 1
-                const signatures = await solanaConnection.getSignaturesForAddress(
-                    pubKey, { limit: sigFetchLimit }, DEPOSIT_CONFIRMATION_LEVEL
-                );
-
-                if (signatures && signatures.length > 0) {
-                    for (const sigInfo of signatures.reverse()) { // Process oldest first
-                        if (sigInfo?.signature && !hasProcessedDepositTx(sigInfo.signature)) { // hasProcessedDepositTx from Part P1
-                            const isConfirmed = sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized';
-                            if (!sigInfo.err && isConfirmed) {
-                                console.log(`${addrLogPrefix} Found new confirmed TX: ${sigInfo.signature}. Queuing.`);
-                                // depositProcessorQueue from Part 1
-                                // processDepositTransaction is defined below (original Part P4 version)
-                                depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, depositAddress, userDepositWalletId, userId))
-                                    .catch(queueError => console.error(`❌ ${addrLogPrefix} Error adding TX ${sigInfo.signature} to deposit queue: ${queueError.message}`));
-                                addProcessedDepositTx(sigInfo.signature); // Add to cache (Part P1)
-                            } else if (sigInfo.err) {
-                                addProcessedDepositTx(sigInfo.signature); // Cache failed TX too
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error(`❌ ${addrLogPrefix} Error checking signatures: ${error.message}`);
-                if (typeof isRetryableSolanaError === 'function' && isRetryableSolanaError(error) && (error?.status === 429 || String(error?.message).toLowerCase().includes('rate limit'))) {
-                    await sleep(2000 + Math.random() * 1000); // sleep from Part 1
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`❌ ${logPrefix} Error in main polling loop: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === 'function') await notifyAdmin(`🚨 ERROR in Deposit Monitor loop: ${escapeMarkdownV2(String(error.message || error))}`);
-    } finally {
-        monitorDepositsPolling.isRunning = false;
-    }
+  return {
+    result: outcome,
+    description: resultDescription, // A full sentence describing the outcome
+    player1: { choice: p1c, emoji: p1Emoji },
+    player2: { choice: p2c, emoji: p2Emoji }
+  };
 }
+console.log("Part 4: Simplified Game Logic (Enhanced) - Complete.");
 
-// --- Deposit Transaction Processing (from original Part P4, uses schema from Part 2) ---
-async function processDepositTransaction(txSignature, depositAddress, userDepositWalletId, userId) {
-    const logPrefix = `[ProcessDeposit TX:${txSignature.slice(0, 6)}.. Addr:${depositAddress.slice(0,6)}.. WalletID:${userDepositWalletId} User:${userId}]`;
-    console.log(`${logPrefix} Processing...`);
-    let client = null;
-
-    try {
-        const tx = await solanaConnection.getTransaction(txSignature, {
-            maxSupportedTransactionVersion: 0, commitment: DEPOSIT_CONFIRMATION_LEVEL
-        });
-
-        if (!tx || tx.meta?.err) {
-            console.log(`ℹ️ ${logPrefix} TX ${txSignature} failed on-chain or not found. Error: ${JSON.stringify(tx?.meta?.err)}. Ignoring.`);
-            addProcessedDepositTx(txSignature); // from Part P1
-            return;
-        }
-
-        const { transferAmount, payerAddress } = analyzeTransactionAmounts(tx, depositAddress); // from Part P1
-
-        if (transferAmount <= 0n) {
-            console.log(`ℹ️ ${logPrefix} No positive SOL transfer to ${depositAddress} in TX ${txSignature}. Ignoring.`);
-            addProcessedDepositTx(txSignature);
-            return;
-        }
-        const depositAmountSOL = formatCurrency(transferAmount); // from Part 3
-        console.log(`✅ ${logPrefix} Valid deposit: ${depositAmountSOL} from ${payerAddress || 'unknown'}.`);
-
-        client = await pool.connect(); // pool from Part 1
-        await client.query('BEGIN');
-
-        // recordConfirmedDepositDB from Part P2 (compatible with Part 2 schema)
-        const depositRecordResult = await recordConfirmedDepositDB(client, userId, userDepositWalletId, depositAddress, txSignature, transferAmount, payerAddress, tx.blockTime);
-        if (depositRecordResult.alreadyProcessed) {
-            console.warn(`⚠️ ${logPrefix} TX ${txSignature} already processed in DB (ID: ${depositRecordResult.depositId}). Rolling back.`);
-            await client.query('ROLLBACK'); addProcessedDepositTx(txSignature); return;
-        }
-        if (!depositRecordResult.success || !depositRecordResult.depositId) {
-            throw new Error(`Failed to record deposit in DB for ${txSignature}: ${depositRecordResult.error}`);
-        }
-        const depositId = depositRecordResult.depositId;
-
-        // markDepositAddressInactiveDB from Part P2 (compatible with user_deposit_wallets table)
-        await markDepositAddressInactiveDB(client, userDepositWalletId); // Note: Original P4 didn't specify swept details here.
-        console.log(`${logPrefix} Marked deposit address wallet ID ${userDepositWalletId} as inactive.`);
-
-        // updateUserBalanceAndLedger from Part P2
-        const ledgerNote = `Deposit from ${payerAddress ? payerAddress.slice(0,6)+'..' : 'Unknown'} to ${depositAddress.slice(0,6)}.. TX:${txSignature.slice(0,6)}..`;
-        const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, transferAmount, 'deposit', { deposit_id: depositId }, ledgerNote);
-        if (!balanceUpdateResult.success || typeof balanceUpdateResult.newBalanceLamports === 'undefined') {
-            throw new Error(`Failed to update user ${userId} balance/ledger: ${balanceUpdateResult.error}`);
-        }
-        const newBalanceSOL = formatCurrency(balanceUpdateResult.newBalanceLamports);
-
-        // --- Referral Linking/Checks on First Deposit (Placeholder from original Part P4) ---
-        // This logic would involve checking `pendingReferrals` cache (Part 1)
-        // and calling a DB op like `linkReferral` (from Part P2, if defined).
-        console.log(`${logPrefix} TODO: Implement referral linking checks here if applicable, ensuring schema compatibility.`);
-
-        await client.query('COMMIT');
-        console.log(`✅ ${logPrefix} DB TX committed. User ${userId} new balance: ${newBalanceSOL}.`);
-
-        await safeSendMessage(userId, // safeSendMessage from Part 1
-            `✅ *Deposit Confirmed!* ✅\n\n` +
-            `Amount: *${escapeMarkdownV2(depositAmountSOL)}*\n` +
-            `New Balance: *${escapeMarkdownV2(newBalanceSOL)}*\n` +
-            `TX: \`${escapeMarkdownV2(txSignature)}\`\n\n` +
-            `You can now play games!`,
-            { parse_mode: 'MarkdownV2' }
-        );
-        addProcessedDepositTx(txSignature);
-    } catch (error) {
-        console.error(`❌ ${logPrefix} CRITICAL ERROR: ${error.message}`, error.stack);
-        if (client) { await client.query('ROLLBACK').catch(rbErr => console.error(`❌ ${logPrefix} Rollback failed:`, rbErr)); }
-        if (typeof notifyAdmin === 'function') {
-            await notifyAdmin(`🚨 CRITICAL Error Processing Deposit TX \`${escapeMarkdownV2(txSignature)}\` Addr \`${escapeMarkdownV2(depositAddress)}\` User \`${escapeMarkdownV2(userId)}\`:\n${escapeMarkdownV2(String(error.message || error))}`);
-        }
-        addProcessedDepositTx(txSignature);
-    } finally {
-        if (client) client.release();
-    }
-}
-
-// --- Deposit Address Sweeping Logic (from original Part P4, uses schema from Part 2) ---
-sweepDepositAddresses.isRunning = false;
-async function sweepDepositAddresses() {
-    const logPrefix = '[DepositSweeper]';
-    if (sweepDepositAddresses.isRunning) { console.log(`${logPrefix} Run skipped, previous sweep still active.`); return; }
-    sweepDepositAddresses.isRunning = true;
-    console.log(`🧹 ${logPrefix} Starting sweep cycle...`);
-    // This is a placeholder from original Part P4.
-    // The full implementation would:
-    // 1. Get MAIN_BOT_PRIVATE_KEY to determine sweepTargetAddress.
-    // 2. Query `user_deposit_wallets` for addresses that are `is_active = FALSE` and `swept_at IS NULL`.
-    // 3. For each, derive Keypair using `getKeypairFromPath` and `derivation_path` (from `user_deposit_wallets`).
-    // 4. Check balance. If sufficient, calculate `amountToSweep`.
-    // 5. Call `sendSol` (Part P1) using the derived depositKeypair as the payer.
-    // 6. On success, update `user_deposit_wallets` (set `swept_at`, `balance_at_sweep` - potentially via `markDepositAddressInactiveDB` if it's adapted or a new function).
-    // 7. Log to `processed_sweeps` table.
-    // IMPORTANT: The `sendSol` function in Part P1 is designed to send *from* MAIN_BOT_PRIVATE_KEY or REFERRAL_PAYOUT_PRIVATE_KEY.
-    // For sweeping, `sendSol` would need to be adapted or a new function created that accepts the `depositKeypair` as the signer/source of funds.
-    console.log(`${logPrefix} Placeholder for sweep logic (compatible with Part 2 schema). Processed: 0, Swept: 0.`);
-    // Example (Conceptual - needs sendSol adaptation and full error/retry handling):
-    /*
-    const addressesToSweep = await queryDatabase("SELECT wallet_id, public_key, derivation_path FROM user_deposit_wallets WHERE is_active = FALSE AND swept_at IS NULL LIMIT some_limit");
-    for (const addr of addressesToSweep.rows) {
-        const depositKeypair = getKeypairFromPath(addr.derivation_path);
-        if (!depositKeypair || depositKeypair.publicKey.toBase58() !== addr.public_key) {
-             console.error(`${logPrefix} Key derivation mismatch for ${addr.public_key}`); continue;
-        }
-        const balance = await solanaConnection.getBalance(depositKeypair.publicKey);
-        const rentExemption = await solanaConnection.getMinimumBalanceForRentExemption(0);
-        const feeBuffer = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS || 5000);
-        const amountToSweep = balance - rentExemption - feeBuffer; // Simplified, check for enough to cover its own tx fee if any
-
-        if (amountToSweep > 0n) {
-            // Hypothetical adapted sendSol: sendSol(targetMainAddress, amountToSweep, 'sweep_internal', depositKeypair)
-            // On success: await markDepositAddressInactiveDB(client, addr.wallet_id, true, balance); // Mark as swept
-        } else {
-            // Mark as swept_low_balance or just update swept_at if balance is zero but not marked.
-        }
-    }
-    */
-    sweepDepositAddresses.isRunning = false;
-}
-
-
-// --- Payout Job Processing Logic (using more complete versions from "Extracted" block) ---
-/**
- * Adds a job to the payout queue.
- * @param {{type: 'payout_withdrawal' | 'payout_referral', withdrawalId?: number, payoutId?: number, userId: string|number}} jobData
- */
-async function addPayoutJob(jobData) {
-    const jobType = jobData?.type || 'unknown_job';
-    const jobId = jobData?.withdrawalId || jobData?.payoutId || 'N/A_ID';
-    const logPrefix = `[AddPayoutJob Type:${jobType} ID:${jobId}]`;
-    console.log(`⚙️ ${logPrefix} Adding job to payout queue for user ${jobData.userId || 'N/A'}.`);
-
-    // Ensure dependencies are loaded (these should be from Part 1 or global scope)
-    if (typeof payoutProcessorQueue === 'undefined' ||
-        typeof process.env.PAYOUT_JOB_RETRIES === 'undefined' || // Accessed via process.env
-        typeof process.env.PAYOUT_JOB_RETRY_DELAY_MS === 'undefined' || // Accessed via process.env
-        typeof sleep === 'undefined' ||
-        typeof notifyAdmin === 'undefined' ||
-        typeof escapeMarkdownV2 === 'undefined') {
-        console.error(`${logPrefix} Required queue or constants/utilities for payout jobs are not defined or accessible.`);
-        if (typeof notifyAdmin === "function" && typeof escapeMarkdownV2 === "function") {
-            notifyAdmin(`🚨 ERROR: Cannot add payout job ${escapeMarkdownV2(jobType)}:${escapeMarkdownV2(jobId)}. Required queue/utilities missing.`);
-        }
-        return; // Cannot add job if queue/dependencies are missing
-    }
-
-    payoutProcessorQueue.add(async () => {
-        let attempts = 0;
-        const maxAttempts = (parseInt(process.env.PAYOUT_JOB_RETRIES, 10) || 3) + 1;
-        const baseDelayMs = parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10) || 5000;
-
-        while(attempts < maxAttempts) {
-            attempts++;
-            const attemptLogPrefix = `[PayoutJob Attempt:${attempts}/${maxAttempts} Type:${jobType} ID:${jobId}]`;
-            try {
-                console.log(`${attemptLogPrefix} Starting processing...`);
-                if (jobData.type === 'payout_withdrawal' && typeof handleWithdrawalPayoutJob === 'function') {
-                    await handleWithdrawalPayoutJob(jobData.withdrawalId);
-                } else if (jobData.type === 'payout_referral' && typeof handleReferralPayoutJob === 'function') {
-                    await handleReferralPayoutJob(jobData.payoutId);
-                } else {
-                    throw new Error(`Unknown or unavailable payout job type handler: ${jobData.type}`);
-                }
-                console.log(`✅ ${attemptLogPrefix} Job completed successfully.`);
-                return; // Success, exit retry loop
-            } catch(error) {
-                console.warn(`⚠️ ${attemptLogPrefix} Attempt failed: ${error.message}`);
-                const isRetryableFlag = error.isRetryable === true;
-
-                if (!isRetryableFlag || attempts >= maxAttempts) {
-                    console.error(`❌ ${attemptLogPrefix} Job failed permanently after ${attempts} attempts. Error: ${error.message}`);
-                    if (typeof notifyAdmin === "function" && typeof escapeMarkdownV2 === "function") {
-                        notifyAdmin(`🚨 PAYOUT JOB FAILED (Permanent): Type: ${escapeMarkdownV2(jobType)}, ID: ${escapeMarkdownV2(jobId)}, Attempts: ${attempts}. Error: ${escapeMarkdownV2(String(error.message || error))}`).catch(()=>{});
-                    }
-                    return; // Exit loop
-                }
-                const delayWithJitter = baseDelayMs * Math.pow(2, attempts - 1) * (0.8 + Math.random() * 0.4);
-                console.log(`⏳ ${attemptLogPrefix} Retrying in ~${Math.round(delayWithJitter / 1000)}s...`);
-                await sleep(delayWithJitter);
-            }
-        }
-    }).catch(queueError => {
-        console.error(`❌ ${logPrefix} CRITICAL Error processing job in Payout Queue: ${queueError.message}`);
-        if (typeof notifyAdmin === "function" && typeof escapeMarkdownV2 === "function") {
-            notifyAdmin(`🚨 CRITICAL Payout Queue Error. Type: ${escapeMarkdownV2(jobType)}, ID: ${escapeMarkdownV2(jobId)}. Error: ${escapeMarkdownV2(String(queueError.message || queueError))}`).catch(()=>{});
-        }
-    });
-}
-
-async function handleWithdrawalPayoutJob(withdrawalId) {
-    const logPrefix = `[WithdrawJob ID:${withdrawalId}]`;
-    console.log(`⚙️ ${logPrefix} Processing withdrawal job...`);
-    let clientForRefund = null;
-    let sendSolResult = { success: false, error: "Send SOL not initiated", isRetryable: false };
-
-    // Ensure dependencies are available globally or passed correctly.
-    // These checks are simplified; in a real app, ensure robust dependency injection or global availability.
-    if (typeof getWithdrawalDetailsDB !== 'function' || typeof updateWithdrawalStatusDB !== 'function' ||
-        typeof sendSol !== 'function' || typeof pool === 'undefined' ||
-        typeof updateUserBalanceAndLedger !== 'function' || typeof safeSendMessage !== 'function' ||
-        typeof notifyAdmin !== 'function' || typeof escapeMarkdownV2 !== 'function' ||
-        typeof isRetryableSolanaError !== 'function' || typeof formatCurrency !== 'function') { // formatCurrency or formatSol
-        const error = new Error("Internal Error: Withdrawal payout job is missing critical function dependencies.");
-        error.isRetryable = false; throw error;
-    }
-
-    const details = await getWithdrawalDetailsDB(withdrawalId); // From Part P2
-    if (!details) {
-        console.error(`❌ ${logPrefix} Withdrawal details not found for ID ${withdrawalId}. Cannot process.`);
-        const error = new Error(`Withdrawal details not found for ID ${withdrawalId}. Job cannot proceed.`);
-        error.isRetryable = false; throw error;
-    }
-
-    if (details.status === 'completed' || details.status === 'failed') {
-        console.log(`ℹ️ ${logPrefix} Job skipped, withdrawal ID ${withdrawalId} already in terminal state '${details.status}'.`);
-        return;
-    }
-
-    // Ensure BigInt for amounts coming from DB if they are stored as strings/numbers
-    const userId = details.user_telegram_id; // Assuming schema from Part 2
-    const recipient = details.destination_address;
-    const amountToActuallySend = BigInt(details.amount_lamports);
-    const feeApplied = BigInt(details.fee_lamports);
-    const totalAmountDebitedFromBalance = amountToActuallySend + feeApplied;
-
-    try {
-        const statusUpdatedToProcessing = await updateWithdrawalStatusDB(withdrawalId, 'processing'); // Part P2
-        if (!statusUpdatedToProcessing) {
-            const currentDetailsAfterAttempt = await getWithdrawalDetailsDB(withdrawalId);
-            if (currentDetailsAfterAttempt && (currentDetailsAfterAttempt.status === 'completed' || currentDetailsAfterAttempt.status === 'failed')) {
-                console.warn(`⚠️ ${logPrefix} Failed to update status to 'processing' for ID ${withdrawalId}, but it's already '${currentDetailsAfterAttempt.status}'. Exiting job as no-op.`);
-                return;
-            }
-            const error = new Error(`Failed to update withdrawal ${withdrawalId} status to 'processing'. Current: ${currentDetailsAfterAttempt?.status}`);
-            error.isRetryable = true; throw error;
-        }
-        console.log(`${logPrefix} Status updated to 'processing'. Attempting to send ${formatCurrency(amountToActuallySend)} SOL.`);
-
-        sendSolResult = await sendSol(recipient, amountToActuallySend, 'withdrawal'); // Part P1
-
-        if (sendSolResult.success && sendSolResult.signature) {
-            console.log(`✅ ${logPrefix} sendSol successful for withdrawal ID ${withdrawalId}. TX: ${sendSolResult.signature}. Marking 'completed'.`);
-            await updateWithdrawalStatusDB(withdrawalId, 'completed', null, sendSolResult.signature);
-            await safeSendMessage(userId,
-                `✅ *Withdrawal Completed\\!* ✅\n\n` +
-                `Amount: *${escapeMarkdownV2(formatCurrency(amountToActuallySend))}* sent to \`${escapeMarkdownV2(recipient)}\`\\.\n` +
-                `TX: \`${escapeMarkdownV2(sendSolResult.signature)}\``,
-                { parse_mode: 'MarkdownV2' }
-            );
-            return;
-        } else {
-            const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure.';
-            console.error(`❌ ${logPrefix} sendSol FAILED for withdrawal ID ${withdrawalId}. Reason: ${sendErrorMsg}. Attempting to mark 'failed' and refund user.`);
-            await updateWithdrawalStatusDB(withdrawalId, 'failed', null, null, sendErrorMsg.substring(0, 500));
-
-            clientForRefund = await pool.connect();
-            await clientForRefund.query('BEGIN');
-            const refundUpdateResult = await updateUserBalanceAndLedger(
-                clientForRefund, userId, totalAmountDebitedFromBalance,
-                'withdrawal_refund', { withdrawal_id: withdrawalId }, `Refund for failed withdrawal ID ${withdrawalId}` // Corrected relatedIds
-            );
-            if (refundUpdateResult.success) {
-                await clientForRefund.query('COMMIT');
-                console.log(`✅ ${logPrefix} Successfully refunded ${formatCurrency(totalAmountDebitedFromBalance)} to user ${userId} for failed withdrawal ${withdrawalId}.`);
-                await safeSendMessage(userId,
-                    `⚠️ Your withdrawal of ${escapeMarkdownV2(formatCurrency(amountToActuallySend))} failed \\(Reason: ${escapeMarkdownV2(sendErrorMsg)}\\)\\. The amount ${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromBalance))} \\(including fee\\) has been refunded to your internal balance\\.`,
-                    {parse_mode: 'MarkdownV2'}
-                );
-            } else {
-                await clientForRefund.query('ROLLBACK');
-                console.error(`❌ CRITICAL ${logPrefix} FAILED TO REFUND USER ${userId} for withdrawal ${withdrawalId}. Amount: ${formatCurrency(totalAmountDebitedFromBalance)}. Refund DB Error: ${refundUpdateResult.error}`);
-                await notifyAdmin(
-                    `🚨🚨 CRITICAL: FAILED REFUND User ${escapeMarkdownV2(String(userId))}/WD ${withdrawalId}/Amt ${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromBalance))}. SendErr: ${escapeMarkdownV2(sendErrorMsg)} RefundErr: ${escapeMarkdownV2(refundUpdateResult.error || 'Unknown DB error')}`
-                );
-            }
-            clientForRefund.release(); clientForRefund = null;
-
-            const errorToThrowForRetry = new Error(sendErrorMsg);
-            errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
-            throw errorToThrowForRetry;
-        }
-    } catch (jobError) {
-        console.error(`❌ ${logPrefix} Error during withdrawal job ID ${withdrawalId}: ${jobError.message}`, jobError.stack);
-        if (jobError.isRetryable === undefined) {
-            jobError.isRetryable = isRetryableSolanaError(jobError) || sendSolResult.isRetryable === true;
-        }
-        const currentDetailsAfterJobError = await getWithdrawalDetailsDB(withdrawalId);
-        if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'completed' && currentDetailsAfterJobError.status !== 'failed') {
-            await updateWithdrawalStatusDB(withdrawalId, 'failed', null, null, `Job error: ${escapeMarkdownV2(jobError.message)}`.substring(0,500));
-        }
-        throw jobError;
-    } finally {
-        if (clientForRefund) clientForRefund.release();
-    }
-}
-
-async function handleReferralPayoutJob(payoutId) {
-    const logPrefix = `[ReferralJob ID:${payoutId}]`;
-    console.log(`⚙️ ${logPrefix} Processing referral payout job...`);
-    let sendSolResult = { success: false, error: "Send SOL not initiated for referral", isRetryable: false };
-
-    if (typeof getReferralPayoutDetailsDB !== 'function' || typeof getPaymentSystemUserDetails !== 'function' || /* Replaced getUserWalletDetails */
-        typeof updateReferralPayoutStatusDB !== 'function' || typeof sendSol !== 'function' ||
-        typeof safeSendMessage !== 'function' || typeof notifyAdmin !== 'function' ||
-        typeof escapeMarkdownV2 !== 'function' || typeof isRetryableSolanaError !== 'function' ||
-        typeof formatCurrency !== 'function') { // formatCurrency or formatSol
-        const error = new Error("Internal Error: Referral payout job is missing critical function dependencies.");
-        error.isRetryable = false; throw error;
-    }
-
-    const details = await getReferralPayoutDetailsDB(payoutId); // Part P2
-    if (!details) {
-        console.error(`❌ ${logPrefix} Referral payout details not found for ID ${payoutId}.`);
-        const error = new Error(`Referral payout details not found for ID ${payoutId}. Cannot proceed.`);
-        error.isRetryable = false; throw error;
-    }
-    if (details.status === 'paid' || details.status === 'failed') {
-        console.log(`ℹ️ ${logPrefix} Job skipped, referral payout ID ${payoutId} already in terminal state '${details.status}'.`); return;
-    }
-
-    const referrerUserId = details.referrer_telegram_id; // Assuming schema from Part 2
-    const amountToPay = BigInt(details.commission_amount_lamports); // Assuming schema from Part 2
-    const amountToPaySOL = formatCurrency(amountToPay);
-
-    try {
-        const referrerDetails = await getPaymentSystemUserDetails(referrerUserId); // Part P2
-        if (!referrerDetails?.solana_wallet_address) { // Schema from Part 2 `users` table
-            const noWalletMsg = `Referrer ${referrerUserId} has no linked external withdrawal address for referral payout ID ${payoutId}.`;
-            console.error(`❌ ${logPrefix} ${noWalletMsg}`);
-            await updateReferralPayoutStatusDB(payoutId, 'failed', null, null, noWalletMsg.substring(0,500));
-            const error = new Error(noWalletMsg); error.isRetryable = false; throw error;
-        }
-        const recipientAddress = referrerDetails.solana_wallet_address;
-
-        await updateReferralPayoutStatusDB(payoutId, 'processing');
-        console.log(`${logPrefix} Status updated to 'processing'. Attempting to send ${amountToPaySOL} to ${recipientAddress}.`);
-
-        sendSolResult = await sendSol(recipientAddress, amountToPay, 'referral'); // Part P1
-
-        if (sendSolResult.success && sendSolResult.signature) {
-            console.log(`✅ ${logPrefix} sendSol successful for referral payout ID ${payoutId}. TX: ${sendSolResult.signature}. Marking 'paid'.`);
-            await updateReferralPayoutStatusDB(payoutId, 'paid', null, sendSolResult.signature);
-
-            const rewardTypeMsg = details.commission_type || 'Referral Bonus'; // commission_type from Part 2 schema
-            // const refereeDisplayName = ... (would need to fetch referee's name if needed for message)
-            await safeSendMessage(referrerUserId,
-                `💰 *${escapeMarkdownV2(rewardTypeMsg)} Paid\\!* 💰\n\n` +
-                `Amount: *${escapeMarkdownV2(amountToPaySOL)}* sent to your linked wallet \`${escapeMarkdownV2(recipientAddress)}\`\\.\n` +
-                `TX: \`${escapeMarkdownV2(sendSolResult.signature)}\``,
-                { parse_mode: 'MarkdownV2' }
-            );
-            return;
-        } else {
-            const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure for referral payout.';
-            console.error(`❌ ${logPrefix} sendSol FAILED for referral payout ID ${payoutId}. Reason: ${sendErrorMsg}.`);
-            await updateReferralPayoutStatusDB(payoutId, 'failed', null, null, sendErrorMsg.substring(0, 500));
-            await safeSendMessage(referrerUserId,
-                `❌ Your Referral Reward of ${escapeMarkdownV2(amountToPaySOL)} failed to send \\(Reason: ${escapeMarkdownV2(sendErrorMsg)}\\)\\. Please contact support if this issue persists\\.`,
-                {parse_mode: 'MarkdownV2'}
-            );
-            await notifyAdmin(
-                `🚨 REFERRAL PAYOUT FAILED (Referrer ${escapeMarkdownV2(String(referrerUserId))}, Payout ID ${payoutId}, Amount ${escapeMarkdownV2(amountToPaySOL)}): ${escapeMarkdownV2(sendErrorMsg)}`
-            );
-            const errorToThrowForRetry = new Error(sendErrorMsg);
-            errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
-            throw errorToThrowForRetry;
-        }
-    } catch (jobError) {
-        console.error(`❌ ${logPrefix} Error during referral payout job ID ${payoutId}: ${jobError.message}`, jobError.stack);
-        if (jobError.isRetryable === undefined) {
-            jobError.isRetryable = isRetryableSolanaError(jobError) || sendSolResult.isRetryable === true;
-        }
-        const currentDetailsAfterJobError = await getReferralPayoutDetailsDB(payoutId);
-        if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'paid' && currentDetailsAfterJobError.status !== 'failed') {
-            await updateReferralPayoutStatusDB(payoutId, 'failed', null, null, `Job error: ${escapeMarkdownV2(jobError.message)}`.substring(0,500));
-        }
-        throw jobError;
-    }
-}
-
-
-// --- Webhook Handling (if ENABLE_PAYMENT_WEBHOOKS === 'true' in Part 1) ---
-if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
-    const PAYMENT_WEBHOOK_PORT = parseInt(process.env.PAYMENT_WEBHOOK_PORT, 10) || 3000;
-    const PAYMENT_WEBHOOK_PATH = process.env.PAYMENT_WEBHOOK_PATH || '/webhook/solana-payment';
-    const PAYMENT_WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET;
-
-    if (app) { // app is the express instance from Part 1
-        app.post(PAYMENT_WEBHOOK_PATH, async (req, res) => {
-            const webhookLogPrefix = `[PaymentWebhook ${PAYMENT_WEBHOOK_PATH}]`;
-            console.log(`${webhookLogPrefix} Received POST request.`);
-            try {
-                if (PAYMENT_WEBHOOK_SECRET) {
-                    // Implement robust signature validation here
-                    // Example: const signature = req.headers['x-some-signature'];
-                    // if (!isValidWebhookSignature(req.rawBody || JSON.stringify(req.body), signature, PAYMENT_WEBHOOK_SECRET)) {
-                    // console.warn(`${webhookLogPrefix} Invalid signature.`);
-                    // return res.status(401).send('Unauthorized');
-                    // }
-                    console.log(`${webhookLogPrefix} TODO: Implement robust webhook signature validation if secret is set.`);
-                }
-
-                const payload = req.body;
-                console.log(`${webhookLogPrefix} Payload:`, stringifyWithBigInt(payload)); // stringifyWithBigInt from Part 1
-
-                // Adapt based on actual webhook payload structure
-                const { transactionSignature, depositToAddress /*, amount, status, etc. */ } = payload;
-
-                if (!transactionSignature || !depositToAddress) {
-                    console.warn(`${webhookLogPrefix} Webhook missing critical data (transactionSignature or depositToAddress).`);
-                    return res.status(400).send('Missing data');
-                }
-
-                if (!hasProcessedDepositTx(transactionSignature)) { // from Part P1
-                    // findDepositAddressInfoDB from Part P2 (compatible with user_deposit_wallets schema)
-                    const addrInfo = await findDepositAddressInfoDB(depositToAddress);
-                    if (addrInfo && addrInfo.isActive && new Date(addrInfo.expiresAt).getTime() > Date.now()) {
-                        console.log(`${webhookLogPrefix} Valid webhook for active address. Queuing TX: ${transactionSignature} for User: ${addrInfo.userId}`);
-                        // processDepositTransaction uses user_deposit_wallets schema
-                        depositProcessorQueue.add(() => processDepositTransaction(transactionSignature, depositToAddress, addrInfo.walletId, addrInfo.userId))
-                            .catch(queueError => console.error(`❌ ${webhookLogPrefix} Error adding TX ${transactionSignature} to deposit queue from webhook: ${queueError.message}`));
-                        addProcessedDepositTx(transactionSignature);
-                    } else {
-                        console.warn(`${webhookLogPrefix} Webhook for inactive/expired/unknown address ${depositToAddress}. Ignoring TX ${transactionSignature}. AddrInfo:`, addrInfo);
-                    }
-                } else {
-                    console.log(`${webhookLogPrefix} TX ${transactionSignature} already processed or seen (via cache). Ignoring webhook.`);
-                }
-                res.status(200).send('Webhook received');
-            } catch (error) {
-                console.error(`❌ ${webhookLogPrefix} Error processing webhook:`, error);
-                res.status(500).send('Internal Server Error');
-            }
-        });
-        // The app.listen call will be in Part 6 (main startup)
-        console.log(`✅ Payment webhook route ${PAYMENT_WEBHOOK_PATH} configured (server to be started in Part 6).`);
-    } else {
-        console.warn("⚠️ ENABLE_PAYMENT_WEBHOOKS is true, but Express app instance is not available. Webhook endpoint not set up.");
-    }
-}
-
-console.log("Part P4: Payment System Background Tasks & Webhook Handling - Complete.");
-// --- End of Part P4 ---
+// --- End of Part 4 ---
 // --- Start of Part 5a, Section 1 ---
 // index.js - Part 5a, Section 1: Core Listeners, General Command Handlers & Payment UI Integration
 //---------------------------------------------------------------------------
