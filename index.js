@@ -57,10 +57,8 @@ const CASINO_ENV_DEFAULTS = {
   'DB_REJECT_UNAUTHORIZED': 'true',
   'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
   'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
-  // MIN_BET_AMOUNT_LAMPORTS and MAX_BET_AMOUNT_LAMPORTS will now be secondary to USD limits for user input
-  // but can serve as absolute floors/ceilings for lamport values after USD conversion.
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000',    // 0.005 SOL (example, might be derived from MIN_BET_USD)
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL (example, might be derived from MAX_BET_USD)
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000',
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000',
   'COMMAND_COOLDOWN_MS': '1500',
   'JOIN_GAME_TIMEOUT_MS': '120000',
   'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
@@ -78,12 +76,12 @@ const CASINO_ENV_DEFAULTS = {
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', // Default single mainnet RPC
-  'RPC_URLS': '', // Comma-separated list for RateLimitedConnection pool
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/',
+  'RPC_URLS': '',
   'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
   'DEPOSIT_CONFIRMATIONS': 'confirmed',
   'WITHDRAWAL_FEE_LAMPORTS': '5000',
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000', // Approx 0.01 SOL
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000',
   'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '1000',
   'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
   'PAYOUT_COMPUTE_UNIT_LIMIT': '200000',
@@ -112,18 +110,17 @@ const PAYMENT_ENV_DEFAULTS = {
   'DEPOSIT_MONITOR_INTERVAL_MS': '20000',
   'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '50',
   'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '5',
-  'WALLET_CACHE_TTL_MS': (10 * 60 * 1000).toString(), // 10 minutes
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (61 * 60 * 1000).toString(), // 61 minutes (to align with 60 min expiry)
+  'WALLET_CACHE_TTL_MS': (10 * 60 * 1000).toString(),
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (61 * 60 * 1000).toString(),
   'MAX_PROCESSED_TX_CACHE': '5000',
   'INIT_DELAY_MS': '5000',
   'ENABLE_PAYMENT_WEBHOOKS': 'false',
   'PAYMENT_WEBHOOK_PORT': '3000',
   'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payment',
-  // NEW: Price Feed and USD Bet Limit Defaults
   'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (2 * 60 * 1000).toString(), // 2 minutes
-  'MIN_BET_USD': '1.00', // Minimum bet of $1.00 USD
-  'MAX_BET_USD': '50.00', // Maximum bet of $50.00 USD
+  'SOL_USD_PRICE_CACHE_TTL_MS': (2 * 60 * 1000).toString(),
+  'MIN_BET_USD': '1.00',
+  'MAX_BET_USD': '50.00',
 };
 
 const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
@@ -135,7 +132,6 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
   }
 });
 
-// Core Configuration Constants
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -148,7 +144,6 @@ const REFERRAL_PAYOUT_PRIVATE_KEY = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '').split(',').map(u => u.trim()).filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
 const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
 
-// Parsed Numeric/Boolean Configuration
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
@@ -159,11 +154,8 @@ const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE
 const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
 const DICE_21_BOT_STAND_SCORE = parseInt(process.env.DICE_21_BOT_STAND_SCORE, 10);
 
-// Original lamport-based bet limits (can act as secondary validation or be deprecated for user input)
 const MIN_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MIN_BET_AMOUNT_LAMPORTS);
 const MAX_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MAX_BET_AMOUNT_LAMPORTS);
-
-// NEW: USD Bet Limits (primary for user input)
 const MIN_BET_USD_val = parseFloat(process.env.MIN_BET_USD);
 const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
@@ -175,15 +167,13 @@ const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
 const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION;
 const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
 
-const SOL_DECIMALS = 9; // Standard Solana decimal places
+const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 
-
-// Critical Startup Validations
 if (!BOT_TOKEN) { console.error("FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
@@ -199,7 +189,6 @@ for (const [key, value] of Object.entries(criticalGameScores)) {
         process.exit(1);
     }
 }
-// Validate new USD bet limits
 if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) {
     console.error(`FATAL ERROR: MIN_BET_USD (${process.env.MIN_BET_USD}) must be a positive number.`);
     process.exit(1);
@@ -208,7 +197,6 @@ if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
     console.error(`FATAL ERROR: MAX_BET_USD (${process.env.MAX_BET_USD}) must be >= MIN_BET_USD and be a number.`);
     process.exit(1);
 }
-// Lamport limits (still useful as sanity checks for converted values)
 if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
     console.error(`FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS (${MIN_BET_AMOUNT_LAMPORTS_config}) must be a positive number.`);
     process.exit(1);
@@ -217,7 +205,6 @@ if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Num
     console.error(`FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS (${MAX_BET_AMOUNT_LAMPORTS_config}) must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`);
     process.exit(1);
 }
-
 
 console.log("BOT_TOKEN loaded successfully.");
 if (ADMIN_USER_ID) console.log(`Admin User ID: ${ADMIN_USER_ID} loaded.`);
@@ -229,7 +216,7 @@ if (REFERRAL_PAYOUT_PRIVATE_KEY) console.log("Payment System: REFERRAL_PAYOUT_PR
 console.log("--- Game Settings Loaded ---");
 console.log(`Dice Escalator - Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Bot Stand Score: ${BOT_STAND_SCORE_DICE_ESCALATOR}, Jackpot Contribution: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%`);
 console.log(`Dice 21 - Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand Score: ${DICE_21_BOT_STAND_SCORE}`);
-console.log(`User Bet Limits (Primary): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} USD`); // NEW USD display
+console.log(`User Bet Limits (Primary): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} USD`);
 console.log(`Internal Lamport Bet Limits (Fallback/Reference): ${MIN_BET_AMOUNT_LAMPORTS_config} - ${MAX_BET_AMOUNT_LAMPORTS_config} lamports`);
 console.log(`Default Starting Balance: ${DEFAULT_STARTING_BALANCE_LAMPORTS} lamports`);
 console.log(`Command Cooldown: ${COMMAND_COOLDOWN_MS}ms`);
@@ -240,7 +227,6 @@ console.log(`Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes`)
 console.log(`SOL/USD Price API URL: ${process.env.SOL_PRICE_API_URL}`);
 console.log("-----------------------------");
 
-// --- PostgreSQL Pool Setup ---
 console.log("⚙️ Setting up PostgreSQL Pool...");
 const useSsl = process.env.DB_SSL === 'true';
 const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
@@ -269,13 +255,10 @@ pool.on('error', (err, client) => {
 });
 console.log("✅ PostgreSQL Pool created.");
 
-// --- Database Query Helper (from Part 2, but essential for other parts, ensure defined early) ---
 async function queryDatabase(sql, params = [], dbClient = pool) {
     const logPrefix = '[queryDatabase]';
     try {
-        // console.debug(`${logPrefix} SQL: ${sql.substring(0, 100)}... Params:`, params);
         const result = await dbClient.query(sql, params);
-        // console.debug(`${logPrefix} Result: ${result.rowCount} rows affected/returned.`);
         return result;
     } catch (error) {
         console.error(`${logPrefix} Error executing query. SQL (start): "${sql.substring(0,100)}..." Params: [${params.join(', ')}] Error: ${error.message}`);
@@ -284,14 +267,12 @@ async function queryDatabase(sql, params = [], dbClient = pool) {
 }
 console.log("[Global Utils] queryDatabase helper function defined.");
 
-
-// --- Solana Connection Setup ---
 console.log("⚙️ Setting up Solana Connection...");
 const solanaConnection = new RateLimitedConnection(
     RPC_URLS_LIST_FROM_ENV,
     SINGLE_MAINNET_RPC_FROM_ENV,
     {
-        commitment: process.env.RPC_COMMITMENT, // from PAYMENT_ENV_DEFAULTS
+        commitment: process.env.RPC_COMMITMENT,
         maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
         retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
         maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
@@ -302,120 +283,112 @@ const solanaConnection = new RateLimitedConnection(
 );
 console.log(`✅ Solana Connection initialized (RateLimitedConnection).`);
 
-// --- Telegram Bot Instance ---
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log("Telegram Bot instance created and configured for polling.");
 
-// --- Express App for Webhooks (if enabled) ---
 let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
-    app.use(express.json()); // Middleware to parse JSON bodies
+    app.use(express.json());
     console.log("🚀 Express app initialized for payment webhooks.");
 } else {
     console.log("ℹ️ Payment webhooks are disabled via ENABLE_PAYMENT_WEBHOOKS env var.");
 }
 
-// --- Global Constants & State Variables ---
-const BOT_VERSION = '3.2.0-usd-integration'; // Updated version
+const BOT_VERSION = '3.2.1-markdownfix'; // Updated version reflecting markdown strategy change
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
 let isShuttingDown = false;
 
-// Game state, user state, caches
 let activeGames = new Map();
 let userCooldowns = new Map();
 let groupGameSessions = new Map();
 
-const walletCache = new Map(); // For user's linked external wallet addresses
-const activeDepositAddresses = new Map(); // Cache for { address: { userId, expiresAt, walletId, derivationPath } }
-const processedDepositTxSignatures = new Set(); // To avoid re-processing deposit TXs
-const pendingReferrals = new Map(); // For multi-step referral processes if any
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const userStateCache = new Map(); // For stateful UI interactions (e.g., awaiting withdrawal amount)
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
+const processedDepositTxSignatures = new Set();
+const pendingReferrals = new Map();
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
+const userStateCache = new Map();
 
-// NEW: Price Feed Cache
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price';
-const solPriceCache = new Map(); // Cache for {SOL_PRICE_CACHE_KEY: { price: number, timestamp: number }}
+const solPriceCache = new Map();
 
-// Game specific constants
 const DICE_ESCALATOR_BUST_ON = 1;
 
 console.log(`Initializing ${BOT_NAME || 'Casino Bot'} v${BOT_VERSION}...`);
 console.log(`Current system time: ${new Date().toISOString()}`);
 console.log(`Node.js Version: ${process.version}`);
 
-
-// --- Core Utility Functions ---
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 console.log("[Global Utils] escapeMarkdownV2 helper function defined.");
 
-// safeSendMessage is complex, assume it's complete from original.
+// MODIFIED safeSendMessage: It no longer escapes the entire message for MarkdownV2.
+// The caller is responsible for preparing a valid MarkdownV2 string,
+// meaning dynamic content within it should be escaped by the caller.
 async function safeSendMessage(chatId, text, options = {}) {
-  const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
-  if (!chatId || typeof text !== 'string') {
-    console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
-    return undefined;
-  }
-  let messageToSend = text;
-  let finalOptions = { ...options };
-
-  if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-    const ellipsis = "... (message truncated)";
-    const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsis.length);
-    messageToSend = messageToSend.substring(0, truncateAt) + ellipsis;
-    console.warn(`${LOG_PREFIX_SSM} Message pre-truncated > ${MAX_MARKDOWN_V2_MESSAGE_LENGTH}.`);
-  }
-
-  if (finalOptions.parse_mode === 'MarkdownV2') {
-    // If text was already escaped, this might double-escape. Usually, pass raw text.
-    // For safety, assume incoming text to this function is NOT pre-escaped if MarkdownV2 is an option.
-    // However, if helper functions like getPlayerDisplayReference already escape, then it's tricky.
-    // Best practice: functions preparing text for Markdown should escape, and this function should trust it.
-    // If it's called with already escaped text, we should not escape again.
-    // The current safeSendMessage escapes internally if parse_mode is MarkdownV2. This is fine.
-    // The provided structure already does this.
-  }
-  // The rest of safeSendMessage from the original document should follow here.
-  // For brevity, assuming it's the same complex function with MarkdownV2 escaping, truncation, and plain text fallback.
-  // It will use the global `bot` instance and `stringifyWithBigInt`.
-  // This is a simplified placeholder for that logic:
-  try {
-    if (finalOptions.parse_mode === 'MarkdownV2' && !options.text_is_already_escaped) { // Hypothetical flag
-        messageToSend = escapeMarkdownV2(messageToSend); // Escape if not already
-         if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Re-truncate after escape
-            const ellipsisMarkdown = escapeMarkdownV2("... (message re-truncated)");
-            const truncateAtMarkdown = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisMarkdown.length);
-            messageToSend = messageToSend.substring(0, truncateAtMarkdown) + ellipsisMarkdown;
-            console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) re-truncated AFTER escaping.`);
-        }
+    const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
+    if (!chatId || typeof text !== 'string') {
+        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
+        return undefined;
     }
-    return await bot.sendMessage(chatId, messageToSend, finalOptions);
-  } catch (error) {
-    console.error(`${LOG_PREFIX_SSM} Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
-    if (error.response && error.response.body && String(error.response.body.description).includes("can't parse entities") && finalOptions.parse_mode === 'MarkdownV2') {
-        console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error. Attempting plain text fallback.`);
-        try {
-            delete finalOptions.parse_mode;
-            // Use original unescaped text for fallback, re-truncate if necessary
-            let plainText = text;
-            if (plainText.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-                const ellipsis = "... (message truncated)";
-                const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsis.length);
-                plainText = plainText.substring(0, truncateAt) + ellipsis;
+    
+    let messageToSend = text; // Assumed to be plain text or a pre-formatted, valid MarkdownV2 string
+    let finalOptions = { ...options };
+
+    // Truncation logic
+    if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+        const ellipsisBase = "... (message truncated)";
+        // If MarkdownV2, the ellipsis itself (being appended literal text) needs escaping
+        const ellipsis = (finalOptions.parse_mode === 'MarkdownV2') ? escapeMarkdownV2(ellipsisBase) : ellipsisBase;
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsis.length);
+        messageToSend = messageToSend.substring(0, truncateAt) + ellipsis;
+        console.warn(`${LOG_PREFIX_SSM} Message content was too long and has been truncated.`);
+    }
+
+    if (!bot) {
+        console.error(`${LOG_PREFIX_SSM} Error: Telegram 'bot' instance not available.`);
+        return undefined;
+    }
+
+    try {
+        if (typeof bot.sendMessage !== 'function') {
+            throw new Error("'bot.sendMessage' is not a function.");
+        }
+        const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
+        return sentMessage;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_SSM} Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
+        if (error.response && error.response.body) {
+            console.error(`${LOG_PREFIX_SSM} API Response: ${stringifyWithBigInt(error.response.body)}`);
+            // Fallback for MarkdownV2 parse errors
+            if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.includes("can't parse entities")) {
+                console.error(`${LOG_PREFIX_SSM} MarkdownV2 parse error. Original text (approx 200 chars): "${text.substring(0,200)}"`);
+                console.warn(`${LOG_PREFIX_SSM} Attempting plain text fallback with original, unescaped text.`);
+                try {
+                    delete finalOptions.parse_mode; // Switch to plain text
+                    let plainTextForFallback = text; // Use the *original* text passed to safeSendMessage
+
+                    // Re-truncate if the original text was too long for plain text mode
+                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+                        const ellipsisPlain = "... (message truncated)"; // Plain ellipsis
+                        const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
+                        plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlain;
+                    }
+                    return await bot.sendMessage(chatId, plainTextForFallback, finalOptions);
+                } catch (fallbackError) {
+                    console.error(`${LOG_PREFIX_SSM} Plain text fallback failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
+                    return undefined;
+                }
             }
-            return await bot.sendMessage(chatId, plainText, finalOptions);
-        } catch (fallbackError) {
-            console.error(`${LOG_PREFIX_SSM} Plain text fallback failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
         }
+        return undefined;
     }
-    return undefined;
-  }
 }
-console.log("[Global Utils] safeSendMessage (placeholder for full logic) helper function defined.");
+console.log("[Global Utils] safeSendMessage (revised Markdown handling) helper function defined.");
 
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -423,24 +396,23 @@ console.log("[Global Utils] sleep helper function defined.");
 
 async function notifyAdmin(message, options = {}) {
     if (ADMIN_USER_ID) {
+        // Message for admin is constructed here; dynamic parts of 'message' should be escaped BEFORE calling notifyAdmin
         return safeSendMessage(ADMIN_USER_ID, `🔔 ADMIN ALERT 🔔\n${message}`, { parse_mode: 'MarkdownV2', ...options });
     } else {
-        console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message: ${message.substring(0,100)}...`);
+        console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message: ${String(message).substring(0,100)}...`);
         return null;
     }
 }
 console.log("[Global Utils] notifyAdmin helper function defined.");
 
-
-// --- NEW: Price Feed Utilities ---
 console.log("⚙️ Setting up Price Feed Utilities...");
 
 async function fetchSolUsdPriceFromAPI() {
-    const apiUrl = process.env.SOL_PRICE_API_URL; // Already has default from PAYMENT_ENV_DEFAULTS
+    const apiUrl = process.env.SOL_PRICE_API_URL;
     const logPrefix = '[PriceFeed API]';
     try {
         console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`);
-        const response = await axios.get(apiUrl, { timeout: 5000 }); // Added timeout
+        const response = await axios.get(apiUrl, { timeout: 5000 });
         if (response.data && response.data.solana && response.data.solana.usd) {
             const price = parseFloat(response.data.solana.usd);
             if (isNaN(price) || price <= 0) {
@@ -455,7 +427,7 @@ async function fetchSolUsdPriceFromAPI() {
     } catch (error) {
         const errMsg = error.isAxiosError ? error.message : String(error);
         console.error(`${logPrefix} Error fetching SOL/USD price: ${errMsg}`);
-        if (error.response) { // Log more details for HTTP errors
+        if (error.response) {
             console.error(`${logPrefix} API Response Status: ${error.response.status}`);
             console.error(`${logPrefix} API Response Data:`, stringifyWithBigInt(error.response.data));
         }
@@ -465,32 +437,26 @@ async function fetchSolUsdPriceFromAPI() {
 
 async function getSolUsdPrice() {
     const logPrefix = '[getSolUsdPrice]';
-    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10); // Default set in PAYMENT_ENV_DEFAULTS
+    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
     const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
     if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
-        // console.log(`${logPrefix} Returning cached SOL/USD price: ${cachedEntry.price}`);
         return cachedEntry.price;
     }
 
     try {
         const price = await fetchSolUsdPriceFromAPI();
         solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
-        // console.log(`${logPrefix} Fetched and cached new SOL/USD price: ${price}`);
         return price;
     } catch (error) {
-        if (cachedEntry) { // Use stale cache as a fallback if API fetch fails
+        if (cachedEntry) {
             console.warn(`${logPrefix} API fetch failed (${error.message}), using stale cached price: ${cachedEntry.price}`);
-            // Optionally, check if stale cache is too old
-            // const STALE_CACHE_MAX_AGE = cacheTtl * 5; // e.g., 5 times the normal TTL
-            // if (Date.now() - cachedEntry.timestamp > STALE_CACHE_MAX_AGE) {
-            //    console.error(`${logPrefix} Stale cache is too old. Price unavailable.`);
-            //    throw new Error(`Critical: Could not retrieve SOL/USD price. Stale cache too old. Error: ${error.message}`);
-            // }
             return cachedEntry.price;
         }
         console.error(`${logPrefix} CRITICAL: Unable to get SOL/USD price and no cache available. Error: ${error.message}`);
-        await notifyAdmin(`🚨 CRITICAL: Unable to fetch SOL/USD price from API and no cache available. USD conversions will fail. Error: ${escapeMarkdownV2(error.message)}`);
+        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') { // Check to prevent error if called too early
+            await notifyAdmin(`🚨 CRITICAL: Unable to fetch SOL/USD price from API and no cache available. USD conversions will fail. Error: ${escapeMarkdownV2(error.message)}`);
+        }
         throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`);
     }
 }
@@ -499,7 +465,7 @@ console.log("[PriceFeed Utils] getSolUsdPrice and fetchSolUsdPriceFromAPI define
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
         console.error(`[Convert] Invalid solUsdPrice (${solUsdPrice}) for lamports to USD conversion. Lamports: ${lamports}`);
-        return 'Price Error'; // Or throw an error
+        return 'Price Error';
     }
     if (typeof lamports !== 'bigint') {
         try { lamports = BigInt(lamports); }
@@ -524,8 +490,6 @@ function convertUSDToLamports(usdAmount, solUsdPrice) {
 }
 console.log("[PriceFeed Utils] convertUSDToLamports defined.");
 
-
-// --- P-Queues for processing jobs ---
 const payoutProcessorQueue = new PQueue({
     concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
     timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
@@ -538,15 +502,13 @@ const depositProcessorQueue = new PQueue({
 });
 console.log("✅ Payment processing queues initialized.");
 
-
-// --- Game-Specific Constants (Example: Slot Payouts) ---
 const SLOT_PAYOUTS = {
     64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" },
     1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
     22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },
     43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },
 };
-const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; // This might mean player loses their bet (1x their bet amount)
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 
 console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed) - Complete.");
 // --- End of Part 1 ---
@@ -4541,91 +4503,149 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 async function handleWalletCommand(msgOrCbMsg, args, correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
     const chatId = String(msgOrCbMsg.chat.id);
-    const messageIdToEditOrDelete = msgOrCbMsg.message_id; // ID of the message that triggered (/wallet, /setwallet, or callback button)
+    // messageIdToEditOrDelete is the ID of the message that triggered this command/callback
+    // For commands, it's msg.message_id. For callbacks, it's callbackQuery.message.message_id.
+    const messageIdToEditOrDelete = msgOrCbMsg.message_id;
     const isFromCallback = !!correctUserIdFromCb;
 
-    clearUserState(userId);
-    console.log(`[WalletCmd User ${userId}] Args: ${args.join(',')}. IsFromCallback: ${isFromCallback}`);
+    clearUserState(userId); // Clear any pending input states
+    console.log(`[WalletCmd User ${userId}] Args: [${args.join(', ')}]. IsFromCallback: ${isFromCallback}. TriggerMsgID: ${messageIdToEditOrDelete}`);
 
-    // Handling direct /setwallet <address> command
-    // args from /setwallet will be like ['/wallet', '<address_arg>'] due to current routing in Part 5a S1
+    // --- Scenario 1: Handling direct /setwallet <address> command ---
+    // The /setwallet command in Part 5a S1 routes here with args: ['/wallet', '<address_arg>']
+    // and msgOrCbMsg being the original Telegram message object from the user.
     if (!isFromCallback && args && args.length > 0 && args[0].toLowerCase() === '/wallet' && args[1]) {
         const potentialNewAddress = args[1].trim();
-        const originalUserCommandMessageId = messageIdToEditOrDelete;
+        const originalUserCommandMessageId = msgOrCbMsg.message_id; // ID of the user's "/setwallet <addr>" message
 
+        // Attempt to delete the user's original "/setwallet <addr>" message for a cleaner interface
         if (originalUserCommandMessageId && bot) {
-            await bot.deleteMessage(chatId, originalUserCommandMessageId).catch(e => console.warn(`[handleWalletCommand] Failed to delete user's /setwallet cmd: ${e.message}`));
+            await bot.deleteMessage(chatId, originalUserCommandMessageId)
+                .catch(e => console.warn(`[handleWalletCommand] Non-critical: Failed to delete user's /setwallet cmd msg ${originalUserCommandMessageId} in chat ${chatId}: ${e.message}`));
         }
 
-        const linkingStatusMsg = await safeSendMessage(chatId, `🔗 Attempting to link wallet \`${escapeMarkdownV2(potentialNewAddress)}\`... Please wait.`, { parse_mode: 'MarkdownV2' });
-        const displayMsgId = linkingStatusMsg ? linkingStatusMsg.message_id : null;
+        const linkingStatusMsg = await safeSendMessage(chatId, `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`... Please wait.`, { parse_mode: 'MarkdownV2' });
+        const displayMsgId = linkingStatusMsg ? linkingStatusMsg.message_id : null; // ID of the "linking..." message
 
         try {
-            new PublicKey(potentialNewAddress); // Basic validation
-            const linkResult = await linkUserWallet(userId, potentialNewAddress); // Calls MODIFIED linkUserWallet
+            new PublicKey(potentialNewAddress); // Basic client-side format validation (throws on error)
+            const linkResult = await linkUserWallet(userId, potentialNewAddress); // Calls modified linkUserWallet (Part 2)
 
+            let feedbackText;
             if (linkResult.success) {
-                const successText = `✅ ${escapeMarkdownV2(linkResult.message || `Wallet ${potentialNewAddress} successfully linked.`)}`;
-                if (displayMsgId && bot) {
-                    await bot.editMessageText(successText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
-                } else { /* Fallback send */ }
+                // Fetch fresh details to confirm the address displayed is the one now in DB
+                const freshUserDetails = await getPaymentSystemUserDetails(userId);
+                const confirmedAddress = freshUserDetails?.solana_wallet_address || potentialNewAddress;
+                feedbackText = `✅ ${escapeMarkdownV2(linkResult.message || `Wallet \`${confirmedAddress}\` successfully linked.`)}`;
             } else {
-                const failureText = `⚠️ Failed to link wallet: ${escapeMarkdownV2(linkResult.error || "Please check the address and try again.")}`;
-                if (displayMsgId && bot) {
-                    await bot.editMessageText(failureText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Try Again (Back to Wallet)', callback_data: 'menu:wallet' }]] }});
-                } else { /* Fallback send */ }
+                feedbackText = `⚠️ Failed to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`.\nReason: ${escapeMarkdownV2(linkResult.error || "Please check the address and try again.")}`;
             }
-        } catch (e) {
-            console.error(`[handleWalletCommand /setwallet] Error for ${potentialNewAddress} by ${userId}: ${e.message}`);
-            const errorText = `⚠️ Error: ${escapeMarkdownV2(e.message)}. Ensure it's a valid Solana public key.`;
+
+            const finalKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
+
             if (displayMsgId && bot) {
-                await bot.editMessageText(errorText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] }});
-            } else { /* Fallback send */ }
-        }
-        return; // Exit after /setwallet processing
-    }
-
-    // --- Standard Wallet Display Logic (if not a /setwallet command action or if it's a callback to show menu) ---
-    const userDetails = await getPaymentSystemUserDetails(userId); // From Part P2 - this fetches fresh DB data
-    const balanceLamports = userDetails ? BigInt(userDetails.balance) : 0n;
-    const linkedAddress = userDetails ? userDetails.solana_wallet_address : null;
-
-    const balanceDisplayUSD = await formatBalanceForDisplay(balanceLamports, 'USD'); // Uses new USD display
-    const balanceDisplaySOL = await formatBalanceForDisplay(balanceLamports, 'SOL');
-
-    let text = `👤 *Your Wallet Overview*\n\nApproximate Balance: *<span class="math-inline">\{escapeMarkdownV2\(balanceDisplayUSD\)\}\*\\n  Equivalent\: \(</span>{escapeMarkdownV2(balanceDisplaySOL)})\n\n`;
-    if (linkedAddress) {
-        text += `🔗 Linked Withdrawal Address:\n\`${escapeMarkdownV2(linkedAddress)}\`\n`;
-    } else {
-        text += `🔗 Linked Withdrawal Address: Not set. Use \`/setwallet <YourSolanaAddress>\` or the button below.\n`;
-    }
-    text += `\nManage your funds or update your linked wallet below.`;
-
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "💰 Deposit SOL", callback_data: DEPOSIT_CALLBACK_ACTION }, { text: "💸 Withdraw SOL", callback_data: "menu:withdraw" }],
-            [{ text: "📜 Transaction History", callback_data: "menu:history" }],
-            linkedAddress
-                ? [{ text: "🔄 Update Linked Wallet", callback_data: "menu:link_wallet_prompt" }]
-                : [{ text: "🔗 Link Withdrawal Wallet", callback_data: "menu:link_wallet_prompt" }],
-            [{ text: "🤝 Referrals", callback_data: "menu:referral" }, { text: "🏆 Leaderboards", callback_data: "menu:leaderboards" }],
-            [{ text: "↩️ Main Help", callback_data: "menu:main" }] // Assuming menu:main shows help or a main menu
-        ]
-    };
-
-    if (isFromCallback && messageIdToEditOrDelete && bot) {
-        await bot.editMessageText(text, { chat_id: chatId, message_id: messageIdToEditOrDelete, parse_mode: 'MarkdownV2', reply_markup: keyboard }).catch(async (e) => {
-            if (!e.message || !e.message.includes("message is not modified")) { // Avoid error if message is identical
-                console.warn(`[handleWalletCommand] Edit failed (isFromCallback: ${isFromCallback}), sending new. Error: ${e.message}`);
-                await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+                await bot.editMessageText(feedbackText, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
+            } else {
+                await safeSendMessage(chatId, feedbackText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
             }
-        });
-    } else {
-        // If triggered by a command like /wallet, delete the command message and send a new wallet menu
-        if (!isFromCallback && messageIdToEditOrDelete && bot) {
-            await bot.deleteMessage(chatId, messageIdToEditOrDelete).catch(()=>{});
+        } catch (e) { // Catches PublicKey constructor error or other unexpected errors from the try block
+            console.error(`[handleWalletCommand /setwallet] Error processing wallet link for ${potentialNewAddress} by ${userId}: ${e.message}`, e.stack);
+            const errorTextForUser = `⚠️ Error with the provided wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`.\nDetails: ${escapeMarkdownV2(e.message)}. Please ensure it's a valid Solana public key.`;
+            const errorKeyboard = { inline_keyboard: [[{ text: '↩️ Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
+            if (displayMsgId && bot) {
+                await bot.editMessageText(errorTextForUser, { chat_id: chatId, message_id: displayMsgId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+            } else {
+                await safeSendMessage(chatId, errorTextForUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+            }
         }
-        await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        return; // Exit after handling the set wallet action
+    }
+
+    // --- Scenario 2: Standard Wallet Menu Display (from /wallet command or 'menu:wallet' callback) ---
+    const loadingMsg = await safeSendMessage(chatId, "Loading your wallet details...", {});
+    const loadingMsgId = loadingMsg ? loadingMsg.message_id : null;
+
+    try {
+        const userDetails = await getPaymentSystemUserDetails(userId); // Fetches fresh DB data
+        if (!userDetails) {
+            // This case should ideally be handled by getOrCreateUser earlier in the command flow
+            const noUserText = "Could not retrieve your user profile. Please try sending /start to the bot first.";
+            if (loadingMsgId && bot) await bot.editMessageText(noUserText, {chat_id: chatId, message_id: loadingMsgId});
+            else await safeSendMessage(chatId, noUserText, {});
+            return;
+        }
+
+        const balanceLamports = BigInt(userDetails.balance || '0'); // Ensure BigInt
+        const linkedAddress = userDetails.solana_wallet_address;
+
+        const balanceDisplayUSD = await formatBalanceForDisplay(balanceLamports, 'USD');
+        const balanceDisplaySOL = await formatBalanceForDisplay(balanceLamports, 'SOL');
+
+        // Escape dynamic content for MarkdownV2
+        const escapedBalanceUSD = escapeMarkdownV2(balanceDisplayUSD);
+        const escapedBalanceSOL = escapeMarkdownV2(balanceDisplaySOL);
+        const escapedLinkedAddress = linkedAddress ? escapeMarkdownV2(linkedAddress) : null;
+
+        let text = `👤 *Your Wallet Overview*\n\n` +
+                   `Approximate Balance: *${escapedBalanceUSD}*\n` +
+                   `  *(Equivalent: ${escapedBalanceSOL})*\n\n`;
+
+        if (escapedLinkedAddress) {
+            text += `🔗 Linked Withdrawal Address:\n\`${escapedLinkedAddress}\`\n`;
+        } else {
+            text += `🔗 Linked Withdrawal Address: Not set.\nUse \`/setwallet <YourSolanaAddress>\` or the button below to link one for withdrawals.\n`;
+        }
+        text += `\nManage your funds or update your linked wallet:`;
+
+        const keyboardActions = [
+            [{ text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }, { text: "💸 Withdraw SOL", callback_data: "menu:withdraw" }],
+            [{ text: "📜 Transaction History", callback_data: "menu:history" }],
+        ];
+
+        if (linkedAddress) {
+            keyboardActions.push([{ text: "🔄 Update Linked Wallet", callback_data: "menu:link_wallet_prompt" }]);
+        } else {
+            keyboardActions.push([{ text: "🔗 Link Withdrawal Wallet", callback_data: "menu:link_wallet_prompt" }]);
+        }
+        keyboardActions.push(
+            [{ text: "🤝 Referrals", callback_data: "menu:referral" }, { text: "🏆 Leaderboards", callback_data: "menu:leaderboards" }],
+            [{ text: "❓ Help & Games", callback_data: "menu:main" }] // Assuming menu:main shows main help/commands
+        );
+
+        const keyboard = { inline_keyboard: keyboardActions };
+        
+        if (isFromCallback && messageIdToEditOrDelete && bot) {
+            // If called from a callback, edit the message that had the callback button
+             if (loadingMsgId && loadingMsgId !== messageIdToEditOrDelete) await bot.deleteMessage(chatId, loadingMsgId).catch(()=>{}); // delete "Loading..."
+            await bot.editMessageText(text, { chat_id: chatId, message_id: messageIdToEditOrDelete, parse_mode: 'MarkdownV2', reply_markup: keyboard })
+                .catch(async (e) => {
+                    if (!e.message || !e.message.includes("message is not modified")) {
+                        console.warn(`[handleWalletCommand] Edit failed (isFromCallback: ${isFromCallback}), sending new. Error: ${e.message}`);
+                        await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+                    } else {
+                        console.log("[handleWalletCommand] Message not modified, no edit needed.");
+                    }
+                });
+        } else {
+            // If called from a command like /wallet, delete the user's command and the "Loading..." message, then send new.
+            if (!isFromCallback && messageIdToEditOrDelete && bot) { // messageIdToEditOrDelete is the /wallet command
+                await bot.deleteMessage(chatId, messageIdToEditOrDelete).catch(()=>{});
+            }
+            if (loadingMsgId && bot) await bot.deleteMessage(chatId, loadingMsgId).catch(()=>{});
+
+            await safeSendMessage(chatId, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        }
+
+    } catch (error) {
+        console.error(`[handleWalletCommand] Error displaying wallet: ${error.message}`, error.stack);
+        const errorText = "申し訳ありませんが、ウォレット情報の取得中にエラーが発生しました。しばらくしてからもう一度お試しください。"; // "Sorry, an error occurred while fetching your wallet information. Please try again later."
+         if (loadingMsgId && bot) {
+            await bot.editMessageText(errorText, {chat_id: chatId, message_id: loadingMsgId, parse_mode: 'MarkdownV2'}).catch(() => {
+                safeSendMessage(chatId, errorText, {parse_mode: 'MarkdownV2'}); // Fallback send
+            });
+        } else {
+            await safeSendMessage(chatId, errorText, {parse_mode: 'MarkdownV2'});
+        }
     }
 }
 
