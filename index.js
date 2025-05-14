@@ -326,17 +326,33 @@ pool.on('error', (err, client) => {
 });
 console.log("✅ PostgreSQL Pool created.");
 
+// Updated queryDatabase function with enhanced logging
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[queryDatabase]';
-    try {
-        const result = await dbClient.query(sql, params);
-        return result;
-    } catch (error) {
-        console.error(`${logPrefix} Error executing query. SQL (start): "${sql.substring(0,100)}..." Params: [${params ? params.join(', ') : 'N/A'}] Error: ${error.message}`);
-        throw error; // Re-throw to be handled by caller
-    }
+    const logPrefix = '[queryDatabase]';
+    // Log the SQL query being executed. For security in production, consider redacting sensitive data from params if logged.
+    // For debugging, logging the full query and params is helpful.
+    const sqlPreview = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
+    const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
+    
+    console.log(`${logPrefix} Attempting to execute SQL (Full length: ${sql.length}): [${sqlPreview}] with PARAMS: [${paramsPreview.join(', ')}]`);
+
+    try {
+        const result = await dbClient.query(sql, params);
+        // console.log(`${logPrefix} Query successful. Rows affected/returned: ${result.rowCount !== null ? result.rowCount : 'N/A'}`);
+        return result;
+    } catch (error) {
+        // Log the detailed error from PostgreSQL, including code and position if available.
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        console.error(`${logPrefix} SQL that failed (Full length: ${sql.length}): [${sqlPreview}]`);
+        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreview.join(', ')}]`);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
+        if (error.stack) {
+            console.error(`${logPrefix} Stack: ${error.stack}`);
+        }
+        throw error; // Re-throw to be handled by the caller
+    }
 }
-console.log("[Global Utils] queryDatabase helper function defined.");
+console.log("[Global Utils] queryDatabase helper function (with enhanced logging) defined.");
 
 // --- CORRECTED RateLimitedConnection Instantiation ---
 console.log("⚙️ Setting up Solana Connection...");
