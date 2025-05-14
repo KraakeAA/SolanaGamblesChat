@@ -1906,89 +1906,63 @@ bot.on('callback_query', async (callbackQuery) => {
 // --- Command Handler Functions (General Casino Bot Commands) ---
 
 async function handleHelpCommand(chatId, userObj) {
-  const userMention = getPlayerDisplayReference(userObj);
-  const jackpotScoreInfo = TARGET_JACKPOT_SCORE ? escapeMarkdownV2(String(TARGET_JACKPOT_SCORE)) : 'a high';
-  const botNameEscaped = escapeMarkdownV2(BOT_NAME || "Casino Bot");
+    const userMention = getPlayerDisplayReference(userObj); // Assumes getPlayerDisplayReference is defined (Part 3)
+    const jackpotScoreInfo = TARGET_JACKPOT_SCORE ? escapeMarkdownV2(String(TARGET_JACKPOT_SCORE)) : 'a high'; // TARGET_JACKPOT_SCORE from Part 1
+    const botNameEscaped = escapeMarkdownV2(BOT_NAME || "Casino Bot"); // BOT_NAME from Part 1
 
-  // Using lamports directly for bet limits in help message
-  const minBetDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS));
-  const maxBetDisplay = escapeMarkdownV2(formatCurrency(MAX_BET_AMOUNT_LAMPORTS));
+    // Use the primary USD bet limits defined in Part 1
+    const minBetUsdDisplay = `$${MIN_BET_USD_val.toFixed(2)}`; // MIN_BET_USD_val from Part 1
+    const maxBetUsdDisplay = `$${MAX_BET_USD_val.toFixed(2)}`; // MAX_BET_USD_val from Part 1
 
-  const helpTextParts = [
-    `👋 Hello ${userMention}\\! Welcome to the **${botNameEscaped} v${BOT_VERSION}**\\.`,
-    `\nHere's a quick guide to our commands and games:`,
-    `\n*Financial Commands:*`,
-    `▫️ \`/balance\` or \`/bal\` \\- Check your SOL balance & access deposit/withdrawal\\.`,
-    `▫️ \`/deposit\` \\- Get your unique SOL deposit address\\.`,
-    `▫️ \`/withdraw\` \\- Initiate a SOL withdrawal to your linked wallet\\.`,
-    `▫️ \`/setwallet <YourSolAddress>\` \\- Link or update your Solana withdrawal wallet\\.`,
-    `▫️ \`/history\` \\- View your recent transaction history\\.`,
-    `▫️ \`/referral\` \\- Get your referral link & check earnings\\.`,
-    `\n*Information Commands:*`,
-    `▫️ \`/help\` \\- Shows this help message\\.`,
-    `▫️ \`/rules\` or \`/info\` \\- View detailed rules for all games\\.`,
-    `▫️ \`/jackpot\` \\- View the current Dice Escalator jackpot total \\(in SOL\\)\\.`,
-    `\n*Available Games (Group Play Recommended):*`,
-    `▫️ \`/coinflip <bet_in_sol_or_lamports>\` \\- Classic coin toss\\.`,
-    `▫️ \`/rps <bet_in_sol_or_lamports>\` \\- Rock Paper Scissors duel\\.`,
-    `▫️ \`/diceescalator <bet_in_sol_or_lamports>\` \\(or \`/de\`\\) \\- Climb the score ladder\\. Hit the Jackpot\\!`,
-    `▫️ \`/dice21 <bet_in_sol_or_lamports>\` \\(or \`/d21\`, \`/blackjack\`\\) \\- Dice Blackjack\\.`,
-    `▫️ \`/ou7 <bet_in_sol_or_lamports>\` \\(or \`/overunder7\`\\) \\- Bet on sum of two dice\\.`,
-    `▫️ \`/duel <bet_in_sol_or_lamports>\` \\(or \`/highroller\`\\) \\- Dice duel vs Bot\\.`,
-    `▫️ \`/ladder <bet_in_sol_or_lamports>\` \\(or \`/greedsladder\`\\) \\- Risk it with 3 dice rolls\\.`,
-    `▫️ \`/sevenout <bet_in_sol_or_lamports>\` \\(or \`/s7\`, \`/craps\`\\) \\- Simplified Craps\\.`,
-    `▫️ \`/slot <bet_in_sol_or_lamports>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- Spin the Slot Machine\\!`,
-    `\n*Betting:*`,
-    `Specify your bet after the game command\\. Example: \`/d21 0.1\` \\(for 0\\.1 SOL\\) or \`/coinflip 10000000\` \\(for 10,000,000 lamports / 0.01 SOL\\)\\. If no bet is specified, it defaults to the minimum\\.`,
-    `Current bet limits: ${minBetDisplay} to ${maxBetDisplay}\\.`,
-    `\n*Dice Escalator Jackpot:*`,
-    `🏆 Win by standing with a score of *${jackpotScoreInfo}\\+* AND beating the Bot Dealer in Dice Escalator\\!`,
-    `\nRemember to play responsibly and have fun\\! 🎉`,
-    ADMIN_USER_ID ? `For issues, contact admin\\. (Admin ID: ${escapeMarkdownV2(ADMIN_USER_ID)})` : `For issues, please refer to group administrators.`
-  ];
-
-  await safeSendMessage(chatId, helpTextParts.filter(Boolean).join('\n'), { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
-}
-
-async function handleBalanceCommand(chatId, userObj) {
-  const LOG_PREFIX_BAL = `[BalanceCmd UID:${userObj.telegram_id}]`;
-  const userMention = getPlayerDisplayReference(userObj);
-  const currentBalanceLamports = BigInt(userObj.balance || 0n);
-  const balanceMessage = `${userMention}, your current account balance is:\n💰 *${escapeMarkdownV2(formatCurrency(currentBalanceLamports))}*`; // Default currency is SOL
-
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "💰 Deposit SOL", callback_data: DEPOSIT_CALLBACK_ACTION }, // Constants from Part 1
-        { text: "💸 Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION }
-      ],
-      [ { text: "📜 Transaction History", callback_data: "menu:history" } ],
-      [ { text: "🔗 Manage Wallet", callback_data: "menu:wallet" } ]
-    ]
-  };
-  await safeSendMessage(chatId, balanceMessage, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
-}
-
-async function handleJackpotCommand(chatId, userObj) {
-    const LOG_PREFIX_JACKPOT = `[JackpotCmd UID:${userObj.telegram_id}]`;
-    const userMention = getPlayerDisplayReference(userObj);
-    try {
-        // queryDatabase is now defined in Part 1
-        const result = await queryDatabase('SELECT current_amount FROM jackpots WHERE jackpot_id = $1', [MAIN_JACKPOT_ID]);
-        let jackpotMessage;
-        if (result.rows.length > 0) {
-            const jackpotAmountLamports = BigInt(result.rows[0].current_amount || '0');
-            const jackpotDisplay = formatCurrency(jackpotAmountLamports); // Defaults to SOL
-            jackpotMessage = `Hey ${userMention}!\n\nThe current Dice Escalator Super Jackpot is a whopping:\n💎 *${escapeMarkdownV2(jackpotDisplay)}* 💎\n\nTo win it, achieve a score of *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}\\+* in Dice Escalator and win against the Bot\\! Good luck\\! 🍀`;
-        } else {
-            console.warn(`${LOG_PREFIX_JACKPOT} No jackpot record found for ID: ${MAIN_JACKPOT_ID}. This is unusual.`);
-            jackpotMessage = `${userMention}, the Dice Escalator Jackpot information is currently unavailable.`;
-        }
-        await safeSendMessage(chatId, jackpotMessage, { parse_mode: 'MarkdownV2' });
-    } catch (error) {
-        console.error(`${LOG_PREFIX_JACKPOT} Error fetching jackpot: ${error.message}`, error.stack);
-        await safeSendMessage(chatId, "😕 Sorry, there was an error fetching the current jackpot amount.", {});
+    // Optional: If you still want to show the configured lamport limits for reference
+    // Ensure MIN_BET_AMOUNT_LAMPORTS_config is defined in Part 1.
+    // If you didn't rename it and it was just MIN_BET_AMOUNT_LAMPORTS, ensure it's loaded.
+    // For safety, let's check if the _config version exists, or fall back.
+    let referenceLamportLimits = "";
+    if (typeof MIN_BET_AMOUNT_LAMPORTS_config !== 'undefined' && typeof MAX_BET_AMOUNT_LAMPORTS_config !== 'undefined') {
+         // formatCurrency is from Part 3
+        const minLamportDisplay = formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'lamports', true);
+        const maxLamportDisplay = formatCurrency(MAX_BET_AMOUNT_LAMPORTS_config, 'lamports', true);
+        referenceLamportLimits = `\n(Internal ref: ${escapeMarkdownV2(minLamportDisplay)} to ${escapeMarkdownV2(maxLamportDisplay)})`;
     }
+
+
+    const helpTextParts = [
+        `👋 Hello ${userMention}\\! Welcome to the **${botNameEscaped} v${BOT_VERSION}**\\.`, // BOT_VERSION from Part 1
+        `\nHere's a quick guide to our commands and games:`,
+        `\n*Financial Commands:*`,
+        `▫️ \`/balance\` or \`/bal\` \\- Check your approximate USD balance & access deposit/withdrawal\\.`,
+        `▫️ \`/deposit\` \\- Get your unique SOL deposit address\\.`,
+        `▫️ \`/withdraw\` \\- Initiate a SOL withdrawal to your linked wallet\\.`,
+        `▫️ \`/setwallet <YourSolAddress>\` \\- Link or update your Solana withdrawal wallet\\.`,
+        `▫️ \`/history\` \\- View your recent transaction history\\.`,
+        `▫️ \`/referral\` \\- Get your referral link & check earnings\\.`,
+        `\n*Information Commands:*`,
+        `▫️ \`/help\` \\- Shows this help message\\.`,
+        `▫️ \`/rules\` or \`/info\` \\- View detailed rules for all games\\.`,
+        `▫️ \`/jackpot\` \\- View the current Dice Escalator jackpot total (approximate USD value)\\.`,
+        `\n*Available Games (Group Play Recommended):*`,
+        // Game commands should remind users to bet in USD
+        `▫️ \`/coinflip <bet_in_usd>\` \\- Classic coin toss\\.`,
+        `▫️ \`/rps <bet_in_usd>\` \\- Rock Paper Scissors duel\\.`,
+        `▫️ \`/diceescalator <bet_in_usd>\` \\(or \`/de\`\\) \\- Climb the score ladder\\. Hit the Jackpot\\!`,
+        `▫️ \`/dice21 <bet_in_usd>\` \\(or \`/d21\`, \`/blackjack\`\\) \\- Dice Blackjack\\.`,
+        `▫️ \`/ou7 <bet_in_usd>\` \\(or \`/overunder7\`\\) \\- Bet on sum of two dice\\.`,
+        `▫️ \`/duel <bet_in_usd>\` \\(or \`/highroller\`\\) \\- Dice duel vs Bot\\.`,
+        `▫️ \`/ladder <bet_in_usd>\` \\(or \`/greedsladder\`\\) \\- Risk it with 3 dice rolls\\.`,
+        `▫️ \`/sevenout <bet_in_usd>\` \\(or \`/s7\`, \`/craps\`\\) \\- Simplified Craps\\.`,
+        `▫️ \`/slot <bet_in_usd>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- Spin the Slot Machine\\!`,
+        `\n*Betting:*`,
+        `Specify your bet in USD after the game command\\. Example: \`/d21 5\` \\(for $5 USD\\)\\. If no bet is specified, it defaults to the minimum\\.`,
+        `Current bet limits: ${escapeMarkdownV2(minBetUsdDisplay)} to ${escapeMarkdownV2(maxBetUsdDisplay)}\\.${referenceLamportLimits}`, // MODIFIED to show USD limits
+        `\n*Dice Escalator Jackpot:*`,
+        `🏆 Win by standing with a score of *${jackpotScoreInfo}\\+* AND beating the Bot Dealer in Dice Escalator\\!`,
+        `\nRemember to play responsibly and have fun\\! 🎉`,
+        ADMIN_USER_ID ? `For issues, contact admin\\. (Admin ID: ${escapeMarkdownV2(ADMIN_USER_ID)})` : `For issues, please refer to group administrators.`
+    ];
+
+    // Ensure safeSendMessage and escapeMarkdownV2 are available
+    await safeSendMessage(chatId, helpTextParts.filter(Boolean).join('\n'), { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 }
 
 async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdit = false) {
