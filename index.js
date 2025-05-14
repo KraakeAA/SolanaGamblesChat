@@ -2101,31 +2101,6 @@ async function handleStartGroupRPSCommand(chatId, initiatorUserObj, betAmount, c
   }, JOIN_GAME_TIMEOUT_MS);
 }
 
-
-// --- Stubs for other game start handlers (to be fully implemented in later segments) ---
-async function handleStartDiceEscalatorCommand(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "🎲 Dice Escalator handler is under construction in Part 5b!", {});
-}
-async function handleStartDice21Command(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "🃏 Dice 21 handler is under construction!", {});
-}
-async function handleStartOverUnder7Command(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "🎲 Over/Under 7 handler is under construction!", {});
-}
-async function handleStartDuelCommand(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "⚔️ Duel handler is under construction!", {});
-}
-async function handleStartLadderCommand(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "🪜 Ladder handler is under construction!", {});
-}
-async function handleStartSevenOutCommand(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "🎲 Sevens Out handler is under construction!", {});
-}
-async function handleStartSlotCommand(chatId, userObj, betAmount, commandMessageId) {
-    await safeSendMessage(chatId, "🎰 Slot Frenzy handler is under construction!", {});
-}
-
-
 console.log("Part 5a (Segment 2): Rules Implementation, Coinflip/RPS Enhancements, Game Handler Stubs - Complete.");
 // --- End of Part 5a (Segment 2 of 2) ---
 // --- Start of Part 5a (Segment 3 of N) ---
