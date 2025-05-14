@@ -2319,9 +2319,10 @@ console.log("Loading Part 5a, Section 2 (NEW): General Command Handler Implement
 //         OU7_PAYOUT_NORMAL, OU7_PAYOUT_SEVEN, OU7_DICE_COUNT, DUEL_DICE_COUNT,
 //         LADDER_ROLL_COUNT, LADDER_BUST_ON, LADDER_PAYOUTS, SLOT_PAYOUTS (defined in Part 1),
 //         RULES_CALLBACK_PREFIX, QUICK_DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION, LAMPORTS_PER_SOL,
-//         getSolUsdPrice, convertLamportsToUSDString, convertUSDToLamports
+//         getSolUsdPrice, convertLamportsToUSDString, convertUSDToLamports, userStateCache
 // Part 2: getOrCreateUser, getUserBalance, queryDatabase, getUserByReferralCode, generateReferralCode
 // Part 3: getPlayerDisplayReference, formatCurrency, formatBalanceForDisplay
+// Part 5a-S4 (NEW): createPostGameKeyboard (this function is CALLED by game handlers, defined in 5a-S4)
 // Part P2: updateUserBalanceAndLedger (This is crucial for /grant)
 // Part P3: clearUserState (This is called by /start, /wallet if needed)
 
@@ -2363,7 +2364,7 @@ async function handleStartCommand(msg, args) {
             const refCode = deepLinkParam.substring(4);
             const referrerUserRecord = await getUserByReferralCode(refCode); // From Part 2
             let refByDisplay = "a fellow player";
-            let referredSuccessfully = false;
+            // let referredSuccessfully = false; // Not strictly needed here unless we change flow
 
             if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
                 const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
@@ -2378,12 +2379,12 @@ async function handleStartCommand(msg, args) {
                             `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
                              VALUES ($1, $2, 'pending_criteria', NOW(), NOW())
                              ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Handles case where referred_telegram_id is already unique
                             [referrerUserRecord.telegram_id, userId]
                         );
                         await client.query('COMMIT');
                         userObject = await getOrCreateUser(userId); // Re-fetch updated user
-                        referredSuccessfully = true;
+                        // referredSuccessfully = true;
                         console.log(`${LOG_PREFIX_START} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} via ref_code ${refCode}.`);
                     } catch (refError) {
                         await client.query('ROLLBACK');
@@ -2393,10 +2394,12 @@ async function handleStartCommand(msg, args) {
                     }
                 } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
                     console.log(`${LOG_PREFIX_START} User ${userId} was already referred by ${referrerUserRecord.telegram_id}.`);
-                    referredSuccessfully = true; // Still acknowledge the referrer
+                    // referredSuccessfully = true;
                 } else {
                     console.log(`${LOG_PREFIX_START} User ${userId} was already referred by someone else (${userObject.referrer_telegram_id}). Cannot apply new ref_code ${refCode}.`);
-                    refByDisplay = "your original referrer";
+                    const existingReferrer = await getOrCreateUser(userObject.referrer_telegram_id);
+                    if(existingReferrer) refByDisplay = getPlayerDisplayReference(existingReferrer) + " (your original referrer)";
+                    else refByDisplay = "your original referrer";
                 }
             } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
                 refByDisplay = "yourself \\(clever try\\! 😉\\)";
@@ -2410,49 +2413,22 @@ async function handleStartCommand(msg, args) {
             } else {
                 await safeSendMessage(chatId, referralMsg, { parse_mode: 'MarkdownV2' });
             }
-            await handleHelpCommand({ ...msg, chat: { id: userId, type: 'private' }}); // Show help in DM
+            // Always show full help menu in DM after referral processing
+            await handleHelpCommand({ ...msg, chat: { id: userId, type: 'private' }});
             return;
-        } else if (deepLinkParam.startsWith('cb_')) { // For callback-like actions from DM link e.g. /start cb_menu_deposit
+        } else if (deepLinkParam.startsWith('cb_')) {
              const cbParts = deepLinkParam.substring(3).split('_');
              const action = cbParts[0];
              const params = cbParts.slice(1);
              console.log(`${LOG_PREFIX_START} Deep link callback detected: Action: ${action}, Params: ${params.join(',')}`);
-
-            // Simulate a callback query environment to reuse callback handlers.
-            // This is a simplified way to trigger the logic, actual callback structure is more complex.
-            const mockCallbackQueryForDeepLink = {
-                id: `deeplink_${Date.now()}_${userId}`,
-                from: msg.from, // User object
-                message: { // Mock the message object callback query would typically have
-                    message_id: null, // No existing message to edit in this DM context from a /start link
-                    chat: { id: userId, type: 'private' }, // Action takes place in DM
-                    date: Math.floor(Date.now() / 1000),
-                    text: "" // No original text for the "message" the button was on
-                },
-                data: `${action}:${params.join(':')}`, // Reconstruct callback data string
-                chat_instance: String(userId) // For private chat, chat_instance can be user_id
-            };
-            // Directly invoke the main callback router (conceptually, how bot.processUpdate would do it)
-            // Find the actual callback handler function in your bot instance and call it.
-            // Since the main `bot.on('callback_query', ...)` is globally defined, we assume it will pick this up
-            // if we could emit an event. For now, we will attempt to call the handler structure.
-            // This is a placeholder for direct invocation:
-            if (typeof bot._handleCallbackQuery === "function") { // node-telegram-bot-api internal like method (example, not real)
-                 // bot._handleCallbackQuery(mockCallbackQueryForDeepLink); // This is conceptual
-                 console.warn(`${LOG_PREFIX_START} Deep link cb_* needs robust routing. Simulating action for ${action}.`);
-                 // As a fallback, try to route to the menu if that's what it is.
-                 if (action === "menu" && params[0] && typeof handleMenuAction === 'function') {
-                     await handleMenuAction(userId, userId, null, params[0], params.slice(1), false, 'private');
-                 } else if (action === "showRules" && params[0] && typeof handleDisplayGameRules === 'function') {
-                     await handleDisplayGameRules(userId, null, params[0], userObject, 'private');
-                 } else {
-                      await safeSendMessage(userId, `Welcome back\\! To continue with "${escapeMarkdownV2(action.replace(/_/g, " "))}", please use the main menus or commands\\. Trying to take you to a relevant spot\\!`, {parse_mode: 'MarkdownV2'});
-                      await handleHelpCommand({ ...msg, chat: { id: userId, type: 'private' }}); // Default to help
-                 }
-            } else {
-                 console.error(`${LOG_PREFIX_START} Cannot directly route deep link cb_ action: ${action}. Showing help.`);
-                 await handleHelpCommand({ ...msg, chat: { id: userId, type: 'private' }});
-            }
+            
+            const deepLinkActionText = escapeMarkdownV2(action.replace(/_/g, " "));
+            const userGuidanceText = `👋 Welcome back, ${playerRef}!\nIt seems you're trying to continue an action for: *${deepLinkActionText}*.\n\nI'll take you to the main help menu where you can navigate to this feature or re-initiate the command.`;
+            await safeSendMessage(userId, userGuidanceText, {parse_mode: 'MarkdownV2'});
+            // For 'cb_' deeplinks, directly calling the callback router can be complex.
+            // A robust solution involves ensuring the user is in the right state or re-initiating the flow.
+            // For now, we'll guide them to the help menu after a welcome.
+            await handleHelpCommand({ ...msg, chat: { id: userId, type: 'private' }});
             return;
         }
     }
@@ -2463,7 +2439,6 @@ async function handleStartCommand(msg, args) {
         await safeSendMessage(chatId, `👋 Ahoy, ${playerRef}! Welcome to the thrilling world of ${escapeMarkdownV2(BOT_NAME)}! 🎰\nI've just sent you a private message with all the details on how to get started and navigate our casino. Check your DMs: @${escapeMarkdownV2(botUsername)} 📬`, { parse_mode: 'MarkdownV2' });
         await handleHelpCommand({ ...msg, chat: { id: userId, type: 'private' }}); // Send help to DM
     } else {
-        // Already in PM, send welcome and help
         await safeSendMessage(userId, `🎉 Salutations, ${playerRef}! Welcome to **${escapeMarkdownV2(BOT_NAME)}** \\- your portal to exhilarating Solana casino action! 🎉\nLet's get you started with the grand tour below! 👇`, { parse_mode: 'MarkdownV2' });
         await handleHelpCommand(msg);
     }
@@ -2471,7 +2446,7 @@ async function handleStartCommand(msg, args) {
 
 async function handleHelpCommand(originalMessageObject) {
     const userId = String(originalMessageObject.from.id);
-    const chatId = String(originalMessageObject.chat.id);
+    const chatId = String(originalMessageObject.chat.id); // This will be the DM chat ID if called from /start
 
     const userObj = await getOrCreateUser(userId, originalMessageObject.from.username, originalMessageObject.from.first_name, originalMessageObject.from.last_name);
     if (!userObj) {
@@ -2504,7 +2479,6 @@ async function handleHelpCommand(originalMessageObject) {
         }
     }
 
-
     const helpTextParts = [
         `🌟 Greetings, ${playerMention}! Welcome to the **${botNameEscaped} Casino Royale v${BOT_VERSION}**! 🌟`,
         `\nYour ultimate destination for electrifying Solana-powered casino games and big wins! Here’s your guide to the action:`,
@@ -2522,15 +2496,15 @@ async function handleHelpCommand(originalMessageObject) {
         `▫️ \`/jackpot\` \\- Check the current eye\\-watering amount of the Dice Escalator Super Jackpot\\!`,
         `▫️ \`/leaderboards\` \\- See who's topping the charts\\! *(Coming Soon!)*`,
         `\n*🎲 Available Games \\(Play in groups or PM against the Bot Dealer!\\):*`,
-        `▫️ \`/coinflip <bet_usd_or_sol>\` \\- 🪙 Classic Heads or Tails for two players\\.`,
-        `▫️ \`/rps <bet_usd_or_sol>\` \\- 🪨📄✂️ Epic Rock Paper Scissors duel for two players\\.`,
-        `▫️ \`/de <bet_usd_or_sol>\` \\(or \`/diceescalator\`\\) \\- 🎲 Climb the score ladder for escalating wins & Jackpot glory\\! (vs\\. Bot)`,
-        `▫️ \`/d21 <bet_usd_or_sol>\` \\(or \`/blackjack\`\\) \\- 🃏 Fast\\-paced Dice Blackjack against the Bot Dealer\\. (vs\\. Bot)`,
-        `▫️ \`/ou7 <bet_usd_or_sol>\` \\(or \`/overunder7\`\\) \\- 🎲 Bet on the sum: Over 7, Under 7, or Exactly 7\\! (vs\\. Bot)`,
-        `▫️ \`/duel <bet_usd_or_sol>\` \\(or \`/highroller\`\\) \\- ⚔️ High\\-stakes dice duel against the Bot Dealer\\. (vs\\. Bot)`,
-        `▫️ \`/ladder <bet_usd_or_sol>\` \\(or \`/greedsladder\`\\) \\- 🪜 Risk it all in Greed's Ladder \\- climb high, don't bust\\! (vs\\. Bot)`,
-        `▫️ \`/s7 <bet_usd_or_sol>\` \\(or \`/sevenout\`, \`/craps\`\\) \\- 🎲 Simplified & lightning\\-fast Craps action\\. (vs\\. Bot)`,
-        `▫️ \`/slot <bet_usd_or_sol>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- 🎰 Spin the Telegram Slot Machine for dazzling prizes\\! (vs\\. Bot)`,
+        `▫️ \`/coinflip <bet>\` \\- 🪙 Classic Heads or Tails for two players\\.`,
+        `▫️ \`/rps <bet>\` \\- 🪨📄✂️ Epic Rock Paper Scissors duel for two players\\.`,
+        `▫️ \`/de <bet>\` \\(or \`/diceescalator\`\\) \\- 🎲 Climb the score ladder for escalating wins & Jackpot glory\\! (vs\\. Bot)`,
+        `▫️ \`/d21 <bet>\` \\(or \`/blackjack\`\\) \\- 🃏 Fast\\-paced Dice Blackjack against the Bot Dealer\\. (vs\\. Bot)`,
+        `▫️ \`/ou7 <bet>\` \\(or \`/overunder7\`\\) \\- 🎲 Bet on the sum: Over 7, Under 7, or Exactly 7\\! (vs\\. Bot)`,
+        `▫️ \`/duel <bet>\` \\(or \`/highroller\`\\) \\- ⚔️ High\\-stakes dice duel against the Bot Dealer\\. (vs\\. Bot)`,
+        `▫️ \`/ladder <bet>\` \\(or \`/greedsladder\`\\) \\- 🪜 Risk it all in Greed's Ladder \\- climb high, don't bust\\! (vs\\. Bot)`,
+        `▫️ \`/s7 <bet>\` \\(or \`/sevenout\`, \`/craps\`\\) \\- 🎲 Simplified & lightning\\-fast Craps action\\. (vs\\. Bot)`,
+        `▫️ \`/slot <bet>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- 🎰 Spin the Telegram Slot Machine for dazzling prizes\\! (vs\\. Bot)`,
         `\n*💰 Betting Guide:*`,
         `To place a bet, use the game command followed by your bet amount in *USD* (e\\.g\\., \`/d21 5\` for $5 USD), or *SOL* (e\\.g\\., \`/d21 0.1 sol\` or \`/d21 0.05\`), or *Lamports* (e.g. \`/d21 10000000 lamports\`).`,
         `If no bet is specified, the game typically defaults to the minimum USD bet\\.`,
@@ -2545,7 +2519,7 @@ async function handleHelpCommand(originalMessageObject) {
     const helpKeyboard = {
         inline_keyboard: [
             [{ text: "💳 My Wallet Dashboard", callback_data: "menu:wallet" }, { text: "📖 Game Rules Library", callback_data: "show_rules_menu" }],
-            [{ text: "💰 Quick Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }] // QUICK_DEPOSIT_CALLBACK_ACTION from Part 1
+            [{ text: "💰 Quick Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]
         ]
     };
 
@@ -2572,8 +2546,8 @@ async function handleBalanceCommand(msg) {
 
     const balanceLamports = await getUserBalance(userId);
     if (balanceLamports === null) {
-        const errorMsgDm = "🏦 Oops! We couldn't retrieve your balance right now. Please try again in a moment, or contact support if this persists.";
-        await safeSendMessage(userId, errorMsgDm, { parse_mode: 'MarkdownV2' });
+        const errorMsgDm = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual. Please try again in a moment, or contact support if this issue persists.";
+        await safeSendMessage(userId, errorMsgDm, { parse_mode: 'MarkdownV2' }); // Send error to DM
         if (chatType !== 'private') {
             if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
             await safeSendMessage(commandChatId, `${playerRef}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeMarkdownV2(botUsername)}.`, { parse_mode: 'MarkdownV2' });
@@ -2582,7 +2556,7 @@ async function handleBalanceCommand(msg) {
     }
 
     const balanceUSDShort = await formatBalanceForDisplay(balanceLamports, 'USD');
-    const balanceSOLShort = formatCurrency(balanceLamports, 'SOL'); // Use formatCurrency for consistent SOL display
+    const balanceSOLShort = formatCurrency(balanceLamports, 'SOL');
 
     if (chatType !== 'private') {
         if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
@@ -2592,11 +2566,11 @@ async function handleBalanceCommand(msg) {
     
     const balanceMessageDm = `🏦 **Your Casino Royale Account Statement** 🏦\n\n` +
         `Player: ${playerRef}\n` +
-        `\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n` + // MarkdownV2 escaped hyphens
+        `\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n` +
         `💰 Approx\\. Total Value: *${escapeMarkdownV2(balanceUSDShort)}*\n` +
         `🪙 SOL Balance: *${escapeMarkdownV2(balanceSOLShort)}*\n` +
         `⚙️ Lamports: \`${escapeMarkdownV2(String(balanceLamports))}\`\n` +
-        `\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n\n` +
+        `\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\-\\-\n\n` +
         `Manage your funds or dive into the games using the buttons below! May luck be your ally! ✨`;
 
     const keyboardDm = {
@@ -2618,40 +2592,29 @@ async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdi
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.error(`${LOG_PREFIX_RULES} Could not fetch bot username:`, e.message); }
 
-    let targetChatId = chatId;
-    let targetMessageId = messageIdToEdit;
-    let targetIsEdit = isEdit;
+    let targetChatId = String(userObj.telegram_id); // Default to DM for rules menu
+    let targetMessageId = null; // Usually send new in DM unless isEdit is true from within DM
+    let targetIsEdit = false;
 
-    if (chatType !== 'private' && !isEdit) { // First time /rules in group
-        if (messageIdToEdit && chatId !== String(userObj.telegram_id)) await bot.deleteMessage(chatId, messageIdToEdit).catch(() => {});
+    if (chatType !== 'private') { // Command originated in a group
+        if (messageIdToEdit && chatId !== String(userObj.telegram_id)) await bot.deleteMessage(chatId, messageIdToEdit).catch(() => {}); // Delete the /rules command in group
         await safeSendMessage(chatId, `${userMention}, I've summoned the Gamepedia to our private chat: @${escapeMarkdownV2(botUsername)} 📖 Dive in!`, { parse_mode: 'MarkdownV2' });
-        targetChatId = String(userObj.telegram_id);
-        targetMessageId = null;
-        targetIsEdit = false;
-    } else if (chatType !== 'private' && isEdit) { // Navigating back to rules menu from specific rule (which shouldn't happen in group, but as a fallback)
-        const redirectText = `${userMention}, let's continue Browse game rules in our private chat for a better experience: @${escapeMarkdownV2(botUsername)} 📖`;
-        await bot.editMessageText(redirectText, {
-            chat_id: chatId, message_id: messageIdToEdit, parse_mode: 'MarkdownV2',
-            reply_markup: { inline_keyboard: [[{ text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules` }]] }
-        }).catch(async (e) => {
-             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                console.warn(`${LOG_PREFIX_RULES} Failed to edit group message for rules redirect, sending new. Error: ${e.message}`);
-                await safeSendMessage(chatId, redirectText, {
-                    parse_mode: 'MarkdownV2',
-                    reply_markup: { inline_keyboard: [[{ text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules` }]] }
-                });
-            }
-        });
-        targetChatId = String(userObj.telegram_id);
-        targetMessageId = null;
-        targetIsEdit = false;
+        // targetChatId is already userObj.telegram_id, targetMessageId remains null, targetIsEdit remains false for new DM message
+    } else { // Command originated in DM
+        targetChatId = chatId; // Stay in DM
+        targetMessageId = messageIdToEdit;
+        targetIsEdit = isEdit; // If it was an edit (e.g. back from specific rule to menu)
+        // If it's a new /rules command in DM, delete the command message
+        if (!isEdit && messageIdToEdit) {
+             await bot.deleteMessage(chatId, messageIdToEdit).catch(() => {});
+             targetMessageId = null; // Will send new message
+        }
     }
     
-    // From here, assume targetChatId is the DM.
     const rulesIntroText = `📚 **${escapeMarkdownV2(BOT_NAME)} Gamepedia Central** 📚\n\nHey ${userMention}, welcome to our casino's hall of knowledge! Select any game below to learn its rules, strategies, and payout secrets. Master them all! 👇`;
     
-    const gameRuleButtons = Object.entries(GAME_IDS).map(([key, gameCode]) => {
-        const gameName = key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+    const gameRuleButtons = Object.values(GAME_IDS).map(gameCode => { // Use GAME_IDS from 5a-S1 New
+        const gameName = gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         let emoji = '❓';
         switch (gameCode) {
             case GAME_IDS.COINFLIP: emoji = '🪙'; break; case GAME_IDS.RPS: emoji = '✂️'; break;
@@ -2664,14 +2627,11 @@ async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdi
     });
 
     const rows = [];
-    for (let i = 0; i < gameRuleButtons.length; i += 2) { // Arrange in 2 columns
+    for (let i = 0; i < gameRuleButtons.length; i += 2) {
         rows.push(gameRuleButtons.slice(i, i + 2));
     }
-    rows.push([{ text: '🏛️ Back to Main Menu', callback_data: 'menu:main' }]); // menu:main should be handled by handleMenuAction
-    if (targetChatId === String(userObj.telegram_id)) { // Only add wallet button if in DM
-         rows.push([{ text: '💳 Wallet Dashboard', callback_data: 'menu:wallet' }]);
-    }
-
+    rows.push([{ text: '🏛️ Back to Main Help', callback_data: 'menu:main' }]); // menu:main calls handleHelpCommand via handleMenuAction
+    rows.push([{ text: '💳 Wallet Dashboard', callback_data: 'menu:wallet' }]);
 
     const keyboard = { inline_keyboard: rows };
     const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true };
@@ -2686,9 +2646,6 @@ async function handleRulesCommand(chatId, userObj, messageIdToEdit = null, isEdi
             }
         }
     } else {
-        if (targetMessageId && targetChatId === String(userObj.telegram_id)) { // If switching from a specific rule display in DM to the main rules menu
-            await bot.deleteMessage(targetChatId, targetMessageId).catch(() => {});
-        }
         await safeSendMessage(targetChatId, rulesIntroText, options);
     }
 }
@@ -2702,36 +2659,26 @@ async function handleDisplayGameRules(chatId, originalMessageId, gameCode, userO
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.error(`${LOG_PREFIX_RULES_DISP} Could not fetch bot username:`, e.message); }
 
-    let targetChatId = chatId;
-    let targetMessageId = originalMessageId;
-    let sendNew = (chatType !== 'private'); // Send new if original was in group
+    let targetChatId = String(userObj.telegram_id); // Always display specific rules in DM
+    let messageToEditInDm = null; // By default, send new in DM
 
-    if (chatType !== 'private') {
+    if (chatType !== 'private' && originalMessageId) { // If callback was from a group message
         const gameNameDisplayUpper = gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        const redirectText = `${playerRef}, I've sent the rules for *${escapeMarkdownV2(gameNameDisplayUpper)}* to our private chat: @${escapeMarkdownV2(botUsername)} 📖 Check your DMs!`;
-        if (originalMessageId && bot) {
-            await bot.editMessageText(redirectText, {
-                chat_id: chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2',
-                reply_markup: { inline_keyboard: [[{ text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules_${gameCode}` }]] }
-            }).catch(async (e) => {
-                if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                    console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit group message for rule display redirect, sending new. Error: ${e.message}`);
-                    await safeSendMessage(chatId, redirectText, {
-                        parse_mode: 'MarkdownV2',
-                        reply_markup: { inline_keyboard: [[{ text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules_${gameCode}` }]] }
-                    });
-                }
-            });
-        } else { // No original message to edit, just send the redirect info
-             await safeSendMessage(chatId, redirectText, { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules_${gameCode}` }]] } });
-        }
-        targetChatId = String(userObj.telegram_id); // Target DM for actual rules
-        targetMessageId = null; // Must send new in DM
+        const redirectText = `${playerRef}, I've sent the detailed rules for *${escapeMarkdownV2(gameNameDisplayUpper)}* to our private chat: @${escapeMarkdownV2(botUsername)} 📖 Check your DMs!`;
+        await bot.editMessageText(redirectText, {
+            chat_id: chatId, message_id: originalMessageId, parse_mode: 'MarkdownV2',
+            reply_markup: { inline_keyboard: [[{ text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules_${gameCode}` }]] }
+        }).catch(e => {
+             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit group msg for rule redirect: ${e.message}.`);
+             }
+        });
+    } else if (chatType === 'private' && originalMessageId) { // If callback was from DM (e.g. from rules menu)
+        messageToEditInDm = originalMessageId; // We can edit this message
     }
-
-
+    
     let rulesTitle = gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-    let gameEmoji = '🎲'; // Default
+    let gameEmoji = '📜'; // Default
     switch (gameCode) {
         case GAME_IDS.COINFLIP: gameEmoji = '🪙'; rulesTitle = "Coinflip Challenge"; break;
         case GAME_IDS.RPS: gameEmoji = '✂️'; rulesTitle = "Rock Paper Scissors Showdown"; break;
@@ -2742,20 +2689,18 @@ async function handleDisplayGameRules(chatId, originalMessageId, gameCode, userO
         case GAME_IDS.LADDER: gameEmoji = '🪜'; rulesTitle = "Greed's Ladder Challenge"; break;
         case GAME_IDS.SEVEN_OUT: gameEmoji = '🎲'; rulesTitle = "Sevens Out (Fast Craps)"; break;
         case GAME_IDS.SLOT_FRENZY: gameEmoji = '🎰'; rulesTitle = "Slot Fruit Frenzy Spins"; break;
-        default: rulesTitle = `Game: ${rulesTitle}`; gameEmoji = '❓';
+        default: rulesTitle = `Game: ${rulesTitle}`;
     }
 
-    let rulesText = `${gameEmoji} *Welcome to ${escapeMarkdownV2(rulesTitle)}* ${gameEmoji}\n\n`;
-    rulesText += `Hey ${playerRef}\\! Ready to master *${escapeMarkdownV2(rulesTitle)}*\\? Here’s the lowdown:\n\n`;
+    let rulesText = `${gameEmoji} *Welcome to the Rules of ${escapeMarkdownV2(rulesTitle)}* ${gameEmoji}\n\n`;
+    rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
 
-    let solPrice = 100; // Default fallback price
+    let solPrice = 100; 
     try { solPrice = await getSolUsdPrice(); }
-    catch (priceErr) { console.warn(`${LOG_PREFIX_RULES_DISP} Could not fetch SOL price for rules display. Using default $${solPrice}. Error: ${priceErr.message}`); }
+    catch (priceErr) { console.warn(`${LOG_PREFIX_RULES_DISP} Could not fetch SOL price for rules. Using default $${solPrice}. Error: ${priceErr.message}`); }
 
-    const minBetUsdLimit = MIN_BET_USD_val;
-    const maxBetUsdLimit = MAX_BET_USD_val;
-    const minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(convertUSDToLamports(minBetUsdLimit, solPrice), solPrice));
-    const maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(convertUSDToLamports(maxBetUsdLimit, solPrice), solPrice));
+    const minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(convertUSDToLamports(MIN_BET_USD_val, solPrice), solPrice));
+    const maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(convertUSDToLamports(MAX_BET_USD_val, solPrice), solPrice));
     const defaultBetDisplay = minBetDisplay;
 
     rulesText += `*💰 General Betting Info:*\n` +
@@ -2763,118 +2708,72 @@ async function handleDisplayGameRules(chatId, originalMessageId, gameCode, userO
         `▫️ Current Limits (USD Equiv\\.): *${minBetDisplay}* to *${maxBetDisplay}*\\.\n` +
         `▫️ No bet specified? Defaults to *${defaultBetDisplay}* USD approx\\.\n\n`;
 
-    // Game-specific rules text generation
     switch (gameCode) {
         case GAME_IDS.COINFLIP:
-            rulesText += `*🎯 Objective:* Correctly guess the outcome of a fair coin toss \\(Heads or Tails\\) against another player\\.\n` +
-                         `*🎮 How to Play:* Type \`/coinflip <bet>\` in a group\\. Another player joins by clicking the button\\. The coin is flipped by the bot\\. Winner takes the entire pot \\(2x their bet\\)\\!\n` +
-                         `*⚖️ Fair Play:* A true 50/50 chance\\. May the luckiest player prevail\\!`;
+            rulesText += `*🎯 Objective:* Guess Heads or Tails correctly against another player\\.\n` +
+                         `*🎮 How to Play:* Use \`/coinflip <bet>\` in a group\\. Another player joins\\. Bot flips\\. Winner takes 2x their bet\\.\n` +
+                         `*⚖️ Fair Play:* 50/50 chance\\. Pure luck\\!`;
             break;
         case GAME_IDS.RPS:
-            rulesText += `*🎯 Objective:* Outsmart your opponent in the timeless game of Rock, Paper, Scissors\\.\n` +
-                         `*🎮 How to Play:* Start with \`/rps <bet>\` in a group\\. An opponent joins\\. Both players then secretly choose Rock 🪨, Paper 📄, or Scissors ✂️ via DM with the bot\\.\n` +
-                         `*🏆 Winning Moves:* Rock crushes Scissors, Scissors cuts Paper, Paper covers Rock\\. Winner claims the pot \\(2x their bet\\)\\. Ties result in a push \\(bet returned\\)\\.\n` +
-                         `*🧠 Strategy:* Predict your opponent's move or play your favorite\\!`;
+            rulesText += `*🎯 Objective:* Outsmart your opponent: Rock, Paper, or Scissors\\.\n` +
+                         `*🎮 How to Play:* Use \`/rps <bet>\` in a group\\. Opponent joins\\. Both choose secretly via DM\\. Rock > Scissors > Paper > Rock\\. Winner gets 2x bet\\. Ties push (bet returned)\\.\n` +
+                         `*🧠 Strategy:* It's all in the mind games\\!`;
             break;
         case GAME_IDS.DICE_ESCALATOR:
-            const deBust = escapeMarkdownV2(String(DICE_ESCALATOR_BUST_ON));
-            const deBotStand = escapeMarkdownV2(String(BOT_STAND_SCORE_DICE_ESCALATOR));
-            const deJackpotScore = escapeMarkdownV2(String(TARGET_JACKPOT_SCORE));
-            rulesText += `*🎯 Objective:* Accumulate the highest dice score against the Bot Dealer without rolling a ${deBust}\\. Hit *${deJackpotScore}\\+* and win the round to also claim the current Super Jackpot\\!\n` +
-                         `*🎮 How to Play:* Type \`/de <bet>\`\\. You roll a die repeatedly; each roll adds to your score\\. \n` +
-                         `*💥 Busting:* Rolling a *${deBust}* means you BUST! Your score becomes 0, and you lose your wager instantly\\.\n` +
-                         `*✋ Standing:* Choose to "Stand" at any time to lock in your current score\\. The Bot Dealer then plays, attempting to beat your score, and will stand on *${deBotStand}* or more, or if they beat your score without busting\\. \n` +
-                         `*🏆 Winning:* If your score is higher than the Bot's \\(or if the Bot busts and you haven't\\), you win 2x your bet\\. If you win AND your score was *${deJackpotScore} or higher*, you also win the current Dice Escalator Super Jackpot amount\\! A small percentage of each \`/de\` bet contributes to the jackpot\\.`;
+            rulesText += `*🎯 Objective:* Score high with dice rolls, beat the Bot, don't bust on a *${escapeMarkdownV2(String(DICE_ESCALATOR_BUST_ON))}*\\. Hit *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}\\+* & win the round for the Super Jackpot\\!\n` +
+                         `*🎮 How to Play:* Use \`/de <bet>\`\\. Roll dice repeatedly\\. "Stand" to lock score\\. Bot plays, stands on *${escapeMarkdownV2(String(BOT_STAND_SCORE_DICE_ESCALATOR))}* or more\\. \n` +
+                         `*🏆 Winning:* Higher score (or Bot busts) wins 2x bet\\. Win with *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}\\+* score to also claim the Jackpot\\.`;
             break;
         case GAME_IDS.DICE_21:
-            const d21Target = escapeMarkdownV2(String(DICE_21_TARGET_SCORE));
-            const d21BotStand = escapeMarkdownV2(String(DICE_21_BOT_STAND_SCORE));
-            rulesText += `*🎯 Objective:* Get your total dice sum closer to *${d21Target}* than the Bot Dealer, without exceeding *${d21Target}*\\.\n` +
-                         `*🎮 How to Play:* Start with \`/d21 <bet>\`\\. You're dealt two dice initially\\. You can "Hit" to take another die, or "Stand" to keep your current total\\.\n` +
-                         `*🤖 Bot's Turn:* The Bot Dealer will Hit on scores less than *${d21BotStand}* and Stand on *${d21BotStand}* or more\\. \n` +
-                         `*🏆 Winning & Payouts:*\n` +
-                         `   ▫️ Standard Win \\(Your score > Bot's, or Bot busts\\): Pays *2x* your bet\\.\n` +
-                         `   ▫️ Dice 21 Blackjack \\(Hitting *${d21Target}* exactly on your first two dice\\): Pays *2\\.5x* your bet\\!\n` +
-                         `   ▫️ Busting \\(Your score > ${d21Target}\\): You lose your wager\\.\n` +
-                         `   ▫️ Push \\(Tie with Bot, neither busts\\): Your bet is returned\\.`;
+            rulesText += `*🎯 Objective:* Get dice sum closer to *${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}* than Bot, without busting (> ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))})\\.\n` +
+                         `*🎮 How to Play:* Use \`/d21 <bet>\`\\. Get 2 dice\\. "Hit" for more, "Stand" to keep\\. Bot stands on *${escapeMarkdownV2(String(DICE_21_BOT_STAND_SCORE))}*\\+ \\.\n` +
+                         `*🏆 Payouts:* Win: 2x bet\\. Dice 21 (target on first 2 dice): 2\\.5x bet\\. Push (tie): Bet returned\\.`;
             break;
-        // ... (Implement detailed rules for OU7, DUEL, LADDER, S7, SLOT_FRENZY here following the same pattern)
-        // For brevity, I will add placeholders for the rest. You can fill these in with similar detail.
         case GAME_IDS.OVER_UNDER_7:
-             const ou7DiceCount = escapeMarkdownV2(String(OU7_DICE_COUNT));
-             const ou7SevenPayout = escapeMarkdownV2(String(OU7_PAYOUT_SEVEN + 1));
-             rulesText += `*🎯 Objective:* Predict if the sum of *${ou7DiceCount}* dice will be Over 7, Under 7, or Exactly 7\\.\n` +
-                          `*🎮 How to Play:* Start with \`/ou7 <bet>\`\\. Then, choose your prediction: Under 7 (sum 2\\-6), Exactly 7, or Over 7 (sum 8\\-12)\\.\n` +
-                          `*🏆 Payouts:*\n` +
-                          `   ▫️ Under 7 or Over 7: Wins *2x* your bet\\.\n` +
-                          `   ▫️ Exactly 7: A lucky hit wins a handsome *${ou7SevenPayout}x* your bet\\!`;
+             rulesText += `*🎯 Objective:* Predict if *${escapeMarkdownV2(String(OU7_DICE_COUNT))} dice* sum is Over 7, Under 7, or Exactly 7\\.\n` +
+                          `*🎮 How to Play:* Use \`/ou7 <bet>\`\\. Choose your prediction via buttons\\.\n` +
+                          `*🏆 Payouts:* Under 7 (2-6) or Over 7 (8-12): *2x* bet\\. Exactly 7: *${escapeMarkdownV2(String(OU7_PAYOUT_SEVEN + 1))}x* bet\\!`;
             break;
         case GAME_IDS.DUEL:
-            const duelDiceCount = escapeMarkdownV2(String(DUEL_DICE_COUNT));
-             rulesText += `*🎯 Objective:* Roll a higher total sum with *${duelDiceCount}* dice than the Bot Dealer in a head\\-to\\-head duel\\.\n` +
-                          `*🎮 How to Play:* Start with \`/duel <bet>\`\\. Click the button to roll your dice\\. The Bot Dealer then rolls theirs\\.\n` +
-                          `*🏆 Winning:* Highest total sum wins *2x* your bet\\. Ties are a push \\(bet returned\\)\\.\n` +
-                          `*⚔️ Pure Luck:* A straightforward test of fortune and valor\\!`;
+             rulesText += `*🎯 Objective:* Roll a higher sum with *${escapeMarkdownV2(String(DUEL_DICE_COUNT))} dice* than the Bot Dealer\\.\n` +
+                          `*🎮 How to Play:* Use \`/duel <bet>\`\\. Click to roll\\. Bot rolls after\\. Highest sum wins 2x bet\\. Ties push\\.\n` +
+                          `*⚔️ Pure Luck:* A quick test of fortune\\!`;
             break;
         case GAME_IDS.LADDER:
-            const ladderRollCount = escapeMarkdownV2(String(LADDER_ROLL_COUNT));
-            const ladderBustOn = escapeMarkdownV2(String(LADDER_BUST_ON));
-             rulesText += `*🎯 Objective:* Achieve a high score by summing *${ladderRollCount}* dice rolls\\. However, if any die shows a *${ladderBustOn}*, you bust\\!\n` +
-                          `*🎮 How to Play:* Start with \`/ladder <bet>\`\\. The bot rolls all *${ladderRollCount}* dice for you at once\\.\n` +
-                          `*💥 Busting:* If any of your dice shows a *${ladderBustOn}*, you bust and lose your wager\\.\n` +
-                          `*🏆 Payout Tiers (Example for 3 dice):*\n`;
-                        LADDER_PAYOUTS.forEach(p => {
-                            rulesText += `   ▫️ Sum *${escapeMarkdownV2(String(p.min))}\\-${escapeMarkdownV2(String(p.max))}*: Pays *${escapeMarkdownV2(String(p.multiplier + 1))}x* bet \\(${escapeMarkdownV2(p.label)}\\)\n`;
-                        });
-                        rulesText += `   ▫️ Lower sums may result in a push or loss, check game feedback for specifics\\. Higher rolls mean higher rewards\\!`;
+             rulesText += `*🎯 Objective:* Get a high sum with *${escapeMarkdownV2(String(LADDER_ROLL_COUNT))} dice*\\. Rolling a *${escapeMarkdownV2(String(LADDER_BUST_ON))}* on ANY die means you bust\\!\n` +
+                          `*🎮 How to Play:* Use \`/ladder <bet>\`\\. All dice rolled at once\\.\n` +
+                          `*🏆 Payouts (Based on Sum, No Bust):*\n`;
+                        LADDER_PAYOUTS.forEach(p => { rulesText += `   ▫️ Sum *${escapeMarkdownV2(String(p.min))}\\-${escapeMarkdownV2(String(p.max))}*: *${escapeMarkdownV2(String(p.multiplier + 1))}x* bet \\(${escapeMarkdownV2(p.label)}\\)\n`; });
             break;
         case GAME_IDS.SEVEN_OUT:
-             rulesText += `*🎯 Objective:* A simplified dice game inspired by Craps\\. Win by rolling your "Point" before a 7, or win instantly on the Come Out Roll\\. Uses two dice\\. \n` +
-                          `*🎲 Come Out Roll (First Roll):*\n` +
-                          `   ▫️ Roll a 7 or 11: *You Win Instantly* \\(2x bet\\)\\!\n` +
-                          `   ▫️ Roll a 2, 3, or 12 \\("Craps"\\): *You Lose Instantly*\\.\n` +
-                          `   ▫️ Roll any other sum \\(4, 5, 6, 8, 9, 10\\): This sum becomes your "Point"\\.\n` +
-                          `*🎲 Point Phase (If a Point is Established):*\n` +
-                          `   ▫️ The bot keeps rolling for you\\. If your Point is rolled again *before* a 7: *You Win* \\(2x bet\\)\\!\n` +
-                          `   ▫️ If a 7 is rolled *before* your Point: *You Lose* \\("Seven Out"\\)\\.`;
+             rulesText += `*🎯 Objective:* Simplified Craps\\. Win on Come Out (7/11), or roll Point before a 7\\. Lose on Come Out (2/3/12) or rolling 7 before Point\\. Uses 2 dice\\. \n` +
+                          `*🎲 Come Out Roll:* Auto\\-rolled after \`/s7 <bet>\`\\. Win on 7/11 (2x bet)\\. Lose on 2/3/12\\. Other sums (4,5,6,8,9,10) become your "Point"\\.\n` +
+                          `*🎲 Point Phase:* Click "Roll for Point"\\. Win if you roll Point (2x bet)\\. Lose if you roll 7 ("Seven Out")\\.`;
             break;
         case GAME_IDS.SLOT_FRENZY:
-             rulesText += `*🎯 Objective:* Spin the Telegram slot machine and match symbols for exciting payouts\\! The outcome is determined by Telegram's animated slot machine dice roll, which gives a value from 1 to 64\\.\n` +
-                          `*🎮 How to Play:* Start with \`/slot <bet>\`\\. The bot spins the slot machine for you\\.\n` +
-                          `*🏆 Winning Combinations & Payouts:*\n`;
-                        // Assuming SLOT_PAYOUTS is an object like { "64": { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, ... }
-                        for (const key in SLOT_PAYOUTS) {
-                            const payout = SLOT_PAYOUTS[key];
-                            if (payout.multiplier >= 5) { // Show significant payouts in rules
-                                rulesText += `   ▫️ ${payout.symbols} \\(Roll Value ${escapeMarkdownV2(key)}\\): Wins *${escapeMarkdownV2(String(payout.multiplier + 1))}x* bet \\(${escapeMarkdownV2(payout.label)}\\)\n`;
-                            }
-                        }
-                        rulesText += `   ▫️ Many other combinations offer smaller wins or your bet back\\! Check the specific game result for details\\. Non\\-winning rolls result in loss of wager\\.`;
+             rulesText += `*🎯 Objective:* Match symbols on Telegram's animated slot machine (value 1-64)\\.\n` +
+                          `*🎮 How to Play:* Use \`/slot <bet>\`\\. Bot spins the slot for you\\.\n` +
+                          `*🏆 Payouts (based on dice value from slot animation):\n`;
+                        for (const key in SLOT_PAYOUTS) { if (SLOT_PAYOUTS[key].multiplier >= 1) { rulesText += `   ▫️ ${SLOT_PAYOUTS[key].symbols} \\(${escapeMarkdownV2(SLOT_PAYOUTS[key].label)}\\): *${escapeMarkdownV2(String(SLOT_PAYOUTS[key].multiplier + 1))}x* bet \\(Value: ${key}\\)\n`;}}
+                        rulesText += `   ▫️ Other rolls may result in a loss\\.`;
             break;
         default:
-            rulesText += `📜 Rules for *"${escapeMarkdownV2(rulesTitle)}"* are as mysterious as a hidden treasure map\\! This game might be new or its rules are still being chiseled into stone\\. Please check back soon or use \`/help\` to see currently detailed games\\.`;
+            rulesText += `📜 Rules for *"${escapeMarkdownV2(rulesTitle)}"* are currently being polished by our game masters\\. Check back soon\\!`;
     }
-    rulesText += `\n\nRemember to always play responsibly and within your limits\\. Good luck, high roller\\! 🍀`;
+    rulesText += `\n\nPlay smart, play responsibly, and may the odds be ever in your favor\\! 🍀`;
 
     const keyboard = { inline_keyboard: [[{ text: "📚 Back to Games List", callback_data: "show_rules_menu" }]] };
     
-    if (!sendNew && targetMessageId && targetChatId === String(userObj.telegram_id)) {
+    if (messageToEditInDm) { // If we are editing a message in DM
         try {
-            await bot.editMessageText(rulesText, {
-                chat_id: targetChatId, message_id: Number(targetMessageId),
-                parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true
-            });
+            await bot.editMessageText(rulesText, { chat_id: targetChatId, message_id: Number(messageToEditInDm), parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
         } catch (e) {
             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit rules display for ${gameCode}, sending new. Error: ${e.message}`);
+                console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit rules display in DM for ${gameCode}, sending new. Error: ${e.message}`);
                 await safeSendMessage(targetChatId, rulesText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
             }
         }
-    } else { // Send new message (either because sendNew is true, or no targetMessageId in DM)
-        // If there was an old message in DM that we were supposed to edit but couldn't, delete it.
-        if (targetMessageId && targetChatId === String(userObj.telegram_id) && !sendNew) {
-             await bot.deleteMessage(targetChatId, Number(targetMessageId)).catch(()=>{});
-        }
+    } else { // Send a new message in DM
         await safeSendMessage(targetChatId, rulesText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
     }
 }
@@ -2891,7 +2790,7 @@ async function handleJackpotCommand(chatId, userObj, chatType) {
         }
         
         const jackpotUSD = await formatBalanceForDisplay(jackpotAmountLamports, 'USD');
-        const jackpotSOL = formatCurrency(jackpotAmountLamports, 'SOL'); // Use formatCurrency for consistent SOL
+        const jackpotSOL = formatCurrency(jackpotAmountLamports, 'SOL');
         const jackpotTargetScoreDisplay = escapeMarkdownV2(String(TARGET_JACKPOT_SCORE));
 
         const jackpotMessage = `🏆 **Dice Escalator Super Jackpot Alert!** 🏆\n\n` +
@@ -2912,7 +2811,10 @@ async function handleLeaderboardsCommand(msg, args) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
     const user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!user) return;
+    if (!user) {
+         await safeSendMessage(chatId, "Error fetching your profile. Please try /start.", {});
+         return;
+    }
     const playerRef = getPlayerDisplayReference(user);
     const typeArg = args[0] || 'overall_wagered';
     const typeDisplay = escapeMarkdownV2(typeArg.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()));
@@ -2924,67 +2826,69 @@ async function handleLeaderboardsCommand(msg, args) {
     await safeSendMessage(chatId, leaderboardMessage, { parse_mode: 'MarkdownV2' });
 }
 
-async function handleGrantCommand(msg, args, adminUserObj /* This is the admin executing the command */) {
+async function handleGrantCommand(msg, args, adminUserObj) {
     const LOG_PREFIX_GRANT = `[GrantCmd UID:${adminUserObj.telegram_id}]`;
-    const chatId = String(msg.chat.id); // Command was sent here
+    const chatId = String(msg.chat.id);
     const adminUserIdStr = String(adminUserObj.telegram_id);
 
     if (!ADMIN_USER_ID || adminUserIdStr !== ADMIN_USER_ID) {
         console.warn(`${LOG_PREFIX_GRANT} Unauthorized attempt to use /grant by user ${adminUserIdStr}.`);
-        // Silently ignore or send "unknown command" if in PM (handled by main router's default)
-        return;
+        return; // Silently ignore or handled by main router default
     }
 
     if (args.length < 2) {
-        await safeSendMessage(chatId, "⚙️ Admin Usage: `/grant <target_user_id_or_@username> <amount_SOL_or_Lamports> [Optional: reason]`\nExample: `/grant @LuckyPlayer 10 SOL Welcome Bonus` or `/grant 123456789 50000000 lamports Correction`", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "⚙️ **Admin Grant Usage:** `/grant <target_user_id_or_@username> <amount_SOL_or_Lamports> [Optional: reason]`\n*Examples:*\n`/grant @LuckyPlayer 10 SOL Welcome Bonus`\n`/grant 123456789 50000000 lamports Correction`\n`/grant @RiskTaker -2 SOL BetSettleFix`", { parse_mode: 'MarkdownV2' });
         return;
     }
 
     const targetUserIdentifier = args[0];
     const amountArg = args[1];
-    const reason = args.slice(2).join(' ') || `Admin grant by ${adminUserIdStr}`;
+    const reason = args.slice(2).join(' ') || `Admin grant by ${adminUserObj.username || adminUserIdStr}`;
     let amountToGrantLamports;
     let targetUser;
 
     try {
-        // Resolve target user
         if (targetUserIdentifier.startsWith('@')) {
             const usernameToFind = targetUserIdentifier.substring(1);
             const userRes = await queryDatabase('SELECT telegram_id, username, first_name FROM users WHERE LOWER(username) = LOWER($1)', [usernameToFind]);
-            if (userRes.rowCount === 0) throw new Error(`Could not find user by username: \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
+            if (userRes.rowCount === 0) throw new Error(`User not found: \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
             targetUser = await getOrCreateUser(userRes.rows[0].telegram_id, userRes.rows[0].username, userRes.rows[0].first_name);
         } else if (/^\d+$/.test(targetUserIdentifier)) {
             targetUser = await getOrCreateUser(targetUserIdentifier);
         } else {
-            throw new Error(`Invalid target user identifier: \`${escapeMarkdownV2(targetUserIdentifier)}\`. Use Telegram ID or @username.`);
+            throw new Error(`Invalid target: \`${escapeMarkdownV2(targetUserIdentifier)}\`. Use Telegram ID or @username.`);
         }
-        if (!targetUser) throw new Error(`Could not find or create target user \`${escapeMarkdownV2(targetUserIdentifier)}\` for grant.`);
+        if (!targetUser) throw new Error(`Could not find or create target user \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
         
-        // Parse amount (simplified from parseBetAmount, as this is an admin action)
         const amountArgLower = String(amountArg).toLowerCase();
+        let parsedAmount;
+        let isNegative = String(amountArg).startsWith('-');
+
         if (amountArgLower.endsWith('sol')) {
-            const solAmount = parseFloat(amountArgLower.replace('sol', '').trim());
-            if (isNaN(solAmount)) throw new Error("Invalid SOL amount for grant.");
-            amountToGrantLamports = BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)));
+            parsedAmount = parseFloat(amountArgLower.replace('sol', '').trim());
+            if (isNaN(parsedAmount)) throw new Error("Invalid SOL amount.");
+            amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
         } else if (amountArgLower.endsWith('lamports')) {
-            amountToGrantLamports = BigInt(amountArgLower.replace('lamports','').trim());
+            parsedAmount = amountArgLower.replace('lamports','').trim();
+            amountToGrantLamports = BigInt(parsedAmount);
         } else if (String(amountArg).includes('.')) {
-             const solAmount = parseFloat(amountArg);
-             if (isNaN(solAmount)) throw new Error("Invalid SOL amount (decimal) for grant.");
-             amountToGrantLamports = BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)));
-        } else { // Assume integer, could be SOL or lamports. If it's a small int, likely SOL.
-            const intAmount = BigInt(amountArg);
-            if (intAmount > 0n && intAmount < 100000n && !amountArgLower.endsWith('000000')) { // Heuristic for SOL
-                 amountToGrantLamports = BigInt(Math.floor(Number(intAmount) * Number(LAMPORTS_PER_SOL)));
+             parsedAmount = parseFloat(amountArg);
+             if (isNaN(parsedAmount)) throw new Error("Invalid SOL amount (decimal).");
+             amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
+        } else {
+            parsedAmount = BigInt(amountArg);
+            // If a small integer (not obviously lamports), assume SOL. Let admin be explicit with 'lamports' for large lamport grants.
+            if (parsedAmount !== 0n && (Math.abs(Number(parsedAmount)) < 100000 || isNegative && Math.abs(Number(parsedAmount)) < 100000)) {
+                 amountToGrantLamports = BigInt(Math.floor(Number(parsedAmount) * Number(LAMPORTS_PER_SOL)));
             } else {
-                amountToGrantLamports = intAmount;
+                amountToGrantLamports = parsedAmount;
             }
         }
-        if (amountToGrantLamports === 0n) throw new Error("Grant amount cannot be zero."); // Allow negative for debit if needed by adding a separate command or flag
-        if (isNaN(Number(amountToGrantLamports))) throw new Error("Could not parse grant amount to a valid number.");
+        if (isNaN(Number(amountToGrantLamports))) throw new Error("Could not parse grant amount.");
+        if (amountToGrantLamports === 0n && String(amountArg) !== "0") throw new Error("Grant amount resolved to zero incorrectly. Be explicit: `0 sol` or `0 lamports`.");
 
     } catch (e) {
-        await safeSendMessage(chatId, `⚠️ Invalid grant parameters. ${escapeMarkdownV2(e.message)}`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, `⚠️ **Grant Parameter Error:**\n${escapeMarkdownV2(e.message)}`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
@@ -2994,12 +2898,12 @@ async function handleGrantCommand(msg, args, adminUserObj /* This is the admin e
         await grantClient.query('BEGIN');
 
         if (typeof updateUserBalanceAndLedger !== 'function') {
-            console.error(`${LOG_PREFIX_GRANT} FATAL: updateUserBalanceAndLedger function is not defined for grant command.`);
-            await safeSendMessage(chatId, "🛠️ Internal error: Grant functionality is currently unavailable. Core balance function missing.", { parse_mode: 'MarkdownV2' });
+            console.error(`${LOG_PREFIX_GRANT} FATAL: updateUserBalanceAndLedger is undefined for grant.`);
+            await safeSendMessage(chatId, "🛠️ **Internal System Error:** Grant functionality is offline. Core balance function missing.", { parse_mode: 'MarkdownV2' });
             await grantClient.query('ROLLBACK'); return;
         }
-        const transactionType = amountToGrantLamports > 0n ? 'admin_grant_credit' : 'admin_grant_debit';
-        const grantNotes = `Admin grant: ${reason}. By: ${adminUserIdStr}. To: ${targetUser.telegram_id}. Amount: ${formatCurrency(amountToGrantLamports, 'SOL')}`;
+        const transactionType = amountToGrantLamports >= 0n ? 'admin_grant_credit' : 'admin_grant_debit';
+        const grantNotes = `Admin Action: ${reason}. By: ${adminUserObj.username || adminUserIdStr} (${adminUserIdStr}). To: ${targetUser.username || targetUser.telegram_id} (${targetUser.telegram_id}). Amount: ${formatCurrency(amountToGrantLamports, 'SOL')}`;
         
         const grantResult = await updateUserBalanceAndLedger(
             grantClient, targetUser.telegram_id, amountToGrantLamports, transactionType, {}, grantNotes
@@ -3008,54 +2912,30 @@ async function handleGrantCommand(msg, args, adminUserObj /* This is the admin e
         if (grantResult.success) {
             await grantClient.query('COMMIT');
             const grantAmountDisplay = escapeMarkdownV2(formatCurrency(amountToGrantLamports, 'SOL'));
-            const newBalanceDisplay = escapeMarkdownV2(await formatBalanceForDisplay(grantResult.newBalanceLamports, 'USD')); // Show USD to user
+            const newBalanceDisplay = escapeMarkdownV2(await formatBalanceForDisplay(grantResult.newBalanceLamports, 'USD'));
             const targetUserDisplay = getPlayerDisplayReference(targetUser);
-            const verb = amountToGrantLamports > 0n ? "granted" : "debited";
-            const preposition = amountToGrantLamports > 0n ? "to" : "from";
+            const verb = amountToGrantLamports >= 0n ? "credited to" : "debited from";
+            const actionWord = amountToGrantLamports >= 0n ? "Credit" : "Debit";
 
-            await safeSendMessage(chatId, `✅ Successfully ${verb} *${grantAmountDisplay}* ${preposition} user ${targetUserDisplay} (ID: \`${targetUser.telegram_id}\`).\nNew balance: *${newBalanceDisplay}*\\.`, { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(chatId, `✅ **Admin Action Successful!**\n*${grantAmountDisplay}* has been ${verb} ${targetUserDisplay} (ID: \`${targetUser.telegram_id}\`).\nNew balance for user: *${newBalanceDisplay}*\\.`, { parse_mode: 'MarkdownV2' });
             
-            const userNotifText = amountToGrantLamports > 0n
-                ? `🎉 Hooray! You have received an admin credit of *${grantAmountDisplay}*\\! Your new balance is *${newBalanceDisplay}*\\. Reason: _${escapeMarkdownV2(reason)}_`
-                : `⚠️ Admin Adjustment: Your account has been debited by *${grantAmountDisplay}*\\. Your new balance is *${newBalanceDisplay}*\\. Reason: _${escapeMarkdownV2(reason)}_`;
+            const userNotifText = amountToGrantLamports >= 0n
+                ? `🎉 Good news! You have received an admin credit of *${grantAmountDisplay}* from the Casino Royale team! Your new balance is *${newBalanceDisplay}*\\. Reason: _${escapeMarkdownV2(reason)}_`
+                : `⚖️ Admin Adjustment: Your account has been debited by *${grantAmountDisplay}* by the Casino Royale team. Your new balance is *${newBalanceDisplay}*\\. Reason: _${escapeMarkdownV2(reason)}_`;
             await safeSendMessage(targetUser.telegram_id, userNotifText, { parse_mode: 'MarkdownV2' });
         } else {
             await grantClient.query('ROLLBACK');
-            await safeSendMessage(chatId, `❌ Failed to ${amountToGrantLamports > 0n ? 'grant' : 'debit'} funds: ${escapeMarkdownV2(grantResult.error || "Unknown error during balance update.")}`, { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(chatId, `❌ **Admin Action Failed:** Failed to ${amountToGrantLamports > 0n ? 'credit' : 'debit'} funds. Reason: \`${escapeMarkdownV2(grantResult.error || "Unknown balance update error.")}\``, { parse_mode: 'MarkdownV2' });
         }
     } catch (grantError) {
         if (grantClient) await grantClient.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_GRANT} Admin Grant DB Transaction Error: ${grantError.message}`);
-        await safeSendMessage(chatId, `❌ Database error during grant: \`${escapeMarkdownV2(grantError.message)}\``, { parse_mode: 'MarkdownV2' });
+        console.error(`${LOG_PREFIX_GRANT} Admin Grant DB Transaction Error: ${grantError.message}`, grantError.stack);
+        await safeSendMessage(chatId, `❌ **Database Error During Grant:** \`${escapeMarkdownV2(grantError.message)}\`. The action was not completed.`, { parse_mode: 'MarkdownV2' });
     } finally {
         if (grantClient) grantClient.release();
     }
 }
 
-// Helper to create consistent "Play Again" style keyboards.
-function createPostGameKeyboard(gameCode, betAmountLamports) {
-    const playAgainBetDisplaySOL = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL')); 
-    const playAgainCallback = `play_again_${gameCode}:${betAmountLamports.toString()}`; 
-    
-    const gameNameClean = gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-    let gameEmoji = '🎲'; // Default
-    switch(gameCode) {
-        case GAME_IDS.COINFLIP: gameEmoji = '🪙'; break; case GAME_IDS.RPS: gameEmoji = '✂️'; break;
-        case GAME_IDS.DICE_ESCALATOR: gameEmoji = '🎲'; break; case GAME_IDS.DICE_21: gameEmoji = '🃏'; break;
-        case GAME_IDS.OVER_UNDER_7: gameEmoji = '🎲'; break; case GAME_IDS.DUEL: gameEmoji = '⚔️'; break;
-        case GAME_IDS.LADDER: gameEmoji = '🪜'; break; case GAME_IDS.SEVEN_OUT: gameEmoji = '🎲'; break;
-        case GAME_IDS.SLOT_FRENZY: gameEmoji = '🎰'; break;
-    }
-
-    return {
-        inline_keyboard: [
-            [{ text: `🔁 Play Again (${playAgainBetDisplaySOL})`, callback_data: playAgainCallback }],
-            [{ text: "💰 Add Funds", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }, 
-             { text: `📖 ${gameEmoji} Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${gameCode}` }],
-            [{ text: "🎲 All Games Menu", callback_data: "show_rules_menu" }, { text: "💳 Wallet", callback_data: "menu:wallet" }]
-        ]
-    };
-}
 
 console.log("Part 5a, Section 2 (NEW): General Command Handler Implementations - Complete.");
 // --- End of Part 5a, Section 2 (NEW) ---
