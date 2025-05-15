@@ -625,33 +625,30 @@ async function initializeDatabaseSchema() {
         await client.query('BEGIN');
 
         // Users Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                telegram_id BIGINT PRIMARY KEY,
-                username VARCHAR(255),
-                first_name VARCHAR(255),
-                last_name VARCHAR(255),
-                balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
-                last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                is_banned BOOLEAN DEFAULT FALSE,
-                ban_reason TEXT,
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                solana_wallet_address VARCHAR(44) UNIQUE, 
-                referral_code VARCHAR(12) UNIQUE,
-                referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-                can_generate_deposit_address BOOLEAN DEFAULT TRUE,
-                last_deposit_address VARCHAR(44), 
-                last_deposit_address_generated_at TIMESTAMPTZ,
-                total_deposited_lamports BIGINT DEFAULT 0,
-                total_withdrawn_lamports BIGINT DEFAULT 0,
-                total_wagered_lamports BIGINT DEFAULT 0,
-                total_won_lamports BIGINT DEFAULT 0,
-                notes TEXT 
-            );
-        `);
-        console.log("  [DB Schema] 'users' table checked/created.");
-
+        await client.query(`CREATE TABLE IF NOT EXISTS users (
+            telegram_id BIGINT PRIMARY KEY,
+            username VARCHAR(255),
+            first_name VARCHAR(255),
+            last_name VARCHAR(255),
+            balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
+            last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            is_banned BOOLEAN DEFAULT FALSE,
+            ban_reason TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            solana_wallet_address VARCHAR(44) UNIQUE,
+            referral_code VARCHAR(12) UNIQUE,
+            referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+            can_generate_deposit_address BOOLEAN DEFAULT TRUE,
+            last_deposit_address VARCHAR(44),
+            last_deposit_address_generated_at TIMESTAMPTZ,
+            total_deposited_lamports BIGINT DEFAULT 0,
+            total_withdrawn_lamports BIGINT DEFAULT 0,
+            total_wagered_lamports BIGINT DEFAULT 0,
+            total_won_lamports BIGINT DEFAULT 0,
+            notes TEXT
+        );`);
+        console.log("  [DB Schema] 'users' table checked/created.");
         // Jackpots Table
         await client.query(`
             CREATE TABLE IF NOT EXISTS jackpots (
