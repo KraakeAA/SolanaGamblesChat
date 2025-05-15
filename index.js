@@ -8406,58 +8406,57 @@ console.log("[State Handler] handleWithdrawalAmountInput defined.");
 
 async function handleWalletCommand(msg) { 
     const userId = String(msg.from.id);
-    const commandChatId = String(msg.chat.id); 
+    const commandChatId = String(msg.chat.id); // Chat where /wallet was typed
     const chatType = msg.chat.type;
     
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) {
-        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try /start again\\.", {parse_mode: 'MarkdownV2'}); // Escaped .
-        return;
-    }
-    const playerRef = getPlayerDisplayReference(userObject); // Already escaped
-    clearUserState(userId); 
+        await safeSendMessage(commandChatId, "Error fetching your player profile. Please try /start again.", {parse_mode: 'MarkdownV2'});
+        return;
+    }
+    const playerRef = getPlayerDisplayReference(userObject);
+    clearUserState(userId); // Clear any pending input states
 
-    let botUsername = "our bot"; 
-    try { 
-        const selfInfo = await bot.getMe(); 
-        if(selfInfo.username) botUsername = selfInfo.username; 
-    } catch(e) {console.error("[WalletCmd] Error getting bot username:", e.message);}
+    let botUsername = "our bot";
+    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) {console.error("[WalletCmd] Error getting bot username:", e.message);}
 
-    let targetChatIdForMenu = userId; 
-    let messageIdToEditOrDeleteForMenu = msg.message_id; 
+    let targetChatIdForMenu = userId; // Default to DM
+    let messageIdToEditOrDeleteForMenu = msg.message_id; // Original /wallet command message ID
 
     if (chatType !== 'private') {
         if(msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(()=>{});
-        await safeSendMessage(commandChatId, `${playerRef}, I've sent your Wallet Dashboard to our private chat: @${escapeMarkdownV2(botUsername)} 💳 For your security, all wallet actions are handled there\\.`, { parse_mode: 'MarkdownV2' }); // Escaped .
-        messageIdToEditOrDeleteForMenu = null; 
+        await safeSendMessage(commandChatId, `${playerRef}, I've sent your Wallet Dashboard to our private chat: @${escapeMarkdownV2(botUsername)} 💳 For your security, all wallet actions are handled there\\.`, { parse_mode: 'MarkdownV2' });
+        messageIdToEditOrDeleteForMenu = null; // No message to edit in DM initially
     } else {
-        if(msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(()=>{});
-        messageIdToEditOrDeleteForMenu = null; 
-    }
+        // If already in DM, we might want to delete the /wallet command message
+        if(msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(()=>{});
+        messageIdToEditOrDeleteForMenu = null; // Will send a new message
+    }
     
-    const loadingDmMsg = await safeSendMessage(targetChatIdForMenu, "Loading your Wallet Dashboard\\.\\.\\. ⏳", {parse_mode: 'MarkdownV2'}); // Escaped ...
+    const loadingDmMsg = await safeSendMessage(targetChatIdForMenu, "Loading your Wallet Dashboard... ⏳", {});
+    // Use the ID of the "Loading..." message for editing, if successfully sent
     if (loadingDmMsg?.message_id) messageIdToEditOrDeleteForMenu = loadingDmMsg.message_id;
 
     try {
-        const userDetails = await getPaymentSystemUserDetails(userId); 
+        const userDetails = await getPaymentSystemUserDetails(userId); // From Part P2
         if (!userDetails) {
-            const noUserText = `😕 Could not retrieve your player profile\\. Please try sending \`/start\` to the bot first\\.`; // Escaped .
+            const noUserText = "😕 Could not retrieve your player profile. Please try sending \`/start\` to the bot first.";
             if (messageIdToEditOrDeleteForMenu) await bot.editMessageText(noUserText, {chat_id: targetChatIdForMenu, message_id: messageIdToEditOrDeleteForMenu, parse_mode: 'MarkdownV2'});
             else await safeSendMessage(targetChatIdForMenu, noUserText, {parse_mode: 'MarkdownV2'});
             return;
         }
         const balanceLamports = BigInt(userDetails.balance || '0');
         const linkedAddress = userDetails.solana_wallet_address;
-        const balanceDisplayUSD = await formatBalanceForDisplay(balanceLamports, 'USD'); // Already escaped by formatBalanceForDisplay if it includes $
-        const balanceDisplaySOL = await formatBalanceForDisplay(balanceLamports, 'SOL'); // Already escaped by formatBalanceForDisplay
-        const escapedLinkedAddress = linkedAddress ? `\`${escapeMarkdownV2(linkedAddress)}\`` : "_Not Set_"; // Wrapped in backticks, then escape content
+        const balanceDisplayUSD = await formatBalanceForDisplay(balanceLamports, 'USD');
+        const balanceDisplaySOL = await formatBalanceForDisplay(balanceLamports, 'SOL');
+        const escapedLinkedAddress = linkedAddress ? escapeMarkdownV2(linkedAddress) : "_Not Set_";
 
-        let text = `⚜️ *${escapeMarkdownV2(BOT_NAME)} Wallet Dashboard* ⚜️\n\n` +
+        let text = `⚜️ **${escapeMarkdownV2(BOT_NAME)} Wallet Dashboard** ⚜️\n\n` +
                    `👤 Player: ${playerRef}\n\n` +
-                   `💰 Current Balance:\n   Approx\\. *${escapeMarkdownV2(balanceDisplayUSD)}*\n   SOL: *${escapeMarkdownV2(balanceDisplaySOL)}*\n\n` + // Escaped .
-                   `🔗 Linked Withdrawal Address:\n   ${escapedLinkedAddress}\n\n`;
+                   `💰 Current Balance:\n   Approx\\. *${escapeMarkdownV2(balanceDisplayUSD)}*\n   SOL: *${escapeMarkdownV2(balanceDisplaySOL)}*\n\n` +
+                   `🔗 Linked Withdrawal Address:\n   \`${escapedLinkedAddress}\`\n\n`;
         if (!linkedAddress) {
-            text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat\\.\n\n`; // Escaped .
+            text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat\\.\n\n`;
         }
         text += `What would you like to do?`;
         
@@ -8467,22 +8466,22 @@ async function handleWalletCommand(msg) { 
             linkedAddress 
                 ? [{ text: "🔄 Update Linked Wallet", callback_data: "menu:link_wallet_prompt" }]
                 : [{ text: "🔗 Link Withdrawal Wallet", callback_data: "menu:link_wallet_prompt" }],
-            [{ text: "🤝 Referrals & Rewards", callback_data: "menu:referral" }, { text: "🏆 View Leaderboards", callback_data: "menu:leaderboards" }], 
+            [{ text: "🤝 Referrals & Rewards", callback_data: "menu:referral" }, { text: "🏆 View Leaderboards", callback_data: "menu:leaderboards" }], // Leaderboards can be group or DM
             [{ text: "❓ Help & Games Menu", callback_data: "menu:main" }]
         ];
         const keyboard = { inline_keyboard: keyboardActions };
 
-        if (messageIdToEditOrDeleteForMenu && bot) { // Added bot check
+        if (messageIdToEditOrDeleteForMenu) {
             await bot.editMessageText(text, { chat_id: targetChatIdForMenu, message_id: messageIdToEditOrDeleteForMenu, parse_mode: 'MarkdownV2', reply_markup: keyboard });
         } else {
             await safeSendMessage(targetChatIdForMenu, text, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
         }
     } catch (error) {
         console.error(`[handleWalletCommand UID:${userId}] ❌ Error displaying wallet: ${error.message}`, error.stack);
-        const errorText = "⚙️ Apologies, we encountered an issue while fetching your wallet information\\. Please try again in a moment\\."; // Escaped .
-        if (messageIdToEditOrDeleteForMenu && bot) { // Added bot check
+        const errorText = "⚙️ Apologies, we encountered an issue while fetching your wallet information. Please try again in a moment.";
+        if (messageIdToEditOrDeleteForMenu) {
             await bot.editMessageText(errorText, {chat_id: targetChatIdForMenu, message_id: messageIdToEditOrDeleteForMenu, parse_mode: 'MarkdownV2'}).catch(async () => {
-                await safeSendMessage(targetChatIdForMenu, errorText, {parse_mode: 'MarkdownV2'}); 
+                await safeSendMessage(targetChatIdForMenu, errorText, {parse_mode: 'MarkdownV2'}); // Fallback to send new if edit fails
             });
         } else {
             await safeSendMessage(targetChatIdForMenu, errorText, {parse_mode: 'MarkdownV2'});
@@ -8557,42 +8556,44 @@ async function handleSetWalletCommand(msg, args) { 
 console.log("[UI Handler] handleSetWalletCommand defined.");
 
 async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) { 
-    const userId = String(correctUserIdFromCb || msg.from.id); 
-    const commandChatId = String(msg.chat.id); 
+    const userId = String(correctUserIdFromCb || msg.from.id); // Use CB ID if provided (from menu), else msg.from.id
+    const commandChatId = String(msg.chat.id); // Chat where original command/button was
     const chatType = msg.chat.type;
 
     let userObject = await getOrCreateUser(userId, msg.from?.username, msg.from?.first_name, msg.from?.last_name);
     if (!userObject) {
-        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try /start again\\.", {parse_mode: 'MarkdownV2'}); // Escaped .
-        return;
-    }
-    const playerRef = getPlayerDisplayReference(userObject); // Already escaped
-    clearUserState(userId); 
+        await safeSendMessage(commandChatId, "Error fetching your player profile. Please try /start.", {parse_mode: 'MarkdownV2'});
+        return;
+    }
+    const playerRef = getPlayerDisplayReference(userObject);
+    clearUserState(userId); // Clear any pending states
     const logPrefix = `[DepositCmd UID:${userId} OrigChat:${commandChatId} Type:${chatType}]`;
-    let botUsername = "our bot"; // Default
-    try { 
-        const selfInfo = await bot.getMe(); 
-        if(selfInfo.username) botUsername = selfInfo.username; 
-    } catch(e) {console.error(`${logPrefix} Error getting bot username:`, e.message);}
+    let botUsername = "our bot";
+    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) {console.error(`${logPrefix} Error getting bot username:`, e.message);}
 
+
+    // If command came from group, or if msg.chat.id is not the user's DM, redirect message to DM
     if (String(commandChatId) !== userId) {
-        if (msg.message_id && msg.chat?.id && String(msg.chat.id) !== userId) { 
-            if (!msg.isCallbackRedirect) { 
-                await bot.deleteMessage(commandChatId, msg.message_id).catch(()=>{});
-            }
-        }
-        await safeSendMessage(commandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs\\.`, { parse_mode: 'MarkdownV2' }); // Escaped .
+        if (msg.message_id && msg.chat?.id && String(msg.chat.id) !== userId) { // if it's an actual message from group
+            // For callbacks (isCallbackRedirect), message might have been edited already.
+            // For commands, delete the original command in group.
+            if (!msg.isCallbackRedirect) { // isCallbackRedirect is from mockMsgObjectForHandler
+                await bot.deleteMessage(commandChatId, msg.message_id).catch(()=>{});
+            }
+        }
+        await safeSendMessage(commandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs.`, { parse_mode: 'MarkdownV2' });
     }
 
-    const loadingDmMsg = await safeSendMessage(userId, "Generating your personal Solana deposit address... This may take a moment\\. ⚙️", {parse_mode:'MarkdownV2'}); // Escaped .
+    // All further interaction happens in DM (userId is the DM chat ID)
+    const loadingDmMsg = await safeSendMessage(userId, "Generating your personal Solana deposit address... This may take a moment. ⚙️", {parse_mode:'MarkdownV2'});
     const loadingDmMsgId = loadingDmMsg?.message_id;
-    let client = null;
+    let client = null;
 
     try {
-        client = await pool.connect(); 
-        await client.query('BEGIN');
+        client = await pool.connect(); // Acquire client for potential transaction
+        await client.query('BEGIN');
 
-        const existingAddresses = await client.query( 
+        const existingAddresses = await client.query( // Use client
             "SELECT public_key, expires_at FROM user_deposit_wallets WHERE user_telegram_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
             [userId]
         );
@@ -8601,48 +8602,52 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         if (existingAddresses.rows.length > 0) {
             depositAddress = existingAddresses.rows[0].public_key;
             expiresAt = new Date(existingAddresses.rows[0].expires_at);
-            console.log(`${logPrefix} Found existing active deposit address: ${depositAddress}`);
+            console.log(`${logPrefix} Found existing active deposit address: ${depositAddress}`);
         } else {
-            const newAddress = await generateUniqueDepositAddress(userId, client); 
+            // generateUniqueDepositAddress (from Part P1) inserts into user_deposit_wallets
+            const newAddress = await generateUniqueDepositAddress(userId, client); // Pass client
             if (!newAddress) {
-                throw new Error("Failed to generate a new deposit address\\. Please try again or contact support\\."); // Escaped .
+                throw new Error("Failed to generate a new deposit address. Please try again or contact support.");
             }
             depositAddress = newAddress;
-            newAddressGenerated = true;
+            newAddressGenerated = true;
+            // Fetch the expiry that was set in DB by generateUniqueDepositAddress
             const newAddrDetails = await client.query("SELECT expires_at FROM user_deposit_wallets WHERE public_key = $1 AND user_telegram_id = $2", [depositAddress, userId]);
             expiresAt = newAddrDetails.rows.length > 0 ? new Date(newAddrDetails.rows[0].expires_at) : new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS);
         }
 
-        if (newAddressGenerated || (userObject.last_deposit_address !== depositAddress)) {
-            await client.query(
-                `UPDATE users SET last_deposit_address = $1, last_deposit_address_generated_at = $2, updated_at = NOW() WHERE telegram_id = $3`,
-                [depositAddress, expiresAt, userId]
-            );
-            console.log(`${logPrefix} Updated users table with last_deposit_address: ${depositAddress} for user ${userId}.`);
-        }
-        await client.query('COMMIT');
+        if (newAddressGenerated || (userObject.last_deposit_address !== depositAddress)) {
+            // Update users table with the latest deposit address info
+            await client.query(
+                `UPDATE users SET last_deposit_address = $1, last_deposit_address_generated_at = $2, updated_at = NOW() WHERE telegram_id = $3`,
+                [depositAddress, expiresAt, userId]
+            );
+            console.log(`${logPrefix} Updated users table with last_deposit_address: ${depositAddress} for user ${userId}.`);
+        }
+        await client.query('COMMIT');
+
 
         const expiryTimestamp = Math.floor(expiresAt.getTime() / 1000);
         const timeRemaining = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 60000)); 
-        const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`; // playerRef is already escaped
+        const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`;
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
 
         const depositMessage = `💰 *Your Personal Solana Deposit Address* 💰\n\n` +
                                `Hi ${playerRef}, please send your SOL deposits to the following unique address:\n\n` +
-                               `\`${escapeMarkdownV2(depositAddress)}\`\n\n` + // Address itself should be escaped if it could contain md chars, though unlikely for SOL addr
+                               `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
                                `_(Tap address to copy)_ \n\n` +
-                               `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(<t:${expiryTimestamp}:R>\\)\\.\n` + // Escaped ( ) .
+                               `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires <t:${expiryTimestamp}:R>\\)\\.\n` +
                                `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
                                `⚠️ *Important:*\n` +
-                               `   ▫️ Send *only SOL* to this address\\.\n` + // Escaped .
-                               `   ▫️ Do *not* send NFTs or other tokens\\.\n` + // Escaped .
-                               `   ▫️ Deposits from exchanges may take longer to confirm\\.\n` + // Escaped .
-                               `   ▫️ This address is *unique to you* for this deposit session\\. Do not share it\\.`; // Escaped .
+                               `   ▫️ Send *only SOL* to this address\\.\n` +
+                               `   ▫️ Do *not* send NFTs or other tokens\\.\n` +
+                               `   ▫️ Deposits from exchanges may take longer to confirm\\.\n` +
+                               `   ▫️ This address is *unique to you* for this deposit session\\. Do not share it\\.`;
         
         const keyboard = {
             inline_keyboard: [
                 [{ text: "🔍 View on Solscan", url: `https://solscan.io/account/${depositAddress}` }],
-                [{ text: "📱 Scan QR Code", url: qrCodeUrl }],
+                [{ text: "📱 Scan QR Code", url: qrCodeUrl }], // Consider if this URL needs encoding
                 [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
             ]
         };
@@ -8654,8 +8659,8 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         }
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
-        console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack);
-        const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`; // Escaped .
+        console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack);
+        const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`;
         if (loadingDmMsgId) {
             await bot.editMessageText(errorText, {chat_id: userId, message_id: loadingDmMsgId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text:"Try Again", callback_data:DEPOSIT_CALLBACK_ACTION}]]}}).catch(async () => {
                 await safeSendMessage(userId, errorText, {parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text:"Try Again", callback_data:DEPOSIT_CALLBACK_ACTION}]]}});
@@ -8664,8 +8669,8 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
             await safeSendMessage(userId, errorText, {parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text:"Try Again", callback_data:DEPOSIT_CALLBACK_ACTION}]]}});
         }
     } finally {
-        if (client) client.release();
-    }
+        if (client) client.release();
+    }
 }
 console.log("[UI Handler] handleDepositCommand defined.");
 
