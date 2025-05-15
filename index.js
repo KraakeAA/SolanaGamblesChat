@@ -7012,17 +7012,17 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
     const changeAmount = BigInt(changeAmountLamports);
     const logPrefix = `[UpdateBalanceLedger UID:${stringUserId} Type:${transactionType} Amt:${changeAmount}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client. Transaction cannot proceed.`);
-        return { success: false, error: 'Invalid database client provided to updateUserBalanceAndLedger.', errorCode: 'INVALID_DB_CLIENT' };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client. Transaction cannot proceed.`);
+        return { success: false, error: 'Invalid database client provided to updateUserBalanceAndLedger.', errorCode: 'INVALID_DB_CLIENT' };
+    }
 
     const relDepositId = (relatedIds?.deposit_id && Number.isInteger(relatedIds.deposit_id)) ? relatedIds.deposit_id : null;
     const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(relatedIds.withdrawal_id)) ? relatedIds.withdrawal_id : null;
     const relGameLogId = (relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null;
     const relReferralId = (relatedIds?.referral_id && Number.isInteger(relatedIds.referral_id)) ? relatedIds.referral_id : null;
     const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(relatedIds.related_sweep_id)) ? relatedIds.related_sweep_id : null;
-    let oldBalanceLamports; // To store the balance before change
+    let oldBalanceLamports; // To store the balance before change
 
     try {
         const balanceRes = await dbClient.query('SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE', [stringUserId]);
@@ -7051,14 +7051,14 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
             newTotalWagered -= changeAmount; // Subtracting a negative = adding positive
         } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_')) && changeAmount > 0n) {
-            // Assumes changeAmount is the total credited amount (bet_returned + profit).
-            // total_won_lamports tracks the gross amount credited from these wins.
+            // Assumes changeAmount is the total credited amount (bet_returned + profit).
+            // total_won_lamports tracks the gross amount credited from these wins.
             newTotalWon += changeAmount;
         } else if (transactionType === 'referral_commission' && changeAmount > 0n) {
-            // If referral commissions directly credit user balance (instead of being paid out separately)
-            // This would also be a "win" of sorts. Assuming for now referral payouts are separate.
-            // If they do hit balance: newTotalWon += changeAmount; (or a new category total_referral_earnings_credited)
-        }
+            // If referral commissions directly credit user balance (instead of being paid out separately)
+            // This would also be a "win" of sorts. Assuming for now referral payouts are separate.
+            // If they do hit balance: newTotalWon += changeAmount; (or a new category total_referral_earnings_credited)
+        }
 
 
         const updateUserQuery = `
