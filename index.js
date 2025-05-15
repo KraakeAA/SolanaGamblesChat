@@ -424,8 +424,6 @@ const userStateCache = new Map();
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map();
 
-const DICE_ESCALATOR_BUST_ON = 1;
-
 console.log(`🚀 Initializing ${BOT_NAME} v${BOT_VERSION}...`);
 console.log(`🕰️ Current system time: ${new Date().toISOString()}`);
 console.log(`💻 Node.js Version: ${process.version}`);
