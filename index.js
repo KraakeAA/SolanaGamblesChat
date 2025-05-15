@@ -1,4 +1,4 @@
-// --- Start of Part 1 ---
+// --- Start of Part 1 (with new Dice Roll Polling constants) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)
 //---------------------------------------------------------------------------
 
@@ -43,9 +43,6 @@ function stringifyWithBigInt(obj) {
       return `[Function: ${value.name || 'anonymous'}]`;
     }
     if (value === undefined) {
-      // Note: This custom "undefined_value" string can cause issues if directly
-      // inserted into DB columns expecting specific types (e.g., numeric, boolean)
-      // without proper handling or type conversion beforehand.
       return 'undefined_value';
     }
     return value;
@@ -59,7 +56,7 @@ const CASINO_ENV_DEFAULTS = {
   'DB_IDLE_TIMEOUT': '30000',
   'DB_CONN_TIMEOUT': '5000',
   'DB_SSL': 'true',
-  'DB_REJECT_UNAUTHORIZED': 'true', // Important for secure DB connections
+  'DB_REJECT_UNAUTHORIZED': 'true', 
   'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
   'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
   'MIN_BET_AMOUNT_LAMPORTS': '5000000', // 0.005 SOL
@@ -78,52 +75,55 @@ const CASINO_ENV_DEFAULTS = {
   'MAX_RETRY_POLLING_DELAY': '60000', // 1 minute
   'INITIAL_RETRY_POLLING_DELAY': '5000', // 5 seconds
   'BOT_NAME': 'Solana Casino Royale',
+  // NEW Dice Roll Polling Defaults (can be overridden by environment variables)
+  'DICE_ROLL_POLL_INTERVAL_MS': '2500', // How often SolanaChatBot checks DB for helper bot dice result
+  'DICE_ROLL_POLL_ATTEMPTS': '24',     // Max attempts (24 * 2.5s = 60s timeout)
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', // Fallback if RPC_URLS is empty
-  'RPC_URLS': '', // Comma-separated list of RPC URLs for RateLimitedConnection
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', 
+  'RPC_URLS': '', 
   'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed', // Solana confirmation levels: processed, confirmed, finalized
-  'WITHDRAWAL_FEE_LAMPORTS': '10000', // Covers base fee + priority
+  'DEPOSIT_CONFIRMATIONS': 'confirmed', 
+  'WITHDRAWAL_FEE_LAMPORTS': '10000', 
   'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
-  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', // Base priority fee for payouts
-  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', // Max priority fee for payouts
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', // For simple SOL transfers
+  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', 
+  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', 
   'PAYOUT_JOB_RETRIES': '3',
   'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
   'SWEEP_INTERVAL_MS': '300000', // 5 minutes
   'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', // Buffer left in deposit address after sweep for its own tx fee
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', // Compute units for sweep transactions
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', // Priority fee for sweep transactions
-  'SWEEP_ADDRESS_DELAY_MS': '1500', // Delay between processing each address in a sweep batch
-  'SWEEP_RETRY_ATTEMPTS': '2', // Retries for a single address sweep if it fails
+  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', 
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', 
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', 
+  'SWEEP_ADDRESS_DELAY_MS': '1500', 
+  'SWEEP_RETRY_ATTEMPTS': '2', 
   'SWEEP_RETRY_DELAY_MS': '10000',
-  'RPC_MAX_CONCURRENT': '10', // Max concurrent requests for RateLimitedConnection
-  'RPC_RETRY_BASE_DELAY': '750', // Base delay for RPC retries
-  'RPC_MAX_RETRIES': '4', // Max retries for RPC calls
-  'RPC_RATE_LIMIT_COOLOFF': '3000', // Increased cooloff period after hitting a rate limit
-  'RPC_RETRY_MAX_DELAY': '25000', // Max delay for RPC retries
-  'RPC_RETRY_JITTER': '0.3', // Jitter factor for RPC retry delays
-  'RPC_COMMITMENT': 'confirmed', // Default Solana commitment for RPC calls
-  'PAYOUT_QUEUE_CONCURRENCY': '4', // Concurrency for payout processing queue
-  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', // Timeout for payout jobs
-  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', // Concurrency for deposit processing queue
-  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', // Timeout for deposit processing jobs
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', // Concurrency for sending Telegram messages (to respect rate limits)
-  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', // Interval for Telegram message queue (standard is ~1s per message)
-  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', // Messages per interval
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', // Interval for polling deposit addresses
-  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', // How many addresses to check per monitoring cycle
-  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', // How many signatures to fetch per address
-  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), // Cache TTL for user withdrawal wallets (15 mins)
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), // Cache for active deposit addresses (expiry + 5 mins)
-  'MAX_PROCESSED_TX_CACHE': '10000', // Max size for the cache of processed transaction signatures
-  'INIT_DELAY_MS': '7000', // Initial delay before starting background processes
-  'ENABLE_PAYMENT_WEBHOOKS': 'false', // Enable/disable payment webhook server
-  'PAYMENT_WEBHOOK_PORT': '3000', // Port for payment webhook server
-  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', // Standardized path for webhook endpoint
+  'RPC_MAX_CONCURRENT': '10', 
+  'RPC_RETRY_BASE_DELAY': '750', 
+  'RPC_MAX_RETRIES': '4', 
+  'RPC_RATE_LIMIT_COOLOFF': '3000', 
+  'RPC_RETRY_MAX_DELAY': '25000', 
+  'RPC_RETRY_JITTER': '0.3', 
+  'RPC_COMMITMENT': 'confirmed', 
+  'PAYOUT_QUEUE_CONCURRENCY': '4', 
+  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', 
+  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', 
+  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', 
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 
+  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 
+  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', 
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', 
+  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', 
+  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', 
+  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), 
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), 
+  'MAX_PROCESSED_TX_CACHE': '10000', 
+  'INIT_DELAY_MS': '7000', 
+  'ENABLE_PAYMENT_WEBHOOKS': 'false', 
+  'PAYMENT_WEBHOOK_PORT': '3000', 
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', 
   'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
   'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(), // Cache TTL for SOL/USD price (3 mins)
   'MIN_BET_USD': '0.50',
@@ -142,11 +142,16 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOT_NAME = process.env.BOT_NAME; // Already defaulted via OPTIONAL_ENV_DEFAULTS
+const BOT_NAME = process.env.BOT_NAME; 
 
 const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
 const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY;
 const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
+
+// NEW Dice Roll Polling Constants (loaded from env with defaults from CASINO_ENV_DEFAULTS)
+const DICE_ROLL_POLLING_INTERVAL_MS = parseInt(process.env.DICE_ROLL_POLL_INTERVAL_MS, 10);
+const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLL_ATTEMPTS, 10);
+
 
 let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
@@ -169,13 +174,12 @@ if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
         console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
     } catch (e) {
         console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null; // Explicitly nullify on error
+        REFERRAL_PAYOUT_KEYPAIR = null; 
     }
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
 
-// Corrected RPC URL processing for RateLimitedConnection
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
     .split(',')
     .map(u => u.trim())
@@ -187,14 +191,12 @@ let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
     combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
-// If combinedRpcEndpointsForConnection is empty, RateLimitedConnection will use its internal hardcoded defaults if available in its definition.
-
 
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
-const MAIN_JACKPOT_ID = 'dice_escalator_main'; // Ensure this matches DB init in Part 2
+const MAIN_JACKPOT_ID = 'dice_escalator_main'; 
 const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE_ESCALATOR, 10);
 const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
@@ -213,29 +215,20 @@ const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
 const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION;
 const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
 
-const SOL_DECIMALS = 9; // Standard Solana decimal places
+const SOL_DECIMALS = 9; 
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
-const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase(); // e.g., 'processed', 'confirmed', 'finalized'
+const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase(); 
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 
-// Critical environment variable checks
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
-// MAIN_BOT_KEYPAIR check done during its initialization.
 
-// Check if HARCODED_RPC_ENDPOINTS is expected to be available from './lib/solana-connection.js'
-// This depends on the content of that file, which is not provided.
-// Assuming RateLimitedConnection has its own defaults if combinedRpcEndpointsForConnection is empty.
 if (combinedRpcEndpointsForConnection.length === 0) {
-    // Check if RateLimitedConnection itself has internal defaults it can use.
-    // If not, this warning is very important.
-    // For this exercise, we assume RateLimitedConnection might have its own fallbacks.
     console.warn("⚠️ WARNING: No RPC URLs provided via environment (RPC_URLS, SOLANA_RPC_URL). RateLimitedConnection might rely on its internal defaults, if any. RPC functionality may be impaired if no defaults are present.");
 }
-
 
 const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE };
 for (const [key, value] of Object.entries(criticalGameScores)) {
@@ -260,25 +253,24 @@ if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Num
     console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be greater than or equal to MIN_BET_AMOUNT_LAMPORTS and be a number.`);
     process.exit(1);
 }
-// Ensure JACKPOT_CONTRIBUTION_PERCENT is valid
 if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) {
-    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
+    process.exit(1);
 }
-
 
 console.log("✅ BOT_TOKEN loaded successfully.");
 if (ADMIN_USER_ID) console.log(`🔑 Admin User ID: ${ADMIN_USER_ID} loaded.`);
 else console.log("ℹ️ INFO: No ADMIN_USER_ID set (optional, for admin alerts).");
 console.log(`🔑 Payment System: DEPOSIT_MASTER_SEED_PHRASE is set (value not logged).`);
 console.log(`📡 Using RPC Endpoints (from env): [${combinedRpcEndpointsForConnection.join(', ')}] (RateLimitedConnection may use internal defaults if this list is empty or fails).`);
+console.log(`🎲 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}`);
 
-// Helper to format lamports to SOL string for console logs, defined early for use here
+
 function formatLamportsToSolStringForLog(lamports) {
     if (typeof lamports !== 'bigint') {
-        try { lamports = BigInt(lamports); }
-        catch (e) { return 'Invalid_Lamports'; }
-    }
+        try { lamports = BigInt(lamports); }
+        catch (e) { return 'Invalid_Lamports'; }
+    }
     return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
@@ -295,7 +287,6 @@ console.log(`Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LA
 console.log(`Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes`);
 console.log(`📈 SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}`);
 console.log("------------------------------------");
-
 
 console.log("⚙️ Setting up PostgreSQL Pool...");
 const useSsl = process.env.DB_SSL === 'true';
@@ -326,63 +317,53 @@ pool.on('error', (err, client) => {
 });
 console.log("✅ PostgreSQL Pool created.");
 
-// Updated queryDatabase function with enhanced logging
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[queryDatabase]';
-    // Log the SQL query being executed. For security in production, consider redacting sensitive data from params if logged.
-    // For debugging, logging the full query and params is helpful.
-    const sqlPreview = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
-    const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
-    
-    console.log(`${logPrefix} Attempting to execute SQL (Full length: ${sql.length}): [${sqlPreview}] with PARAMS: [${paramsPreview.join(', ')}]`);
+    const logPrefix = '[queryDatabase]';
+    const sqlPreview = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
+    const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
+    
+    console.log(`${logPrefix} Attempting to execute SQL (Full length: ${sql.length}): [${sqlPreview}] with PARAMS: [${paramsPreview.join(', ')}]`);
 
-    try {
-        const result = await dbClient.query(sql, params);
-        // console.log(`${logPrefix} Query successful. Rows affected/returned: ${result.rowCount !== null ? result.rowCount : 'N/A'}`);
-        return result;
-    } catch (error) {
-        // Log the detailed error from PostgreSQL, including code and position if available.
-        console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL that failed (Full length: ${sql.length}): [${sqlPreview}]`);
-        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreview.join(', ')}]`);
-        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
-        if (error.stack) {
-            console.error(`${logPrefix} Stack: ${error.stack}`);
-        }
-        throw error; // Re-throw to be handled by the caller
-    }
+    try {
+        const result = await dbClient.query(sql, params);
+        return result;
+    } catch (error) {
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        console.error(`${logPrefix} SQL that failed (Full length: ${sql.length}): [${sqlPreview}]`);
+        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreview.join(', ')}]`);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
+        if (error.stack) {
+            console.error(`${logPrefix} Stack: ${error.stack}`);
+        }
+        throw error; 
+    }
 }
 console.log("[Global Utils] queryDatabase helper function (with enhanced logging) defined.");
 
-// --- CORRECTED RateLimitedConnection Instantiation ---
 console.log("⚙️ Setting up Solana Connection...");
 const connectionOptions = {
-    commitment: process.env.RPC_COMMITMENT, // Make sure this is a valid Commitment type string
+    commitment: process.env.RPC_COMMITMENT, 
     maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
     retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
     maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
     rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
     retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
     retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
-    // wsEndpoint: process.env.SOLANA_WSS_URL_OVERRIDE || undefined, // Example
-    // httpHeaders: {'your-header': 'value'}, // Example for custom headers if needed by RPC provider
 };
 
 const solanaConnection = new RateLimitedConnection(
     combinedRpcEndpointsForConnection,
     connectionOptions
 );
-// --- End of RateLimitedConnection Instantiation ---
-
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log("🤖 Telegram Bot instance created and configured for polling.");
 
-let app = null; // Express app instance for webhooks
+let app = null; 
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
-        verify: (req, res, buf) => { // Store raw body for potential signature verification
+        verify: (req, res, buf) => { 
             req.rawBody = buf;
         }
     }));
@@ -391,28 +372,27 @@ if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     console.log("ℹ️ Payment webhooks are disabled via ENABLE_PAYMENT_WEBHOOKS env var.");
 }
 
-const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes'; // Incremented version
+const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes'; 
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-let isShuttingDown = false; // Global shutdown flag
+let isShuttingDown = false; 
 
-// Global Caches & State
-let activeGames = new Map(); // Stores active multiplayer game instances: gameId -> gameData
-let userCooldowns = new Map(); // Tracks user command cooldowns: userId -> timestamp
-let groupGameSessions = new Map(); // Tracks group game sessions: chatId -> { currentGameId, currentGameType, lastActivity }
+let activeGames = new Map(); 
+let userCooldowns = new Map(); 
+let groupGameSessions = new Map(); 
 
-const walletCache = new Map(); // Stores { userId (string) -> { solanaAddress, timestamp } } for withdrawal wallets
-const activeDepositAddresses = new Map(); // Stores { depositAddressString -> { userId (string), expiresAtTimestamp } }
-const processedDepositTxSignatures = new Set(); // Stores processed tx signatures (strings) to prevent duplicates
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for pending referrals
-const pendingReferrals = new Map(); // Stores { referredUserId (string) -> { referrerId (string), timestamp } }
+const walletCache = new Map(); 
+const activeDepositAddresses = new Map(); 
+const processedDepositTxSignatures = new Set(); 
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; 
+const pendingReferrals = new Map(); 
 
-const userStateCache = new Map(); // For multi-step interactions: userId (string) -> { state, data, messageId, chatId }
+const userStateCache = new Map(); 
 
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map(); // Stores { SOL_PRICE_CACHE_KEY -> { price, timestamp } }
+const solPriceCache = new Map(); 
 
-const DICE_ESCALATOR_BUST_ON = 1; // If a player rolls this in Dice Escalator, they bust.
+const DICE_ESCALATOR_BUST_ON = 1; 
 
 console.log(`🚀 Initializing ${BOT_NAME} v${BOT_VERSION}...`);
 console.log(`🕰️ Current system time: ${new Date().toISOString()}`);
@@ -420,7 +400,6 @@ console.log(`💻 Node.js Version: ${process.version}`);
 
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
-  // Ensure text is a string before calling replace
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 console.log("[Global Utils] escapeMarkdownV2 helper function defined.");
@@ -429,33 +408,31 @@ async function safeSendMessage(chatId, text, options = {}) {
     const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
     if (!chatId || typeof text !== 'string') {
         console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
-        return undefined; // Return undefined, not an empty object, for consistency
+        return undefined; 
     }
     
     let messageToSend = text; 
-    let finalOptions = { ...options }; // Clone options to avoid modifying the original object
+    let finalOptions = { ...options }; 
 
     if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`; 
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
         console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) was too long (${text.length} chars) and has been truncated.`);
-    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // For non-Markdown or other parse modes
-        const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
-        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-        console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) was too long (${text.length} chars) and has been truncated.`);
-    }
+    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
+        const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
+        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
+        console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) was too long (${text.length} chars) and has been truncated.`);
+    }
 
-
-    if (!bot) { // Check if bot instance exists
+    if (!bot) { 
         console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance not available.`);
         return undefined;
     }
 
     try {
         if (typeof bot.sendMessage !== 'function') {
-            // This should not happen if bot is initialized correctly
             throw new Error("'bot.sendMessage' is not a function. Bot may not be initialized.");
         }
         const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
@@ -464,18 +441,16 @@ async function safeSendMessage(chatId, text, options = {}) {
         console.error(`${LOG_PREFIX_SSM} ❌ Failed to send message. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
         if (error.response && error.response.body) {
             console.error(`${LOG_PREFIX_SSM} Telegram API Response: ${stringifyWithBigInt(error.response.body)}`);
-            // If MarkdownV2 fails, try sending as plain text
             if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.toLowerCase().includes("can't parse entities")) {
                 console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected. Attempting to send as plain text.`);
-                console.error(`${LOG_PREFIX_SSM} Original MarkdownV2 text (first 200 chars): "${text.substring(0,200)}"`); // Log the problematic text
+                console.error(`${LOG_PREFIX_SSM} Original MarkdownV2 text (first 200 chars): "${text.substring(0,200)}"`); 
                 try {
-                    let plainTextFallbackOptions = { ...options }; // Get original options
-                    delete plainTextFallbackOptions.parse_mode; // Remove parse_mode for plain text
+                    let plainTextFallbackOptions = { ...options }; 
+                    delete plainTextFallbackOptions.parse_mode; 
                     
-                    // Re-truncate if necessary for plain text, using original text
-                    let plainTextForFallback = text;
+                    let plainTextForFallback = text;
                     if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`; // Non-Markdown ellipsis
+                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`; 
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
                         plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
                     }
@@ -486,22 +461,21 @@ async function safeSendMessage(chatId, text, options = {}) {
                 }
             }
         }
-        return undefined; // Explicitly return undefined on failure
+        return undefined; 
     }
 }
 console.log("[Global Utils] safeSendMessage (with MarkdownV2 fallback & refined truncation) defined.");
-
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 console.log("[Global Utils] sleep helper function defined.");
 
 async function notifyAdmin(message, options = {}) {
     if (ADMIN_USER_ID) {
-        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`; // Message itself should be pre-escaped if it contains user input or dynamic Markdown.
+        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`; 
         return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
     } else {
         console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message (first 100 chars): ${String(message).substring(0,100)}...`);
-        return null; // Return null, not undefined, to distinguish from send failure
+        return null; 
     }
 }
 console.log("[Global Utils] notifyAdmin helper function defined.");
@@ -513,13 +487,13 @@ async function fetchSolUsdPriceFromAPI() {
     const logPrefix = '[PriceFeed API]';
     try {
         console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`);
-        const response = await axios.get(apiUrl, { timeout: 8000 }); // Standard timeout
+        const response = await axios.get(apiUrl, { timeout: 8000 }); 
         if (response.data && response.data.solana && response.data.solana.usd) {
             const price = parseFloat(response.data.solana.usd);
             if (isNaN(price) || price <= 0) {
                 throw new Error('Invalid or non-positive price data received from API.');
             }
-            console.log(`${logPrefix} ✅ Successfully fetched SOL/USD price: $${price.toFixed(2)}`); // Log with fixed decimals
+            console.log(`${logPrefix} ✅ Successfully fetched SOL/USD price: $${price.toFixed(2)}`); 
             return price;
         } else {
             console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data));
@@ -532,7 +506,7 @@ async function fetchSolUsdPriceFromAPI() {
             console.error(`${logPrefix} API Response Status: ${error.response.status}`);
             console.error(`${logPrefix} API Response Data:`, stringifyWithBigInt(error.response.data));
         }
-        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`); // Re-throw for getSolUsdPrice to handle
+        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`); 
     }
 }
 
@@ -542,7 +516,6 @@ async function getSolUsdPrice() {
     const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
     if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
-        // console.log(`${logPrefix} Using cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`); // Optional: log cache hit
         return cachedEntry.price;
     }
     try {
@@ -556,11 +529,11 @@ async function getSolUsdPrice() {
             return cachedEntry.price;
         }
         const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available\\. USD conversions will be severely impacted\\.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
-        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`); // Flatten for single line log
+        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`); 
         if (typeof notifyAdmin === 'function') { 
-            await notifyAdmin(criticalErrorMessage); // Already Markdown formatted
+            await notifyAdmin(criticalErrorMessage); 
         }
-        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`); // Re-throw for calling function to handle
+        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`); 
     }
 }
 console.log("[PriceFeed Utils] getSolUsdPrice and fetchSolUsdPriceFromAPI defined.");
@@ -572,8 +545,8 @@ function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) 
     }
     let lamportsBigInt;
     try {
-        lamportsBigInt = BigInt(lamports);
-    } catch (e) { 
+        lamportsBigInt = BigInt(lamports);
+    } catch (e) { 
         console.warn(`[Convert] Invalid lamport amount for USD conversion: ${lamports}. Error: ${e.message}`);
         return '⚠️ Amount Error'; 
     } 
@@ -588,15 +561,14 @@ function convertUSDToLamports(usdAmount, solUsdPrice) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
         throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
     }
-    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,"")); // Allow negative for parsing, then check
-    if (isNaN(parsedUsdAmount) || parsedUsdAmount <= 0) { // Ensure positive USD amount
+    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,"")); 
+    if (isNaN(parsedUsdAmount) || parsedUsdAmount <= 0) { 
         throw new Error("Invalid or non-positive USD amount for conversion.");
     }
     const solAmount = parsedUsdAmount / solUsdPrice;
-    return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL))); // Use floor to avoid fractional lamports
+    return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL))); 
 }
 console.log("[PriceFeed Utils] convertUSDToLamports defined.");
-
 
 const payoutProcessorQueue = new PQueue({
     concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
@@ -610,16 +582,13 @@ const depositProcessorQueue = new PQueue({
 });
 console.log("✅ Payment processing queues (Payout & Deposit) initialized.");
 
-const SLOT_PAYOUTS = { // Slot payouts based on dice roll (1-64) from Telegram's slot machine
-    // Key: Dice value (1-64), Value: { multiplier (profit multiplier, e.g., 20 means 21x bet returned), symbols, label }
-    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, // Typically 7-7-7 or BAR-BAR-BAR in Telegram slots
-    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },  // (Dice value 1)
-    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },  // (Dice value 22)
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },   // (Dice value 43)
-    // Add more payouts as desired. Ensure these match potential outcomes from bot.sendDice({emoji: '🎰'}) values (1-64)
-    // For example, if Telegram's slot for value X shows YYY, map X to YYY here.
+const SLOT_PAYOUTS = { 
+    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, 
+    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },  
+    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },  
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },   
 };
-const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; // Player loses their bet
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; 
 
 console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed) - Complete.");
 // --- End of Part 1 ---
