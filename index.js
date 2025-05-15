@@ -4316,20 +4316,19 @@ async function processDiceEscalatorBotTurn(gameData) {
     const LOG_PREFIX_DE_BOT = `[DE_BotTurn GID:${gameData.gameId}]`;
     if (!gameData || isShuttingDown) {
         console.log(`${LOG_PREFIX_DE_BOT} Game data missing or shutting down, aborting bot turn.`);
-        if (gameData) activeGames.delete(gameData.gameId); // Clean up if possible
+        if (gameData) activeGames.delete(gameData.gameId); 
         return;
     }
     gameData.status = 'bot_rolling_waiting_helper'; 
-    gameData.botScore = 0; // Reset bot score for this turn
-    gameData.botRolls = []; // Reset bot rolls
+    gameData.botScore = 0; 
+    gameData.botRolls = []; 
     activeGames.set(gameData.gameId, gameData);
 
     let botMessageAccumulator = `${gameData.playerRef}'s Score: *${escapeMarkdownV2(String(gameData.playerScore))}*\\.\n\n`+
         `Bot Dealer 🤖 is now playing via Helper Bot\\!\n`;
-    let botScore = 0; // Use local variable for accumulation
-    const botRolls = []; // Local array for rolls this turn
+    let botScore = 0; 
+    const botRolls = []; 
 
-    // Initial message update
     if (gameData.gameMessageId && bot) {
         await bot.editMessageText(botMessageAccumulator + `Bot is requesting its first die from the Helper Bot... 🎲`, {chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
     } else {
@@ -4348,7 +4347,8 @@ async function processDiceEscalatorBotTurn(gameData) {
 
         try {
             client = await pool.connect();
-            const requestResult = await insertDiceRollRequest(client, gameData.gameId, gameData.chatId, 'BOT_PLAYER_DE', '🎲', 'Bot DE Roll');
+            // *** MODIFIED HERE: Pass null for userId when bot is rolling for itself ***
+            const requestResult = await insertDiceRollRequest(client, gameData.gameId, gameData.chatId, null, '🎲', 'Bot DE Roll');
             if (!requestResult.success || !requestResult.requestId) {
                 throw new Error(requestResult.error || "Failed to create dice roll request for bot.");
             }
@@ -4360,14 +4360,12 @@ async function processDiceEscalatorBotTurn(gameData) {
             while (attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
                 await sleep(DICE_ROLL_POLLING_INTERVAL_MS);
                 if (isShuttingDown) { helperBotError = "Shutdown during bot poll."; break; }
-
                 client = await pool.connect();
                 const statusResult = await getDiceRollRequestResult(client, requestId);
                 client.release(); client = null;
 
                 if (statusResult.success && statusResult.status === 'completed') {
-                    botRollValue = statusResult.roll_value;
-                    break;
+                    botRollValue = statusResult.roll_value; break;
                 } else if (statusResult.success && statusResult.status === 'error') {
                     helperBotError = statusResult.notes || "Helper Bot error on bot roll."; break;
                 }
@@ -4379,17 +4377,19 @@ async function processDiceEscalatorBotTurn(gameData) {
                 await client.query("UPDATE dice_roll_requests SET status='timeout', notes=$1 WHERE request_id=$2", [helperBotError.substring(0,250), requestId]).catch(e => console.error("Failed to mark bot request as timeout:", e));
                 client.release(); client = null;
             }
+            if (helperBotError) throw new Error(helperBotError);
+            if (typeof botRollValue !== 'number') throw new Error("Invalid roll value from helper for bot."); // Check if it's a number
+
         } catch (error) {
             if (client) client.release(); client = null;
             console.error(`${LOG_PREFIX_DE_BOT} Error during bot dice roll request/polling: ${error.message}`);
             helperBotError = error.message;
         }
 
-        if (helperBotError || botRollValue === null || typeof botRollValue !== 'number') {
+        if (helperBotError || botRollValue === null ) { // Check if botRollValue is null (could be 0, which is valid)
             console.error(`${LOG_PREFIX_DE_BOT} Bot failed to get a valid roll. Error: ${helperBotError || "Roll value was null."}`);
             botMessageAccumulator += `Bot encountered an issue with the Helper Bot: \`${escapeMarkdownV2(String(helperBotError || "No result").substring(0,100))}\`\\. Bot's turn ends abruptly.\n`;
-            // Consider this a bot bust or error, player likely wins by default if their score is > 0
-            botScore = 0; // Treat as bot bust due to helper error
+            botScore = 0; 
             break; 
         }
 
@@ -4406,13 +4406,13 @@ async function processDiceEscalatorBotTurn(gameData) {
         if (gameData.gameMessageId && bot) {
              await bot.editMessageText(botMessageAccumulator + (botScore < BOT_STAND_SCORE_DICE_ESCALATOR ? `Bot is requesting another die... 🤔` : `Bot considers its options...`), {chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
         }
-        await sleep(1500); // Pause between bot rolls or before standing
+        await sleep(1500); 
     }
     if (botScore >= BOT_STAND_SCORE_DICE_ESCALATOR && !botRolls.includes(DICE_ESCALATOR_BUST_ON) && !(helperBotError && botScore === 0) ) {
         botMessageAccumulator += `Bot stands with its score of *${escapeMarkdownV2(String(botScore))}*\\.\n`;
     }
-    gameData.botScore = botScore; // Final bot score for this turn
-    gameData.botRolls = botRolls; // Store bot's rolls
+    gameData.botScore = botScore; 
+    gameData.botRolls = botRolls; 
     gameData.status = 'ended';
     activeGames.set(gameData.gameId, gameData);
 
@@ -4423,9 +4423,9 @@ async function processDiceEscalatorBotTurn(gameData) {
 
     if (playerScore === 0 && botRolls.includes(DICE_ESCALATOR_BUST_ON)) { 
         resultTextPart = `🤯 *Double Bust!* Both player and Bot Dealer (via Helper) busted\\. The house claims the wager\\.`;
-    } else if (playerScore === 0) { // Player busted earlier
+    } else if (playerScore === 0) { 
         resultTextPart = `😥 *UNLUCKY!* You busted earlier. The Bot Dealer stood with *${escapeMarkdownV2(String(botScore))}* (or encountered an error but didn't bust on you)\\.`;
-    } else if (botScore === 0) { // Bot busted (or helper error treated as bust)
+    } else if (botScore === 0) { 
         playerWins = true;
         resultTextPart = `🎉 *YOU WIN!* The Bot Dealer (via Helper) busted spectacularly or failed its roll\\!`;
     } else if (playerScore > botScore) {
@@ -4434,17 +4434,17 @@ async function processDiceEscalatorBotTurn(gameData) {
     } else if (playerScore === botScore) {
         isPush = true;
         resultTextPart = `💔 *SO CLOSE!* It's a PUSH\\. Both you and the Bot scored *${escapeMarkdownV2(String(playerScore))}*\\. Your wager is returned\\.`;
-    } else { // Bot score > player score
+    } else { 
         resultTextPart = `😥 *UNLUCKY!* The Bot Dealer's score of *${escapeMarkdownV2(String(botScore))}* edges out your *${escapeMarkdownV2(String(playerScore))}*\\. Better luck next time\\!`;
     }
     botMessageAccumulator += `\n${resultTextPart}`;
 
     let payoutAmountLamports = 0n;
-    let transactionType = 'loss_dice_escalator'; // Default
+    let transactionType = 'loss_dice_escalator'; 
     if (playerWins) {
         payoutAmountLamports = gameData.betAmount * 2n; 
         transactionType = 'win_dice_escalator';
-        botMessageAccumulator += `\nYou win *${escapeMarkdownV2(await formatBalanceForDisplay(gameData.betAmount, 'USD', gameData.playerId))}* profit\\!`; // Profit is original bet
+        botMessageAccumulator += `\nYou win *${escapeMarkdownV2(await formatBalanceForDisplay(gameData.betAmount, 'USD', gameData.playerId))}* profit\\!`; 
     } else if (isPush) {
         payoutAmountLamports = gameData.betAmount; 
         transactionType = 'push_dice_escalator';
@@ -4472,25 +4472,20 @@ async function processDiceEscalatorBotTurn(gameData) {
                     await clientOutcome.query('UPDATE jackpots SET current_amount = 0, last_won_by_telegram_id = $1, last_won_timestamp = NOW() WHERE jackpot_id = $2', [gameData.playerId, MAIN_JACKPOT_ID]);
                     botMessageAccumulator += `\n\n👑🌟 *JACKPOT HIT!!!* 🌟👑\n${gameData.playerRef}, you've conquered the Dice Escalator and claimed the Super Jackpot of *${escapeMarkdownV2(await formatBalanceForDisplay(jackpotPayoutAmount, 'USD', gameData.playerId))}*\\! Absolutely magnificent\\!`;
                     console.log(`${LOG_PREFIX_DE_BOT} JACKPOT WIN! Player ${gameData.playerId} won ${jackpotPayoutAmount} lamports.`);
-                } else { jackpotWon = false; } // No jackpot if amount is 0
-            } else { jackpotWon = false; } // Jackpot ID not found
+                } else { jackpotWon = false; } 
+            } else { jackpotWon = false; } 
         }
 
-        // For losses, player bet is already taken. For wins/pushes, payoutAmountLamports includes the returned bet.
-        // The amount passed to updateUserBalanceAndLedger should be the net change from this transaction.
-        // If win (2x bet payout): net change is +betAmount (since -betAmount was already done) + jackpot
-        // If push (1x bet payout): net change is 0 (since -betAmount already done, now +betAmount)
-        // If loss (0 payout): net change is -betAmount (already done, so 0 here for ledger)
         let ledgerAmount = 0n;
         if (playerWins) {
-            ledgerAmount = payoutAmountLamports; // This is total to credit: original_bet_back + profit + jackpot
+            ledgerAmount = payoutAmountLamports; 
         } else if (isPush) {
-            ledgerAmount = gameData.betAmount; // Credit back original bet
-        } // If loss, ledgerAmount remains 0n as bet was already taken.
+            ledgerAmount = gameData.betAmount; 
+        } 
 
         if (ledgerAmount > 0n || transactionType === 'loss_dice_escalator') { 
             const balanceUpdateResult = await updateUserBalanceAndLedger(
-                clientOutcome, gameData.playerId, ledgerAmount, // Pass the amount to credit
+                clientOutcome, gameData.playerId, ledgerAmount, 
                 transactionType, { game_id_custom_field: gameData.gameId, jackpot_won: jackpotWon },
                 `Outcome for Dice Escalator game ${gameData.gameId}. Player score: ${playerScore}, Bot score: ${botScore}. Jackpot: ${jackpotWon}`
             );
@@ -5018,7 +5013,7 @@ async function processDice21BotTurn(gameData, currentMainGameMessageId) {
         if (gameData) activeGames.delete(gameData.gameId);
         return;
     }
-    const { gameId, chatId, userId, playerRef, playerScore, betAmount, userObj } = gameData;
+    const { gameId, chatId, userId, playerRef, playerScore, betAmount, userObj } = gameData; // `userId` here is the player's ID
     const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'));
 
     gameData.status = 'bot_rolling_waiting_helper'; 
@@ -5045,25 +5040,26 @@ async function processDice21BotTurn(gameData, currentMainGameMessageId) {
         if (newMainMsg?.message_id) effectiveGameMessageId = newMainMsg.message_id;
         gameData.gameMessageId = effectiveGameMessageId;
     }
-    activeGames.set(gameId, gameData); // Save updated message ID
+    activeGames.set(gameId, gameData); 
     await sleep(1500);
 
     const botStandScoreThreshold = BigInt(DICE_21_BOT_STAND_SCORE);
     const targetScoreD21 = BigInt(DICE_21_TARGET_SCORE);       
     let botBusted = false;
-    let tempMessageIdForBotRollsDisplay = null; // To show accumulating rolls
+    let tempMessageIdForBotRollsDisplay = null; 
 
-    for (let i = 0; i < 7 && gameData.botScore < botStandScoreThreshold && !botBusted; i++) { // Bot hits up to 7 times or stands/busts
+    for (let i = 0; i < 7 && gameData.botScore < botStandScoreThreshold && !botBusted; i++) { 
         if (isShuttingDown) { console.log(`${LOG_PREFIX_D21_BOT} Shutdown during bot roll loop.`); break; }
         
         let client = null;
         let requestId = null;
-        let botRoll = null;
+        let botRoll = null; // Initialize as null
         let helperBotError = null;
 
         try {
             client = await pool.connect();
-            const requestResult = await insertDiceRollRequest(client, gameId, chatId, 'BOT_PLAYER_D21', '🎲', `Bot D21 Roll ${i+1}`);
+            // *** MODIFIED HERE: Pass null for userId when bot is rolling for itself ***
+            const requestResult = await insertDiceRollRequest(client, gameId, chatId, null, '🎲', `Bot D21 Roll ${i+1}`);
             if (!requestResult.success || !requestResult.requestId) {
                 throw new Error(requestResult.error || "Failed to create D21 bot roll request.");
             }
@@ -5079,26 +5075,32 @@ async function processDice21BotTurn(gameData, currentMainGameMessageId) {
                 client.release(); client = null;
 
                 if (statusResult.success && statusResult.status === 'completed') {
-                    botRoll = BigInt(statusResult.roll_value); break;
+                    if (typeof statusResult.roll_value === 'number') { // Ensure roll_value is a number
+                        botRoll = BigInt(statusResult.roll_value);
+                    } else {
+                        helperBotError = "Helper Bot returned invalid roll_value type.";
+                    }
+                    break;
                 } else if (statusResult.success && statusResult.status === 'error') {
                     helperBotError = statusResult.notes || "Helper Bot error on bot roll."; break;
                 }
                 attempts++;
             }
-            if (botRoll === null && !helperBotError) {
+            if (botRoll === null && !helperBotError) { // Check botRoll directly
                 helperBotError = "Timeout for D21 bot roll.";
                 client = await pool.connect();
                 await client.query("UPDATE dice_roll_requests SET status='timeout', notes=$1 WHERE request_id=$2", [helperBotError.substring(0,250), requestId]).catch(e => console.error("Failed to mark bot D21 request as timeout:", e));
                 client.release(); client = null;
             }
             if (helperBotError) throw new Error(helperBotError);
-            if (botRoll === null || typeof Number(botRoll) !== 'number') throw new Error("Invalid roll value from helper for bot.");
+            if (botRoll === null) throw new Error("Invalid roll value (null) from helper for bot after polling.");
+
 
         } catch (e) {
             if (client) client.release();
             console.error(`${LOG_PREFIX_D21_BOT} Error getting bot roll ${i+1}: ${e.message}`);
-            helperBotError = e.message; // Store and break
-            break;
+            helperBotError = e.message; 
+            break; 
         }
 
         gameData.botHandRolls.push(Number(botRoll)); 
@@ -5124,24 +5126,24 @@ async function processDice21BotTurn(gameData, currentMainGameMessageId) {
             await safeSendMessage(String(chatId), `🤖 Bot Dealer stands with *${escapeMarkdownV2(String(gameData.botScore))}*\\.`, {parse_mode:'MarkdownV2'});
             break; 
         }
-        await sleep(2000); // Delay before bot's next roll request
+        await sleep(2000); 
     }
 
-    if (helperBotError && !botBusted) { // If loop exited due to helper error before bust/stand
-        botBusted = true; // Treat as a bust for simplicity if helper failed critically
-        gameData.botScore = 99n; // Indicate an error bust, not natural
+    if (helperBotError && !botBusted) { 
+        botBusted = true; 
+        gameData.botScore = 99n; // Special value to indicate error bust
         await safeSendMessage(String(chatId), `⚠️ Bot's turn ended due to Helper Bot error: \`${escapeMarkdownV2(helperBotError)}\``, {parse_mode:'MarkdownV2'});
     }
     
     if (tempMessageIdForBotRollsDisplay && bot) { await bot.deleteMessage(String(chatId), tempMessageIdForBotRollsDisplay).catch(()=>{}); }
-    await sleep(1000); // Final pause before results
+    await sleep(1000); 
 
     let resultTextEnd = ""; 
     let payoutAmountLamports = 0n; 
     let outcomeReasonLog = "";
 
-    if (botBusted) { 
-        resultTextEnd = `🎉 *Congratulations, ${playerRef}! You WIN!* 🎉\nThe Bot Dealer busted, making your score of *${escapeMarkdownV2(String(playerScore))}* the winner\\!`; 
+    if (botBusted) { // This now includes helperBotError scenarios for the bot
+        resultTextEnd = `🎉 *Congratulations, ${playerRef}! You WIN!* 🎉\nThe Bot Dealer busted (or encountered a roll error), making your score of *${escapeMarkdownV2(String(playerScore))}* the winner\\!`; 
         payoutAmountLamports = betAmount * 2n; 
         outcomeReasonLog = `win_dice21_bot_bust`;
     } else if (playerScore > gameData.botScore) { 
@@ -5160,7 +5162,7 @@ async function processDice21BotTurn(gameData, currentMainGameMessageId) {
 
     let finalSummaryMessage = `🃏 **Dice 21 \\- Final Result** 🃏\nYour Wager: *${betDisplayUSD}*\n\n`;
     finalSummaryMessage += `${playerRef}'s Hand: ${formatDiceRolls(gameData.playerHandRolls)} \\(Total: *${escapeMarkdownV2(String(playerScore))}*\\)\n`;
-    finalSummaryMessage += `Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} \\(Total: *${escapeMarkdownV2(String(gameData.botScore))}*\\)${botBusted && gameData.botScore !== 99n ? " \\- *BUSTED!*" : ""}\n\n${resultTextEnd}`;
+    finalSummaryMessage += `Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} \\(Total: *${escapeMarkdownV2(String(gameData.botScore))}*\\)${botBusted && gameData.botScore !== 99n ? " \\- *BUSTED!*" : (gameData.botScore === 99n ? " \\- *ERROR/BUST!*" : "")}\n\n${resultTextEnd}`;
 
     let finalUserBalanceForDisplay = BigInt(userObj.balance);
     let clientOutcome = null;
@@ -5759,7 +5761,6 @@ async function handleDuelRoll(gameId, userObj, originalMessageIdFromCallback, ca
         } else {
             await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.DUEL, betAmount) });
         }
-        // Refund logic
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -5785,13 +5786,14 @@ async function handleDuelRoll(gameId, userObj, originalMessageIdFromCallback, ca
         const newMsg = await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2' });
         if(newMsg?.message_id) gameData.gameMessageId = newMsg.message_id;
     }
-    activeGames.set(gameId, gameData); // Save before bot roll
+    activeGames.set(gameId, gameData); 
 
     // --- Bot's Roll via Helper ---
     gameData.status = 'resolving_bot_roll';
     activeGames.set(gameId, gameData);
 
-    const botRollResult = await getMultipleDiceRollsFromHelper(gameId, chatId, 'BOT_DUEL', diceCount, '🎲', 'Bot Duel Roll', LOG_PREFIX_DUEL_ROLL);
+    // *** MODIFIED HERE: Pass null for userIdForRoll for the bot's turn ***
+    const botRollResult = await getMultipleDiceRollsFromHelper(gameId, chatId, null, diceCount, '🎲', 'Bot Duel Roll', LOG_PREFIX_DUEL_ROLL);
 
     if (botRollResult.error || botRollResult.rolls.length !== diceCount) {
         const errorMsgToUser = `⚠️ ${playerRef}, the Bot Dealer encountered an issue getting its dice rolls: \`${escapeMarkdownV2(String(botRollResult.error || "Incomplete rolls").substring(0,150))}\`\nThe game is void. Your bet of *${betDisplayUSD}* has been refunded.`;
@@ -5802,7 +5804,6 @@ async function handleDuelRoll(gameId, userObj, originalMessageIdFromCallback, ca
         } else {
             await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.DUEL, betAmount) });
         }
-        // Refund logic
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -5821,7 +5822,6 @@ async function handleDuelRoll(gameId, userObj, originalMessageIdFromCallback, ca
     gameData.status = 'ended';
     activeGames.set(gameId, gameData);
 
-    // Build final result message
     const titleResult = createStandardTitle("High Roller Duel - Showdown!", "🏁");
     messageText = `${titleResult}\n\nYour Wager: *${betDisplayUSD}*\n\n`+
                   `${playerRef}'s rolls: ${formatDiceRolls(gameData.playerRolls)} (Total: *${escapeMarkdownV2(String(gameData.playerScore))}*)\n` +
