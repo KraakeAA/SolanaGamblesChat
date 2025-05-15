@@ -7,20 +7,20 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Pool } from 'pg';
 import express from 'express';
 import {
-    Connection, // Keep for type checking if RateLimitedConnection is an instance of Connection
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
-    sendAndConfirmTransaction, // Still used by the modified sendSol if not using connection.sendTransaction directly
-    ComputeBudgetProgram,
-    SendTransactionError, // For error checking
-    TransactionExpiredBlockheightExceededError // For error checking
+    Connection, 
+    PublicKey,
+    LAMPORTS_PER_SOL,
+    Keypair,
+    Transaction,
+    SystemProgram,
+    sendAndConfirmTransaction, 
+    ComputeBudgetProgram,
+    SendTransactionError, 
+    TransactionExpiredBlockheightExceededError 
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto';
-import { createHash } from 'crypto'; // Specifically for createSafeUserSpecificIndex
+import { createHash } from 'crypto'; 
 import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
 import bip39 from 'bip39';
@@ -28,175 +28,199 @@ import { derivePath } from 'ed25519-hd-key';
 import nacl from 'tweetnacl';
 import axios from 'axios';
 
-// Import the custom RateLimitedConnection
-// The path './lib/solana-connection.js' assumes it's in a 'lib' subdirectory relative to index.js
 import RateLimitedConnection from './lib/solana-connection.js';
 
 console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)...");
 
 function stringifyWithBigInt(obj) {
-  return JSON.stringify(obj, (key, value) => {
-    if (typeof value === 'bigint') {
-      return value.toString() + 'n'; // Suffix 'n' to denote BigInt
-    }
-    if (typeof value === 'function') {
-      return `[Function: ${value.name || 'anonymous'}]`;
-    }
-    if (value === undefined) {
-      return 'undefined_value';
-    }
-    return value;
-  }, 2);
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'bigint') {
+      return value.toString() + 'n'; 
+    }
+    if (typeof value === 'function') {
+      return `[Function: ${value.name || 'anonymous'}]`;
+    }
+    if (value === undefined) {
+      return 'undefined_value';
+    }
+    return value;
+  }, 2);
 }
 console.log("[Global Utils] stringifyWithBigInt helper function defined.");
 
 const CASINO_ENV_DEFAULTS = {
-  'DB_POOL_MAX': '25',
-  'DB_POOL_MIN': '5',
-  'DB_IDLE_TIMEOUT': '30000',
-  'DB_CONN_TIMEOUT': '5000',
-  'DB_SSL': 'true',
-  'DB_REJECT_UNAUTHORIZED': 'true',
-  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000', // 0.005 SOL
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
-  'COMMAND_COOLDOWN_MS': '1500',
-  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
-  'TARGET_JACKPOT_SCORE': '100',
-  'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
-  'DICE_21_TARGET_SCORE': '21',
-  'DICE_21_BOT_STAND_SCORE': '17',
-  'RULES_CALLBACK_PREFIX': 'rules_game_',
-  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
-  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
-  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
-  'MAX_RETRY_POLLING_DELAY': '60000', // 1 minute
-  'INITIAL_RETRY_POLLING_DELAY': '5000', // 5 seconds
-  'BOT_NAME': 'Solana Casino Royale',
-  // NEW Dice Roll Polling Defaults (can be overridden by environment variables)
-  'DICE_ROLL_POLL_INTERVAL_MS': '2500', // How often SolanaChatBot checks DB for helper bot dice result
-  'DICE_ROLL_POLL_ATTEMPTS': '24',     // Max attempts (24 * 2.5s = 60s timeout)
+  'DB_POOL_MAX': '25',
+  'DB_POOL_MIN': '5',
+  'DB_IDLE_TIMEOUT': '30000',
+  'DB_CONN_TIMEOUT': '5000',
+  'DB_SSL': 'true',
+  'DB_REJECT_UNAUTHORIZED': 'true', 
+  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000', 
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', 
+  'COMMAND_COOLDOWN_MS': '1500',
+  'JOIN_GAME_TIMEOUT_MS': '120000', 
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', 
+  'TARGET_JACKPOT_SCORE': '100',       // Dice Escalator
+  'BOT_STAND_SCORE_DICE_ESCALATOR': '10',// Dice Escalator
+  'DICE_ESCALATOR_BUST_ON': '1',       // Dice Escalator (already present as a const later, good to have default here)
+  'DICE_21_TARGET_SCORE': '21',          // Dice 21
+  'DICE_21_BOT_STAND_SCORE': '17',       // Dice 21
+  'OU7_DICE_COUNT': '2',                 // Over/Under 7: Number of dice to roll
+  'OU7_PAYOUT_NORMAL': '1',              // Over/Under 7: Profit multiplier for Under/Over 7 (e.g., 1 = 2x total return)
+  'OU7_PAYOUT_SEVEN': '4',               // Over/Under 7: Profit multiplier for Exactly 7 (e.g., 4 = 5x total return)
+  'DUEL_DICE_COUNT': '2',                // High Roller Duel: Number of dice per player
+  'LADDER_ROLL_COUNT': '5',              // Greed's Ladder: Number of dice rolled
+  'LADDER_BUST_ON': '1',                 // Greed's Ladder: Value that busts the roll
+  'RULES_CALLBACK_PREFIX': 'rules_game_',
+  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
+  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
+  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
+  'MAX_RETRY_POLLING_DELAY': '60000', 
+  'INITIAL_RETRY_POLLING_DELAY': '5000', 
+  'BOT_NAME': 'Solana Casino Royale',
+  'DICE_ROLL_POLL_INTERVAL_MS': '2500', 
+  'DICE_ROLL_POLL_ATTEMPTS': '24',     
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/',
-  'RPC_URLS': '',
-  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed',
-  'WITHDRAWAL_FEE_LAMPORTS': '10000',
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
-  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',
-  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',
-  'PAYOUT_JOB_RETRIES': '3',
-  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
-  'SWEEP_INTERVAL_MS': '300000', // 5 minutes
-  'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '20000',
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',
-  'SWEEP_ADDRESS_DELAY_MS': '1500',
-  'SWEEP_RETRY_ATTEMPTS': '2',
-  'SWEEP_RETRY_DELAY_MS': '10000',
-  'RPC_MAX_CONCURRENT': '10',
-  'RPC_RETRY_BASE_DELAY': '750',
-  'RPC_MAX_RETRIES': '4',
-  'RPC_RATE_LIMIT_COOLOFF': '3000',
-  'RPC_RETRY_MAX_DELAY': '25000',
-  'RPC_RETRY_JITTER': '0.3',
-  'RPC_COMMITMENT': 'confirmed',
-  'PAYOUT_QUEUE_CONCURRENCY': '4',
-  'PAYOUT_QUEUE_TIMEOUT_MS': '90000',
-  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5',
-  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000',
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1',
-  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050',
-  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',
-  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75',
-  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15',
-  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(),
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(),
-  'MAX_PROCESSED_TX_CACHE': '10000',
-  'INIT_DELAY_MS': '7000',
-  'ENABLE_PAYMENT_WEBHOOKS': 'false',
-  'PAYMENT_WEBHOOK_PORT': '3000',
-  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
-  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(), // Cache TTL for SOL/USD price (3 mins)
-  'MIN_BET_USD': '0.50',
-  'MAX_BET_USD': '100.00',
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', 
+  'RPC_URLS': '', 
+  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
+  'DEPOSIT_CONFIRMATIONS': 'confirmed', 
+  'WITHDRAWAL_FEE_LAMPORTS': '10000', 
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000', 
+  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', 
+  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', 
+  'PAYOUT_JOB_RETRIES': '3',
+  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
+  'SWEEP_INTERVAL_MS': '300000', 
+  'SWEEP_BATCH_SIZE': '15',
+  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', 
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', 
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', 
+  'SWEEP_ADDRESS_DELAY_MS': '1500', 
+  'SWEEP_RETRY_ATTEMPTS': '2', 
+  'SWEEP_RETRY_DELAY_MS': '10000',
+  'RPC_MAX_CONCURRENT': '10', 
+  'RPC_RETRY_BASE_DELAY': '750', 
+  'RPC_MAX_RETRIES': '4', 
+  'RPC_RATE_LIMIT_COOLOFF': '3000', 
+  'RPC_RETRY_MAX_DELAY': '25000', 
+  'RPC_RETRY_JITTER': '0.3', 
+  'RPC_COMMITMENT': 'confirmed', 
+  'PAYOUT_QUEUE_CONCURRENCY': '4', 
+  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', 
+  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', 
+  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', 
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 
+  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 
+  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', 
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', 
+  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', 
+  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', 
+  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), 
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), 
+  'MAX_PROCESSED_TX_CACHE': '10000', 
+  'INIT_DELAY_MS': '7000', 
+  'ENABLE_PAYMENT_WEBHOOKS': 'false', 
+  'PAYMENT_WEBHOOK_PORT': '3000', 
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', 
+  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
+  'MIN_BET_USD': '0.50',
+  'MAX_BET_USD': '100.00',
 };
 
 const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
 
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
-  if (process.env[key] === undefined) {
-    console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
-    process.env[key] = defaultValue;
-  }
+  if (process.env[key] === undefined) {
+    console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
+    process.env[key] = defaultValue;
+  }
 });
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOT_NAME = process.env.BOT_NAME;
+const BOT_NAME = process.env.BOT_NAME; 
 
 const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
 const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY;
 const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
 
-// NEW Dice Roll Polling Constants (loaded from env with defaults from CASINO_ENV_DEFAULTS)
+// Dice Roll Polling Constants
 const DICE_ROLL_POLLING_INTERVAL_MS = parseInt(process.env.DICE_ROLL_POLL_INTERVAL_MS, 10);
 const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLL_ATTEMPTS, 10);
+
+// Game Specific Constants (loaded from ENV via defaults)
+const OU7_DICE_COUNT = parseInt(process.env.OU7_DICE_COUNT, 10);
+const OU7_PAYOUT_NORMAL = parseFloat(process.env.OU7_PAYOUT_NORMAL); // Profit Multiplier
+const OU7_PAYOUT_SEVEN = parseFloat(process.env.OU7_PAYOUT_SEVEN);   // Profit Multiplier
+const DUEL_DICE_COUNT = parseInt(process.env.DUEL_DICE_COUNT, 10);
+const LADDER_ROLL_COUNT = parseInt(process.env.LADDER_ROLL_COUNT, 10);
+const LADDER_BUST_ON = parseInt(process.env.LADDER_BUST_ON, 10);
+const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10); // Already a const later, ensure consistency
+
+// Greed's Ladder Payout Tiers (Hardcoded for structure, values can be tuned)
+const LADDER_PAYOUTS = [
+    // Example: { min: 5, max: 9, multiplier: 0, label: "Small Steps" }, // 0 multiplier = bet back (no profit)
+    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },      // 1x profit = 2x total return
+    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },      // 2x profit = 3x total return
+    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },  // 5x profit = 6x total return
+    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" }, // 10x profit = 11x total return
+    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" }    // Max possible with 5x 6-sided dice (if LADDER_ROLL_COUNT is 5)
+];
+// Adjust LADDER_PAYOUTS min/max values based on LADDER_ROLL_COUNT (e.g. if 5 dice, max sum is 30)
 
 
 let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
-    try {
-        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
-        process.exit(1);
-    }
+    try {
+        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
+        process.exit(1);
+    }
 } else {
-    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
-    process.exit(1);
+    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
+    process.exit(1);
 }
 
 let REFERRAL_PAYOUT_KEYPAIR = null;
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
-    try {
-        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null;
-    }
+    try {
+        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
+        REFERRAL_PAYOUT_KEYPAIR = null; 
+    }
 } else {
-    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
+    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
 
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
-    .split(',')
-    .map(u => u.trim())
-    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+    .split(',')
+    .map(u => u.trim())
+    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
 
 const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
 
 let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
-    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
+    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
 
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
-const MAIN_JACKPOT_ID = 'dice_escalator_main';
+const MAIN_JACKPOT_ID = 'dice_escalator_main'; 
 const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE_ESCALATOR, 10);
 const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
@@ -215,10 +239,10 @@ const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
 const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION;
 const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
 
-const SOL_DECIMALS = 9;
+const SOL_DECIMALS = 9; 
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
-const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
+const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase(); 
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 
@@ -227,51 +251,59 @@ if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not define
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 
 if (combinedRpcEndpointsForConnection.length === 0) {
-    console.warn("⚠️ WARNING: No RPC URLs provided via environment (RPC_URLS, SOLANA_RPC_URL). RateLimitedConnection might rely on its internal defaults, if any. RPC functionality may be impaired if no defaults are present.");
+    console.warn("⚠️ WARNING: No RPC URLs provided via environment (RPC_URLS, SOLANA_RPC_URL). RateLimitedConnection might rely on its internal defaults, if any. RPC functionality may be impaired if no defaults are present.");
 }
 
-const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE };
+const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
 for (const [key, value] of Object.entries(criticalGameScores)) {
-    if (isNaN(value) || value <=0) {
-        console.error(`🚨 FATAL ERROR: Game score parameter '${key}' ('${value}') is not a valid positive number. Check .env file or defaults.`);
-        process.exit(1);
-    }
+    if (isNaN(value) || value <=0) {
+        console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number. Check .env file or defaults.`);
+        process.exit(1);
+    }
 }
 if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
+    process.exit(1);
 }
 if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be greater than or equal to MIN_BET_USD and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be greater than or equal to MIN_BET_USD and be a number.`);
+    process.exit(1);
 }
 if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
+    process.exit(1);
 }
 if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be greater than or equal to MIN_BET_AMOUNT_LAMPORTS and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be greater than or equal to MIN_BET_AMOUNT_LAMPORTS and be a number.`);
+    process.exit(1);
 }
 if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) {
-    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
+    process.exit(1);
 }
+// Validate OU7 Payouts
+if (isNaN(OU7_PAYOUT_NORMAL) || OU7_PAYOUT_NORMAL < 0) { // Can be 0 for bet back
+    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_NORMAL must be a non-negative number.`); process.exit(1);
+}
+if (isNaN(OU7_PAYOUT_SEVEN) || OU7_PAYOUT_SEVEN < 0) {
+    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);
+}
+
 
 console.log("✅ BOT_TOKEN loaded successfully.");
 if (ADMIN_USER_ID) console.log(`🔑 Admin User ID: ${ADMIN_USER_ID} loaded.`);
 else console.log("ℹ️ INFO: No ADMIN_USER_ID set (optional, for admin alerts).");
 console.log(`🔑 Payment System: DEPOSIT_MASTER_SEED_PHRASE is set (value not logged).`);
 console.log(`📡 Using RPC Endpoints (from env): [${combinedRpcEndpointsForConnection.join(', ')}] (RateLimitedConnection may use internal defaults if this list is empty or fails).`);
-console.log(`🎲 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}`);
+console.log(`헬 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}`);
 
 
 function formatLamportsToSolStringForLog(lamports) {
-    if (typeof lamports !== 'bigint') {
-        try { lamports = BigInt(lamports); }
-        catch (e) { return 'Invalid_Lamports'; }
-    }
-    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
+    if (typeof lamports !== 'bigint') {
+        try { lamports = BigInt(lamports); }
+        catch (e) { return 'Invalid_Lamports'; }
+    }
+    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
 console.log("--- 🎲 Game Settings Loaded 🎲 ---");
