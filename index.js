@@ -812,15 +812,15 @@ async function initializeDatabaseSchema() {
         await client.query(`
             CREATE TABLE IF NOT EXISTS dice_roll_requests (
                 request_id SERIAL PRIMARY KEY,
-                game_id VARCHAR(255) NULL,        -- To identify which game this roll is for (can be text gameId)
-                chat_id BIGINT NOT NULL,           -- Telegram chat_id to send the dice to
-                user_id BIGINT NULL,             -- Telegram user_id who initiated or is target of the roll
-                emoji_type VARCHAR(50) DEFAULT '🎲', -- Emoji for bot.sendDice (e.g., 🎲, 🎰, 🎯, 🏀, ⚽)
-                status VARCHAR(50) DEFAULT 'pending',  -- e.g., 'pending', 'processing', 'completed', 'error', 'timeout'
-                roll_value INTEGER NULL,           -- The numerical result of the dice roll
+                game_id VARCHAR(255) NULL,
+                chat_id BIGINT NOT NULL,
+                user_id BIGINT NULL,
+                emoji_type VARCHAR(50) DEFAULT '🎲',
+                status VARCHAR(50) DEFAULT 'pending',
+                roll_value INTEGER NULL,
                 requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 processed_at TIMESTAMPTZ NULL,
-                notes TEXT NULL                    -- For any errors or additional info from the helper bot
+                notes TEXT NULL
             );
         `);
         console.log("  [DB Schema] 'dice_roll_requests' table checked/created.");
@@ -828,6 +828,7 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
         console.log("  [DB Schema] Index for 'dice_roll_requests' (status, requested_at) checked/created.");
         // +++ END OF NEW TABLE +++
+
 
         // Update function for 'updated_at' columns
         await client.query(`
