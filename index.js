@@ -625,202 +625,185 @@ async function initializeDatabaseSchema() {
         await client.query('BEGIN');
 
         // Users Table
-        await client.query(`CREATE TABLE IF NOT EXISTS users (
-            telegram_id BIGINT PRIMARY KEY,
-            username VARCHAR(255),
-            first_name VARCHAR(255),
-            last_name VARCHAR(255),
-            balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
-            last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            is_banned BOOLEAN DEFAULT FALSE,
-            ban_reason TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            solana_wallet_address VARCHAR(44) UNIQUE,
-            referral_code VARCHAR(12) UNIQUE,
-            referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            can_generate_deposit_address BOOLEAN DEFAULT TRUE,
-            last_deposit_address VARCHAR(44),
-            last_deposit_address_generated_at TIMESTAMPTZ,
-            total_deposited_lamports BIGINT DEFAULT 0,
-            total_withdrawn_lamports BIGINT DEFAULT 0,
-            total_wagered_lamports BIGINT DEFAULT 0,
-            total_won_lamports BIGINT DEFAULT 0,
-            notes TEXT
-        );`);
-        console.log("  [DB Schema] 'users' table checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS users (
+            telegram_id BIGINT PRIMARY KEY,
+            username VARCHAR(255),
+            first_name VARCHAR(255),
+            last_name VARCHAR(255),
+            balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
+            last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            is_banned BOOLEAN DEFAULT FALSE,
+            ban_reason TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            solana_wallet_address VARCHAR(44) UNIQUE,
+            referral_code VARCHAR(12) UNIQUE,
+            referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+            can_generate_deposit_address BOOLEAN DEFAULT TRUE,
+            last_deposit_address VARCHAR(44),
+            last_deposit_address_generated_at TIMESTAMPTZ,
+            total_deposited_lamports BIGINT DEFAULT 0,
+            total_withdrawn_lamports BIGINT DEFAULT 0,
+            total_wagered_lamports BIGINT DEFAULT 0,
+            total_won_lamports BIGINT DEFAULT 0,
+            notes TEXT
+        );`);
+        console.log("  [DB Schema] 'users' table checked/created.");
+
         // Jackpots Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS jackpots (
-                jackpot_id VARCHAR(255) PRIMARY KEY,
-                current_amount BIGINT DEFAULT 0,
-                last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-                last_won_timestamp TIMESTAMPTZ,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
+        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
+            jackpot_id VARCHAR(255) PRIMARY KEY,
+            current_amount BIGINT DEFAULT 0,
+            last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+            last_won_timestamp TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
         console.log("  [DB Schema] 'jackpots' table checked/created.");
         await client.query(
             `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID] 
+            [MAIN_JACKPOT_ID]
         );
         console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
 
         // Games Table (Game Log)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS games (
-                game_log_id SERIAL PRIMARY KEY,
-                game_type VARCHAR(50) NOT NULL, 
-                chat_id BIGINT, 
-                initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-                participants_ids BIGINT[], 
-                bet_amount_lamports BIGINT,
-                outcome TEXT, 
-                jackpot_contribution_lamports BIGINT,
-                game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
+        await client.query(`CREATE TABLE IF NOT EXISTS games (
+            game_log_id SERIAL PRIMARY KEY,
+            game_type VARCHAR(50) NOT NULL,
+            chat_id BIGINT,
+            initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+            participants_ids BIGINT[],
+            bet_amount_lamports BIGINT,
+            outcome TEXT,
+            jackpot_contribution_lamports BIGINT,
+            game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
         console.log("  [DB Schema] 'games' table (game log) checked/created.");
 
         // User Deposit Wallets Table (HD Generated Deposit Addresses)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_deposit_wallets (
-                wallet_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                public_key VARCHAR(44) NOT NULL UNIQUE, 
-                derivation_path VARCHAR(255) NOT NULL UNIQUE, 
-                is_active BOOLEAN DEFAULT TRUE, 
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMPTZ, 
-                swept_at TIMESTAMPTZ, 
-                balance_at_sweep BIGINT,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);
-            CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);
-        `);
-        console.log("  [DB Schema] 'user_deposit_wallets' table checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
+            wallet_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            public_key VARCHAR(44) NOT NULL UNIQUE,
+            derivation_path VARCHAR(255) NOT NULL UNIQUE,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMPTZ,
+            swept_at TIMESTAMPTZ,
+            balance_at_sweep BIGINT,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
+        console.log("  [DB Schema] 'user_deposit_wallets' table and indexes checked/created.");
 
         // Deposits Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS deposits (
-                deposit_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
-                transaction_signature VARCHAR(88) NOT NULL UNIQUE, 
-                source_address VARCHAR(44), 
-                deposit_address VARCHAR(44) NOT NULL,
-                amount_lamports BIGINT NOT NULL,
-                confirmation_status VARCHAR(20) DEFAULT 'pending', 
-                block_time BIGINT, 
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMPTZ, 
-                notes TEXT,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);
-            CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);
-            CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);
-        `);
-        console.log("  [DB Schema] 'deposits' table checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
+            deposit_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
+            transaction_signature VARCHAR(88) NOT NULL UNIQUE,
+            source_address VARCHAR(44),
+            deposit_address VARCHAR(44) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            confirmation_status VARCHAR(20) DEFAULT 'pending',
+            block_time BIGINT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ,
+            notes TEXT,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
+        console.log("  [DB Schema] 'deposits' table and indexes checked/created.");
 
         // Withdrawals Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS withdrawals (
-                withdrawal_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                destination_address VARCHAR(44) NOT NULL, 
-                amount_lamports BIGINT NOT NULL,
-                fee_lamports BIGINT NOT NULL,
-                transaction_signature VARCHAR(88) UNIQUE, 
-                status VARCHAR(30) DEFAULT 'pending_verification',
-                error_message TEXT,
-                requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMPTZ, 
-                block_time BIGINT,
-                priority_fee_microlamports INT,
-                compute_unit_price_microlamports INT, 
-                compute_unit_limit INT,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);
-        `);
-        console.log("  [DB Schema] 'withdrawals' table checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
+            withdrawal_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            destination_address VARCHAR(44) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            fee_lamports BIGINT NOT NULL,
+            transaction_signature VARCHAR(88) UNIQUE,
+            status VARCHAR(30) DEFAULT 'pending_verification',
+            error_message TEXT,
+            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ,
+            block_time BIGINT,
+            priority_fee_microlamports INT,
+            compute_unit_price_microlamports INT,
+            compute_unit_limit INT,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
+        console.log("  [DB Schema] 'withdrawals' table and indexes checked/created.");
 
         // Referrals Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS referrals (
-                referral_id SERIAL PRIMARY KEY,
-                referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE, 
-                commission_type VARCHAR(20), 
-                commission_amount_lamports BIGINT, 
-                transaction_signature VARCHAR(88), 
-                status VARCHAR(20) DEFAULT 'pending_criteria', 
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);
-        `);
-        console.log("  [DB Schema] 'referrals' table checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
+            referral_id SERIAL PRIMARY KEY,
+            referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
+            commission_type VARCHAR(20),
+            commission_amount_lamports BIGINT,
+            transaction_signature VARCHAR(88),
+            status VARCHAR(20) DEFAULT 'pending_criteria',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
+        console.log("  [DB Schema] 'referrals' table and indexes checked/created.");
 
         // Processed Sweeps Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS processed_sweeps (
-                sweep_id SERIAL PRIMARY KEY,
-                source_deposit_address VARCHAR(44) NOT NULL, 
-                destination_main_address VARCHAR(44) NOT NULL, 
-                amount_lamports BIGINT NOT NULL,
-                transaction_signature VARCHAR(88) UNIQUE NOT NULL,
-                swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);
-        `);
-        console.log("  [DB Schema] 'processed_sweeps' table checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
+            sweep_id SERIAL PRIMARY KEY,
+            source_deposit_address VARCHAR(44) NOT NULL,
+            destination_main_address VARCHAR(44) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            transaction_signature VARCHAR(88) UNIQUE NOT NULL,
+            swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
+        console.log("  [DB Schema] 'processed_sweeps' table and index checked/created.");
         
         // Ledger Table
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS ledger (
-                ledger_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                transaction_type VARCHAR(50) NOT NULL,
-                amount_lamports BIGINT NOT NULL,
-                balance_before_lamports BIGINT NOT NULL,
-                balance_after_lamports BIGINT NOT NULL,
-                deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
-                withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
-                game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
-                referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
-                related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
-                notes TEXT,
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);
-            CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);
-            CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);
-        `);
-        console.log("  [DB Schema] 'ledger' table (for financial tracking) checked/created.");
+        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
+            ledger_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            transaction_type VARCHAR(50) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            balance_before_lamports BIGINT NOT NULL,
+            balance_after_lamports BIGINT NOT NULL,
+            deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
+            withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
+            game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
+            referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
+            related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
+            notes TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
+        console.log("  [DB Schema] 'ledger' table and indexes checked/created.");
 
-        // Dice Roll Requests Table (for Helper Bot)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS dice_roll_requests (
-                request_id SERIAL PRIMARY KEY,
-                game_id VARCHAR(255) NULL,
-                chat_id BIGINT NOT NULL,
-                user_id BIGINT NULL,
-                emoji_type VARCHAR(50) DEFAULT '🎲',
-                status VARCHAR(50) DEFAULT 'pending',
-                roll_value INTEGER NULL,
-                requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMPTZ NULL,
-                notes TEXT NULL
-            );
-        `);
+        // Dice Roll Requests Table
+        await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
+            request_id SERIAL PRIMARY KEY,
+            game_id VARCHAR(255) NULL,
+            chat_id BIGINT NOT NULL,
+            user_id BIGINT NULL,
+            emoji_type VARCHAR(50) DEFAULT '🎲',
+            status VARCHAR(50) DEFAULT 'pending',
+            roll_value INTEGER NULL,
+            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ NULL,
+            notes TEXT NULL
+        );`);
         console.log("  [DB Schema] 'dice_roll_requests' table checked/created.");
 
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
@@ -833,7 +816,7 @@ async function initializeDatabaseSchema() {
             BEGIN
               NEW.updated_at = NOW();
               RETURN NEW;
-             END;
+            END;
             $$ LANGUAGE plpgsql;
         `);
         const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
@@ -857,7 +840,7 @@ async function initializeDatabaseSchema() {
         console.log("✅ Database schema initialization complete.");
     } catch (e) {
         await client.query('ROLLBACK');
-        if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) { // Check for position near start
+        if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
              console.error('❌ Error during database schema initialization (Likely an empty/malformed query, or invisible characters at the START of an SQL DDL string):', e);
             console.error(`Hint: The error occurred at position ${e.position} of the failing SQL query. This often indicates an issue right at the beginning of the statement, possibly due to invisible characters from copy-pasting DDL.`);
         } else {
