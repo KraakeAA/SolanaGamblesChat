@@ -615,6 +615,7 @@ const generateReferralCode = (length = 8) => {
 console.log("[User Management] generateReferralCode helper function defined.");
 
 //---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
 // Database Schema Initialization
 //---------------------------------------------------------------------------
 async function initializeDatabaseSchema() {
@@ -664,7 +665,7 @@ async function initializeDatabaseSchema() {
         console.log("  [DB Schema] 'jackpots' table checked/created.");
         await client.query(
             `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID] // MAIN_JACKPOT_ID from Part 1
+            [MAIN_JACKPOT_ID] 
         );
         console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
 
@@ -757,11 +758,11 @@ async function initializeDatabaseSchema() {
             CREATE TABLE IF NOT EXISTS referrals (
                 referral_id SERIAL PRIMARY KEY,
                 referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE, -- Ensures a user can only be referred once
-                commission_type VARCHAR(20), -- e.g., 'first_deposit_percentage', 'fixed_signup'
-                commission_amount_lamports BIGINT, -- Actual commission paid for this specific referral link usage
-                transaction_signature VARCHAR(88), -- If commission was paid out on-chain
-                status VARCHAR(20) DEFAULT 'pending_criteria', -- e.g., 'pending_criteria', 'earned', 'paid_out', 'failed'
+                referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE, 
+                commission_type VARCHAR(20), 
+                commission_amount_lamports BIGINT, 
+                transaction_signature VARCHAR(88), 
+                status VARCHAR(20) DEFAULT 'pending_criteria', 
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
@@ -808,7 +809,7 @@ async function initializeDatabaseSchema() {
         `);
         console.log("  [DB Schema] 'ledger' table (for financial tracking) checked/created.");
 
-        // +++ NEW TABLE for Dice Roll Requests from Helper Bot +++
+        // Dice Roll Requests Table (for Helper Bot)
         await client.query(`
             CREATE TABLE IF NOT EXISTS dice_roll_requests (
                 request_id SERIAL PRIMARY KEY,
@@ -827,8 +828,6 @@ async function initializeDatabaseSchema() {
 
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
         console.log("  [DB Schema] Index for 'dice_roll_requests' (status, requested_at) checked/created.");
-        // +++ END OF NEW TABLE +++
-
 
         // Update function for 'updated_at' columns
         await client.query(`
@@ -837,11 +836,10 @@ async function initializeDatabaseSchema() {
             BEGIN
               NEW.updated_at = NOW();
               RETURN NEW;
-            END;
+             END;
             $$ LANGUAGE plpgsql;
         `);
-        // Tables that need the updated_at trigger
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals']; // dice_roll_requests does not have an updated_at
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
         for (const tableName of tablesWithUpdatedAt) {
             const triggerExistsRes = await client.query(
                 `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = '${tableName}'::regclass;`
@@ -854,8 +852,6 @@ async function initializeDatabaseSchema() {
                     EXECUTE FUNCTION trigger_set_timestamp();
                 `).then(() => console.log(`  [DB Schema] 'updated_at' trigger created for '${tableName}'.`))
                   .catch(err => console.warn(`  [DB Schema] Could not set update trigger for ${tableName} (may require permissions or function issue): ${err.message}`));
-            } else {
-                // console.log(`  [DB Schema] 'updated_at' trigger already exists for '${tableName}'.`);
             }
         }
         console.log("  [DB Schema] 'updated_at' trigger function and assignments checked/created.");
@@ -864,14 +860,13 @@ async function initializeDatabaseSchema() {
         console.log("✅ Database schema initialization complete.");
     } catch (e) {
         await client.query('ROLLBACK');
-        // If the error is the specific syntax error, add more guidance
-        if (e.code === '42601' && e.message.includes('at or near ""') && e.position === '2') { // This specific check might be less relevant if we fixed the true cause
-             console.error('❌ Error during database schema initialization (Likely an empty or malformed query before the main DDL statements):', e);
-             console.error("Hint: This specific error ('syntax error at or near \"\"' at position 2) often means an empty string or a very short, malformed query (e.g., starting with just a quote) was executed. Please check for any client.query() calls between BEGIN and the first CREATE TABLE that might result in this, or invisible characters at the start of a query string.");
+        if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) { // Check for position near start
+             console.error('❌ Error during database schema initialization (Likely an empty/malformed query, or invisible characters at the START of an SQL DDL string):', e);
+            console.error(`Hint: The error occurred at position ${e.position} of the failing SQL query. This often indicates an issue right at the beginning of the statement, possibly due to invisible characters from copy-pasting DDL.`);
         } else {
             console.error('❌ Error during database schema initialization:', e);
         }
-        throw e; // Re-throw to halt startup if schema init fails
+        throw e; 
     } finally {
         client.release();
     }
