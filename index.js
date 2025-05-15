@@ -7,16 +7,16 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Pool } from 'pg';
 import express from 'express';
 import {
-    Connection, // Keep for type checking if RateLimitedConnection is an instance of Connection
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
-    sendAndConfirmTransaction, // Still used by the modified sendSol if not using connection.sendTransaction directly
-    ComputeBudgetProgram,
-    SendTransactionError, // For error checking
-    TransactionExpiredBlockheightExceededError // For error checking
+    Connection, // Keep for type checking if RateLimitedConnection is an instance of Connection
+    PublicKey,
+    LAMPORTS_PER_SOL,
+    Keypair,
+    Transaction,
+    SystemProgram,
+    sendAndConfirmTransaction, // Still used by the modified sendSol if not using connection.sendTransaction directly
+    ComputeBudgetProgram,
+    SendTransactionError, // For error checking
+    TransactionExpiredBlockheightExceededError // For error checking
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto';
@@ -35,114 +35,114 @@ import RateLimitedConnection from './lib/solana-connection.js';
 console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)...");
 
 function stringifyWithBigInt(obj) {
-  return JSON.stringify(obj, (key, value) => {
-    if (typeof value === 'bigint') {
-      return value.toString() + 'n'; // Suffix 'n' to denote BigInt
-    }
-    if (typeof value === 'function') {
-      return `[Function: ${value.name || 'anonymous'}]`;
-    }
-    if (value === undefined) {
-      return 'undefined_value';
-    }
-    return value;
-  }, 2);
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'bigint') {
+      return value.toString() + 'n'; // Suffix 'n' to denote BigInt
+    }
+    if (typeof value === 'function') {
+      return `[Function: ${value.name || 'anonymous'}]`;
+    }
+    if (value === undefined) {
+      return 'undefined_value';
+    }
+    return value;
+  }, 2);
 }
 console.log("[Global Utils] stringifyWithBigInt helper function defined.");
 
 const CASINO_ENV_DEFAULTS = {
-  'DB_POOL_MAX': '25',
-  'DB_POOL_MIN': '5',
-  'DB_IDLE_TIMEOUT': '30000',
-  'DB_CONN_TIMEOUT': '5000',
-  'DB_SSL': 'true',
-  'DB_REJECT_UNAUTHORIZED': 'true', 
-  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000', // 0.005 SOL
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
-  'COMMAND_COOLDOWN_MS': '1500',
-  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
-  'TARGET_JACKPOT_SCORE': '100',
-  'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
-  'DICE_21_TARGET_SCORE': '21',
-  'DICE_21_BOT_STAND_SCORE': '17',
-  'RULES_CALLBACK_PREFIX': 'rules_game_',
-  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
-  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
-  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
-  'MAX_RETRY_POLLING_DELAY': '60000', // 1 minute
-  'INITIAL_RETRY_POLLING_DELAY': '5000', // 5 seconds
-  'BOT_NAME': 'Solana Casino Royale',
+  'DB_POOL_MAX': '25',
+  'DB_POOL_MIN': '5',
+  'DB_IDLE_TIMEOUT': '30000',
+  'DB_CONN_TIMEOUT': '5000',
+  'DB_SSL': 'true',
+  'DB_REJECT_UNAUTHORIZED': 'true',
+  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000', // 0.005 SOL
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
+  'COMMAND_COOLDOWN_MS': '1500',
+  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
+  'TARGET_JACKPOT_SCORE': '100',
+  'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
+  'DICE_21_TARGET_SCORE': '21',
+  'DICE_21_BOT_STAND_SCORE': '17',
+  'RULES_CALLBACK_PREFIX': 'rules_game_',
+  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
+  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
+  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
+  'MAX_RETRY_POLLING_DELAY': '60000', // 1 minute
+  'INITIAL_RETRY_POLLING_DELAY': '5000', // 5 seconds
+  'BOT_NAME': 'Solana Casino Royale',
   // NEW Dice Roll Polling Defaults (can be overridden by environment variables)
   'DICE_ROLL_POLL_INTERVAL_MS': '2500', // How often SolanaChatBot checks DB for helper bot dice result
   'DICE_ROLL_POLL_ATTEMPTS': '24',     // Max attempts (24 * 2.5s = 60s timeout)
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', 
-  'RPC_URLS': '', 
-  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed', 
-  'WITHDRAWAL_FEE_LAMPORTS': '10000', 
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
-  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', 
-  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', 
-  'PAYOUT_JOB_RETRIES': '3',
-  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
-  'SWEEP_INTERVAL_MS': '300000', // 5 minutes
-  'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', 
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', 
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', 
-  'SWEEP_ADDRESS_DELAY_MS': '1500', 
-  'SWEEP_RETRY_ATTEMPTS': '2', 
-  'SWEEP_RETRY_DELAY_MS': '10000',
-  'RPC_MAX_CONCURRENT': '10', 
-  'RPC_RETRY_BASE_DELAY': '750', 
-  'RPC_MAX_RETRIES': '4', 
-  'RPC_RATE_LIMIT_COOLOFF': '3000', 
-  'RPC_RETRY_MAX_DELAY': '25000', 
-  'RPC_RETRY_JITTER': '0.3', 
-  'RPC_COMMITMENT': 'confirmed', 
-  'PAYOUT_QUEUE_CONCURRENCY': '4', 
-  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', 
-  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', 
-  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', 
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 
-  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 
-  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', 
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', 
-  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', 
-  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', 
-  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), 
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), 
-  'MAX_PROCESSED_TX_CACHE': '10000', 
-  'INIT_DELAY_MS': '7000', 
-  'ENABLE_PAYMENT_WEBHOOKS': 'false', 
-  'PAYMENT_WEBHOOK_PORT': '3000', 
-  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', 
-  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(), // Cache TTL for SOL/USD price (3 mins)
-  'MIN_BET_USD': '0.50',
-  'MAX_BET_USD': '100.00',
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/',
+  'RPC_URLS': '',
+  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
+  'DEPOSIT_CONFIRMATIONS': 'confirmed',
+  'WITHDRAWAL_FEE_LAMPORTS': '10000',
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
+  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',
+  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',
+  'PAYOUT_JOB_RETRIES': '3',
+  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
+  'SWEEP_INTERVAL_MS': '300000', // 5 minutes
+  'SWEEP_BATCH_SIZE': '15',
+  'SWEEP_FEE_BUFFER_LAMPORTS': '20000',
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',
+  'SWEEP_ADDRESS_DELAY_MS': '1500',
+  'SWEEP_RETRY_ATTEMPTS': '2',
+  'SWEEP_RETRY_DELAY_MS': '10000',
+  'RPC_MAX_CONCURRENT': '10',
+  'RPC_RETRY_BASE_DELAY': '750',
+  'RPC_MAX_RETRIES': '4',
+  'RPC_RATE_LIMIT_COOLOFF': '3000',
+  'RPC_RETRY_MAX_DELAY': '25000',
+  'RPC_RETRY_JITTER': '0.3',
+  'RPC_COMMITMENT': 'confirmed',
+  'PAYOUT_QUEUE_CONCURRENCY': '4',
+  'PAYOUT_QUEUE_TIMEOUT_MS': '90000',
+  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5',
+  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000',
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1',
+  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050',
+  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',
+  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75',
+  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15',
+  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(),
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(),
+  'MAX_PROCESSED_TX_CACHE': '10000',
+  'INIT_DELAY_MS': '7000',
+  'ENABLE_PAYMENT_WEBHOOKS': 'false',
+  'PAYMENT_WEBHOOK_PORT': '3000',
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
+  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(), // Cache TTL for SOL/USD price (3 mins)
+  'MIN_BET_USD': '0.50',
+  'MAX_BET_USD': '100.00',
 };
 
 const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
 
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
-  if (process.env[key] === undefined) {
-    console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
-    process.env[key] = defaultValue;
-  }
+  if (process.env[key] === undefined) {
+    console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
+    process.env[key] = defaultValue;
+  }
 });
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOT_NAME = process.env.BOT_NAME; 
+const BOT_NAME = process.env.BOT_NAME;
 
 const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
 const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY;
@@ -155,48 +155,48 @@ const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLL_ATTEM
 
 let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
-    try {
-        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
-        process.exit(1);
-    }
+    try {
+        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
+        process.exit(1);
+    }
 } else {
-    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
-    process.exit(1);
+    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
+    process.exit(1);
 }
 
 let REFERRAL_PAYOUT_KEYPAIR = null;
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
-    try {
-        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null; 
-    }
+    try {
+        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
+        REFERRAL_PAYOUT_KEYPAIR = null;
+    }
 } else {
-    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
+    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
 
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
-    .split(',')
-    .map(u => u.trim())
-    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+    .split(',')
+    .map(u => u.trim())
+    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
 
 const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
 
 let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
-    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
+    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
 
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
-const MAIN_JACKPOT_ID = 'dice_escalator_main'; 
+const MAIN_JACKPOT_ID = 'dice_escalator_main';
 const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE_ESCALATOR, 10);
 const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
@@ -215,10 +215,10 @@ const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
 const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION;
 const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
 
-const SOL_DECIMALS = 9; 
+const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
-const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase(); 
+const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase();
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 
@@ -227,35 +227,35 @@ if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not define
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 
 if (combinedRpcEndpointsForConnection.length === 0) {
-    console.warn("⚠️ WARNING: No RPC URLs provided via environment (RPC_URLS, SOLANA_RPC_URL). RateLimitedConnection might rely on its internal defaults, if any. RPC functionality may be impaired if no defaults are present.");
+    console.warn("⚠️ WARNING: No RPC URLs provided via environment (RPC_URLS, SOLANA_RPC_URL). RateLimitedConnection might rely on its internal defaults, if any. RPC functionality may be impaired if no defaults are present.");
 }
 
 const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE };
 for (const [key, value] of Object.entries(criticalGameScores)) {
-    if (isNaN(value) || value <=0) {
-        console.error(`🚨 FATAL ERROR: Game score parameter '${key}' ('${value}') is not a valid positive number. Check .env file or defaults.`);
-        process.exit(1);
-    }
+    if (isNaN(value) || value <=0) {
+        console.error(`🚨 FATAL ERROR: Game score parameter '${key}' ('${value}') is not a valid positive number. Check .env file or defaults.`);
+        process.exit(1);
+    }
 }
 if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
+    process.exit(1);
 }
 if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be greater than or equal to MIN_BET_USD and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be greater than or equal to MIN_BET_USD and be a number.`);
+    process.exit(1);
 }
 if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
+    process.exit(1);
 }
 if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be greater than or equal to MIN_BET_AMOUNT_LAMPORTS and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be greater than or equal to MIN_BET_AMOUNT_LAMPORTS and be a number.`);
+    process.exit(1);
 }
 if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) {
-    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
+    process.exit(1);
 }
 
 console.log("✅ BOT_TOKEN loaded successfully.");
@@ -267,11 +267,11 @@ console.log(`🎲 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms
 
 
 function formatLamportsToSolStringForLog(lamports) {
-    if (typeof lamports !== 'bigint') {
-        try { lamports = BigInt(lamports); }
-        catch (e) { return 'Invalid_Lamports'; }
-    }
-    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
+    if (typeof lamports !== 'bigint') {
+        try { lamports = BigInt(lamports); }
+        catch (e) { return 'Invalid_Lamports'; }
+    }
+    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
 console.log("--- 🎲 Game Settings Loaded 🎲 ---");
@@ -294,175 +294,175 @@ const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
 console.log(`DB_SSL configuration: Use SSL = '${useSsl}', Reject Unauthorized = '${rejectUnauthorizedSsl}'`);
 
 const pool = new Pool({
-  connectionString: DATABASE_URL,
-  max: parseInt(process.env.DB_POOL_MAX, 10),
-  min: parseInt(process.env.DB_POOL_MIN, 10),
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
-  connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
-  ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
+  connectionString: DATABASE_URL,
+  max: parseInt(process.env.DB_POOL_MAX, 10),
+  min: parseInt(process.env.DB_POOL_MIN, 10),
+  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
+  connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
+  ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
 });
 
 pool.on('connect', client => {
-  console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.');
+  console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.');
 });
 pool.on('error', (err, client) => {
-  console.error('❌ Unexpected error on idle PostgreSQL client', err);
-  if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
-    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details\\.`;
-    safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
-      .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
-  } else {
-    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage or escapeMarkdownV2 might not be available or ADMIN_USER_ID not set)`);
-  }
+  console.error('❌ Unexpected error on idle PostgreSQL client', err);
+  if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details\\.`;
+    safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
+      .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
+  } else {
+    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage or escapeMarkdownV2 might not be available or ADMIN_USER_ID not set)`);
+  }
 });
 console.log("✅ PostgreSQL Pool created.");
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[queryDatabase]';
-    const sqlPreview = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
-    const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
-    
-    console.log(`${logPrefix} Attempting to execute SQL (Full length: ${sql.length}): [${sqlPreview}] with PARAMS: [${paramsPreview.join(', ')}]`);
+    const logPrefix = '[queryDatabase]';
+    const sqlPreview = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
+    const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
+    
+    console.log(`${logPrefix} Attempting to execute SQL (Full length: ${sql.length}): [${sqlPreview}] with PARAMS: [${paramsPreview.join(', ')}]`);
 
-    try {
-        const result = await dbClient.query(sql, params);
-        return result;
-    } catch (error) {
-        console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL that failed (Full length: ${sql.length}): [${sqlPreview}]`);
-        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreview.join(', ')}]`);
-        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
-        if (error.stack) {
-            console.error(`${logPrefix} Stack: ${error.stack}`);
-        }
-        throw error; 
-    }
+    try {
+        const result = await dbClient.query(sql, params);
+        return result;
+    } catch (error) {
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        console.error(`${logPrefix} SQL that failed (Full length: ${sql.length}): [${sqlPreview}]`);
+        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreview.join(', ')}]`);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
+        if (error.stack) {
+            console.error(`${logPrefix} Stack: ${error.stack}`);
+        }
+        throw error;
+    }
 }
 console.log("[Global Utils] queryDatabase helper function (with enhanced logging) defined.");
 
 console.log("⚙️ Setting up Solana Connection...");
 const connectionOptions = {
-    commitment: process.env.RPC_COMMITMENT, 
-    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
-    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
-    maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
-    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
-    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
-    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
+    commitment: process.env.RPC_COMMITMENT,
+    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
+    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
+    maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
+    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
+    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
+    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
 };
 
 const solanaConnection = new RateLimitedConnection(
-    combinedRpcEndpointsForConnection,
-    connectionOptions
+    combinedRpcEndpointsForConnection,
+    connectionOptions
 );
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log("🤖 Telegram Bot instance created and configured for polling.");
 
-let app = null; 
+let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
-    app = express();
-    app.use(express.json({
-        verify: (req, res, buf) => { 
-            req.rawBody = buf;
-        }
-    }));
-    console.log("🚀 Express app initialized for payment webhooks (JSON body parser with rawBody enabled).");
+    app = express();
+    app.use(express.json({
+        verify: (req, res, buf) => {
+            req.rawBody = buf;
+        }
+    }));
+    console.log("🚀 Express app initialized for payment webhooks (JSON body parser with rawBody enabled).");
 } else {
-    console.log("ℹ️ Payment webhooks are disabled via ENABLE_PAYMENT_WEBHOOKS env var.");
+    console.log("ℹ️ Payment webhooks are disabled via ENABLE_PAYMENT_WEBHOOKS env var.");
 }
 
-const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes'; 
+const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes';
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-let isShuttingDown = false; 
+let isShuttingDown = false;
 
-let activeGames = new Map(); 
-let userCooldowns = new Map(); 
-let groupGameSessions = new Map(); 
+let activeGames = new Map();
+let userCooldowns = new Map();
+let groupGameSessions = new Map();
 
-const walletCache = new Map(); 
-const activeDepositAddresses = new Map(); 
-const processedDepositTxSignatures = new Set(); 
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; 
-const pendingReferrals = new Map(); 
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
+const processedDepositTxSignatures = new Set();
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
+const pendingReferrals = new Map();
 
-const userStateCache = new Map(); 
+const userStateCache = new Map();
 
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map(); 
+const solPriceCache = new Map();
 
-const DICE_ESCALATOR_BUST_ON = 1; 
+const DICE_ESCALATOR_BUST_ON = 1;
 
 console.log(`🚀 Initializing ${BOT_NAME} v${BOT_VERSION}...`);
 console.log(`🕰️ Current system time: ${new Date().toISOString()}`);
 console.log(`💻 Node.js Version: ${process.version}`);
 
 const escapeMarkdownV2 = (text) => {
-  if (text === null || typeof text === 'undefined') return '';
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+  if (text === null || typeof text === 'undefined') return '';
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
 console.log("[Global Utils] escapeMarkdownV2 helper function defined.");
 
 async function safeSendMessage(chatId, text, options = {}) {
-    const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
-    if (!chatId || typeof text !== 'string') {
-        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
-        return undefined; 
-    }
-    
-    let messageToSend = text; 
-    let finalOptions = { ...options }; 
+    const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
+    if (!chatId || typeof text !== 'string') {
+        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
+        return undefined;
+    }
+    
+    let messageToSend = text;
+    let finalOptions = { ...options };
 
-    if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-        const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`; 
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
-        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-        console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) was too long (${text.length} chars) and has been truncated.`);
-    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
-        const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
-        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-        console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) was too long (${text.length} chars) and has been truncated.`);
-    }
+    if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+        const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`;
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
+        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
+        console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) was too long (${text.length} chars) and has been truncated.`);
+    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+        const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
+        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
+        console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) was too long (${text.length} chars) and has been truncated.`);
+    }
 
-    if (!bot) { 
-        console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance not available.`);
-        return undefined;
-    }
+    if (!bot) {
+        console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance not available.`);
+        return undefined;
+    }
 
-    try {
-        if (typeof bot.sendMessage !== 'function') {
-            throw new Error("'bot.sendMessage' is not a function. Bot may not be initialized.");
-        }
-        const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
-        return sentMessage;
-    } catch (error) {
-        console.error(`${LOG_PREFIX_SSM} ❌ Failed to send message. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
-        if (error.response && error.response.body) {
-            console.error(`${LOG_PREFIX_SSM} Telegram API Response: ${stringifyWithBigInt(error.response.body)}`);
-            if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.toLowerCase().includes("can't parse entities")) {
-                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected. Attempting to send as plain text.`);
-                console.error(`${LOG_PREFIX_SSM} Original MarkdownV2 text (first 200 chars): "${text.substring(0,200)}"`); 
-                try {
-                    let plainTextFallbackOptions = { ...options }; 
-                    delete plainTextFallbackOptions.parse_mode; 
-                    
-                    let plainTextForFallback = text;
-                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`; 
-                        const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
-                        plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
-                    }
-                    return await bot.sendMessage(chatId, plainTextForFallback, plainTextFallbackOptions);
-                } catch (fallbackError) {
-                    console.error(`${LOG_PREFIX_SSM} ❌ Plain text fallback also failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
-                    return undefined;
-                }
-            }
-        }
-        return undefined; 
-    }
+    try {
+        if (typeof bot.sendMessage !== 'function') {
+            throw new Error("'bot.sendMessage' is not a function. Bot may not be initialized.");
+        }
+        const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
+        return sentMessage;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_SSM} ❌ Failed to send message. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
+        if (error.response && error.response.body) {
+            console.error(`${LOG_PREFIX_SSM} Telegram API Response: ${stringifyWithBigInt(error.response.body)}`);
+            if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.toLowerCase().includes("can't parse entities")) {
+                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected. Attempting to send as plain text.`);
+                console.error(`${LOG_PREFIX_SSM} Original MarkdownV2 text (first 200 chars): "${text.substring(0,200)}"`);
+                try {
+                    let plainTextFallbackOptions = { ...options };
+                    delete plainTextFallbackOptions.parse_mode;
+                    
+                    let plainTextForFallback = text;
+                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`;
+                        const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
+                        plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
+                    }
+                    return await bot.sendMessage(chatId, plainTextForFallback, plainTextFallbackOptions);
+                } catch (fallbackError) {
+                    console.error(`${LOG_PREFIX_SSM} ❌ Plain text fallback also failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
+                    return undefined;
+                }
+            }
+        }
+        return undefined;
+    }
 }
 console.log("[Global Utils] safeSendMessage (with MarkdownV2 fallback & refined truncation) defined.");
 
@@ -470,125 +470,125 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 console.log("[Global Utils] sleep helper function defined.");
 
 async function notifyAdmin(message, options = {}) {
-    if (ADMIN_USER_ID) {
-        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`; 
-        return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
-    } else {
-        console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message (first 100 chars): ${String(message).substring(0,100)}...`);
-        return null; 
-    }
+    if (ADMIN_USER_ID) {
+        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`;
+        return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
+    } else {
+        console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message (first 100 chars): ${String(message).substring(0,100)}...`);
+        return null;
+    }
 }
 console.log("[Global Utils] notifyAdmin helper function defined.");
 
 console.log("⚙️ Setting up Price Feed Utilities...");
 
 async function fetchSolUsdPriceFromAPI() {
-    const apiUrl = process.env.SOL_PRICE_API_URL;
-    const logPrefix = '[PriceFeed API]';
-    try {
-        console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`);
-        const response = await axios.get(apiUrl, { timeout: 8000 }); 
-        if (response.data && response.data.solana && response.data.solana.usd) {
-            const price = parseFloat(response.data.solana.usd);
-            if (isNaN(price) || price <= 0) {
-                throw new Error('Invalid or non-positive price data received from API.');
-            }
-            console.log(`${logPrefix} ✅ Successfully fetched SOL/USD price: $${price.toFixed(2)}`); 
-            return price;
-        } else {
-            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data));
-            throw new Error('SOL price not found or invalid structure in API response.');
-        }
-    } catch (error) {
-        const errMsg = error.isAxiosError ? error.message : String(error);
-        console.error(`${logPrefix} ❌ Error fetching SOL/USD price: ${errMsg}`);
-        if (error.response) {
-            console.error(`${logPrefix} API Response Status: ${error.response.status}`);
-            console.error(`${logPrefix} API Response Data:`, stringifyWithBigInt(error.response.data));
-        }
-        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`); 
-    }
+    const apiUrl = process.env.SOL_PRICE_API_URL;
+    const logPrefix = '[PriceFeed API]';
+    try {
+        console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`);
+        const response = await axios.get(apiUrl, { timeout: 8000 });
+        if (response.data && response.data.solana && response.data.solana.usd) {
+            const price = parseFloat(response.data.solana.usd);
+            if (isNaN(price) || price <= 0) {
+                throw new Error('Invalid or non-positive price data received from API.');
+            }
+            console.log(`${logPrefix} ✅ Successfully fetched SOL/USD price: $${price.toFixed(2)}`);
+            return price;
+        } else {
+            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data));
+            throw new Error('SOL price not found or invalid structure in API response.');
+        }
+    } catch (error) {
+        const errMsg = error.isAxiosError ? error.message : String(error);
+        console.error(`${logPrefix} ❌ Error fetching SOL/USD price: ${errMsg}`);
+        if (error.response) {
+            console.error(`${logPrefix} API Response Status: ${error.response.status}`);
+            console.error(`${logPrefix} API Response Data:`, stringifyWithBigInt(error.response.data));
+        }
+        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`);
+    }
 }
 
 async function getSolUsdPrice() {
-    const logPrefix = '[getSolUsdPrice]';
-    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
-    const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
+    const logPrefix = '[getSolUsdPrice]';
+    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
+    const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
-    if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
-        return cachedEntry.price;
-    }
-    try {
-        const price = await fetchSolUsdPriceFromAPI();
-        solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
-        console.log(`${logPrefix} Fetched and cached new SOL/USD price: $${price.toFixed(2)}`);
-        return price;
-    } catch (error) {
-        if (cachedEntry) {
-            console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
-            return cachedEntry.price;
-        }
-        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available\\. USD conversions will be severely impacted\\.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
-        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`); 
-        if (typeof notifyAdmin === 'function') { 
-            await notifyAdmin(criticalErrorMessage); 
-        }
-        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`); 
-    }
+    if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
+        return cachedEntry.price;
+    }
+    try {
+        const price = await fetchSolUsdPriceFromAPI();
+        solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
+        console.log(`${logPrefix} Fetched and cached new SOL/USD price: $${price.toFixed(2)}`);
+        return price;
+    } catch (error) {
+        if (cachedEntry) {
+            console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
+            return cachedEntry.price;
+        }
+        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available\\. USD conversions will be severely impacted\\.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
+        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`);
+        if (typeof notifyAdmin === 'function') {
+            await notifyAdmin(criticalErrorMessage);
+        }
+        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`);
+    }
 }
 console.log("[PriceFeed Utils] getSolUsdPrice and fetchSolUsdPriceFromAPI defined.");
 
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
-    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
-        console.warn(`[Convert] Invalid solUsdPrice (${solUsdPrice}) for lamports to USD conversion. Lamports: ${lamports}`);
-        return '⚠️ Price N/A';
-    }
-    let lamportsBigInt;
-    try {
-        lamportsBigInt = BigInt(lamports);
-    } catch (e) { 
-        console.warn(`[Convert] Invalid lamport amount for USD conversion: ${lamports}. Error: ${e.message}`);
-        return '⚠️ Amount Error'; 
-    } 
-    
-    const solAmount = Number(lamportsBigInt) / Number(LAMPORTS_PER_SOL);
-    const usdValue = solAmount * solUsdPrice;
-    return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: displayDecimals, maximumFractionDigits: displayDecimals })}`;
+    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
+        console.warn(`[Convert] Invalid solUsdPrice (${solUsdPrice}) for lamports to USD conversion. Lamports: ${lamports}`);
+        return '⚠️ Price N/A';
+    }
+    let lamportsBigInt;
+    try {
+        lamportsBigInt = BigInt(lamports);
+    } catch (e) {
+        console.warn(`[Convert] Invalid lamport amount for USD conversion: ${lamports}. Error: ${e.message}`);
+        return '⚠️ Amount Error';
+    }
+    
+    const solAmount = Number(lamportsBigInt) / Number(LAMPORTS_PER_SOL);
+    const usdValue = solAmount * solUsdPrice;
+    return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: displayDecimals, maximumFractionDigits: displayDecimals })}`;
 }
 console.log("[PriceFeed Utils] convertLamportsToUSDString defined.");
 
 function convertUSDToLamports(usdAmount, solUsdPrice) {
-    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
-        throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
-    }
-    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,"")); 
-    if (isNaN(parsedUsdAmount) || parsedUsdAmount <= 0) { 
-        throw new Error("Invalid or non-positive USD amount for conversion.");
-    }
-    const solAmount = parsedUsdAmount / solUsdPrice;
-    return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL))); 
+    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
+        throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
+    }
+    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,""));
+    if (isNaN(parsedUsdAmount) || parsedUsdAmount <= 0) {
+        throw new Error("Invalid or non-positive USD amount for conversion.");
+    }
+    const solAmount = parsedUsdAmount / solUsdPrice;
+    return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)));
 }
 console.log("[PriceFeed Utils] convertUSDToLamports defined.");
 
 const payoutProcessorQueue = new PQueue({
-    concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
+    concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
 });
 const depositProcessorQueue = new PQueue({
-    concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
+    concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
 });
 console.log("✅ Payment processing queues (Payout & Deposit) initialized.");
 
-const SLOT_PAYOUTS = { 
-    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, 
-    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },  
-    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },  
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },   
+const SLOT_PAYOUTS = {
+    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" },
+    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
+    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },
 };
-const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; 
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 
 console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed) - Complete.");
 // --- End of Part 1 ---
@@ -605,12 +605,12 @@ console.log("Loading Part 2: Database Schema Initialization & Core User Manageme
 
 // --- Helper function for referral code generation ---
 const generateReferralCode = (length = 8) => {
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    return result;
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return result;
 };
 console.log("[User Management] generateReferralCode helper function defined.");
 
@@ -618,12 +618,12 @@ console.log("[User Management] generateReferralCode helper function defined.");
 // Database Schema Initialization
 //---------------------------------------------------------------------------
 async function initializeDatabaseSchema() {
-    console.log("🚀 Initializing database schema...");
-    const client = await pool.connect(); 
-    try {
-        await client.query('BEGIN');
+    console.log("🚀 Initializing database schema...");
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-        // Users Table
+        // Users Table
         await client.query(`CREATE TABLE IF NOT EXISTS users (
             telegram_id BIGINT PRIMARY KEY,
             username VARCHAR(255),
@@ -649,146 +649,146 @@ async function initializeDatabaseSchema() {
         );`);
         console.log("  [DB Schema] 'users' table checked/created.");
 
-        // Jackpots Table
-        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
-            jackpot_id VARCHAR(255) PRIMARY KEY,
-            current_amount BIGINT DEFAULT 0,
-            last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            last_won_timestamp TIMESTAMPTZ,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        console.log("  [DB Schema] 'jackpots' table checked/created.");
-        await client.query(
-            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID]
-        );
-        console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
+        // Jackpots Table
+        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
+            jackpot_id VARCHAR(255) PRIMARY KEY,
+            current_amount BIGINT DEFAULT 0,
+            last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+            last_won_timestamp TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        console.log("  [DB Schema] 'jackpots' table checked/created.");
+        await client.query(
+            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
+            [MAIN_JACKPOT_ID]
+        );
+        console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
 
-        // Games Table (Game Log)
-        await client.query(`CREATE TABLE IF NOT EXISTS games (
-            game_log_id SERIAL PRIMARY KEY,
-            game_type VARCHAR(50) NOT NULL,
-            chat_id BIGINT,
-            initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            participants_ids BIGINT[],
-            bet_amount_lamports BIGINT,
-            outcome TEXT,
-            jackpot_contribution_lamports BIGINT,
-            game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        console.log("  [DB Schema] 'games' table (game log) checked/created.");
+        // Games Table (Game Log)
+        await client.query(`CREATE TABLE IF NOT EXISTS games (
+            game_log_id SERIAL PRIMARY KEY,
+            game_type VARCHAR(50) NOT NULL,
+            chat_id BIGINT,
+            initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+            participants_ids BIGINT[],
+            bet_amount_lamports BIGINT,
+            outcome TEXT,
+            jackpot_contribution_lamports BIGINT,
+            game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        console.log("  [DB Schema] 'games' table (game log) checked/created.");
 
-        // User Deposit Wallets Table
-        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
-            wallet_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            public_key VARCHAR(44) NOT NULL UNIQUE,
-            derivation_path VARCHAR(255) NOT NULL UNIQUE,
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMPTZ,
-            swept_at TIMESTAMPTZ,
-            balance_at_sweep BIGINT,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-        console.log("  [DB Schema] 'user_deposit_wallets' table and indexes checked/created.");
+        // User Deposit Wallets Table
+        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
+            wallet_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            public_key VARCHAR(44) NOT NULL UNIQUE,
+            derivation_path VARCHAR(255) NOT NULL UNIQUE,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMPTZ,
+            swept_at TIMESTAMPTZ,
+            balance_at_sweep BIGINT,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
+        console.log("  [DB Schema] 'user_deposit_wallets' table and indexes checked/created.");
 
-        // Deposits Table
-        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
-            deposit_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
-            transaction_signature VARCHAR(88) NOT NULL UNIQUE,
-            source_address VARCHAR(44),
-            deposit_address VARCHAR(44) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            confirmation_status VARCHAR(20) DEFAULT 'pending',
-            block_time BIGINT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMPTZ,
-            notes TEXT,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-        console.log("  [DB Schema] 'deposits' table and indexes checked/created.");
+        // Deposits Table
+        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
+            deposit_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
+            transaction_signature VARCHAR(88) NOT NULL UNIQUE,
+            source_address VARCHAR(44),
+            deposit_address VARCHAR(44) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            confirmation_status VARCHAR(20) DEFAULT 'pending',
+            block_time BIGINT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ,
+            notes TEXT,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
+        console.log("  [DB Schema] 'deposits' table and indexes checked/created.");
 
-        // Withdrawals Table
-        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
-            withdrawal_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            destination_address VARCHAR(44) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            fee_lamports BIGINT NOT NULL,
-            transaction_signature VARCHAR(88) UNIQUE,
-            status VARCHAR(30) DEFAULT 'pending_verification',
-            error_message TEXT,
-            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMPTZ,
-            block_time BIGINT,
-            priority_fee_microlamports INT,
-            compute_unit_price_microlamports INT,
-            compute_unit_limit INT,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
-        console.log("  [DB Schema] 'withdrawals' table and indexes checked/created.");
+        // Withdrawals Table
+        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
+            withdrawal_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            destination_address VARCHAR(44) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            fee_lamports BIGINT NOT NULL,
+            transaction_signature VARCHAR(88) UNIQUE,
+            status VARCHAR(30) DEFAULT 'pending_verification',
+            error_message TEXT,
+            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ,
+            block_time BIGINT,
+            priority_fee_microlamports INT,
+            compute_unit_price_microlamports INT,
+            compute_unit_limit INT,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
+        console.log("  [DB Schema] 'withdrawals' table and indexes checked/created.");
 
-        // Referrals Table
-        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
-            referral_id SERIAL PRIMARY KEY,
-            referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
-            commission_type VARCHAR(20),
-            commission_amount_lamports BIGINT,
-            transaction_signature VARCHAR(88),
-            status VARCHAR(20) DEFAULT 'pending_criteria',
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
-        console.log("  [DB Schema] 'referrals' table and indexes checked/created.");
+        // Referrals Table
+        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
+            referral_id SERIAL PRIMARY KEY,
+            referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
+            commission_type VARCHAR(20),
+            commission_amount_lamports BIGINT,
+            transaction_signature VARCHAR(88),
+            status VARCHAR(20) DEFAULT 'pending_criteria',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
+        console.log("  [DB Schema] 'referrals' table and indexes checked/created.");
 
-        // Processed Sweeps Table
-        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
-            sweep_id SERIAL PRIMARY KEY,
-            source_deposit_address VARCHAR(44) NOT NULL,
-            destination_main_address VARCHAR(44) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            transaction_signature VARCHAR(88) UNIQUE NOT NULL,
-            swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-        console.log("  [DB Schema] 'processed_sweeps' table and index checked/created.");
-        
-        // Ledger Table
-        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
-            ledger_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            transaction_type VARCHAR(50) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            balance_before_lamports BIGINT NOT NULL,
-            balance_after_lamports BIGINT NOT NULL,
-            deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
-            withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
-            game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
-            referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
-            related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
-            notes TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
-        console.log("  [DB Schema] 'ledger' table and indexes checked/created.");
+        // Processed Sweeps Table
+        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
+            sweep_id SERIAL PRIMARY KEY,
+            source_deposit_address VARCHAR(44) NOT NULL,
+            destination_main_address VARCHAR(44) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            transaction_signature VARCHAR(88) UNIQUE NOT NULL,
+            swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
+        console.log("  [DB Schema] 'processed_sweeps' table and index checked/created.");
+        
+        // Ledger Table
+        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
+            ledger_id SERIAL PRIMARY KEY,
+            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+            transaction_type VARCHAR(50) NOT NULL,
+            amount_lamports BIGINT NOT NULL,
+            balance_before_lamports BIGINT NOT NULL,
+            balance_after_lamports BIGINT NOT NULL,
+            deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
+            withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
+            game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
+            referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
+            related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
+            notes TEXT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
+        console.log("  [DB Schema] 'ledger' table and indexes checked/created.");
 
         // Dice Roll Requests Table
         await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
@@ -808,47 +808,47 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
         console.log("  [DB Schema] Index for 'dice_roll_requests' (status, requested_at) checked/created.");
 
-        // Update function for 'updated_at' columns
-        await client.query(`
-            CREATE OR REPLACE FUNCTION trigger_set_timestamp()
-            RETURNS TRIGGER AS $$
-            BEGIN
-              NEW.updated_at = NOW();
-              RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-        `);
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
-        for (const tableName of tablesWithUpdatedAt) {
-            const triggerExistsRes = await client.query(
-                `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = '${tableName}'::regclass;`
-            );
-            if (triggerExistsRes.rowCount === 0) {
-                await client.query(`
-                    CREATE TRIGGER set_timestamp
-                    BEFORE UPDATE ON ${tableName}
-                    FOR EACH ROW
-                    EXECUTE FUNCTION trigger_set_timestamp();
-                `).then(() => console.log(`  [DB Schema] 'updated_at' trigger created for '${tableName}'.`))
-                  .catch(err => console.warn(`  [DB Schema] Could not set update trigger for ${tableName} (may require permissions or function issue): ${err.message}`));
-            }
-        }
-        console.log("  [DB Schema] 'updated_at' trigger function and assignments checked/created.");
+        // Update function for 'updated_at' columns
+        await client.query(`
+            CREATE OR REPLACE FUNCTION trigger_set_timestamp()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        `);
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
+        for (const tableName of tablesWithUpdatedAt) {
+            const triggerExistsRes = await client.query(
+                `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = '${tableName}'::regclass;`
+            );
+            if (triggerExistsRes.rowCount === 0) {
+                await client.query(`
+                    CREATE TRIGGER set_timestamp
+                    BEFORE UPDATE ON ${tableName}
+                    FOR EACH ROW
+                    EXECUTE FUNCTION trigger_set_timestamp();
+                `).then(() => console.log(`  [DB Schema] 'updated_at' trigger created for '${tableName}'.`))
+                  .catch(err => console.warn(`  [DB Schema] Could not set update trigger for ${tableName} (may require permissions or function issue): ${err.message}`));
+            }
+        }
+        console.log("  [DB Schema] 'updated_at' trigger function and assignments checked/created.");
 
-        await client.query('COMMIT');
-        console.log("✅ Database schema initialization complete.");
-    } catch (e) {
-        await client.query('ROLLBACK');
-        if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
-             console.error('❌ Error during database schema initialization (Likely an empty/malformed query, or invisible characters at the START of an SQL DDL string):', e);
+        await client.query('COMMIT');
+        console.log("✅ Database schema initialization complete.");
+    } catch (e) {
+        await client.query('ROLLBACK');
+        if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
+             console.error('❌ Error during database schema initialization (Likely an empty/malformed query, or invisible characters at the START of an SQL DDL string):', e);
             console.error(`Hint: The error occurred at position ${e.position} of the failing SQL query. This often indicates an issue right at the beginning of the statement, possibly due to invisible characters from copy-pasting DDL.`);
-        } else {
-            console.error('❌ Error during database schema initialization:', e);
-        }
-        throw e; 
-    } finally {
-        client.release();
-    }
+        } else {
+            console.error('❌ Error during database schema initialization:', e);
+        }
+        throw e;
+    } finally {
+        client.release();
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -962,7 +962,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
                     console.log(`${LOG_PREFIX_GOCU} Referral link recorded for ${referrerId} -> ${newUser.telegram_id}.`);
                 } catch (referralError) {
                    console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
-                   // Don't let referral error stop user creation, but log it.
+                    // Don't let referral error stop user creation, but log it.
                 }
             }
             await client.query('COMMIT');
@@ -994,10 +994,10 @@ async function getUserBalance(telegramId) {
     try {
         const result = await pool.query('SELECT balance FROM users WHERE telegram_id = $1', [stringTelegramId]);
         if (result.rows.length > 0) {
-            return BigInt(result.rows[0].balance); 
+            return BigInt(result.rows[0].balance);
         }
         console.warn(`[getUserBalance TG:${stringTelegramId}] User not found, cannot retrieve balance.`);
-        return null; 
+        return null;
     } catch (error) {
         console.error(`[getUserBalance TG:${stringTelegramId}] Error retrieving balance for telegramId ${stringTelegramId}:`, error);
         return null;
@@ -1021,7 +1021,7 @@ async function updateUserBalance(telegramId, newBalanceLamports, client = pool) 
 
         const result = await client.query(
             'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2',
-            [newBalanceLamports.toString(), stringTelegramId] 
+            [newBalanceLamports.toString(), stringTelegramId]
         );
         if (result.rowCount > 0) {
             console.warn(`${LOG_PREFIX_UUB} ⚠️ Balance directly set to ${newBalanceLamports.toString()} lamports. LEDGER NOT UPDATED by this specific function. This is for special administrative use cases ONLY.`);
@@ -1104,7 +1104,7 @@ console.log("[User Management] linkUserWallet (with PublicKey validation) define
 async function getUserLinkedWallet(telegramId) {
     const stringTelegramId = String(telegramId);
     // WALLET_CACHE_TTL_MS from Part 1 env defaults
-    const cacheTTL = parseInt(process.env.WALLET_CACHE_TTL_MS || (15 * 60 * 1000).toString(), 10); 
+    const cacheTTL = parseInt(process.env.WALLET_CACHE_TTL_MS || (15 * 60 * 1000).toString(), 10);
     
     if (walletCache) { // walletCache from Part 1
         const cachedData = walletCache.get(stringTelegramId);
@@ -1117,7 +1117,7 @@ async function getUserLinkedWallet(telegramId) {
     try {
         const result = await pool.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
         if (result.rows.length > 0 && result.rows[0].solana_wallet_address) {
-            if (walletCache) walletCache.set(stringTelegramId, { solanaAddress: result.rows[0].solana_wallet_address, timestamp: Date.now() }); 
+            if (walletCache) walletCache.set(stringTelegramId, { solanaAddress: result.rows[0].solana_wallet_address, timestamp: Date.now() });
             return result.rows[0].solana_wallet_address;
         }
         return null; // No wallet linked
@@ -1136,10 +1136,10 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
             SELECT derivation_path
             FROM user_deposit_wallets
             WHERE user_telegram_id = $1
-            ORDER BY created_at DESC; 
+            ORDER BY created_at DESC;
         `;
         // queryDatabase from Part 1
-        const res = await queryDatabase(query, [stringUserId], dbClient); 
+        const res = await queryDatabase(query, [stringUserId], dbClient);
         let maxIndex = -1;
 
         if (res.rows.length > 0) {
@@ -1148,7 +1148,7 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
                 const parts = path.split('/');
                 // Standard path m/44'/501'/USER_ACCOUNT_INDEX'/0'/ADDRESS_INDEX' has 6 parts (0-5) if 'm' is part 0
                 // We are interested in ADDRESS_INDEX', which is the last part.
-                if (parts.length >= 6) { 
+                if (parts.length >= 6) {
                     const lastPart = parts[parts.length - 1];
                     if (lastPart.endsWith("'")) {
                         const indexStr = lastPart.substring(0, lastPart.length - 1);
@@ -1214,11 +1214,11 @@ async function deleteUserAccount(telegramId) {
             // Clear in-memory caches associated with the user
             // activeGames, userCooldowns, etc. from Part 1
             if (activeGames && activeGames instanceof Map) {
-                activeGames.forEach((game, gameId) => { 
+                activeGames.forEach((game, gameId) => {
                     if (game && game.participants && Array.isArray(game.participants)) {
                         game.participants = game.participants.filter(p => String(p.userId) !== stringTelegramId);
                         // GAME_IDS assumed to be available (from Part 5a-S1 New)
-                        if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) { 
+                        if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) {
                             activeGames.delete(gameId);
                             console.log(`${LOG_PREFIX_DUA} Removed empty group game ${gameId} from activeGames cache.`);
                         }
