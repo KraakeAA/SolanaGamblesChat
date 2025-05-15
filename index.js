@@ -7530,19 +7530,23 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
     const relGameLogId = (relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null;
     const relReferralId = (relatedIds?.referral_id && Number.isInteger(relatedIds.referral_id)) ? relatedIds.referral_id : null;
     const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(relatedIds.related_sweep_id)) ? relatedIds.related_sweep_id : null;
-    let oldBalanceLamports; // To store the balance before change
+    let oldBalanceLamports; 
 
     try {
-        const balanceRes = await dbClient.query('SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE', [stringUserId]);
+        // Query 1: Select user data for update
+        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
+        console.log(`${logPrefix} [DEBUG_SQL_EXEC] Query 1 (Select User): ${selectUserSQL.replace(/\s+/g, ' ').trim()} PARAMS: [${stringUserId}]`);
+        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
+        
         if (balanceRes.rowCount === 0) {
             console.error(`${logPrefix} ❌ User balance record not found for ID ${stringUserId}.`);
             return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
         }
         const userData = balanceRes.rows[0];
-        oldBalanceLamports = BigInt(userData.balance); // Capture old balance
+        oldBalanceLamports = BigInt(userData.balance); 
         const balanceAfter = oldBalanceLamports + changeAmount;
 
-        if (balanceAfter < 0n && transactionType !== 'admin_grant' && transactionType !== 'admin_adjustment_debit') {
+        if (balanceAfter < 0n && transactionType !== 'admin_grant' && transactionType !== 'admin_adjustment_debit' && transactionType !== 'admin_grant_debit') { // Added admin_grant_debit
             console.warn(`${logPrefix} ⚠️ Insufficient balance. Current: ${oldBalanceLamports}, Change: ${changeAmount}, Would be: ${balanceAfter}. Required: ${-changeAmount}`);
             return { success: false, error: 'Insufficient balance for this transaction.', oldBalanceLamports: oldBalanceLamports, newBalanceLamportsWouldBe: balanceAfter, errorCode: 'INSUFFICIENT_FUNDS' };
         }
@@ -7550,66 +7554,56 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
         let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
         let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
-        let newTotalWon = BigInt(userData.total_won_lamports || '0'); // Tracks gross amount credited from wins
+        let newTotalWon = BigInt(userData.total_won_lamports || '0'); 
 
         if (transactionType === 'deposit' && changeAmount > 0n) {
             newTotalDeposited += changeAmount;
-        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee')) && changeAmount < 0n) {
-            newTotalWithdrawn -= changeAmount; // Subtracting a negative = adding positive
+        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) { // Added withdrawal_confirmed
+            newTotalWithdrawn -= changeAmount; 
         } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
-            newTotalWagered -= changeAmount; // Subtracting a negative = adding positive
-        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_')) && changeAmount > 0n) {
-            // Assumes changeAmount is the total credited amount (bet_returned + profit).
-            // total_won_lamports tracks the gross amount credited from these wins.
+            newTotalWagered -= changeAmount; 
+        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_')) && changeAmount > 0n) { // push returns bet
             newTotalWon += changeAmount;
-        } else if (transactionType === 'referral_commission' && changeAmount > 0n) {
-            // If referral commissions directly credit user balance (instead of being paid out separately)
-            // This would also be a "win" of sorts. Assuming for now referral payouts are separate.
-            // If they do hit balance: newTotalWon += changeAmount; (or a new category total_referral_earnings_credited)
-        }
+        } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) { // If commission hits balance
+           newTotalWon += changeAmount; // Or a new category like total_referral_credits
+       }
 
 
-        const updateUserQuery = `
-            UPDATE users 
-            SET balance = $1, 
-                total_deposited_lamports = $2,
-                total_withdrawn_lamports = $3,
-                total_wagered_lamports = $4,
-                total_won_lamports = $5,
-                updated_at = NOW() 
-            WHERE telegram_id = $6;
-        `;
-        const updateRes = await dbClient.query(updateUserQuery, [
+        // Query 2: Update users table
+        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
+        const updateUserParams = [
             balanceAfter.toString(), 
             newTotalDeposited.toString(),
             newTotalWithdrawn.toString(),
             newTotalWagered.toString(),
             newTotalWon.toString(),
             stringUserId
-        ]);
+        ];
+        console.log(`${logPrefix} [DEBUG_SQL_EXEC] Query 2 (Update User): ${updateUserQuery.replace(/\s+/g, ' ').trim()} PARAMS: ${JSON.stringify(updateUserParams)}`);
+        const updateRes = await dbClient.query(updateUserQuery, updateUserParams);
 
         if (updateRes.rowCount === 0) {
-             console.error(`${logPrefix} ❌ Failed to update user balance row after lock for user ${stringUserId}. This should not happen.`);
-             throw new Error('Failed to update user balance row after lock.');
+            console.error(`${logPrefix} ❌ Failed to update user balance row after lock for user ${stringUserId}. This should not happen.`);
+            throw new Error('Failed to update user balance row after lock.');
         }
 
-        const ledgerQuery = `
-            INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports,
-                                deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-            RETURNING ledger_id;
-        `;
-        const ledgerRes = await dbClient.query(ledgerQuery, [
+        // Query 3: Insert into ledger
+        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING ledger_id;`;
+        const ledgerParams = [
             stringUserId, transactionType, changeAmount.toString(), oldBalanceLamports.toString(), balanceAfter.toString(),
             relDepositId, relWithdrawalId, relGameLogId, relReferralId, relSweepId, notes
-        ]);
+        ];
+        console.log(`${logPrefix} [DEBUG_SQL_EXEC] Query 3 (Insert Ledger): ${ledgerQuery.replace(/\s+/g, ' ').trim()} PARAMS: ${JSON.stringify(ledgerParams)}`);
+        const ledgerRes = await dbClient.query(ledgerQuery, ledgerParams);
         
         const ledgerId = ledgerRes.rows[0]?.ledger_id;
         console.log(`${logPrefix} ✅ Balance updated from ${oldBalanceLamports} to ${balanceAfter}. Ledger entry ID: ${ledgerId} created.`);
         return { success: true, newBalanceLamports: balanceAfter, oldBalanceLamports: oldBalanceLamports, ledgerId };
 
     } catch (err) {
-        console.error(`${logPrefix} ❌ Error: ${err.message} (Code: ${err.code})`, err.stack);
+        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message} (Code: ${err.code || 'N/A'})`, err.stack);
+        // Log the parameters that were passed to the main function as well for context
+        console.error(`${logPrefix} [DEBUG_PARAMS_FAILURE] Function called with: telegramId=${telegramId}, changeAmountLamports=${changeAmountLamports}, transactionType=${transactionType}, relatedIds=${JSON.stringify(relatedIds)}, notes=${notes}`);
         let errMsg = `Database error during balance/ledger update (Code: ${err.code || 'N/A'})`;
         if (err.message && err.message.toLowerCase().includes('violates check constraint') && err.message.toLowerCase().includes('balance')) {
             errMsg = 'Insufficient balance (check constraint violation).';
@@ -7617,8 +7611,6 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         return { success: false, error: errMsg, errorCode: err.code, oldBalanceLamports };
     }
 }
-console.log("[DB Ops] updateUserBalanceAndLedger (with aggregated totals) defined.");
-
 
 // --- Deposit Address & Deposit Operations ---
 
