@@ -8071,7 +8071,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 // --- UI Command Handler Implementations ---
 
 async function handleWalletCommand(msg) { 
-    const userId = String(msg.from.id);
+    const userId = String(msgOrCbMsg.from.telegram_id);
     const commandChatId = String(msg.chat.id); 
     const chatType = msg.chat.type;
     
