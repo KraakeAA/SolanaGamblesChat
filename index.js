@@ -8221,17 +8221,15 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* Reduced log */ }
 
-    // DM Redirection Logic
     if (String(commandChatId) !== userId) {
         if (msg.message_id && msg.chat?.id && String(msg.chat.id) !== userId) {
-            if (!msg.isCallbackRedirect) { // Avoid deleting if it's already a redirect placeholder
+            if (!msg.isCallbackRedirect) {
                 await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
             }
         }
         await safeSendMessage(commandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs\\.`, { parse_mode: 'MarkdownV2' });
     }
 
-    // Send loading message to DM
     const loadingDmMsgText = `Generating your personal Solana deposit address\\.\\.\\. This may take a moment\\. ⚙️`;
     const loadingDmMsg = await safeSendMessage(userId, loadingDmMsgText, { parse_mode: 'MarkdownV2' });
     const loadingDmMsgId = loadingDmMsg?.message_id;
@@ -8241,32 +8239,26 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // Check for existing active address or generate a new one
         const existingAddresses = await client.query(
             "SELECT public_key, expires_at FROM user_deposit_wallets WHERE user_telegram_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
             [userId]
         );
-        let depositAddress; 
-        let expiresAtDate; // Renamed from expiresAt for clarity
-        let newAddressGenerated = false;
+        let depositAddress; let expiresAtDate; let newAddressGenerated = false;
 
         if (existingAddresses.rows.length > 0) {
             depositAddress = existingAddresses.rows[0].public_key;
             expiresAtDate = new Date(existingAddresses.rows[0].expires_at);
         } else {
-            const newAddress = await generateUniqueDepositAddress(userId, client); // generateUniqueDepositAddress is from Part P1
+            const newAddress = await generateUniqueDepositAddress(userId, client);
             if (!newAddress) {
-                // This error will be caught by the main catch block
                 throw new Error("Failed to generate a new deposit address\\. Please try again or contact support\\.");
             }
             depositAddress = newAddress;
             newAddressGenerated = true;
-            // Fetch the expiry that was set in DB by generateUniqueDepositAddress
             const newAddrDetails = await client.query("SELECT expires_at FROM user_deposit_wallets WHERE public_key = $1 AND user_telegram_id = $2", [depositAddress, userId]);
             expiresAtDate = newAddrDetails.rows.length > 0 ? new Date(newAddrDetails.rows[0].expires_at) : new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS);
         }
 
-        // Update users table if a new address was generated or if it's different from the last one
         if (newAddressGenerated || (userObject.last_deposit_address !== depositAddress)) {
             await client.query(
                 `UPDATE users SET last_deposit_address = $1, last_deposit_address_generated_at = $2, updated_at = NOW() WHERE telegram_id = $3`,
@@ -8275,32 +8267,29 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         }
         await client.query('COMMIT');
 
-        // Prepare display strings
         const timeRemainingMinutes = Math.max(0, Math.floor((expiresAtDate.getTime() - Date.now()) / 60000));
-        const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', { // User-friendly date string
+        const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', {
             hour: '2-digit', minute: '2-digit',
-            day: '2-digit', month: 'short', // Using 'short' for month like "May"
-            // year: 'numeric', // Decided to omit year for brevity, can be added back
-            timeZone: 'UTC' // Specify UTC for consistency, or a target timezone like 'Europe/London'
-        }) + " UTC"; // Explicitly state UTC
+            day: '2-digit', month: 'short',
+            timeZone: 'UTC'
+        }) + " UTC";
 
         const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`;
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
 
-        // Construct the main deposit message
+        // --- MODIFIED depositMessage: Removed internal bolding from list items ---
         const depositMessage =
             `💰 *Your Personal Solana Deposit Address*\n\n` +
             `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
             `\`${escapeMarkdownV2(depositAddress)}\`\n` +
             `_\\(Tap the address above to copy\\)_\\n\n` +
-            // MODIFIED LINE: Using a formatted string for expiry instead of <t:...:R> entity
             `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemainingMinutes))} minutes* \\(expires around ${escapeMarkdownV2(expiryDateTimeString)}\\)\\. __Do not use after expiry\\.__\n` +
             `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
             `⚠️ *Important Information:*\n` +
-            `* Send *only SOL* to this address\\.\n` +
-            `* Do *not* send NFTs or other tokens\\.\n` +
+            `* Send SOL to this address\\.\n` + // Bolding removed from "only SOL"
+            `* Do not send NFTs or other tokens\\.\n` + // Bolding removed from "not"
             `* Deposits from exchanges may take longer to confirm\\.\n` +
-            `* This address is *unique to you* for this deposit session\\. Do not share it\\.\n` +
+            `* This address is unique to you for this deposit session\\. Do not share it\\.\n` + // Bolding removed from "unique to you"
             `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your \`/wallet\` menu\\.`;
 
         const keyboard = {
@@ -8311,7 +8300,6 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
             ]
         };
 
-        // Send or edit the message in DM
         if (loadingDmMsgId) {
             await bot.editMessageText(depositMessage, { chatId: userId, message_id: loadingDmMsgId, parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
         } else {
@@ -8319,11 +8307,8 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         }
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
-        // This console.error logs the original error.message, which might contain the unescaped character error from Telegram
         console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack?.substring(0, 500));
 
-        // This is the error message template sent to the user.
-        // It escapes the caught error.message and its own literal periods.
         const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`;
 
         const errorKeyboard = { inline_keyboard: [[{ text: "Try Again", callback_data: DEPOSIT_CALLBACK_ACTION }]] };
