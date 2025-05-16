@@ -2392,14 +2392,37 @@ async function handleStartCommand(msg, args) {
 }
 
 async function handleHelpCommand(originalMessageObject) {
-    const userId = String(originalMessageObject.from.id);
-    const chatId = String(originalMessageObject.chat.id); // This will be the DM chat ID if called from /start
+    // Robustly get userId from the received message object
+    let userId;
+    let userFirstName = originalMessageObject.from?.first_name;
+    let userUsername = originalMessageObject.from?.username;
+    let userLastName = originalMessageObject.from?.last_name;
 
-    const userObj = await getOrCreateUser(userId, originalMessageObject.from.username, originalMessageObject.from.first_name, originalMessageObject.from.last_name);
-    if (!userObj) {
-        await safeSendMessage(chatId, "😕 Oops! I couldn't fetch your profile to display help\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+    if (originalMessageObject.from && originalMessageObject.from.id) {
+        userId = String(originalMessageObject.from.id);
+    } else if (originalMessageObject.from && originalMessageObject.from.telegram_id) { // Check if it's a userObject from DB (e.g., via actionMsgContext)
+        userId = String(originalMessageObject.from.telegram_id);
+        // If it's a DB object, it might not have separate first_name, username directly on .from
+        // We rely on userObj fetched below to have the correct, fresh details.
+    } else {
+        console.error("[HelpCmd] CRITICAL: Could not determine userId from originalMessageObject.", stringifyWithBigInt(originalMessageObject).substring(0, 500));
+        const errorChatId = originalMessageObject.chat?.id || ADMIN_USER_ID; // Fallback to ADMIN_USER_ID if chat.id also missing
+        if (errorChatId) {
+             await safeSendMessage(errorChatId, "Sorry, an error occurred while trying to display help (user identification failed)\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+        }
         return;
     }
+
+    const chatId = String(originalMessageObject.chat.id); // Chat where help should be displayed or DM if redirected
+
+    // Get or create user to ensure we have up-to-date details for display name
+    // Pass details from originalMessageObject.from if available.
+    const userObj = await getOrCreateUser(userId, userUsername, userFirstName, userLastName);
+    if (!userObj) {
+        await safeSendMessage(chatId, "😕 Oops\\! I couldn't fetch your profile to display help\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    // Use playerRef from the potentially updated userObj
     const playerMention = getPlayerDisplayReference(userObj);
     const jackpotScoreInfo = TARGET_JACKPOT_SCORE ? escapeMarkdownV2(String(TARGET_JACKPOT_SCORE)) : 'a high score';
     const botNameEscaped = escapeMarkdownV2(BOT_NAME);
@@ -2407,7 +2430,7 @@ async function handleHelpCommand(originalMessageObject) {
     try {
         const selfInfo = await bot.getMe();
         if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { /* console.error(`[HelpCmd UID:${userId}] Could not fetch bot username: ${e.message}`); */ } // Reduced log
+    } catch (e) { /* Reduced log */ }
 
     const minBetUsdDisplay = `$${MIN_BET_USD_val.toFixed(2)}`;
     const maxBetUsdDisplay = `$${MAX_BET_USD_val.toFixed(2)}`;
@@ -2416,51 +2439,53 @@ async function handleHelpCommand(originalMessageObject) {
         const solPrice = await getSolUsdPrice();
         const minBetLamportsDynamic = convertUSDToLamports(MIN_BET_USD_val, solPrice);
         const maxBetLamportsDynamic = convertUSDToLamports(MAX_BET_USD_val, solPrice);
-        referenceLamportLimits = `\n_(Approx\\. SOL equivalent: ${escapeMarkdownV2(formatCurrency(minBetLamportsDynamic, 'SOL'))} to ${escapeMarkdownV2(formatCurrency(maxBetLamportsDynamic, 'SOL'))})_`;
+        // Ensure periods in formatted currency are handled by escapeMarkdownV2
+        referenceLamportLimits = `\n_\\(Approx\\. SOL equivalent: ${escapeMarkdownV2(formatCurrency(minBetLamportsDynamic, 'SOL'))} to ${escapeMarkdownV2(formatCurrency(maxBetLamportsDynamic, 'SOL'))}\\)_`;
     } catch (priceErr) {
-        // console.warn(`[HelpCmd UID:${userId}] Failed to get SOL price for dynamic ref limits: ${priceErr.message}`); // Reduced log
         if (typeof MIN_BET_AMOUNT_LAMPORTS_config !== 'undefined' && typeof MAX_BET_AMOUNT_LAMPORTS_config !== 'undefined') {
             const minLamportDisplay = formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL');
             const maxLamportDisplay = formatCurrency(MAX_BET_AMOUNT_LAMPORTS_config, 'SOL');
-            referenceLamportLimits = `\n_(Fixed Ref: ${escapeMarkdownV2(minLamportDisplay)} to ${escapeMarkdownV2(maxLamportDisplay)})_`;
+            referenceLamportLimits = `\n_\\(Fixed Ref: ${escapeMarkdownV2(minLamportDisplay)} to ${escapeMarkdownV2(maxLamportDisplay)}\\)_`;
         }
     }
 
+    // Fully updated helpTextParts with escaped '!' and '.' where necessary at end of sentences/phrases
     const helpTextParts = [
-        `🌟 Greetings, ${playerMention}\\! Welcome to the **${botNameEscaped} Casino Royale v${BOT_VERSION}**\\! 🌟`, // Escaped !
-        `\nYour ultimate destination for electrifying Solana\\-powered casino games and big wins\\! Here’s your guide to the action:`, // Escaped !
+        `🌟 Greetings, ${playerMention}\\! Welcome to the **${botNameEscaped} Casino Royale v${BOT_VERSION}**\\! 🌟`,
+        `\nYour ultimate destination for electrifying Solana\\-powered casino games and big wins\\! Here’s your guide to the action:`,
         `\n\n*🏦 Your Casino Account & Funds:*`,
         `▫️ \`/balance\` or \`/bal\` \\- Peek at your current treasure chest\\. *(Summary in groups, full details in DM)*`,
-        `▫️ \`/wallet\` \\- Your personal casino vault\\! Manage deposits, withdrawals, and link your SOL address\\. *(Best experienced in DM)*`, // Escaped !
+        `▫️ \`/wallet\` \\- Your personal casino vault\\! Manage deposits, withdrawals, and link your SOL address\\. *(Best experienced in DM)*`,
         `▫️ \`/deposit\` \\- Instantly get your unique SOL deposit address\\. *(Handled securely in DM)*`,
         `▫️ \`/withdraw\` \\- Cash out your SOL winnings smoothly\\. *(Handled securely in DM)*`,
         `▫️ \`/setwallet <YourSolanaAddress>\` \\- Link or update your SOL withdrawal wallet\\. *(Use this in DM for privacy)*`,
         `▫️ \`/history\` \\- Review your recent transaction and game history\\. *(Available in DM)*`,
-        `▫️ \`/referral\` \\- Grab your unique referral link & track your earnings from inviting friends\\! *(Details in DM)*`, // Escaped !
+        `▫️ \`/referral\` \\- Grab your unique referral link & track your earnings from inviting friends\\! *(Details in DM)*`,
         `\n*📖 Casino Info & Support:*`,
-        `▫️ \`/help\` \\- You're looking at it\\! This comprehensive guide to all things casino\\.`, // Escaped !
+        `▫️ \`/help\` \\- You're looking at it\\! This comprehensive guide to all things casino\\.`,
         `▫️ \`/rules\` or \`/info\` \\- Delve into the detailed rules for all our thrilling games\\. *(Interactive menu in DM)*`,
-        `▫️ \`/jackpot\` \\- Check the current eye\\-watering amount of the Dice Escalator Super Jackpot\\!`, // Escaped !
-        `▫️ \`/leaderboards\` \\- See who's topping the charts\\! *(Coming Soon\\!)*`, // Escaped ! twice
-        `\n*🎲 Available Games \\(Play in groups or PM against the Bot Dealer\\!\\):*`, // Escaped ! (parentheses are for grouping text, not Markdown entities here)
+        `▫️ \`/jackpot\` \\- Check the current eye\\-watering amount of the Dice Escalator Super Jackpot\\!`,
+        `▫️ \`/leaderboards\` \\- See who's topping the charts\\! *(Coming Soon\\!)*`,
+        `\n*🎲 Available Games \\(Play in groups or PM against the Bot Dealer\\!\\):*`,
         `▫️ \`/coinflip <bet>\` \\- 🪙 Classic Heads or Tails for two players\\.`,
         `▫️ \`/rps <bet>\` \\- 🪨📄✂️ Epic Rock Paper Scissors duel for two players\\.`,
-        `▫️ \`/de <bet>\` \\(or \`/diceescalator\`\\) \\- 🎲 Climb the score ladder for escalating wins & Jackpot glory\\! (vs\\. Bot)`, // Escaped !
+        `▫️ \`/de <bet>\` \\(or \`/diceescalator\`\\) \\- 🎲 Climb the score ladder for escalating wins & Jackpot glory\\! (vs\\. Bot)`,
         `▫️ \`/d21 <bet>\` \\(or \`/blackjack\`\\) \\- 🃏 Fast\\-paced Dice Blackjack against the Bot Dealer\\. (vs\\. Bot)`,
-        `▫️ \`/ou7 <bet>\` \\(or \`/overunder7\`\\) \\- 🎲 Bet on the sum: Over 7, Under 7, or Exactly 7\\! (vs\\. Bot)`, // Escaped !
+        `▫️ \`/ou7 <bet>\` \\(or \`/overunder7\`\\) \\- 🎲 Bet on the sum: Over 7, Under 7, or Exactly 7\\! (vs\\. Bot)`,
         `▫️ \`/duel <bet>\` \\(or \`/highroller\`\\) \\- ⚔️ High\\-stakes dice duel against the Bot Dealer\\. (vs\\. Bot)`,
-        `▫️ \`/ladder <bet>\` \\(or \`/greedsladder\`\\) \\- 🪜 Risk it all in Greed's Ladder \\- climb high, don't bust\\! (vs\\. Bot)`, // Escaped !
+        `▫️ \`/ladder <bet>\` \\(or \`/greedsladder\`\\) \\- 🪜 Risk it all in Greed's Ladder \\- climb high, don't bust\\! (vs\\. Bot)`,
         `▫️ \`/s7 <bet>\` \\(or \`/sevenout\`, \`/craps\`\\) \\- 🎲 Simplified & lightning\\-fast Craps action\\. (vs\\. Bot)`,
-        `▫️ \`/slot <bet>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- 🎰 Spin the Telegram Slot Machine for dazzling prizes\\! (vs\\. Bot)`, // Escaped !
+        `▫️ \`/slot <bet>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- 🎰 Spin the Telegram Slot Machine for dazzling prizes\\! (vs\\. Bot)`,
         `\n*💰 Betting Guide:*`,
-        `To place a bet, use the game command followed by your bet amount in *USD* (e\\.g\\., \`/d21 5\` for $5 USD), or *SOL* (e\\.g\\., \`/d21 0.1 sol\`, \`/d21 0.05\`), or *Lamports* (e\\.g\\. \`/d21 10000000 lamports\`).`,
-        `If no bet is specified, the game typically defaults to the minimum USD bet\\.`,
-        `Current Bet Limits (USD): *${escapeMarkdownV2(minBetUsdDisplay)}* to *${escapeMarkdownV2(maxBetUsdDisplay)}*\\.${referenceLamportLimits}`,
+        `To place a bet, use the game command followed by your bet amount in *USD* (e\\.g\\., \`/d21 5\` for $5 USD), or *SOL* (e\\.g\\., \`/d21 0\\.1 sol\`, \`/d21 0\\.05\`), or *Lamports* (e\\.g\\. \`/d21 10000000 lamports\\)\\.`, // Escaped period
+        `If no bet is specified, the game typically defaults to the minimum USD bet\\.`, // Escaped period
+        `Current Bet Limits (USD): *${escapeMarkdownV2(minBetUsdDisplay)}* to *${escapeMarkdownV2(maxBetUsdDisplay)}*\\.${referenceLamportLimits}`, // Escaped period
         `\n*🏆 Dice Escalator Super Jackpot:*`,
-        `Achieve a score of *${jackpotScoreInfo} or higher* in Dice Escalator AND beat the Bot Dealer to seize the magnificent Super Jackpot\\! A portion of every Dice Escalator bet fuels its growth\\.`, // Escaped !
-        ADMIN_USER_ID ? `For support or issues, feel free to contact an admin or our dedicated support channels\\. (Admin Ref: ${escapeMarkdownV2(String(ADMIN_USER_ID).slice(0, 4))}\\.\\.\\.)` : `For support, please refer to group administrators or the casino's official support channels\\.`,
+        `Achieve a score of *${jackpotScoreInfo} or higher* in Dice Escalator AND beat the Bot Dealer to seize the magnificent Super Jackpot\\! A portion of every Dice Escalator bet fuels its growth\\.`, // Escaped period
+        ADMIN_USER_ID ? `For support or issues, feel free to contact an admin or our dedicated support channels\\. (Admin Ref: ${escapeMarkdownV2(String(ADMIN_USER_ID).slice(0, 4))}\\.\\.\\.)` : `For support, please refer to group administrators or the casino's official support channels\\.`, // Escaped periods
         `\n💡 *Pro Tip:* For sensitive actions like managing your wallet or viewing personal history, it's always best to DM me directly: @${escapeMarkdownV2(botUsername)}`
     ];
+
     const helpMessage = helpTextParts.filter(Boolean).join('\n');
     const helpKeyboard = {
         inline_keyboard: [
@@ -2469,6 +2494,7 @@ async function handleHelpCommand(originalMessageObject) {
         ]
     };
 
+    // Send the message. safeSendMessage will handle its own Markdown fallback if there's still an issue.
     await safeSendMessage(chatId, helpMessage, { parse_mode: 'MarkdownV2', reply_markup: helpKeyboard, disable_web_page_preview: true });
 }
 
@@ -7916,7 +7942,8 @@ async function handleWalletAddressInput(msg, currentState) {
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_address' || dmChatId !== userId) {
         console.error(`${logPrefix} Invalid state or context for wallet address input. State ChatID: ${currentState?.chatId}, Msg ChatID: ${dmChatId}, State: ${currentState?.state}`);
         clearUserState(userId);
-        await safeSendMessage(dmChatId, "⚙️ There was an issue processing your address input. Please try linking your wallet again via the `/wallet` menu or `/setwallet` command.", { parse_mode: 'MarkdownV2' });
+        // Escaped period
+        await safeSendMessage(dmChatId, "⚙️ There was an issue processing your address input\\. Please try linking your wallet again via the \`/wallet\` menu or \`/setwallet\` command\\.", { parse_mode: 'MarkdownV2' });
         return;
     }
 
@@ -7924,42 +7951,64 @@ async function handleWalletAddressInput(msg, currentState) {
     if (originalPromptMessageId && bot) { await bot.deleteMessage(dmChatId, originalPromptMessageId).catch(() => {}); }
     clearUserState(userId);
 
-    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`... Please hold on a moment.`;
+    // This is the "linkingMsgText" that previously caused a '.' or '!' error.
+    // Ensure any static punctuation is escaped.
+    // Using escapeMarkdownV2 on potentialNewAddress is correct.
+    // The "..." ellipses don't need escaping. Periods at the end of sentences do.
+    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on a moment\\.`; // Escaped trailing period.
+    
     const linkingMsg = await safeSendMessage(dmChatId, linkingMsgText, { parse_mode: 'MarkdownV2' });
     const displayMsgIdInDm = linkingMsg ? linkingMsg.message_id : null;
 
     try {
         if (!isValidSolanaAddress(potentialNewAddress)) {
-            throw new Error("The provided address has an invalid Solana address format. Please double-check and try again.");
+            // Escaped periods in this error message string.
+            throw new Error("The provided address has an invalid Solana address format\\. Please double\\-check and try again\\.");
         }
 
-        const linkResult = await linkUserWallet(userId, potentialNewAddress);
+        const linkResult = await linkUserWallet(userId, potentialNewAddress); // This function (Part 2) also sends messages.
+                                                                            // We need to ensure ITS messages are also correctly escaped.
         let feedbackText;
         const finalKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
 
         if (linkResult.success) {
-            feedbackText = `✅ Success! ${escapeMarkdownV2(linkResult.message || `Wallet \`${potentialNewAddress}\` has been successfully linked to your account.`)}`;
+            // linkResult.message ALREADY CONTAINS MARKDOWN AND IS ESCAPED BY linkUserWallet.
+            // So, we should use it as is if it's MarkdownV2 compatible, or re-escape if it's plain text meant for Markdown.
+            // Assuming linkUserWallet's success message is already good for MarkdownV2:
+            feedbackText = linkResult.message || `✅ Success\\! Wallet \`${escapeMarkdownV2(potentialNewAddress)}\` has been successfully linked to your account\\.`; // Escaped ! and .
+            
             if (originalGroupChatId && originalGroupMessageId && bot) {
                 const userForGroupMsg = await getOrCreateUser(userId);
-                await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)} has successfully updated their linked wallet.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
+                // Escaped period
+                await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)} has successfully updated their linked wallet\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
             }
         } else {
-            feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`.\n*Reason:* ${escapeMarkdownV2(linkResult.error || "Please ensure the address is valid and not already in use.")}`;
+            // linkResult.error might contain Telegram API errors with special characters. So, escape it.
+            // Also escape periods in our static text.
+            feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Reason:* ${escapeMarkdownV2(linkResult.error || "Please ensure the address is valid and not already in use\\.")}`;
+            
             if (originalGroupChatId && originalGroupMessageId && bot) {
                 const userForGroupMsg = await getOrCreateUser(userId);
-                await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)}, there was an issue linking your wallet. Please check my DM for details and try again.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
+                // Escaped period
+                await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)}, there was an issue linking your wallet\\. Please check my DM for details and try again\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
             }
         }
 
         if (displayMsgIdInDm && bot) {
+            // The feedbackText might be pre-formatted with Markdown from linkUserWallet, or we format it here.
+            // If linkUserWallet's message is already MarkdownV2, parse_mode should be 'MarkdownV2'.
+            // If we construct it here with escapeMarkdownV2, parse_mode should be 'MarkdownV2'.
             await bot.editMessageText(feedbackText, { chat_id: dmChatId, message_id: displayMsgIdInDm, parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
         } else {
             await safeSendMessage(dmChatId, feedbackText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
         }
-    } catch (e) {
+    } catch (e) { // This 'e' could be from isValidSolanaAddress or other issues BEFORE linkUserWallet
         console.error(`${logPrefix} Error linking wallet ${potentialNewAddress}: ${e.message}`);
-        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`.\n*Details:* ${escapeMarkdownV2(e.message || "An unexpected error occurred.")}\nPlease ensure it's a valid Solana public key and try again.`;
+        // e.message itself might contain special characters. So, escape it.
+        // Also escape periods in our static text.
+        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Details:* ${escapeMarkdownV2(e.message || "An unexpected error occurred\\.")}\nPlease ensure it's a valid Solana public key and try again\\.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Try Again (Wallet Menu)', callback_data: 'menu:wallet' }]] };
+        
         if (displayMsgIdInDm && bot) {
             await bot.editMessageText(errorTextToDisplay, { chat_id: dmChatId, message_id: displayMsgIdInDm, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
         } else {
@@ -7967,7 +8016,8 @@ async function handleWalletAddressInput(msg, currentState) {
         }
         if (originalGroupChatId && originalGroupMessageId && bot) {
             const userForGroupMsg = await getOrCreateUser(userId);
-            await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)}, there was an error processing your wallet address. Please check my DM.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
+            // Escaped period
+            await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)}, there was an error processing your wallet address\\. Please check my DM\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
         }
     }
 }
