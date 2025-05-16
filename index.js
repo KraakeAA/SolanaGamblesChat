@@ -8205,59 +8205,115 @@ async function handleSetWalletCommand(msg, args) {
     }
 }
 
-async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msg.from.id);
-    const commandChatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
+/**
+ * Handles the /deposit command and 'quick_deposit_action' / 'menu:deposit' callbacks.
+ * Shows deposit address in the user's DM.
+ * Mimics the structure and error handling of the provided "working example".
+ * @param {import('node-telegram-bot-api').Message | object} msgOrCbMsg - Message or a mock message object from a callback.
+ * @param {Array<string>} args - Command arguments (usually empty for this).
+ * @param {string | null} [correctUserIdFromCb=null] - User ID if the call originates from a callback.
+ */
+async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb = null) {
+    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
+    // For deposit, the final interaction and message display should always be in the user's DM.
+    const targetDmChatId = userId;
+    const originalCommandChatId = String(msgOrCbMsg.chat.id); // Where the command/callback initially occurred
+    const originalMessageId = msgOrCbMsg.message_id;
+    const chatType = msgOrCbMsg.chat.type;
+    const isFromCallbackOrRedirect = !!correctUserIdFromCb || msgOrCbMsg.isCallbackRedirect;
 
-    let userObject = await getOrCreateUser(userId, msg.from?.username, msg.from?.first_name, msg.from?.last_name);
+    const logPrefix = `[DepositCmd UID:${userId} OrigChat:${originalCommandChatId}]`;
+
+    let userObject = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!userObject) {
-        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(targetDmChatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
         return;
     }
-    const playerRef = getPlayerDisplayReference(userObject); // playerRef is already escaped by this function
-    clearUserState(userId);
-    const logPrefix = `[DepositCmd UID:${userId} OrigChat:${commandChatId}]`;
+    const playerRef = getPlayerDisplayReference(userObject); // playerRef is already escaped
+    clearUserState(userId); // Clear any previous state
+
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* Reduced log */ }
 
-    // DM Redirection Logic
-    if (String(commandChatId) !== userId) {
-        if (msg.message_id && msg.chat?.id && String(msg.chat.id) !== userId) {
-            if (!msg.isCallbackRedirect) {
-                await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
-            }
-        }
-        await safeSendMessage(commandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs\\.`, { parse_mode: 'MarkdownV2' });
+    // If command/callback was from a group and not yet handled by DM redirection logic in main callback router
+    if (originalCommandChatId !== targetDmChatId && !msgOrCbMsg.isCallbackRedirect) {
+        if (originalMessageId) await bot.deleteMessage(originalCommandChatId, originalMessageId).catch(() => {});
+        await safeSendMessage(originalCommandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs.`, { parse_mode: 'MarkdownV2' });
     }
 
-    // Loading message - keeping this one with its minimal, known-good escaping
-    const loadingDmMsgText = `Generating your personal Solana deposit address\\.\\.\\. This may take a moment\\. ⚙️`;
-    const loadingDmMsg = await safeSendMessage(userId, loadingDmMsgText, { parse_mode: 'MarkdownV2' });
-    const loadingDmMsgId = loadingDmMsg?.message_id;
-    let client = null;
+    // --- Initial "Generating..." Message in DM ---
+    let workingMessageId;
+    const generatingText = "⏳ Generating your deposit address\\.\\ Please wait\\.\\.\\.";
 
+    // If the original message (that triggered this) was in the DM and was a command, delete it.
+    if (originalCommandChatId === targetDmChatId && originalMessageId && !isFromCallbackOrRedirect) {
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
+    }
+
+    // Determine if we can edit an existing message in the DM or need to send a new one.
+    // If it's from a callback that already edited the group message (isCallbackRedirect = true), or a new command in DM.
+    if (msgOrCbMsg.isCallbackRedirect || (originalCommandChatId === targetDmChatId && !isFromCallbackOrRedirect)) {
+        const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+        workingMessageId = tempMsg?.message_id;
+    } else if (isFromCallbackOrRedirect && originalMessageId && originalCommandChatId === targetDmChatId) {
+        // This case is for when a callback button (e.g., from /wallet) is pressed IN the DM.
+        // We try to edit that button message.
+        try {
+            await bot.editMessageText(generatingText, { chat_id: targetDmChatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } });
+            workingMessageId = originalMessageId;
+        } catch (editError) {
+            if (!editError.message?.includes("message is not modified")) {
+                console.warn(`${logPrefix} Failed to edit DM message ${originalMessageId} for generating state, sending new. Error: ${editError.message}`);
+                const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+                workingMessageId = tempMsg?.message_id;
+            } else {
+                workingMessageId = originalMessageId;
+            }
+        }
+    } else {
+         // Fallback: if command was in DM and not a callback, or if context is unclear, send new.
+        const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+        workingMessageId = tempMsg?.message_id;
+    }
+
+
+    if (!workingMessageId) {
+        console.error(`${logPrefix} Failed to establish message context (workingMessageId) for deposit address display in DM.`);
+        // Avoid sending another error message if the "generating" message itself failed.
+        return;
+    }
+    // --- End of Initial Message Handling ---
+
+    let client = null;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        const existingAddresses = await client.query(
+        const confirmationLevelEscaped = escapeMarkdownV2(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed');
+
+        // Using P3's DB schema for existing addresses
+        const existingAddressesRes = await client.query(
             "SELECT public_key, expires_at FROM user_deposit_wallets WHERE user_telegram_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
             [userId]
         );
+
         let depositAddress;
         let expiresAtDate;
         let newAddressGenerated = false;
 
-        if (existingAddresses.rows.length > 0) {
-            depositAddress = existingAddresses.rows[0].public_key;
-            expiresAtDate = new Date(existingAddresses.rows[0].expires_at);
+        if (existingAddressesRes.rows.length > 0) {
+            const existing = existingAddressesRes.rows[0];
+            depositAddress = existing.public_key;
+            expiresAtDate = new Date(existing.expires_at);
+            // console.log(`${logPrefix} Found active existing address: ${depositAddress}`);
         } else {
-            const newAddress = await generateUniqueDepositAddress(userId, client);
-            if (!newAddress) {
-                throw new Error("Failed to generate a new deposit address. Please try again or contact support."); // Raw error for catch block
+            // console.log(`${logPrefix} No active address found. Generating new one.`);
+            // Using P3's integrated generateUniqueDepositAddress (from Part P1)
+            const newAddressStr = await generateUniqueDepositAddress(userId, client); // Pass client for transaction
+            if (!newAddressStr) {
+                throw new Error("Failed to generate a new deposit address. Please try again or contact support.");
             }
-            depositAddress = newAddress;
+            depositAddress = newAddressStr;
             newAddressGenerated = true;
             const newAddrDetails = await client.query("SELECT expires_at FROM user_deposit_wallets WHERE public_key = $1 AND user_telegram_id = $2", [depositAddress, userId]);
             expiresAtDate = newAddrDetails.rows.length > 0 ? new Date(newAddrDetails.rows[0].expires_at) : new Date(Date.now() + DEPOSIT_ADDRESS_EXPIRY_MS);
@@ -8271,73 +8327,73 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         }
         await client.query('COMMIT');
 
-        const timeRemainingMinutes = Math.max(0, Math.floor((expiresAtDate.getTime() - Date.now()) / 60000));
+        const timeRemainingMs = expiresAtDate.getTime() - Date.now();
+        const timeRemainingMinutes = Math.max(1, Math.ceil(timeRemainingMs / (60 * 1000)));
         const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', {
-            hour: '2-digit', minute: '2-digit',
-            day: '2-digit', month: 'short',
-            timeZone: 'UTC'
+            hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short', timeZone: 'UTC' // Example, adjust as needed
         }) + " UTC";
 
-        const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`; // playerRef is already escaped
+        const escapedAddress = escapeMarkdownV2(depositAddress);
+        const timeRemainingMinutesEscaped = escapeMarkdownV2(String(timeRemainingMinutes));
+        const expiryDateTimeStringEscaped = escapeMarkdownV2(expiryDateTimeString);
+
+        const message = `💰 *Your ${newAddressGenerated ? 'New' : 'Active'} Deposit Address*\n\n` +
+                        `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
+                        `\`${escapedAddress}\`\n` +
+                        `_\\(Tap the address above to copy\\)_\\n\n` + // Correctly escaped parentheses
+                        `This address is valid for approximately *${timeRemainingMinutesEscaped} minutes* \\(expires around ${expiryDateTimeStringEscaped}\\)\\. __Do not use after expiry\\.__\n\n` +
+                        `Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\.\n\n` +
+                        `⚠️ *Important Information:*\n` +
+                        `* Send only SOL to this address\\. Do not send NFTs or other tokens\\.\n` +
+                        `* Exchange deposits may take longer to confirm\\.\n` +
+                        `* Address is unique to you for this deposit session\\. Do not share it\\.\n` +
+                        `* To generate a new address later, please use the \`/deposit\` command or "Deposit SOL" option in your \`/wallet\` menu\\.`;
+
+        const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + userObject.first_name || playerRef)}`; // playerRef is already escaped
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
 
-        // --- DEBUG LOGS FOR VARIABLES ---
-        console.log(`--- DEBUG Vars for Deposit Message (UID: ${userId}) ---`);
-        console.log(`playerRef: "${playerRef}"`); // Already escaped by getPlayerDisplayReference
-        console.log(`depositAddress (raw): "${depositAddress}"`);
-        console.log(`timeRemainingMinutes (raw): ${timeRemainingMinutes}`);
-        console.log(`expiryDateTimeString (raw): "${expiryDateTimeString}"`);
-        const resolvedConfirmationLevel = String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed');
-        console.log(`DEPOSIT_CONFIRMATION_LEVEL (resolved, raw): "${resolvedConfirmationLevel}"`);
-        console.log("--- END DEBUG ---");
+        const depositKeyboard = [
+            [{ text: "🔍 View on Solscan", url: `https://solscan.io/account/${depositAddress}` }],
+            [{ text: "📱 Scan QR Code", url: qrCodeUrl }],
+            [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
+        ];
+        const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard}, disable_web_page_preview: true };
 
-        // --- ULTRA SIMPLE depositMessage ---
-        const depositMessage =
-            `Your Personal Solana Deposit Address\n\n` +
-            `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
-            `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-            `(Tap the address above to copy)\n\n` +
-            `This address is valid for approximately ${escapeMarkdownV2(String(timeRemainingMinutes))} minutes (expires around ${escapeMarkdownV2(expiryDateTimeString)}). Do not use after expiry.\n` +
-            `Confirmation Level: \`${escapeMarkdownV2(resolvedConfirmationLevel)}\`\n\n` +
-            `Important Information:\n` +
-            `- Send only SOL to this address.\n` +
-            `- Do not send NFTs or other tokens.\n` +
-            `- Exchange deposits may take longer to confirm.\n` +
-            `- Address is unique to you for this deposit session. Do not share it.\n` +
-            `- To generate a new address later, please use the /deposit command or the "Deposit SOL" option in your /wallet menu.`;
+        await bot.editMessageText(message, {chat_id: targetDmChatId, message_id: workingMessageId, ...options}).catch(async (e) => {
+            if (e.message && (e.message.toLowerCase().includes("can't parse entities") || e.message.toLowerCase().includes("bad request"))) {
+                console.error(`❌ ${logPrefix} PARSE ERROR displaying deposit address! Message attempted (first 200 chars): ${message.substring(0,200)}`);
+                const plainMessage = `Your ${newAddressGenerated ? 'New' : 'Active'} Deposit Address (Tap to copy):\n${depositAddress}\n\nExpires in approx. ${timeRemainingMinutes} minutes (around ${expiryDateTimeString}). Confirmations: ${DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'}.\nImportant: Valid for this session only. Do not use after expiry. Use /deposit for new address. Send SOL only.`;
+                const plainKeyboard = {inline_keyboard: [[{ text: 'Back to Wallet', callback_data: 'menu:wallet' }]]}; // Simplified keyboard for plain text
+                await safeSendMessage(targetDmChatId, plainMessage, { reply_markup: plainKeyboard, disable_web_page_preview: true });
+                // If the original message was the "generating" message and we failed to edit it, we just sent a new one.
+                // No need to delete workingMessageId here as it might have been the generating message that failed.
+            } else if (!e.message?.includes("message is not modified")) {
+                console.warn(`${logPrefix} Failed to edit message ${workingMessageId} with deposit address, sending new. Error: ${e.message}`);
+                await safeSendMessage(targetDmChatId, message, options); // Try with safeSendMessage
+                if (workingMessageId) await bot.deleteMessage(targetDmChatId, workingMessageId).catch(()=>{}); // Clean up old "generating" msg if new one sent
+            }
+        });
 
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: "🔍 View on Solscan", url: `https://solscan.io/account/${depositAddress}` }],
-                [{ text: "📱 Scan QR Code", url: qrCodeUrl }],
-                [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
-            ]
-        };
-
-        if (loadingDmMsgId) {
-            await bot.editMessageText(depositMessage, { chatId: userId, message_id: loadingDmMsgId, parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
-        } else {
-            await safeSendMessage(userId, depositMessage, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
-        }
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
         console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack?.substring(0, 500));
 
         const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`;
+        const errorKeyboardButtons = [[{ text: "Try Again", callback_data: DEPOSIT_CALLBACK_ACTION }, { text: "💳 Wallet", callback_data: "menu:wallet" }]];
+        const errorOptions = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: errorKeyboardButtons} };
 
-        const errorKeyboard = { inline_keyboard: [[{ text: "Try Again", callback_data: DEPOSIT_CALLBACK_ACTION }]] };
-        if (loadingDmMsgId) {
-            await bot.editMessageText(errorText, { chatId: userId, message_id: loadingDmMsgId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard }).catch(async () => {
-                await safeSendMessage(userId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
-            });
+        if (workingMessageId) {
+            await bot.editMessageText(errorText, { chat_id: targetDmChatId, message_id: workingMessageId, ...errorOptions })
+                .catch(async () => { // If edit fails, send a new message
+                    await safeSendMessage(targetDmChatId, errorText, errorOptions);
+                });
         } else {
-            await safeSendMessage(userId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+            await safeSendMessage(targetDmChatId, errorText, errorOptions);
         }
     } finally {
         if (client) client.release();
     }
 }
-
 async function handleReferralCommand(msg) { 
     const userId = String(msg.from.id);
     const commandChatId = String(msg.chat.id);
