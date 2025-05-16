@@ -7,20 +7,20 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Pool } from 'pg';
 import express from 'express';
 import {
-    Connection, 
+    Connection,
     PublicKey,
     LAMPORTS_PER_SOL,
     Keypair,
     Transaction,
     SystemProgram,
-    sendAndConfirmTransaction, 
+    sendAndConfirmTransaction,
     ComputeBudgetProgram,
-    SendTransactionError, 
-    TransactionExpiredBlockheightExceededError 
+    SendTransactionError,
+    TransactionExpiredBlockheightExceededError
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import * as crypto from 'crypto';
-import { createHash } from 'crypto'; 
+import * as crypto from 'crypto'; // For createHash and randomBytes
+import { createHash } from 'crypto';
 import PQueue from 'p-queue';
 import { Buffer } from 'buffer';
 import bip39 from 'bip39';
@@ -28,10 +28,10 @@ import { derivePath } from 'ed25519-hd-key';
 import nacl from 'tweetnacl';
 import axios from 'axios';
 
-import RateLimitedConnection from './lib/solana-connection.js'; // Assuming this path is correct relative to your project structure
+// Assuming this path is correct relative to your project structure
+import RateLimitedConnection from './lib/solana-connection.js';
 
-// console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)..."); // Removed
-
+// Helper function to stringify objects with BigInts and Functions for logging
 function stringifyWithBigInt(obj) {
   return JSON.stringify(obj, (key, value) => {
     if (typeof value === 'bigint') {
@@ -41,95 +41,98 @@ function stringifyWithBigInt(obj) {
       return `[Function: ${value.name || 'anonymous'}]`;
     }
     if (value === undefined) {
-      return 'undefined_value';
+      return 'undefined_value'; // Represent undefined explicitly
     }
     return value;
   }, 2);
 }
-// console.log("[Global Utils] stringifyWithBigInt helper function defined."); // Removed
 
+// --- Environment Variable Defaults ---
 const CASINO_ENV_DEFAULTS = {
   'DB_POOL_MAX': '25',
   'DB_POOL_MIN': '5',
   'DB_IDLE_TIMEOUT': '30000',
   'DB_CONN_TIMEOUT': '5000',
-  'DB_SSL': 'true',
-  'DB_REJECT_UNAUTHORIZED': 'true', 
+  'DB_SSL': 'true', // Defaulting to true for security
+  'DB_REJECT_UNAUTHORIZED': 'true', // Defaulting to true for security
   'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000', 
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', 
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01', // 1%
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000',  // 0.005 SOL
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
   'COMMAND_COOLDOWN_MS': '1500',
-  'JOIN_GAME_TIMEOUT_MS': '120000', 
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', 
-  'TARGET_JACKPOT_SCORE': '100',    
+  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
+  'TARGET_JACKPOT_SCORE': '100',
   'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
-  'DICE_ESCALATOR_BUST_ON': '1',    
-  'DICE_21_TARGET_SCORE': '21',        
-  'DICE_21_BOT_STAND_SCORE': '17',     
-  'OU7_DICE_COUNT': '2',               
-  'OU7_PAYOUT_NORMAL': '1',            
-  'OU7_PAYOUT_SEVEN': '4',             
-  'DUEL_DICE_COUNT': '2',              
-  'LADDER_ROLL_COUNT': '5',            
-  'LADDER_BUST_ON': '1',               
+  'DICE_ESCALATOR_BUST_ON': '1',
+  'DICE_21_TARGET_SCORE': '21',
+  'DICE_21_BOT_STAND_SCORE': '17',
+  'OU7_DICE_COUNT': '2',
+  'OU7_PAYOUT_NORMAL': '1', // Pays 1x the bet (total 2x back)
+  'OU7_PAYOUT_SEVEN': '4',  // Pays 4x the bet (total 5x back)
+  'DUEL_DICE_COUNT': '2',
+  'LADDER_ROLL_COUNT': '5',
+  'LADDER_BUST_ON': '1',
   'RULES_CALLBACK_PREFIX': 'rules_game_',
   'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
   'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
   'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
   'MAX_RETRY_POLLING_DELAY': '60000', 
-  'INITIAL_RETRY_POLLING_DELAY': '5000', 
+  'INITIAL_RETRY_POLLING_DELAY': '5000',
   'BOT_NAME': 'Solana Casino Royale',
-  'DICE_ROLL_POLL_INTERVAL_MS': '2500', 
-  'DICE_ROLL_POLL_ATTEMPTS': '24',     
+  'DICE_ROLL_POLL_INTERVAL_MS': '2500', // How often to check DB for dice roll result
+  'DICE_ROLL_POLL_ATTEMPTS': '24',      // Max attempts (24 * 2.5s = 60 seconds timeout)
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', 
-  'RPC_URLS': '', 
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', // Default public RPC
+  'RPC_URLS': '', // Comma-separated list of additional RPCs
   'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed', 
-  'WITHDRAWAL_FEE_LAMPORTS': '10000', 
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000', 
-  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', 
-  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', 
+  'DEPOSIT_CONFIRMATIONS': 'confirmed', // Desired confirmation level for deposits
+  'WITHDRAWAL_FEE_LAMPORTS': '10000',    // 0.00001 SOL
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
+  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',  // For payouts
+  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',             // For payouts
   'PAYOUT_JOB_RETRIES': '3',
   'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
-  'SWEEP_INTERVAL_MS': '300000', 
+  'SWEEP_INTERVAL_MS': '300000',                    // 5 minutes
   'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', 
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', 
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', 
-  'SWEEP_ADDRESS_DELAY_MS': '1500', 
-  'SWEEP_RETRY_ATTEMPTS': '2', 
+  // **IMPORTANT CHANGE**: This is now just for the transaction fee of the sweep itself.
+  // Rent is calculated dynamically in sweepDepositAddresses.
+  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',             // 0.00005 SOL (covers base fee + priority)
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',             // For sweep transactions
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',      // For sweep transactions
+  'SWEEP_ADDRESS_DELAY_MS': '1500',                 // Delay between processing each address in sweep batch
+  'SWEEP_RETRY_ATTEMPTS': '2',                      // For individual sweep transaction attempts
   'SWEEP_RETRY_DELAY_MS': '10000',
-  'RPC_MAX_CONCURRENT': '10', 
-  'RPC_RETRY_BASE_DELAY': '750', 
-  'RPC_MAX_RETRIES': '4', 
-  'RPC_RATE_LIMIT_COOLOFF': '3000', 
-  'RPC_RETRY_MAX_DELAY': '25000', 
-  'RPC_RETRY_JITTER': '0.3', 
-  'RPC_COMMITMENT': 'confirmed', 
-  'PAYOUT_QUEUE_CONCURRENCY': '4', 
-  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', 
-  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', 
-  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', 
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 
-  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 
-  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', 
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', 
-  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', 
-  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', 
-  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), 
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), 
-  'MAX_PROCESSED_TX_CACHE': '10000', 
-  'INIT_DELAY_MS': '7000', 
-  'ENABLE_PAYMENT_WEBHOOKS': 'false', 
-  'PAYMENT_WEBHOOK_PORT': '3000', 
-  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', 
+  'RPC_MAX_CONCURRENT': '10',
+  'RPC_RETRY_BASE_DELAY': '750',
+  'RPC_MAX_RETRIES': '4',
+  'RPC_RATE_LIMIT_COOLOFF': '3000',
+  'RPC_RETRY_MAX_DELAY': '25000',
+  'RPC_RETRY_JITTER': '0.3',
+  'RPC_COMMITMENT': 'confirmed', // Default commitment for Solana connection
+  'PAYOUT_QUEUE_CONCURRENCY': '4',
+  'PAYOUT_QUEUE_TIMEOUT_MS': '90000',
+  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5',
+  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000',
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', // To respect Telegram rate limits
+  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', // Interval between sends
+  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',    // Max 1 message per interval
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',    // Check for new deposits every 15s
+  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75',// How many active deposit addrs to check per cycle
+  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', // How many signatures to fetch per address
+  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), // 15 minutes for linked wallet cache
+  // DEPOSIT_ADDR_CACHE_TTL_MS now depends on DEPOSIT_ADDRESS_EXPIRY_MINUTES from CASINO_ENV_DEFAULTS
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), // Deposit address expiry + 5 min buffer
+  'MAX_PROCESSED_TX_CACHE': '10000', // Max size for processedDepositTxSignatures set
+  'INIT_DELAY_MS': '7000', // General delay for starting background tasks
+  'ENABLE_PAYMENT_WEBHOOKS': 'false',
+  'PAYMENT_WEBHOOK_PORT': '3000',
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
   'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
+  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(), // 3 minutes
   'MIN_BET_USD': '0.50',
   'MAX_BET_USD': '100.00',
 };
@@ -138,42 +141,43 @@ const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS 
 
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
   if (process.env[key] === undefined) {
-    // console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`); // Reduced log
     process.env[key] = defaultValue;
   }
 });
 
+// --- Core Configuration Constants ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID; // Optional, for admin notifications
 const DATABASE_URL = process.env.DATABASE_URL;
 const BOT_NAME = process.env.BOT_NAME; 
 
-const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
-const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY;
-const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
+// Payment System Keys & Seeds
+const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE; // BIP39 Mnemonic
+const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY; // bs58 encoded secret key for main payout/sweep wallet
+const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY; // Optional, for referral payouts
 
-// Dice Roll Polling Constants
+// Dice Roll Polling Constants (from CASINO_ENV_DEFAULTS)
 const DICE_ROLL_POLLING_INTERVAL_MS = parseInt(process.env.DICE_ROLL_POLL_INTERVAL_MS, 10);
 const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLL_ATTEMPTS, 10);
 
-// Game Specific Constants
+// Game Specific Constants (from CASINO_ENV_DEFAULTS)
 const OU7_DICE_COUNT = parseInt(process.env.OU7_DICE_COUNT, 10);
-const OU7_PAYOUT_NORMAL = parseFloat(process.env.OU7_PAYOUT_NORMAL); 
-const OU7_PAYOUT_SEVEN = parseFloat(process.env.OU7_PAYOUT_SEVEN);  
+const OU7_PAYOUT_NORMAL = parseFloat(process.env.OU7_PAYOUT_NORMAL);
+const OU7_PAYOUT_SEVEN = parseFloat(process.env.OU7_PAYOUT_SEVEN);
 const DUEL_DICE_COUNT = parseInt(process.env.DUEL_DICE_COUNT, 10);
 const LADDER_ROLL_COUNT = parseInt(process.env.LADDER_ROLL_COUNT, 10);
 const LADDER_BUST_ON = parseInt(process.env.LADDER_BUST_ON, 10);
-const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10); 
+const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10);
 
 const LADDER_PAYOUTS = [
-    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },    
-    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },    
-    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },  
-    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" }, 
-    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" }   
+    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },    // e.g. Bet 1, Win 1 (Total 2 back)
+    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },    // Bet 1, Win 2 (Total 3 back)
+    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },
+    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" },
+    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" } 
 ];
 
-
+// Keypair Initializations
 let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
     try {
@@ -200,7 +204,12 @@ if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
+if (!REFERRAL_PAYOUT_KEYPAIR) { // Fallback if not set or invalid
+    REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
+}
 
+
+// RPC Endpoint Configuration
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
     .split(',')
     .map(u => u.trim())
@@ -212,7 +221,13 @@ let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
     combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
+if (combinedRpcEndpointsForConnection.length === 0) { // Absolute fallback if nothing is provided
+    console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). Using default public Solana RPC as a last resort.");
+    combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
+}
 
+
+// More Constants derived from ENV
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
@@ -243,14 +258,13 @@ const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCas
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 
+
 // Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 
-if (combinedRpcEndpointsForConnection.length === 0) {
-    console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). RPC functionality may be impaired.");
-}
+// combinedRpcEndpointsForConnection check already done and includes a fallback.
 
 const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
 for (const [key, value] of Object.entries(criticalGameScores)) {
@@ -267,7 +281,7 @@ if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
     console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
     process.exit(1);
 }
-if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
+if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) { // Ensure it's positive
     console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
     process.exit(1);
 }
@@ -286,21 +300,18 @@ if (isNaN(OU7_PAYOUT_SEVEN) || OU7_PAYOUT_SEVEN < 0) {
     console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);
 }
 
-// console.log("✅ BOT_TOKEN loaded."); // Reduced log
 if (ADMIN_USER_ID) console.log(`ℹ️ Admin User ID: ${ADMIN_USER_ID} loaded.`);
-// else console.log("ℹ️ INFO: No ADMIN_USER_ID set (optional)."); // Reduced log
-// console.log(`ℹ️ Payment System: DEPOSIT_MASTER_SEED_PHRASE is set.`); // Reduced log
-// console.log(`📡 Using RPC Endpoints (from env): [${combinedRpcEndpointsForConnection.join(', ')}]`); // Reduced log
-// console.log(`🎲 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}`); // Reduced log
 
-
+// Function to format lamports to SOL string for logs (more precision)
 function formatLamportsToSolStringForLog(lamports) {
     if (typeof lamports !== 'bigint') {
         try { lamports = BigInt(lamports); }
         catch (e) { return 'Invalid_Lamports'; }
     }
+    // Use toFixed with SOL_DECIMALS for consistent decimal places in logs
     return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
+
 
 // Summarized Startup Config Log
 console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
@@ -313,13 +324,13 @@ console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
   SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
   Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
+  Sweep Fee Buffer (for TX cost): ${formatLamportsToSolStringForLog(BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS))} SOL
 -------------------------------------------------`);
 
 
-// console.log("⚙️ Setting up PostgreSQL Pool..."); // Reduced log
+// --- Database Setup ---
 const useSsl = process.env.DB_SSL === 'true';
 const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
-// console.log(`DB_SSL config: Use SSL = '${useSsl}', Reject Unauthorized = '${rejectUnauthorizedSsl}'`); // Reduced log
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -330,51 +341,41 @@ const pool = new Pool({
   ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
 });
 
-pool.on('connect', client => {
-  // console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.'); // Can be noisy, removed
-});
 pool.on('error', (err, client) => {
   console.error('❌ Unexpected error on idle PostgreSQL client', err);
   if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
-    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details\\.`;
+    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details.`; // Removed \\. for MarkdownV2
     safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
       .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
   } else {
     console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage, escapeMarkdownV2, or ADMIN_USER_ID unavailable)`);
   }
 });
-// console.log("✅ PostgreSQL Pool created."); // Reduced log
 
+// Global Database Query Helper
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query]'; // Shortened
-    // const sqlPreview = sql.length > 100 ? `${sql.substring(0, 97)}...` : sql; // Reduced length for preview
-    // const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 30) ? `${p.substring(0, 27)}...` : p);
-    
-    // Reduced logging for successful queries
-    // console.log(`${logPrefix} Attempting SQL (Preview: ${sqlPreview}) PARAMS: [${paramsPreview.join(', ')}]`);
-
+    const logPrefix = '[DB_Query]';
     try {
         const result = await dbClient.query(sql, params);
         return result;
     } catch (error) {
         const sqlPreviewOnError = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
-        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
+        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : p) );
 
         console.error(`${logPrefix} ❌ Error executing query.`);
         console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
         console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
         console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
         if (error.stack) {
-            console.error(`${logPrefix} Stack: ${error.stack.substring(0,500)}...`); // Log partial stack
+            console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
         }
-        throw error;
+        throw error; // Re-throw to be handled by caller
     }
 }
-// console.log("[Global Utils] queryDatabase helper function (with reduced success logging) defined."); // Removed
 
-// console.log("⚙️ Setting up Solana Connection..."); // Reduced log
+// --- Solana Connection Setup ---
 const connectionOptions = {
-    commitment: process.env.RPC_COMMITMENT,
+    commitment: process.env.RPC_COMMITMENT, // from PAYMENT_ENV_DEFAULTS
     maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
     retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
     maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
@@ -384,76 +385,71 @@ const connectionOptions = {
 };
 
 const solanaConnection = new RateLimitedConnection(
-    combinedRpcEndpointsForConnection,
+    combinedRpcEndpointsForConnection, // This was set up earlier
     connectionOptions
 );
 
+// --- Telegram Bot Setup ---
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-// console.log("🤖 Telegram Bot instance created and configured for polling."); // Reduced log
 
 let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
-        verify: (req, res, buf) => {
+        verify: (req, res, buf) => { // For raw body access if needed by webhook signature verification
             req.rawBody = buf;
         }
     }));
-    // console.log("🚀 Express app initialized for payment webhooks."); // Reduced log
-} else {
-    // console.log("ℹ️ Payment webhooks are disabled."); // Reduced log
 }
 
-const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes';
+// --- Global State Variables & Caches ---
+const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes'; // Default if not set
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-let isShuttingDown = false;
+let isShuttingDown = false; // Flag for graceful shutdown
 
-let activeGames = new Map();
-let userCooldowns = new Map();
-let groupGameSessions = new Map();
+let activeGames = new Map();          // Stores active game instances { gameId: gameData }
+let userCooldowns = new Map();        // Stores user command cooldowns { userId: lastCommandTimestamp }
+let groupGameSessions = new Map();    // Stores group game sessions { chatId: sessionData }
 
-const walletCache = new Map();
-const activeDepositAddresses = new Map();
-const processedDepositTxSignatures = new Set();
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
-const pendingReferrals = new Map();
+// Payment System Caches
+const walletCache = new Map();                      // { userId: { solanaAddress, timestamp } }
+const activeDepositAddresses = new Map();           // { depositAddress: { userId, expiresAtTimestamp } }
+const processedDepositTxSignatures = new Set();     // { txSignature } - To prevent double processing
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for pending referrals (example)
+const pendingReferrals = new Map();                 // { referredUserId: { referrerId, timestamp } } (Example structure)
 
-const userStateCache = new Map();
+const userStateCache = new Map(); // For stateful interactions { userId: { state, data, messageId, chatId } }
 
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map();
+const solPriceCache = new Map(); // { SOL_PRICE_CACHE_KEY: { price, timestamp } }
 
-// console.log(`🚀 Initializing ${BOT_NAME} v${BOT_VERSION}...`); // Moved to main() in Part 6
-// console.log(`🕰️ Current system time: ${new Date().toISOString()}`); // Moved to main()
-// console.log(`💻 Node.js Version: ${process.version}`); // Moved to main()
+// --- Core Utility Functions ---
 
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
-// console.log("[Global Utils] escapeMarkdownV2 helper function defined."); // Removed
 
 async function safeSendMessage(chatId, text, options = {}) {
-    const LOG_PREFIX_SSM = `[SafeSend CH:${chatId}]`; // Shortened
+    const LOG_PREFIX_SSM = `[SafeSend CH:${chatId}]`;
     if (!chatId || typeof text !== 'string') {
         console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID ${chatId}, Text type ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
         return undefined;
     }
     
     let messageToSend = text;
-    let finalOptions = { ...options };
+    let finalOptions = { ...options }; // Clone options
 
+    // Truncation logic
     if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-        const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`;
+        const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`; // Escaped ellipsis for MDv2
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-        // console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) truncated (${text.length} chars).`); // Reduced log
-    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Plain text or other parse_mode
         const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-        // console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) truncated (${text.length} chars).`); // Reduced log
     }
 
     if (!bot) {
@@ -470,15 +466,15 @@ async function safeSendMessage(chatId, text, options = {}) {
     } catch (error) {
         console.error(`${LOG_PREFIX_SSM} ❌ Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
         if (error.response && error.response.body) {
-            // console.error(`${LOG_PREFIX_SSM} Telegram API Response: ${stringifyWithBigInt(error.response.body)}`); // Can be verbose
-            if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.toLowerCase().includes("can't parse entities")) {
-                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error. Attempting plain text fallback.`);
-                // console.error(`${LOG_PREFIX_SSM} Original MDv2 (first 200): "${text.substring(0,200)}"`); // Reduced log
+            if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && 
+                (error.response.body.description.toLowerCase().includes("can't parse entities") || error.response.body.description.toLowerCase().includes("bad request")) ) {
+                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected by API. Attempting plain text fallback.`);
                 try {
                     let plainTextFallbackOptions = { ...options };
-                    delete plainTextFallbackOptions.parse_mode;
+                    delete plainTextFallbackOptions.parse_mode; // Remove parse_mode for plain text
                     
-                    let plainTextForFallback = text; // Use original full text for fallback attempt before re-truncating
+                    // Use original full text for fallback, then re-truncate if necessary for plain text
+                    let plainTextForFallback = text; 
                     if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
                         const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`;
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
@@ -491,39 +487,33 @@ async function safeSendMessage(chatId, text, options = {}) {
                 }
             }
         }
-        return undefined;
+        return undefined; // Original error was not a parse error or fallback failed
     }
 }
-// console.log("[Global Utils] safeSendMessage (with MarkdownV2 fallback & refined truncation) defined."); // Removed
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-// console.log("[Global Utils] sleep helper function defined."); // Removed
 
 async function notifyAdmin(message, options = {}) {
     if (ADMIN_USER_ID) {
         const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`;
+        // Always use MarkdownV2 for admin alerts, assuming message content is pre-escaped if needed
         return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
     } else {
-        // console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID. Message (first 100): ${String(message).substring(0,100)}...`); // Reduced log
-        return null;
+        return null; 
     }
 }
-// console.log("[Global Utils] notifyAdmin helper function defined."); // Removed
 
-// console.log("⚙️ Setting up Price Feed Utilities..."); // Removed
-
+// --- Price Feed Utilities ---
 async function fetchSolUsdPriceFromAPI() {
     const apiUrl = process.env.SOL_PRICE_API_URL;
     const logPrefix = '[PriceFeed API]';
     try {
-        // console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`); // Reduced log
-        const response = await axios.get(apiUrl, { timeout: 8000 });
-        if (response.data && response.data.solana && response.data.solana.usd) {
+        const response = await axios.get(apiUrl, { timeout: 8000 }); // 8 second timeout
+        if (response.data && response.data.solana && typeof response.data.solana.usd === 'number') {
             const price = parseFloat(response.data.solana.usd);
             if (isNaN(price) || price <= 0) {
                 throw new Error('Invalid or non-positive price data from API.');
             }
-            // console.log(`${logPrefix} ✅ Fetched SOL/USD price: $${price.toFixed(2)}`); // Reduced log
             return price;
         } else {
             console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data).substring(0,300));
@@ -540,7 +530,7 @@ async function fetchSolUsdPriceFromAPI() {
 }
 
 async function getSolUsdPrice() {
-    const logPrefix = '[GetSolUsdPrice]'; // Shortened
+    const logPrefix = '[GetSolUsdPrice]';
     const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
     const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
@@ -550,33 +540,29 @@ async function getSolUsdPrice() {
     try {
         const price = await fetchSolUsdPriceFromAPI();
         solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
-        // console.log(`${logPrefix} Fetched and cached new SOL/USD price: $${price.toFixed(2)}`); // Reduced log
         return price;
     } catch (error) {
         if (cachedEntry) {
             console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
             return cachedEntry.price;
         }
-        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available\\. USD conversions will be severely impacted\\.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
+        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available. USD conversions will be severely impacted.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
         console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`);
-        if (typeof notifyAdmin === 'function') {
+        if (typeof notifyAdmin === 'function') { // Ensure notifyAdmin is defined
             await notifyAdmin(criticalErrorMessage);
         }
         throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`);
     }
 }
-// console.log("[PriceFeed Utils] getSolUsdPrice and fetchSolUsdPriceFromAPI defined."); // Removed
 
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
-        // console.warn(`[Convert] Invalid solUsdPrice (${solUsdPrice}) for lamports to USD. Lamports: ${lamports}`); // Reduced log
         return '⚠️ Price N/A';
     }
     let lamportsBigInt;
     try {
         lamportsBigInt = BigInt(lamports);
     } catch (e) {
-        // console.warn(`[Convert] Invalid lamport amount for USD conversion: ${lamports}. Error: ${e.message}`); // Reduced log
         return '⚠️ Amount Error';
     }
     
@@ -584,21 +570,20 @@ function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) 
     const usdValue = solAmount * solUsdPrice;
     return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: displayDecimals, maximumFractionDigits: displayDecimals })}`;
 }
-// console.log("[PriceFeed Utils] convertLamportsToUSDString defined."); // Removed
 
 function convertUSDToLamports(usdAmount, solUsdPrice) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
         throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
     }
-    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,""));
-    if (isNaN(parsedUsdAmount) || parsedUsdAmount <= 0) {
-        throw new Error("Invalid or non-positive USD amount for conversion.");
+    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,"")); // Allow negative for internal adjustments if needed, though typically positive.
+    if (isNaN(parsedUsdAmount)) { // Non-positive check removed to allow for potential negative values internally, though UI usually prevents.
+        throw new Error("Invalid USD amount for conversion.");
     }
     const solAmount = parsedUsdAmount / solUsdPrice;
     return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)));
 }
-// console.log("[PriceFeed Utils] convertUSDToLamports defined."); // Removed
 
+// --- Queues ---
 const payoutProcessorQueue = new PQueue({
     concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
     timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
@@ -609,17 +594,17 @@ const depositProcessorQueue = new PQueue({
     timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
     throwOnTimeout: true
 });
-// console.log("✅ Payment processing queues (Payout & Deposit) initialized."); // Reduced log
 
-const SLOT_PAYOUTS = {
-    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" },
-    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
-    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },
+// --- Game Constants (Example - Slots) ---
+const SLOT_PAYOUTS = { // Key is the dice value from Telegram's slot machine (1-64)
+    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, // BAR BAR BAR (Value 64)
+    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" }, // SEVEN SEVEN SEVEN (Value 1)
+    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },  // LEMON LEMON LEMON (Value 22)
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },   // GRAPE GRAPE GRAPE (Value 43) - (assuming bell emoji represents grape for example)
+    // Add other winning combinations as needed
 };
-const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; // Represents loss of the bet
 
-// console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed) - Complete."); // Removed
 // --- End of Part 1 ---
 // --- Start of Part 2 (Modified for dice_roll_requests table) ---
 // index.js - Part 2: Database Schema Initialization & Core User Management
@@ -9004,7 +8989,9 @@ function analyzeTransactionAmounts(txResponse, depositAddress) {
         return { transferAmount, payerAddress };
     }
 
-    if (txResponse.transaction.message.accountKeys && txResponse.transaction.message.accountKeys.length > 0) {
+    // Attempt to get payer from the first signer if message is available
+    if (txResponse.transaction.message && txResponse.transaction.message.accountKeys && txResponse.transaction.message.accountKeys.length > 0) {
+        // The first account is usually the fee payer and often the source for simple transfers
         payerAddress = txResponse.transaction.message.accountKeys[0].toBase58();
     }
 
@@ -9020,6 +9007,12 @@ function analyzeTransactionAmounts(txResponse, depositAddress) {
             transferAmount = postBalance - preBalance;
         }
     }
+    // More robust way to find the sender for the specific transfer to depositAddress
+    // This is complex as it requires iterating through instructions and matching with account keys.
+    // For now, the balance change method is a common approach for simple inbound transfers.
+    // If specific instructions need to be parsed (e.g. for SPL tokens or more complex interactions), this would need expansion.
+    // Also, if payerAddress is still null and there are innerInstructions, one could look there.
+
     return { transferAmount, payerAddress };
 }
 
@@ -9027,38 +9020,51 @@ function analyzeTransactionAmounts(txResponse, depositAddress) {
 let depositMonitorIntervalId = null;
 let sweepIntervalId = null;
 
-// Add static properties to functions to track running state
-if (typeof monitorDepositsPolling !== 'undefined') monitorDepositsPolling.isRunning = false;
-if (typeof sweepDepositAddresses !== 'undefined') sweepDepositAddresses.isRunning = false;
+// Add static properties to functions to track running state, ensure these are defined before use.
+// These functions are defined below in this Part.
+// It's better to define these where the functions themselves are defined or manage state differently.
+// For now, assuming they might be forward-declared or this is a pattern in use.
+// Consider managing `isRunning` state more robustly if issues arise.
+// if (typeof monitorDepositsPolling === 'function' && typeof monitorDepositsPolling.isRunning === 'undefined') {
+//     monitorDepositsPolling.isRunning = false;
+// }
+// if (typeof sweepDepositAddresses === 'function' && typeof sweepDepositAddresses.isRunning === 'undefined') {
+//     sweepDepositAddresses.isRunning = false;
+// }
 
 
 // --- Deposit Monitoring Logic ---
 
 function startDepositMonitoring() {
     let intervalMs = parseInt(process.env.DEPOSIT_MONITOR_INTERVAL_MS, 10);
-    if (isNaN(intervalMs) || intervalMs < 5000) {
-        intervalMs = 15000; 
+    if (isNaN(intervalMs) || intervalMs < 5000) { // Minimum 5 seconds
+        intervalMs = 15000; // Default to 15 seconds
         console.warn(`[DepositMonitor] Invalid DEPOSIT_MONITOR_INTERVAL_MS, using default ${intervalMs}ms.`);
     }
     
     if (depositMonitorIntervalId) {
         clearInterval(depositMonitorIntervalId);
-        // console.log('🔄 [DepositMonitor] Restarting deposit monitor...'); // Reduced log
     } else {
         console.log(`⚙️ [DepositMonitor] Starting Deposit Monitor (Interval: ${intervalMs / 1000}s)...`);
     }
     
-    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 2000; 
-    // console.log(`[DepositMonitor] Scheduling first monitor run in ${initialDelay/1000}s...`); // Reduced log
+    // Ensure monitorDepositsPolling has the isRunning property initialized
+    if (typeof monitorDepositsPolling.isRunning === 'undefined') {
+        monitorDepositsPolling.isRunning = false;
+    }
 
+    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 2000; // Stagger start
     setTimeout(() => {
         if (isShuttingDown) return;
-        // console.log(`[DepositMonitor] Executing first monitor run...`); // Reduced log
         monitorDepositsPolling().catch(err => console.error("❌ [Initial Deposit Monitor Run] Error:", err.message, err.stack?.substring(0,500)));
         
-        depositMonitorIntervalId = setInterval(monitorDepositsPolling, intervalMs);
-        if (depositMonitorIntervalId && depositMonitorIntervalId.unref) depositMonitorIntervalId.unref();
-        // console.log(`✅ [DepositMonitor] Recurring monitor interval set.`); // Reduced log
+        depositMonitorIntervalId = setInterval(() => {
+            monitorDepositsPolling().catch(err => console.error("❌ [Recurring Deposit Monitor Run] Error:", err.message, err.stack?.substring(0,500)));
+        }, intervalMs);
+
+        if (depositMonitorIntervalId && typeof depositMonitorIntervalId.unref === 'function') {
+            depositMonitorIntervalId.unref(); // Allow Node.js to exit if this is the only timer
+        }
     }, initialDelay);
 }
 
@@ -9066,24 +9072,22 @@ function stopDepositMonitoring() {
     if (depositMonitorIntervalId) {
         clearInterval(depositMonitorIntervalId);
         depositMonitorIntervalId = null;
-        if (typeof monitorDepositsPolling !== 'undefined') monitorDepositsPolling.isRunning = false;
+        if (typeof monitorDepositsPolling === 'function') monitorDepositsPolling.isRunning = false; // Reset flag
         console.log("🛑 [DepositMonitor] Deposit monitoring stopped.");
     }
 }
 
 async function monitorDepositsPolling() {
     const logPrefix = '[DepositMonitor Polling]';
-    if (isShuttingDown) { /* console.log(`${logPrefix} Shutdown, skipping.`); */ return; } // Reduced log
+    if (isShuttingDown) { return; }
     if (monitorDepositsPolling.isRunning) {
-        // console.log(`${logPrefix} Run skipped, previous active.`); // Reduced log
         return;
     }
     monitorDepositsPolling.isRunning = true;
-    // console.log(`🔍 ${logPrefix} Starting new polling cycle...`); // Reduced log
 
     try {
-        const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10) || 50;
-        const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10) || 10;
+        const batchSize = parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE, 10) || 75;
+        const sigFetchLimit = parseInt(process.env.DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT, 10) || 15;
 
         const pendingAddressesRes = await queryDatabase(
             `SELECT wallet_id, public_key, user_telegram_id, derivation_path, expires_at
@@ -9104,7 +9108,7 @@ async function monitorDepositsPolling() {
             const depositAddress = row.public_key;
             const userDepositWalletId = row.wallet_id;
             const userId = String(row.user_telegram_id);
-            const addrLogPrefix = `[Monitor Addr:${depositAddress.slice(0, 6)} WID:${userDepositWalletId}]`; // Shortened
+            const addrLogPrefix = `[Monitor Addr:${depositAddress.slice(0, 6)} WID:${userDepositWalletId}]`;
 
             try {
                 const pubKey = new PublicKey(depositAddress);
@@ -9113,30 +9117,34 @@ async function monitorDepositsPolling() {
                 );
 
                 if (signatures && signatures.length > 0) {
-                    // console.log(`${addrLogPrefix} Found ${signatures.length} potential signature(s).`); // Reduced log
-                    for (const sigInfo of signatures.reverse()) { 
+                    for (const sigInfo of signatures.reverse()) { // Process oldest first
                         if (sigInfo?.signature && !processedDepositTxSignatures.has(sigInfo.signature)) {
-                            const isConfirmed = sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized';
-                            if (!sigInfo.err && isConfirmed) {
-                                console.log(`${addrLogPrefix} ✅ New confirmed TX: ${sigInfo.signature}. Queuing.`);
+                            const isConfirmedByLevel = sigInfo.confirmationStatus === DEPOSIT_CONFIRMATION_LEVEL || sigInfo.confirmationStatus === 'finalized';
+                            if (!sigInfo.err && isConfirmedByLevel) {
+                                console.log(`${addrLogPrefix} ✅ New confirmed TX: ${sigInfo.signature}. Queuing for processing.`);
                                 depositProcessorQueue.add(() => processDepositTransaction(sigInfo.signature, depositAddress, userDepositWalletId, userId))
                                     .catch(queueError => console.error(`❌ ${addrLogPrefix} Error adding TX ${sigInfo.signature} to deposit queue: ${queueError.message}`));
                                 processedDepositTxSignatures.add(sigInfo.signature);
+                                // Clean up old signatures from the Set to prevent memory leak
+                                if(processedDepositTxSignatures.size > (parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10) || 10000) * 1.2) {
+                                   const oldSigs = Array.from(processedDepositTxSignatures).slice(0, processedDepositTxSignatures.size - (parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10) || 10000));
+                                   oldSigs.forEach(s => processedDepositTxSignatures.delete(s));
+                                }
                             } else if (sigInfo.err) {
                                 console.warn(`${addrLogPrefix} ⚠️ TX ${sigInfo.signature} has error: ${JSON.stringify(sigInfo.err)}. Marking processed.`);
-                                processedDepositTxSignatures.add(sigInfo.signature); 
+                                processedDepositTxSignatures.add(sigInfo.signature);
                             }
                         }
                     }
                 }
             } catch (error) {
-                console.error(`❌ ${addrLogPrefix} Error checking signatures: ${error.message}`);
+                console.error(`❌ ${addrLogPrefix} Error checking signatures for ${depositAddress}: ${error.message}`);
                 if (error?.status === 429 || String(error?.message).toLowerCase().includes('rate limit')) {
-                    console.warn(`${addrLogPrefix} Rate limit hit. Pausing.`);
+                    console.warn(`${addrLogPrefix} Rate limit hit during signature check. Pausing briefly.`);
                     await sleep(5000 + Math.random() * 3000); 
                 }
             }
-            await sleep(parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10) || 300); 
+            await sleep(parseInt(process.env.DEPOSIT_MONITOR_ADDRESS_DELAY_MS, 10) || 300); // Delay between checking each address
         }
     } catch (error) {
         console.error(`❌ ${logPrefix} Critical error in main polling loop: ${error.message}`, error.stack?.substring(0,500));
@@ -9158,29 +9166,27 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
         });
 
         if (!txResponse || txResponse.meta?.err) {
-            console.warn(`ℹ️ ${logPrefix} TX ${txSignature} failed on-chain or details not found. Error: ${JSON.stringify(txResponse?.meta?.err)}. Marking processed.`);
-            processedDepositTxSignatures.add(txSignature); 
+            console.warn(`ℹ️ ${logPrefix} TX ${txSignature} failed on-chain or details not found. Error: ${JSON.stringify(txResponse?.meta?.err)}. Marking processed locally.`);
+            processedDepositTxSignatures.add(txSignature);
             return;
         }
 
         const { transferAmount, payerAddress } = analyzeTransactionAmounts(txResponse, depositAddress);
 
         if (transferAmount <= 0n) {
-            // console.log(`ℹ️ ${logPrefix} No positive SOL transfer to ${depositAddress} in TX ${txSignature}. Ignoring.`); // Reduced log
             processedDepositTxSignatures.add(txSignature);
             return;
         }
-        const depositAmountSOLDisplay = await formatBalanceForDisplay(transferAmount, 'SOL');
-        console.log(`✅ ${logPrefix} Valid deposit: ${depositAmountSOLDisplay} from ${payerAddress || 'unknown'}.`);
+        const depositAmountSOLDisplay = await formatBalanceForDisplay(transferAmount, 'SOL'); // formatBalanceForDisplay from Part 3
+        console.log(`✅ ${logPrefix} Valid deposit: ${depositAmountSOLDisplay} from ${payerAddress || 'unknown source'}.`);
 
         client = await pool.connect();
         await client.query('BEGIN');
 
         const depositRecordResult = await recordConfirmedDepositDB(client, stringUserId, userDepositWalletId, depositAddress, txSignature, transferAmount, payerAddress, txResponse.blockTime);
         if (depositRecordResult.alreadyProcessed) {
-            // console.warn(`⚠️ ${logPrefix} TX ${txSignature} already processed in DB (ID: ${depositRecordResult.depositId}). Rolling back.`); // Reduced log
             await client.query('ROLLBACK'); 
-            processedDepositTxSignatures.add(txSignature);
+            processedDepositTxSignatures.add(txSignature); // Ensure it's marked if DB said already processed
             return;
         }
         if (!depositRecordResult.success || !depositRecordResult.depositId) {
@@ -9188,52 +9194,54 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
         }
         const depositId = depositRecordResult.depositId;
 
-        const markedInactive = await markDepositAddressInactiveDB(client, userDepositWalletId);
+        // Mark address as inactive (but not necessarily swept yet by this function)
+        // Sweeping is a separate process. This just deactivates it for new deposits.
+        const markedInactive = await markDepositAddressInactiveDB(client, userDepositWalletId, false, null); // false for swept
         if (!markedInactive) {
-            // console.warn(`${logPrefix} ⚠️ Could not mark deposit address WID ${userDepositWalletId} as inactive.`); // Reduced log
+            // This is not critical enough to fail the whole deposit crediting
+            console.warn(`${logPrefix} ⚠️ Could not mark deposit address WID ${userDepositWalletId} as inactive after deposit.`);
         }
 
-        const ledgerNote = `Deposit from ${payerAddress ? payerAddress.slice(0,6)+'..'+payerAddress.slice(-4) : 'Unknown'} to ${depositAddress.slice(0,6)}... TX:${txSignature.slice(0,6)}..`;
-        const balanceUpdateResult = await updateUserBalanceAndLedger(client, stringUserId, transferAmount, 'deposit', { deposit_id: depositId }, ledgerNote);
+        const ledgerNote = `Deposit from ${payerAddress ? payerAddress.slice(0,6)+'...'+payerAddress.slice(-4) : 'Unknown'} to ${depositAddress.slice(0,6)}... TX:${txSignature.slice(0,6)}...`;
+        const balanceUpdateResult = await updateUserBalanceAndLedger(client, stringUserId, transferAmount, 'deposit', { deposit_id: depositId }, ledgerNote); // updateUserBalanceAndLedger from Part P2
         if (!balanceUpdateResult.success || typeof balanceUpdateResult.newBalanceLamports === 'undefined') {
             throw new Error(`Failed to update user ${stringUserId} balance/ledger for deposit: ${balanceUpdateResult.error || "Unknown DB error."}`);
         }
         
         await client.query('COMMIT');
-        // console.log(`✅ ${logPrefix} DB operations committed. User ${stringUserId} credited.`); // Reduced log
         processedDepositTxSignatures.add(txSignature);
 
         const newBalanceUSDDisplay = await formatBalanceForDisplay(balanceUpdateResult.newBalanceLamports, 'USD');
         const userForNotif = await getOrCreateUser(stringUserId); 
-        const playerRefForNotif = getPlayerDisplayReference(userForNotif);
+        const playerRefForNotif = getPlayerDisplayReference(userForNotif || { id: stringUserId, first_name: "Player" }); // getPlayerDisplayReference from Part 3
         
-        await safeSendMessage(stringUserId,
+        await safeSendMessage(stringUserId, // safeSendMessage from Part 1
             `🎉 *Deposit Confirmed, ${playerRefForNotif}!* 🎉\n\n` +
-            `Your deposit of *${escapeMarkdownV2(depositAmountSOLDisplay)}* has been successfully credited to your casino account\\.\n\n` +
-            `💰 Your New Balance: Approx\\. *${escapeMarkdownV2(newBalanceUSDDisplay)}*\n` +
+            `Your deposit of *${escapeMarkdownV2(depositAmountSOLDisplay)}* has been successfully credited to your casino account.\n\n` + // Removed \\. as it's end of sentence.
+            `💰 Your New Balance: Approx. *${escapeMarkdownV2(newBalanceUSDDisplay)}*\n` + // Escaped period in Approx.
             `🧾 Transaction ID: \`${escapeMarkdownV2(txSignature)}\`\n\n` +
-            `Time to hit the tables\\! Good luck\\! 🎰`,
+            `Time to hit the tables! Good luck! 🎰`, // Escaped !
             { parse_mode: 'MarkdownV2' }
         );
         
     } catch (error) {
         console.error(`❌ ${logPrefix} CRITICAL ERROR processing deposit TX ${txSignature}: ${error.message}`, error.stack?.substring(0,500));
         if (client) { await client.query('ROLLBACK').catch(rbErr => console.error(`❌ ${logPrefix} Rollback failed:`, rbErr)); }
-        processedDepositTxSignatures.add(txSignature); 
-        if (typeof notifyAdmin === 'function') {
-            await notifyAdmin(`🚨 *CRITICAL Error Processing Deposit* 🚨\nTX: \`${escapeMarkdownV2(txSignature)}\`\nAddr: \`${escapeMarkdownV2(depositAddress)}\`\nUser: \`${escapeMarkdownV2(stringUserId)}\`\n*Error:*\n\`${escapeMarkdownV2(String(error.message || error))}\`\nManual investigation required\\.`, {parse_mode:'MarkdownV2'});
+        processedDepositTxSignatures.add(txSignature); // Mark as processed to avoid retries on this erroring TX
+        if (typeof notifyAdmin === 'function') { // notifyAdmin from Part 1
+            await notifyAdmin(`🚨 *CRITICAL Error Processing Deposit* 🚨\nTX: \`${escapeMarkdownV2(txSignature)}\`\nAddr: \`${escapeMarkdownV2(depositAddress)}\`\nUser: \`${escapeMarkdownV2(stringUserId)}\`\n*Error:*\n\`${escapeMarkdownV2(String(error.message || error))}\`\nManual investigation required.`, {parse_mode:'MarkdownV2'});
         }
     } finally {
         if (client) client.release();
     }
 }
 
-// --- Deposit Address Sweeping Logic ---
+
+// --- Deposit Address Sweeping Logic (Updated with Rent Exemption) ---
 function startSweepingProcess() {
     let intervalMs = parseInt(process.env.SWEEP_INTERVAL_MS, 10);
     if (isNaN(intervalMs) || intervalMs <= 0) {
-        // console.warn("🧹 [Sweeper] Fund sweeping is disabled (SWEEP_INTERVAL_MS not set or invalid)."); // Reduced log
-        return;
+        return; // Sweeping disabled
     }
     if (intervalMs < 60000) { 
         intervalMs = 60000;
@@ -9242,29 +9250,26 @@ function startSweepingProcess() {
     
     if (sweepIntervalId) {
         clearInterval(sweepIntervalId);
-        // console.log('🔄 [Sweeper] Restarting fund sweeper...'); // Reduced log
     } else {
         console.log(`⚙️ [Sweeper] Starting Fund Sweeper (Interval: ${intervalMs / 1000 / 60} minutes)...`);
     }
-    
+
     if (typeof sweepDepositAddresses.isRunning === 'undefined') {
         sweepDepositAddresses.isRunning = false;
     }
 
-    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 15000; 
-    // console.log(`[Sweeper] Scheduling first sweep run in ${initialDelay / 1000}s...`); // Reduced log
-
+    const initialDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 15000; // Stagger after other initializations
     setTimeout(() => {
         if (isShuttingDown) return;
-        // console.log(`[Sweeper] Executing first sweep run...`); // Reduced log
         sweepDepositAddresses().catch(err => console.error("❌ [Initial Sweep Run] Error:", err.message, err.stack?.substring(0,500)));
         
         sweepIntervalId = setInterval(() => {
             sweepDepositAddresses().catch(err => console.error("❌ [Recurring Sweep Run] Error:", err.message, err.stack?.substring(0,500)));
         }, intervalMs);
 
-        if (sweepIntervalId && sweepIntervalId.unref) sweepIntervalId.unref(); 
-        // console.log(`✅ [Sweeper] Recurring sweep interval set.`); // Reduced log
+        if (sweepIntervalId && typeof sweepIntervalId.unref === 'function') {
+            sweepIntervalId.unref();
+        }
     }, initialDelay);
 }
 
@@ -9272,16 +9277,16 @@ function stopSweepingProcess() {
     if (sweepIntervalId) {
         clearInterval(sweepIntervalId);
         sweepIntervalId = null;
-        if (typeof sweepDepositAddresses !== 'undefined') sweepDepositAddresses.isRunning = false; 
+        if (typeof sweepDepositAddresses === 'function') sweepDepositAddresses.isRunning = false; 
         console.log("🛑 [Sweeper] Fund sweeping stopped.");
     }
 }
 
+// This is the updated sweepDepositAddresses function
 async function sweepDepositAddresses() {
-    const logPrefix = '[SweepAddresses]'; // Shortened
-    if (isShuttingDown) { /* console.log(`${logPrefix} Shutdown, skipping.`); */ return; }
+    const logPrefix = '[SweepAddresses]';
+    if (isShuttingDown) { return; }
     if (sweepDepositAddresses.isRunning) {
-        // console.log(`${logPrefix} Sweep already in progress. Skipping.`); // Reduced log
         return;
     }
     sweepDepositAddresses.isRunning = true;
@@ -9289,13 +9294,31 @@ async function sweepDepositAddresses() {
 
     let addressesProcessedThisCycle = 0;
     let totalSweptThisCycle = 0n;
-    const sweepBatchSize = parseInt(process.env.SWEEP_BATCH_SIZE, 10) || 10;
-    const sweepAddressDelayMs = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10) || 1500;
-    const sweepFeeBuffer = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS || '20000');
-    const minBalanceToSweep = sweepFeeBuffer + 5000n; 
+    const sweepBatchSize = parseInt(process.env.SWEEP_BATCH_SIZE, 10) || 15; // From PAYMENT_ENV_DEFAULTS
+    const sweepAddressDelayMs = parseInt(process.env.SWEEP_ADDRESS_DELAY_MS, 10) || 1500; // From PAYMENT_ENV_DEFAULTS
+    
+    if (!MAIN_BOT_KEYPAIR || !DEPOSIT_MASTER_SEED_PHRASE) {
+        console.error(`❌ ${logPrefix} MAIN_BOT_KEYPAIR or DEPOSIT_MASTER_SEED_PHRASE not available. Cannot sweep.`);
+        sweepDepositAddresses.isRunning = false;
+        if (typeof notifyAdmin === "function") await notifyAdmin(`🚨 [SweepAddresses] Critical configuration missing (Main Bot Keypair or Master Seed)\\. Sweeping aborted\\.`, {parse_mode: 'MarkdownV2'});
+        return;
+    }
     const sweepTargetAddress = MAIN_BOT_KEYPAIR.publicKey.toBase58();
 
-    let addressesToConsiderRes = null; 
+    let rentLamports;
+    try {
+        rentLamports = BigInt(await solanaConnection.getMinimumBalanceForRentExemption(0)); // For a 0-data account
+    } catch (rentError) {
+        console.error(`❌ ${logPrefix} Failed to get minimum balance for rent exemption: ${rentError.message}. Using fallback.`);
+        rentLamports = BigInt(890880); // Approx 0.00089 SOL
+        if (typeof notifyAdmin === "function") await notifyAdmin(`⚠️ [SweepAddresses] Failed to fetch rent exemption, using fallback: ${rentLamports}\\. Error: ${escapeMarkdownV2(rentError.message)}`, {parse_mode: 'MarkdownV2'});
+    }
+
+    // SWEEP_FEE_BUFFER_LAMPORTS is the amount for the transaction fee ITSELF for the sweep.
+    const feeForSweepTxItself = BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS || '20000'); // Default to 20k lamports (0.00002 SOL)
+    const minimumLamportsToLeave = rentLamports + feeForSweepTxItself; // Total to leave for rent + this sweep's tx fee
+
+    let addressesToConsiderRes = null;
 
     try {
         const addressesQuery = `SELECT wallet_id, public_key, derivation_path, user_telegram_id
@@ -9307,136 +9330,146 @@ async function sweepDepositAddresses() {
         addressesToConsiderRes = await queryDatabase(addressesQuery, [sweepBatchSize]);
 
         if (!addressesToConsiderRes || !addressesToConsiderRes.rows) {
-            console.error(`${logPrefix} Failed to fetch addresses or invalid response. Ending cycle.`);
             sweepDepositAddresses.isRunning = false;
             return;
         }
 
         if (addressesToConsiderRes.rowCount > 0) {
-            console.log(`${logPrefix} Found ${addressesToConsiderRes.rowCount} potential addresses to check.`);
+            console.log(`${logPrefix} Found ${addressesToConsiderRes.rowCount} potential addresses to check. Min balance to leave in source account after sweep: ${formatCurrency(minimumLamportsToLeave, 'SOL')}`);
         }
 
         for (const addrData of addressesToConsiderRes.rows) {
             if (isShuttingDown) { console.log(`${logPrefix} Shutdown during address processing.`); break; }
             
-            const addrLogPrefix = `[Sweep Addr:${addrData.public_key.slice(0, 6)} WID:${addrData.wallet_id}]`; // Shortened
+            const addrLogPrefix = `[Sweep Addr:${addrData.public_key.slice(0, 6)} WID:${addrData.wallet_id}]`;
             let depositKeypair;
-            let clientForThisAddress = null; 
+            let clientForThisAddress = null;
 
             try {
-                clientForThisAddress = await pool.connect(); 
+                clientForThisAddress = await pool.connect();
                 await clientForThisAddress.query('BEGIN');
 
                 try {
                     depositKeypair = deriveSolanaKeypair(DEPOSIT_MASTER_SEED_PHRASE, addrData.derivation_path);
                     if (!depositKeypair || depositKeypair.publicKey.toBase58() !== addrData.public_key) {
-                        console.error(`${addrLogPrefix} ❌ Key derivation mismatch for path ${addrData.derivation_path}.`);
-                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, null); 
-                        await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Error: Key derivation mismatch.' WHERE wallet_id = $1", [addrData.wallet_id]);
-                        await clientForThisAddress.query('COMMIT');
-                        continue; 
+                        throw new Error(`Derived public key mismatch! DB: ${addrData.public_key}, Derived: ${depositKeypair?.publicKey?.toBase58()}`);
                     }
                 } catch (derivError) {
-                    console.error(`${addrLogPrefix} ❌ Critical error deriving key for sweep: ${derivError.message}.`);
+                    console.error(`❌ ${addrLogPrefix} Critical error deriving key: ${derivError.message}. Marking as sweep_error.`);
                     await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, null); 
                     await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Error: Key derivation exception.' WHERE wallet_id = $1", [addrData.wallet_id]);
                     await clientForThisAddress.query('COMMIT');
-                    continue; 
+                    continue;
                 }
 
                 const balanceLamports = await getSolBalance(addrData.public_key);
                 if (balanceLamports === null) {
                     console.warn(`${addrLogPrefix} Could not fetch balance. Skipping.`);
                     await clientForThisAddress.query('ROLLBACK'); 
-                    continue; 
+                    continue;
                 }
 
-                if (balanceLamports >= minBalanceToSweep) {
-                    const amountToSweep = balanceLamports - sweepFeeBuffer;
-                    if (amountToSweep <= 0n) { 
-                        // console.log(`${addrLogPrefix} Balance ${balanceLamports} after buffer not positive (${amountToSweep}). Marking as swept (dust).`); // Reduced log
-                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports);
-                        await clientForThisAddress.query('COMMIT');
-                        continue;
-                    }
-
-                    // console.log(`${addrLogPrefix} Balance: ${balanceLamports}. Attempting sweep of ${amountToSweep} to ${sweepTargetAddress.slice(0, 6)}..`); // Reduced log
-                    const sweepPriorityFee = parseInt(process.env.SWEEP_PRIORITY_FEE_MICROLAMPORTS, 10) || 5000;
-                    const sweepComputeUnits = parseInt(process.env.SWEEP_COMPUTE_UNIT_LIMIT, 10) || 25000;
-                    
-                    const sendResult = await sendSol(depositKeypair, sweepTargetAddress, amountToSweep, `Sweep from ${addrData.public_key.slice(0,4)}..${addrData.public_key.slice(-4)}`, sweepPriorityFee, sweepComputeUnits);
-
-                    if (sendResult.success && sendResult.signature) {
-                        totalSweptThisCycle += amountToSweep;
-                        addressesProcessedThisCycle++;
-                        console.log(`${addrLogPrefix} ✅ Sweep successful! TX: ${sendResult.signature}. Amount: ${amountToSweep}`);
-                        await recordSweepTransactionDB(clientForThisAddress, addrData.public_key, sweepTargetAddress, amountToSweep, sendResult.signature);
-                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports); 
-                    } else {
-                        console.error(`${addrLogPrefix} ❌ Sweep failed: ${sendResult.error}. Type: ${sendResult.errorType}.`);
-                        if (sendResult.errorType === "InsufficientFundsError" || sendResult.isRetryable === false) {
-                             await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports); 
-                             await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Failed: " + escapeMarkdownV2(sendResult.error || '').substring(0,100) + "' WHERE wallet_id = $1", [addrData.wallet_id]);
-                        }
-                    }
-                } else if (balanceLamports > 0n) { 
-                    // console.log(`${addrLogPrefix} Balance ${balanceLamports} below threshold. Marking as swept (dust).`); // Reduced log
+                if (balanceLamports <= minimumLamportsToLeave) {
+                    // console.log(`${addrLogPrefix} Balance ${formatCurrency(balanceLamports, 'SOL')} is too low to sweep (Min required to leave: ${formatCurrency(minimumLamportsToLeave, 'SOL')}). Marking 'swept_low_balance'.`);
                     await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports);
-                } else { 
-                    // console.log(`${addrLogPrefix} Zero balance. Marking as swept.`); // Reduced log
-                    await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, 0n);
+                    await clientForThisAddress.query('COMMIT');
+                    continue;
                 }
-                await clientForThisAddress.query('COMMIT'); 
+
+                const amountToSweep = balanceLamports - minimumLamportsToLeave;
+                
+                if (amountToSweep <= 0n) {
+                    console.warn(`${addrLogPrefix} Calculated amountToSweep is not positive (${amountToSweep}). Balance: ${balanceLamports}, MinToLeave: ${minimumLamportsToLeave}. Marking low balance.`);
+                    await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports);
+                    await clientForThisAddress.query('COMMIT');
+                    continue;
+                }
+
+                const sweepPriorityFee = parseInt(process.env.SWEEP_PRIORITY_FEE_MICROLAMPORTS, 10) || 5000; // From PAYMENT_ENV_DEFAULTS
+                const sweepComputeUnits = parseInt(process.env.SWEEP_COMPUTE_UNIT_LIMIT, 10) || 30000; // From PAYMENT_ENV_DEFAULTS
+                
+                const sendResult = await sendSol(depositKeypair, sweepTargetAddress, amountToSweep, `Sweep from ${addrData.public_key.slice(0,4)}..${addrData.public_key.slice(-4)}`, sweepPriorityFee, sweepComputeUnits);
+
+                if (sendResult.success && sendResult.signature) {
+                    totalSweptThisCycle += amountToSweep;
+                    addressesProcessedThisCycle++;
+                    console.log(`✅ ${addrLogPrefix} Sweep successful! TX: ${sendResult.signature}. Amount: ${formatCurrency(amountToSweep, 'SOL')}`);
+                    await recordSweepTransactionDB(clientForThisAddress, addrData.public_key, sweepTargetAddress, amountToSweep, sendResult.signature);
+                    // Pass original balanceLamports to record what it had *before* this successful sweep
+                    await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, true, balanceLamports); 
+                } else {
+                    console.error(`❌ ${addrLogPrefix} Sweep failed: ${sendResult.error}. Type: ${sendResult.errorType}. Retryable: ${sendResult.isRetryable}`);
+                    if (sendResult.errorType === "InsufficientFundsError" || sendResult.isRetryable === false) {
+                        // If error indicates funds issue (e.g. rent after fee, which this logic tries to prevent) or non-retryable, mark as attempted.
+                        // We don't mark as 'swept' but as inactive with a note.
+                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, false, balanceLamports); 
+                        await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Attempt Failed: " + escapeMarkdownV2(String(sendResult.error || '')).substring(0,100) + "' WHERE wallet_id = $1", [addrData.wallet_id]);
+                    }
+                }
+                await clientForThisAddress.query('COMMIT');
             } catch (addrError) {
                 if (clientForThisAddress) await clientForThisAddress.query('ROLLBACK').catch(rbErr => console.error(`${addrLogPrefix} Rollback error: ${rbErr.message}`));
-                console.error(`${addrLogPrefix} ❌ Error processing address ${addrData.public_key}: ${addrError.message}`, addrError.stack?.substring(0,500));
+                console.error(`❌ ${addrLogPrefix} Error processing address ${addrData.public_key}: ${addrError.message}`, addrError.stack?.substring(0,500));
+                 if (clientForThisAddress) { // Try to mark as error if client is still available
+                    try {
+                        await clientForThisAddress.query('BEGIN'); // New transaction for this update
+                        await markDepositAddressInactiveDB(clientForThisAddress, addrData.wallet_id, false, null); // Not swept, attempt to make inactive
+                        await clientForThisAddress.query("UPDATE user_deposit_wallets SET notes = COALESCE(notes, '') || ' Sweep Error: Processing exception.' WHERE wallet_id = $1", [addrData.wallet_id]);
+                        await clientForThisAddress.query('COMMIT');
+                    } catch (finalErr) {
+                        if (clientForThisAddress) await clientForThisAddress.query('ROLLBACK');
+                        console.error(`❌ ${addrLogPrefix} Error marking address after processing error: ${finalErr.message}`);
+                    }
+                }
             } finally {
                 if (clientForThisAddress) clientForThisAddress.release();
             }
-            await sleep(sweepAddressDelayMs); 
+            await sleep(sweepAddressDelayMs);
         }
     } catch (cycleError) {
-        console.error(`❌ ${logPrefix} Critical error in sweep cycle setup: ${cycleError.message}`, cycleError.stack?.substring(0,500));
-        if (typeof notifyAdmin === 'function') await notifyAdmin(`🚨 *ERROR in Fund Sweeping Cycle Setup* 🚨\n\n\`${escapeMarkdownV2(String(cycleError.message || cycleError))}\`\nCheck logs. Sweeping aborted.`, {parse_mode: 'MarkdownV2'});
+        console.error(`❌ ${logPrefix} Critical error in sweep cycle setup or main query: ${cycleError.message}`, cycleError.stack?.substring(0,500));
+        if (typeof notifyAdmin === 'function') await notifyAdmin(`🚨 *ERROR in Fund Sweeping Cycle Setup* 🚨\n\n\`${escapeMarkdownV2(String(cycleError.message || cycleError))}\`\nCheck logs\\. Sweeping aborted this cycle\\.`, {parse_mode: 'MarkdownV2'});
     } finally {
-        sweepDepositAddresses.isRunning = false; 
+        sweepDepositAddresses.isRunning = false;
         if (addressesProcessedThisCycle > 0) {
             const sweptAmountFormatted = formatCurrency(totalSweptThisCycle, 'SOL');
-            console.log(`🧹 ${logPrefix} Sweep cycle finished. Processed ${addressesProcessedThisCycle}, swept ~${sweptAmountFormatted}.`);
-            if(typeof notifyAdmin === 'function') notifyAdmin(`🧹 Sweep Successful: Swept approx\\. ${escapeMarkdownV2(sweptAmountFormatted)} from ${addressesProcessedThisCycle} addresses\\.`, {parse_mode: 'MarkdownV2'});
+            console.log(`🧹 ${logPrefix} Sweep cycle finished. Swept ~${sweptAmountFormatted} from ${addressesProcessedThisCycle} addresses that had sufficient balance beyond rent & fees.`);
+            if(typeof notifyAdmin === 'function') await notifyAdmin(`🧹 Sweep Report: Swept approx\\. ${escapeMarkdownV2(sweptAmountFormatted)} from ${addressesProcessedThisCycle} deposit addresses\\.`, {parse_mode: 'MarkdownV2'});
         } else if (addressesToConsiderRes && addressesToConsiderRes.rowCount > 0) {
-            // console.log(`🧹 ${logPrefix} Sweep finished. No funds swept from ${addressesToConsiderRes.rowCount} considered addresses.`); // Reduced log
+            // console.log(`🧹 ${logPrefix} Sweep finished. No funds swept from ${addressesToConsiderRes.rowCount} considered addresses (likely due to low balance or errors).`);
+        } else {
+             // console.log(`🧹 ${logPrefix} Sweep cycle finished. No addresses found needing a sweep.`);
         }
     }
 }
 
 // --- Payout Job Processing Logic ---
+// (addPayoutJob, handleWithdrawalPayoutJob, handleReferralPayoutJob functions from original Part P4 remain here)
 async function addPayoutJob(jobData) {
-    const jobType = jobData?.type || 'unknown_payout'; // Shortened
-    const jobId = jobData?.withdrawalId || jobData?.payoutId || 'N/A'; // Shortened
-    const logPrefix = `[AddPayoutJob Type:${jobType} ID:${jobId}]`;
-    // console.log(`⚙️ ${logPrefix} Adding job to payout queue for user ${jobData.userId || 'N/A'}.`); // Reduced log
+    const jobType = jobData?.type || 'unknown_payout';
+    const jobId = jobData?.withdrawalId || jobData?.payoutId || jobData?.referralId || 'N/A_JobId';
+    const userIdForLog = jobData?.userId || jobData?.referrerUserId || 'N/A_User';
+    const logPrefix = `[AddPayoutJob Type:${jobType} ID:${jobId} ForUser:${userIdForLog}]`;
 
     if (typeof payoutProcessorQueue === 'undefined' || typeof sleep === 'undefined' || typeof notifyAdmin === 'undefined' || typeof escapeMarkdownV2 === 'undefined') {
-        console.error(`${logPrefix} 🚨 CRITICAL: Payout queue or essential utilities missing.`);
-        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL Error: Cannot add payout job ${escapeMarkdownV2(jobType)}:${escapeMarkdownV2(String(jobId))}. Payout system compromised.`);
+        console.error(`${logPrefix} 🚨 CRITICAL: Payout queue or essential utilities missing. Cannot add job.`);
+        if (typeof notifyAdmin === "function") notifyAdmin(`🚨 CRITICAL Error: Cannot add payout job ${escapeMarkdownV2(jobType)}:${escapeMarkdownV2(String(jobId))}. Payout system compromised.`, {parse_mode: 'MarkdownV2'});
         return;
     }
 
     payoutProcessorQueue.add(async () => {
         let attempts = 0;
-        const maxAttempts = (parseInt(process.env.PAYOUT_JOB_RETRIES, 10) || 3) + 1;
+        const maxAttempts = (parseInt(process.env.PAYOUT_JOB_RETRIES, 10) || 3) + 1; // +1 for initial attempt
         const baseDelayMs = parseInt(process.env.PAYOUT_JOB_RETRY_DELAY_MS, 10) || 7000;
 
         while(attempts < maxAttempts) {
             attempts++;
-            const attemptLogPrefix = `[PayoutJob Att:${attempts}/${maxAttempts} ${jobType} ID:${jobId}]`; // Shortened
+            const attemptLogPrefix = `[PayoutJob Att:${attempts}/${maxAttempts} ${jobType} ID:${jobId}]`;
             try {
-                // console.log(`${attemptLogPrefix} Starting processing...`); // Reduced log
                 if (jobData.type === 'payout_withdrawal' && typeof handleWithdrawalPayoutJob === 'function') {
                     await handleWithdrawalPayoutJob(jobData.withdrawalId);
                 } else if (jobData.type === 'payout_referral' && typeof handleReferralPayoutJob === 'function') {
-                    await handleReferralPayoutJob(jobData.payoutId);
+                    await handleReferralPayoutJob(jobData.referralId); // Assuming jobData has referralId for this type
                 } else {
                     throw new Error(`Unknown or unavailable payout job type handler: ${jobData.type}`);
                 }
@@ -9444,25 +9477,24 @@ async function addPayoutJob(jobData) {
                 return; 
             } catch(error) {
                 console.warn(`⚠️ ${attemptLogPrefix} Attempt failed: ${error.message}`);
-                const isRetryableFlag = error.isRetryable === true;
+                const isRetryableFlag = error.isRetryable === true; // Job specific errors should set this
 
                 if (!isRetryableFlag || attempts >= maxAttempts) {
                     console.error(`❌ ${attemptLogPrefix} Job failed permanently after ${attempts} attempts. Error: ${error.message}`);
                     if (typeof notifyAdmin === "function") {
-                        notifyAdmin(`🚨 *PAYOUT JOB FAILED (Permanent)* 🚨\nType: \`${escapeMarkdownV2(jobType)}\`\nID: \`${escapeMarkdownV2(String(jobId))}\`\nUser: \`${jobData.userId || 'N/A'}\`\nError: \`${escapeMarkdownV2(String(error.message || error))}\`\nManual intervention may be required\\.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
+                        notifyAdmin(`🚨 *PAYOUT JOB FAILED (Permanent)* 🚨\nType: \`${escapeMarkdownV2(jobType)}\`\nID: \`${escapeMarkdownV2(String(jobId))}\`\nUser: \`${escapeMarkdownV2(String(userIdForLog))}\`\nError: \`${escapeMarkdownV2(String(error.message || error))}\`\nManual intervention may be required.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
                     }
                     return; 
                 }
-                const delayWithJitter = baseDelayMs * Math.pow(2, attempts - 1) * (0.8 + Math.random() * 0.4);
-                const actualDelay = Math.min(delayWithJitter, parseInt(process.env.RPC_RETRY_MAX_DELAY, 10) || 90000);
-                // console.log(`⏳ ${attemptLogPrefix} Retrying in ~${Math.round(actualDelay / 1000)}s...`); // Reduced log
+                const delayWithJitter = baseDelayMs * Math.pow(1.5, attempts - 1) * (0.8 + Math.random() * 0.4); // Exponential backoff with jitter
+                const actualDelay = Math.min(delayWithJitter, parseInt(process.env.RPC_RETRY_MAX_DELAY, 10) || 90000); // Max delay from env or 90s
                 await sleep(actualDelay);
             }
         }
-    }).catch(queueError => {
-        console.error(`❌ ${logPrefix} CRITICAL Error in Payout Queue execution: ${queueError.message}`, queueError.stack?.substring(0,500));
+    }).catch(queueError => { // Catch errors from adding to queue or if the promise from add itself rejects (e.g. from PQueue timeout)
+        console.error(`❌ ${logPrefix} CRITICAL Error in Payout Queue execution or job addition: ${queueError.message}`, queueError.stack?.substring(0,500));
         if (typeof notifyAdmin === "function") {
-            notifyAdmin(`🚨 *CRITICAL Payout Queue Error* 🚨\nJob: \`${escapeMarkdownV2(jobType)}:${escapeMarkdownV2(String(jobId))}\`\nError: \`${escapeMarkdownV2(String(queueError.message || queueError))}\`\nQueue compromised\\.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
+            notifyAdmin(`🚨 *CRITICAL Payout Queue Error* 🚨\nJob: \`${escapeMarkdownV2(jobType)}:${escapeMarkdownV2(String(jobId))}\`\nError: \`${escapeMarkdownV2(String(queueError.message || queueError))}\`\nQueue potentially compromised.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
         }
     });
 }
@@ -9473,18 +9505,19 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
     let clientForDb = null;
     let sendSolResult = { success: false, error: "Send SOL not initiated", isRetryable: false }; 
 
-    const details = await getWithdrawalDetailsDB(withdrawalId);
+    const details = await getWithdrawalDetailsDB(withdrawalId); // From Part P2
     if (!details) {
         const error = new Error(`Withdrawal details not found for ID ${withdrawalId}. Job cannot proceed.`);
         error.isRetryable = false; throw error;
     }
 
-    if (details.status === 'completed' || details.status === 'confirmed') {
-        // console.log(`ℹ️ ${logPrefix} Job skipped, withdrawal ID ${withdrawalId} already '${details.status}'.`); // Reduced log
+    if (details.status === 'completed' || details.status === 'confirmed' || details.status === 'sent') {
         return; 
     }
     if (details.status === 'failed' && !sendSolResult.isRetryable) { 
-        // console.log(`ℹ️ ${logPrefix} Job skipped, withdrawal ID ${withdrawalId} already 'failed' non-retryably.`); // Reduced log
+        // If previously failed non-retryably, don't try again unless sendSolResult indicates it is now retryable (e.g. new error)
+        // This logic might need refinement based on how isRetryable is set by sendSol.
+        // For now, if DB says failed, and we haven't just had a retryable failure, we stop.
         return;
     }
 
@@ -9494,17 +9527,25 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
     const feeApplied = BigInt(details.fee_lamports);
     const totalAmountDebitedFromUser = amountToActuallySend + feeApplied;
     const userForNotif = await getOrCreateUser(userId); 
-    const playerRefForNotif = getPlayerDisplayReference(userForNotif);
+    const playerRefForNotif = getPlayerDisplayReference(userForNotif || {id:userId, first_name:"Player"}); // getPlayerDisplayReference from Part 3
 
     try {
         clientForDb = await pool.connect();
         await clientForDb.query('BEGIN');
-        await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'processing');
+        await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'processing'); // From Part P2
         await clientForDb.query('COMMIT');
-        clientForDb.release(); clientForDb = null; 
+    } catch (dbError) {
+        if (clientForDb) await clientForDb.query('ROLLBACK').catch(()=>{});
+        console.error(`❌ ${logPrefix} DB error setting status to 'processing': ${dbError.message}`);
+        jobError.isRetryable = true; // DB errors are often retryable
+        throw dbError; // Re-throw to trigger retry if applicable
+    } finally {
+        if (clientForDb) clientForDb.release();
+        clientForDb = null; // Ensure it's reset
+    }
 
-        // console.log(`${logPrefix} Sending ${formatCurrency(amountToActuallySend, 'SOL')} to ${recipient}.`); // Reduced log
-        sendSolResult = await sendSol(MAIN_BOT_KEYPAIR, recipient, amountToActuallySend, `Withdrawal ID ${withdrawalId} from ${BOT_NAME}`, details.priority_fee_microlamports, details.compute_unit_limit);
+    try {
+        sendSolResult = await sendSol(MAIN_BOT_KEYPAIR, recipient, amountToActuallySend, `Withdrawal ID ${withdrawalId} from ${BOT_NAME}`, details.priority_fee_microlamports, details.compute_unit_limit); // sendSol from Part P1
 
         clientForDb = await pool.connect(); 
         await clientForDb.query('BEGIN');
@@ -9514,11 +9555,11 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
             await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'completed', sendSolResult.signature, null, sendSolResult.blockTime);
             await clientForDb.query('COMMIT');
             
-            await safeSendMessage(userId,
+            await safeSendMessage(userId, // safeSendMessage from Part 1
                 `💸 *Withdrawal Sent Successfully, ${playerRefForNotif}!* 💸\n\n` +
-                `Your withdrawal of *${escapeMarkdownV2(formatCurrency(amountToActuallySend, 'SOL'))}* to wallet \`${escapeMarkdownV2(recipient)}\` has been processed\\.\n` +
+                `Your withdrawal of *${escapeMarkdownV2(formatCurrency(amountToActuallySend, 'SOL'))}* to wallet \`${escapeMarkdownV2(recipient)}\` has been processed.\n` + // Escaped .
                 `🧾 Transaction ID: \`${escapeMarkdownV2(sendSolResult.signature)}\`\n\n` +
-                `Funds should arrive shortly depending on network confirmations\\. Thank you for playing at ${escapeMarkdownV2(BOT_NAME)}\\!`,
+                `Funds should arrive shortly depending on network confirmations. Thank you for playing at ${escapeMarkdownV2(BOT_NAME)}!`, // Escaped !
                 { parse_mode: 'MarkdownV2' }
             );
             return; 
@@ -9528,8 +9569,8 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
             await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'failed', null, sendErrorMsg.substring(0, 250));
             
             const refundNotes = `Refund for failed withdrawal ID ${withdrawalId}. Send Error: ${sendErrorMsg.substring(0,100)}`;
-            const refundUpdateResult = await updateUserBalanceAndLedger(
-                clientForDb, userId, totalAmountDebitedFromUser,
+            const refundUpdateResult = await updateUserBalanceAndLedger( // from Part P2
+                clientForDb, userId, totalAmountDebitedFromUser, 
                 'withdrawal_refund', { withdrawal_id: withdrawalId }, refundNotes
             );
 
@@ -9537,15 +9578,15 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
                 await clientForDb.query('COMMIT');
                 console.log(`✅ ${logPrefix} Successfully refunded ${formatCurrency(totalAmountDebitedFromUser, 'SOL')} to user ${userId}.`);
                 await safeSendMessage(userId,
-                    `⚠️ *Withdrawal Failed* ⚠️\n\n${playerRefForNotif}, your withdrawal of *${escapeMarkdownV2(formatCurrency(amountToActuallySend, 'SOL'))}* could not be processed at this time \\(Reason: \`${escapeMarkdownV2(sendErrorMsg)}\`\\)\\.\n` +
-                    `The full amount of *${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}* \\(including fee\\) has been refunded to your casino balance\\.`,
+                    `⚠️ *Withdrawal Failed* ⚠️\n\n${playerRefForNotif}, your withdrawal of *${escapeMarkdownV2(formatCurrency(amountToActuallySend, 'SOL'))}* could not be processed at this time (Reason: \`${escapeMarkdownV2(sendErrorMsg)}\`).\n` + // Escaped ()
+                    `The full amount of *${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}* (including fee) has been refunded to your casino balance.`, // Escaped . and ()
                     {parse_mode: 'MarkdownV2'}
                 );
             } else {
                 await clientForDb.query('ROLLBACK');
                 console.error(`❌ CRITICAL ${logPrefix} FAILED TO REFUND USER ${userId} for withdrawal ${withdrawalId}. Amount: ${formatCurrency(totalAmountDebitedFromUser, 'SOL')}. Refund DB Error: ${refundUpdateResult.error}`);
                 if (typeof notifyAdmin === 'function') {
-                    notifyAdmin(`🚨🚨 *CRITICAL: FAILED WITHDRAWAL REFUND* 🚨🚨\nUser: ${playerRefForNotif} (\`${escapeMarkdownV2(String(userId))}\`)\nWD ID: \`${withdrawalId}\`\nAmount Due (Refund): \`${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}\`\nSend Error: \`${escapeMarkdownV2(sendErrorMsg)}\`\nRefund DB Error: \`${escapeMarkdownV2(refundUpdateResult.error || 'Unknown')}\`\nMANUAL INTERVENTION REQUIRED\\.`, {parse_mode:'MarkdownV2'});
+                    notifyAdmin(`🚨🚨 *CRITICAL: FAILED WITHDRAWAL REFUND* 🚨🚨\nUser: ${playerRefForNotif} (\`${escapeMarkdownV2(String(userId))}\`)\nWD ID: \`${withdrawalId}\`\nAmount Due (Refund): \`${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}\`\nSend Error: \`${escapeMarkdownV2(sendErrorMsg)}\`\nRefund DB Error: \`${escapeMarkdownV2(refundUpdateResult.error || 'Unknown')}\`\nMANUAL INTERVENTION REQUIRED.`, {parse_mode:'MarkdownV2'});
                 }
             }
             
@@ -9553,138 +9594,150 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true; 
             throw errorToThrowForRetry;
         }
-    } catch (jobError) {
-        if (clientForDb) await clientForDb.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Final rollback error on jobError: ${rbErr.message}`));
+    } catch (jobError) { // Catches errors from sendSol or DB ops after sendSol
+        if (clientForDb && clientForDb.release) { // Check if clientForDb was connected and not yet released
+             try { await clientForDb.query('ROLLBACK'); } catch(rbErr) { console.error(`${logPrefix} Final rollback error on jobError: ${rbErr.message}`);}
+        }
         console.error(`❌ ${logPrefix} Error during withdrawal job ID ${withdrawalId}: ${jobError.message}`, jobError.stack?.substring(0,500));
         
-        const currentDetailsAfterJobError = await getWithdrawalDetailsDB(withdrawalId); 
-        if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'completed' && currentDetailsAfterJobError.status !== 'failed') {
-            const updateClient = await pool.connect();
-            try {
-                await updateWithdrawalStatusDB(updateClient, withdrawalId, 'failed', null, `Job error: ${jobError.message}`.substring(0,250));
-            } catch (finalStatusUpdateError) {
-                console.error(`${logPrefix} Failed to update status to 'failed' after job error: ${finalStatusUpdateError.message}`);
-            } finally {
-                updateClient.release();
+        // Ensure status is 'failed' if not already completed.
+        const updateClient = await pool.connect();
+        try {
+            const currentDetailsAfterJobError = await getWithdrawalDetailsDB(withdrawalId, updateClient); 
+            if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'completed' && currentDetailsAfterJobError.status !== 'failed') {
+                await updateWithdrawalStatusDB(updateClient, withdrawalId, 'failed', null, `Job error: ${String(jobError.message || jobError)}`.substring(0,250));
             }
+        } catch (finalStatusUpdateError) {
+            console.error(`${logPrefix} Failed to update status to 'failed' after job error: ${finalStatusUpdateError.message}`);
+        } finally {
+            updateClient.release();
         }
-        if (jobError.isRetryable === undefined) {
+        
+        if (jobError.isRetryable === undefined) { // Ensure isRetryable is set
              jobError.isRetryable = sendSolResult.isRetryable || false; 
         }
-        throw jobError;
+        throw jobError; // Re-throw for retry mechanism in addPayoutJob
     } finally {
-        if (clientForDb) clientForDb.release();
+        if (clientForDb && clientForDb.release) clientForDb.release(); // Ensure release if it was connected
     }
 }
 
-async function handleReferralPayoutJob(payoutId) {
-    const logPrefix = `[ReferralJob ID:${payoutId}]`;
+
+async function handleReferralPayoutJob(referralId) { // Changed payoutId to referralId for clarity
+    const logPrefix = `[ReferralJob ID:${referralId}]`;
     console.log(`⚙️ ${logPrefix} Processing referral payout...`);
     let clientForDb = null;
     let sendSolResult = { success: false, error: "Send SOL not initiated for referral", isRetryable: false };
     const payerKeypair = REFERRAL_PAYOUT_KEYPAIR || MAIN_BOT_KEYPAIR; 
 
-    const details = await getReferralDetailsDB(payoutId); 
+    const details = await getReferralDetailsDB(referralId); // from Part P2
     if (!details) {
-        const error = new Error(`Referral payout details not found for ID ${payoutId}.`); error.isRetryable = false; throw error;
+        const error = new Error(`Referral payout details not found for ID ${referralId}.`); error.isRetryable = false; throw error;
     }
-    if (details.status === 'paid_out') {
-        // console.log(`ℹ️ ${logPrefix} Job skipped, referral payout ID ${payoutId} already 'paid_out'.`); // Reduced log
-        return;
-    }
-    if (details.status === 'failed') { 
-        // console.log(`ℹ️ ${logPrefix} Job skipped, referral payout ID ${payoutId} already 'failed'.`); // Reduced log
-        return;
-    }
+    if (details.status === 'paid_out') { return; }
+    if (details.status === 'failed') { return; } // Don't retry if manually marked failed or permanently failed previously
     if (details.status !== 'earned') {
-        console.warn(`ℹ️ ${logPrefix} Referral payout ID ${payoutId} not 'earned' (current: ${details.status}). Skipping.`);
-        const error = new Error(`Referral payout ID ${payoutId} not in 'earned' state.`); error.isRetryable = false; throw error;
+        console.warn(`ℹ️ ${logPrefix} Referral payout ID ${referralId} not 'earned' (current: ${details.status}). Skipping for now.`);
+        const error = new Error(`Referral payout ID ${referralId} not in 'earned' state.`); error.isRetryable = false; throw error;
     }
 
     const referrerUserId = String(details.referrer_telegram_id);
     const amountToPay = BigInt(details.commission_amount_lamports || '0');
     if (amountToPay <= 0n) {
-        console.warn(`${logPrefix} Referral commission for ID ${payoutId} is zero or less.`);
+        const zeroErr = `Referral commission for ID ${referralId} is zero or less.`;
+        console.warn(`${logPrefix} ${zeroErr}`);
         const zeroClient = await pool.connect();
-        try { await updateReferralPayoutStatusDB(zeroClient, payoutId, 'failed', null, "Zero or negative commission amount"); }
+        try { await updateReferralPayoutStatusDB(zeroClient, referralId, 'failed', null, zeroErr.substring(0,250)); } // from Part P2
         catch(e){ console.error(`${logPrefix} DB error marking zero commission as failed: ${e.message}`);}
         finally { zeroClient.release(); }
-        const error = new Error(`Zero or negative commission for referral payout ID ${payoutId}.`); error.isRetryable = false; throw error;
+        const error = new Error(zeroErr); error.isRetryable = false; throw error;
     }
 
     const userForNotif = await getOrCreateUser(referrerUserId);
-    const playerRefForNotif = getPlayerDisplayReference(userForNotif);
+    const playerRefForNotif = getPlayerDisplayReference(userForNotif || {id: referrerUserId, first_name:"Referrer"});
 
     try {
         clientForDb = await pool.connect();
         await clientForDb.query('BEGIN');
 
-        const referrerDetails = await getPaymentSystemUserDetails(referrerUserId, clientForDb);
+        const referrerDetails = await getPaymentSystemUserDetails(referrerUserId, clientForDb); // from Part P2
         if (!referrerDetails?.solana_wallet_address) {
-            const noWalletMsg = `Referrer ${playerRefForNotif} (\`${escapeMarkdownV2(referrerUserId)}\`) has no linked SOL wallet for referral payout ID ${payoutId}.`;
+            const noWalletMsg = `Referrer ${playerRefForNotif} (${escapeMarkdownV2(referrerUserId)}) has no linked SOL wallet for referral payout ID ${referralId}.`;
             console.error(`❌ ${logPrefix} ${noWalletMsg}`);
-            await updateReferralPayoutStatusDB(clientForDb, payoutId, 'failed', null, noWalletMsg.substring(0, 250));
+            await updateReferralPayoutStatusDB(clientForDb, referralId, 'failed', null, noWalletMsg.substring(0, 250));
             await clientForDb.query('COMMIT');
             const error = new Error(noWalletMsg); error.isRetryable = false; throw error;
         }
         const recipientAddress = referrerDetails.solana_wallet_address;
 
-        await updateReferralPayoutStatusDB(clientForDb, payoutId, 'processing');
+        await updateReferralPayoutStatusDB(clientForDb, referralId, 'processing');
         await clientForDb.query('COMMIT');
-        clientForDb.release(); clientForDb = null; 
+    } catch(dbProcError) {
+        if(clientForDb) await clientForDb.query('ROLLBACK').catch(()=>{});
+        console.error(`${logPrefix} DB error setting status to 'processing': ${dbProcError.message}`);
+        jobError.isRetryable = true; // DB errors often retryable
+        throw dbProcError;
+    }
+    finally {
+        if (clientForDb) clientForDb.release();
+        clientForDb = null;
+    }
 
-        // console.log(`${logPrefix} Sending ${formatCurrency(amountToPay, 'SOL')} to ${recipientAddress} from ${payerKeypair.publicKey.toBase58().slice(0,6)}...`); // Reduced log
-        sendSolResult = await sendSol(payerKeypair, recipientAddress, amountToPay, `Referral Commission - ${BOT_NAME} - ID ${payoutId}`);
+
+    try {
+        sendSolResult = await sendSol(payerKeypair, recipientAddress, amountToPay, `Referral Commission - ${BOT_NAME} - ID ${referralId}`);
 
         clientForDb = await pool.connect(); 
         await clientForDb.query('BEGIN');
         if (sendSolResult.success && sendSolResult.signature) {
-            console.log(`✅ ${logPrefix} sendSol successful for referral ID ${payoutId}. TX: ${sendSolResult.signature}.`);
-            await updateReferralPayoutStatusDB(clientForDb, payoutId, 'paid_out', sendSolResult.signature);
+            console.log(`✅ ${logPrefix} sendSol successful for referral ID ${referralId}. TX: ${sendSolResult.signature}.`);
+            await updateReferralPayoutStatusDB(clientForDb, referralId, 'paid_out', sendSolResult.signature);
             await clientForDb.query('COMMIT');
 
             await safeSendMessage(referrerUserId,
                 `🎁 *Referral Bonus Paid, ${playerRefForNotif}!* 🎁\n\n` +
-                `Your referral commission of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* has been sent to your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\`\\.\n` +
-                `🧾 Transaction ID: \`${escapeMarkdownV2(sendSolResult.signature)}\`\n\nThanks for spreading the word about ${escapeMarkdownV2(BOT_NAME)}\\!`,
+                `Your referral commission of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* has been sent to your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\`.\n` + // Escaped .
+                `🧾 Transaction ID: \`${escapeMarkdownV2(sendSolResult.signature)}\`\n\nThanks for spreading the word about ${escapeMarkdownV2(BOT_NAME)}!`, // Escaped !
                 { parse_mode: 'MarkdownV2' }
             );
             return; 
         } else {
             const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure for referral payout.';
-            console.error(`❌ ${logPrefix} sendSol FAILED for referral payout ID ${payoutId}. Reason: ${sendErrorMsg}`);
-            await updateReferralPayoutStatusDB(clientForDb, payoutId, 'failed', null, sendErrorMsg.substring(0, 250));
-            await clientForDb.query('COMMIT');
+            console.error(`❌ ${logPrefix} sendSol FAILED for referral payout ID ${referralId}. Reason: ${sendErrorMsg}`);
+            await updateReferralPayoutStatusDB(clientForDb, referralId, 'failed', null, sendErrorMsg.substring(0, 250));
+            await clientForDb.query('COMMIT'); // Commit the 'failed' status
 
             await safeSendMessage(referrerUserId,
-                `⚠️ *Referral Payout Issue* ⚠️\n\n${playerRefForNotif}, we encountered an issue sending your referral reward of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* \\(Details: \`${escapeMarkdownV2(sendErrorMsg)}\`\\)\\. Please ensure your linked wallet is correct or contact support\\. This payout will be re\\-attempted if possible, or an admin will review\\.`,
+                `⚠️ *Referral Payout Issue* ⚠️\n\n${playerRefForNotif}, we encountered an issue sending your referral reward of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* (Details: \`${escapeMarkdownV2(sendErrorMsg)}\`). Please ensure your linked wallet is correct or contact support. This payout will be re-attempted if possible, or an admin will review.`, // Escaped . and ()
                 {parse_mode: 'MarkdownV2'}
             );
             if (typeof notifyAdmin === 'function') {
-                notifyAdmin(`🚨 *REFERRAL PAYOUT FAILED* 🚨\nReferrer: ${playerRefForNotif} (\`${escapeMarkdownV2(referrerUserId)}\`)\nPayout ID: \`${payoutId}\`\nAmount: \`${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}\`\n*Error:* \`${escapeMarkdownV2(sendErrorMsg)}\`\\.`, {parse_mode:'MarkdownV2'});
+                notifyAdmin(`🚨 *REFERRAL PAYOUT FAILED* 🚨\nReferrer: ${playerRefForNotif} (\`${escapeMarkdownV2(referrerUserId)}\`)\nPayout ID: \`${referralId}\`\nAmount: \`${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}\`\n*Error:* \`${escapeMarkdownV2(sendErrorMsg)}\`.`, {parse_mode:'MarkdownV2'});
             }
             const errorToThrowForRetry = new Error(sendErrorMsg);
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
             throw errorToThrowForRetry;
         }
-    } catch (jobError) {
-        if(clientForDb) await clientForDb.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Final rollback error on jobError: ${rbErr.message}`));
-        console.error(`❌ ${logPrefix} Error during referral payout job ID ${payoutId}: ${jobError.message}`, jobError.stack?.substring(0,500));
-        if (jobError.isRetryable === undefined) jobError.isRetryable = sendSolResult.isRetryable || false;
-
-        if (!jobError.isRetryable) {
-            const currentDetailsAfterJobError = await getReferralDetailsDB(payoutId);
-            if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'paid_out' && currentDetailsAfterJobError.status !== 'failed') {
-                const updateClient = await pool.connect();
-                try {
-                    await updateReferralPayoutStatusDB(updateClient, payoutId, 'failed', null, `Job error (non-retryable): ${jobError.message}`.substring(0,250));
-                } catch (finalStatusUpdateError) { console.error(`${logPrefix} Failed to mark referral as 'failed': ${finalStatusUpdateError.message}`);}
-                finally { updateClient.release(); }
-            }
+    } catch (jobError) { // Catches errors from sendSol or DB ops after sendSol
+        if(clientForDb && clientForDb.release) { // If it was connected for the second DB op
+            try { await clientForDb.query('ROLLBACK');} catch(rbErr) {console.error(`${logPrefix} Final rollback error on jobError: ${rbErr.message}`);}
+        } else if (!clientForDb) { // If sendSol failed and we didn't even get to re-connect clientForDb
+            // Ensure status is marked as failed if not already done.
+             const updateClient = await pool.connect();
+             try {
+                 const currentDetailsAfterJobError = await getReferralDetailsDB(referralId, updateClient);
+                 if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'paid_out' && currentDetailsAfterJobError.status !== 'failed') {
+                     await updateReferralPayoutStatusDB(updateClient, referralId, 'failed', null, `Job error (non-retryable): ${String(jobError.message || jobError)}`.substring(0,250));
+                 }
+             } catch (finalStatusUpdateError) { console.error(`${logPrefix} Failed to mark referral as 'failed': ${finalStatusUpdateError.message}`);}
+             finally { updateClient.release(); }
         }
+
+        console.error(`❌ ${logPrefix} Error during referral payout job ID ${referralId}: ${jobError.message}`, jobError.stack?.substring(0,500));
+        if (jobError.isRetryable === undefined) jobError.isRetryable = sendSolResult.isRetryable || false;
         throw jobError; 
     } finally {
-        if (clientForDb) clientForDb.release();
+        if (clientForDb && clientForDb.release) clientForDb.release();
     }
 }
 
