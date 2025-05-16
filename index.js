@@ -625,6 +625,11 @@ const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 // index.js - Part 2: Database Schema Initialization & Core User Management
 //---------------------------------------------------------------------------
 // Assumed necessary functions and constants from Part 1 are available.
+// Specifically: pool, DEFAULT_STARTING_BALANCE_LAMPORTS, escapeMarkdownV2,
+// MAIN_JACKPOT_ID, PublicKey (from @solana/web3.js), walletCache,
+// activeGames, userCooldowns, groupGameSessions, activeDepositAddresses,
+// pendingReferrals, userStateCache, GAME_IDS (if used for activeGames clearing).
+// notifyAdmin and ADMIN_USER_ID are used for critical error reporting.
 
 // --- Helper function for referral code generation ---
 const generateReferralCode = (length = 8) => {
@@ -781,7 +786,7 @@ async function initializeDatabaseSchema() {
             swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-        
+
         // Ledger Table
         await client.query(`CREATE TABLE IF NOT EXISTS ledger (
             ledger_id SERIAL PRIMARY KEY,
@@ -807,13 +812,13 @@ async function initializeDatabaseSchema() {
             request_id SERIAL PRIMARY KEY,
             game_id VARCHAR(255) NULL,
             chat_id BIGINT NOT NULL,
-            user_id BIGINT NULL,
+            user_id BIGINT NULL, -- Can be null if bot initiated roll for itself
             emoji_type VARCHAR(50) DEFAULT '🎲',
-            status VARCHAR(50) DEFAULT 'pending',
+            status VARCHAR(50) DEFAULT 'pending', -- pending, completed, error, timeout
             roll_value INTEGER NULL,
             requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             processed_at TIMESTAMPTZ NULL,
-            notes TEXT NULL
+            notes TEXT NULL -- For error messages from helper or other info
         );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
 
@@ -827,7 +832,7 @@ async function initializeDatabaseSchema() {
             END;
             $$ LANGUAGE plpgsql;
         `);
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals']; // `ledger` and `games` use default current_timestamp mainly
         for (const tableName of tablesWithUpdatedAt) {
             const triggerExistsRes = await client.query(
                 `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = '${tableName}'::regclass;`
@@ -841,8 +846,6 @@ async function initializeDatabaseSchema() {
                 `).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
             }
         }
-        // console.log("  [DB Schema] All tables, indexes, and 'updated_at' triggers checked/created."); // Consolidated log for schema part
-
         await client.query('COMMIT');
         console.log("✅ Database schema initialization complete.");
     } catch (e) {
@@ -863,6 +866,7 @@ async function initializeDatabaseSchema() {
 // Core User Management Functions
 //---------------------------------------------------------------------------
 
+// This is the getOrCreateUser function with the DEBUG logs and console.trace added
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
     // --- BEGIN TEMPORARY DEBUG for getOrCreateUser ---
     console.log(`[DEBUG getOrCreateUser ENTER] Received telegramId: ${telegramId} (type: ${typeof telegramId}), username: ${username}, firstName: ${firstName}, lastName: ${lastName}, referrerIdInput: ${referrerIdInput}`);
@@ -876,7 +880,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
 
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
         console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
-        console.trace("Trace for undefined telegramId call"); // For diagnosing Issue 2
+        console.trace("Trace for undefined telegramId call"); // For diagnosing Issue 3
         if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
             notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
                 .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
@@ -915,14 +919,12 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             const currentFirstName = user.first_name || '';
             const currentLastName = user.last_name || '';
 
-            // Only update if new value is provided and different, or if current is empty and new is provided
             if (username && currentUsername !== username) detailsChanged = true;
             if (firstName && currentFirstName !== firstName) detailsChanged = true;
             if (lastName && currentLastName !== lastName) detailsChanged = true;
-            // Also consider if current is null/empty and new one is provided
             if (!currentUsername && username) detailsChanged = true;
             if (!currentFirstName && firstName) detailsChanged = true;
-            if (!currentLastName && lastName) detailsChanged = true;
+            if (!currentLastName && lastName && lastName !== '') detailsChanged = true;
 
 
             if (detailsChanged) {
@@ -970,7 +972,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
                         `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
                          VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria', CURRENT_TIMESTAMP) 
                          ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Ensures referred_id is unique if that's the constraint name
                         [referrerId, newUser.telegram_id]
                     );
                 } catch (referralError) {
@@ -990,6 +992,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
     }
 }
 
+
 async function updateUserActivity(telegramId) {
     const stringTelegramId = String(telegramId);
     try {
@@ -1006,7 +1009,6 @@ async function getUserBalance(telegramId) {
         if (result.rows.length > 0) {
             return BigInt(result.rows[0].balance);
         }
-        // console.warn(`[GetUserBalance TG:${stringTelegramId}] User not found, cannot retrieve balance.`); // Reduced log
         return null;
     } catch (error) {
         console.error(`[GetUserBalance TG:${stringTelegramId}] Error retrieving balance:`, error);
@@ -1014,9 +1016,11 @@ async function getUserBalance(telegramId) {
     }
 }
 
+// This updateUserBalance is a direct DB update without ledger, use with extreme caution (admin corrections only).
+// For regular balance changes, use updateUserBalanceAndLedger (from Part P2).
 async function updateUserBalance(telegramId, newBalanceLamports, client = pool) {
     const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_UUB = `[UpdateUserBal TG:${stringTelegramId}]`; // Shortened
+    const LOG_PREFIX_UUB = `[UpdateUserBal TG:${stringTelegramId}]`;
     try {
         if (typeof newBalanceLamports !== 'bigint') {
             console.error(`${LOG_PREFIX_UUB} Invalid newBalanceLamports type: ${typeof newBalanceLamports}. Must be BigInt.`);
@@ -1035,7 +1039,6 @@ async function updateUserBalance(telegramId, newBalanceLamports, client = pool) 
             console.warn(`${LOG_PREFIX_UUB} ⚠️ Balance directly set to ${newBalanceLamports.toString()} lamports. LEDGER NOT UPDATED. Admin use ONLY.`);
             return true;
         } else {
-            // console.warn(`${LOG_PREFIX_UUB} User not found or balance not updated for telegramId ${stringTelegramId}.`); // Reduced log
             return false;
         }
     } catch (error) {
@@ -1047,16 +1050,15 @@ async function updateUserBalance(telegramId, newBalanceLamports, client = pool) 
 async function linkUserWallet(telegramId, solanaAddress) {
     const stringTelegramId = String(telegramId);
     const LOG_PREFIX_LUW = `[LinkUserWallet TG:${stringTelegramId}]`;
-    // console.log(`${LOG_PREFIX_LUW} Attempting to link wallet ${solanaAddress}.`); // Reduced log
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         try {
             new PublicKey(solanaAddress); 
         } catch (e) {
-            // console.warn(`${LOG_PREFIX_LUW} Invalid Solana address format: ${solanaAddress}. Error: ${e.message}`); // Reduced log
             await client.query('ROLLBACK');
-            return { success: false, error: "Invalid Solana address format. Please provide a valid Base58 encoded public key." };
+            // Escaped period in user-facing message
+            return { success: false, error: "Invalid Solana address format\\. Please provide a valid Base58 encoded public key\\." };
         }
 
         const existingLink = await client.query('SELECT telegram_id FROM users WHERE solana_wallet_address = $1 AND telegram_id != $2', [solanaAddress, stringTelegramId]);
@@ -1064,7 +1066,8 @@ async function linkUserWallet(telegramId, solanaAddress) {
             const linkedToExistingUserId = existingLink.rows[0].telegram_id;
             console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} already linked to user ID ${linkedToExistingUserId}.`);
             await client.query('ROLLBACK');
-            return { success: false, error: `This wallet address is already associated with another player (ID ending with ${String(linkedToExistingUserId).slice(-4)}). Please use a different address.` };
+            // Escaped period in user-facing message
+            return { success: false, error: `This wallet address is already associated with another player (ID ending with ${String(linkedToExistingUserId).slice(-4)})\\. Please use a different address\\.` };
         }
 
         const result = await client.query(
@@ -1074,32 +1077,36 @@ async function linkUserWallet(telegramId, solanaAddress) {
 
         if (result.rowCount > 0) {
             await client.query('COMMIT');
-            // console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked in DB.`); // Reduced log
             if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() }); 
-            return { success: true, message: `Your Solana wallet \`${escapeMarkdownV2(solanaAddress)}\` has been successfully linked!` }; 
+            // Escaped !, .
+            return { success: true, message: `Your Solana wallet \`${escapeMarkdownV2(solanaAddress)}\` has been successfully linked\\!` }; 
         } else {
             const currentUserState = await client.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
             await client.query('ROLLBACK'); 
             if (currentUserState.rowCount === 0) {
                 console.error(`${LOG_PREFIX_LUW} User ${stringTelegramId} not found. Cannot link wallet.`);
-                return { success: false, error: "Your player profile was not found. Please try \`/start\` again." };
+                // Escaped period
+                return { success: false, error: "Your player profile was not found\\. Please try \`/start\` again\\." };
             }
             if (currentUserState.rows[0].solana_wallet_address === solanaAddress) {
-                // console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} already linked to this user.`); // Reduced log
                 if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() });
-                return { success: true, message: `Your wallet \`${escapeMarkdownV2(solanaAddress)}\` was already linked to your account.` };
+                // Escaped period
+                return { success: true, message: `Your wallet \`${escapeMarkdownV2(solanaAddress)}\` was already linked to your account\\.` };
             }
             console.warn(`${LOG_PREFIX_LUW} User ${stringTelegramId} found, but wallet not updated. DB wallet: ${currentUserState.rows[0].solana_wallet_address}, Attempted: ${solanaAddress}.`);
-            return { success: false, error: "Failed to update wallet in DB. It might be the same, or an unknown issue occurred." }; // Simplified error
+            // Escaped period
+            return { success: false, error: "Failed to update wallet in DB\\. It might be the same, or an unknown issue occurred\\." };
         }
     } catch (error) {
         await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LUW} Rollback error: ${rbErr.message}`));
         if (error.code === '23505') { 
             console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} already linked to another user (unique constraint).`);
-            return { success: false, error: "This wallet address is already in use by another player. Please choose a different one." };
+            // Escaped period
+            return { success: false, error: "This wallet address is already in use by another player\\. Please choose a different one\\." };
         }
         console.error(`${LOG_PREFIX_LUW} Error linking wallet ${solanaAddress}:`, error);
-        return { success: false, error: error.message || "An unexpected server error occurred while linking your wallet." };
+        // Escaped period
+        return { success: false, error: escapeMarkdownV2(error.message || "An unexpected server error occurred while linking your wallet\\.") };
     } finally {
         client.release();
     }
@@ -1124,14 +1131,14 @@ async function getUserLinkedWallet(telegramId) {
         }
         return null; 
     } catch (error) {
-        console.error(`[GetUserWallet TG:${stringTelegramId}] Error getting linked wallet:`, error); // Shortened prefix
+        console.error(`[GetUserWallet TG:${stringTelegramId}] Error getting linked wallet:`, error);
         return null;
     }
 }
 
 async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
     const stringUserId = String(userId);
-    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`; // Shortened
+    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`;
     try {
         const query = `
             SELECT derivation_path
@@ -1139,6 +1146,8 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
             WHERE user_telegram_id = $1
             ORDER BY created_at DESC; 
         `;
+        // queryDatabase is from Part 1, assuming it's available and correct.
+        // If queryDatabase is the one you provided earlier, it handles its own errors.
         const res = await queryDatabase(query, [stringUserId], dbClient);
         let maxIndex = -1;
 
@@ -1154,16 +1163,11 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
                         if (!isNaN(currentIndex) && currentIndex > maxIndex) {
                             maxIndex = currentIndex;
                         }
-                    } else {
-                        // console.warn(`${LOG_PREFIX_GNAI} Malformed last part of derivation path (no quote): ${lastPart} in ${path}`); // Reduced log
                     }
-                } else {
-                    // console.warn(`${LOG_PREFIX_GNAI} Malformed derivation path (too short): ${path}`); // Reduced log
                 }
             }
         }
         const nextIndex = maxIndex + 1;
-        // console.log(`${LOG_PREFIX_GNAI} Determined next addressIndex: ${nextIndex}`); // Reduced log
         return nextIndex;
     } catch (error) {
         console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack?.substring(0,300));
@@ -1173,41 +1177,36 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
 
 async function deleteUserAccount(telegramId) {
     const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_DUA = `[DeleteUser TG:${stringTelegramId}]`; // Shortened
+    const LOG_PREFIX_DUA = `[DeleteUser TG:${stringTelegramId}]`;
     console.warn(`${LOG_PREFIX_DUA} CRITICAL ACTION: Attempting to delete user account and associated data for Telegram ID: ${stringTelegramId}.`);
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // console.log(`${LOG_PREFIX_DUA} Anonymizing references in 'jackpots'...`); // Reduced log
         await client.query('UPDATE jackpots SET last_won_by_telegram_id = NULL WHERE last_won_by_telegram_id = $1', [stringTelegramId]);
-        
-        // console.log(`${LOG_PREFIX_DUA} Anonymizing initiator references in 'games'...`); // Reduced log
         await client.query('UPDATE games SET initiator_telegram_id = NULL WHERE initiator_telegram_id = $1', [stringTelegramId]);
         
-        // Note: participants_ids anonymization in 'games' table is complex and currently omitted for brevity in original.
-        // If strict anonymization is needed, it would require fetching, filtering arrays, and updating.
-
         console.log(`${LOG_PREFIX_DUA} Preparing to delete user from 'users' table (CASCADE to related tables).`);
-        
         const result = await client.query('DELETE FROM users WHERE telegram_id = $1', [stringTelegramId]);
-
         await client.query('COMMIT');
 
         if (result.rowCount > 0) {
             console.log(`${LOG_PREFIX_DUA} User account ${stringTelegramId} and cascaded data deleted successfully from database.`);
             
-            // Clear in-memory caches
+            // Clear in-memory caches - ensure GAME_IDS is defined/imported if used here
+            const GAME_IDS_INTERNAL = typeof GAME_IDS !== 'undefined' ? GAME_IDS : { DICE_ESCALATOR: 'dice_escalator', DICE_21: 'dice21' }; // Fallback if GAME_IDS not in scope
+
             if (activeGames && activeGames instanceof Map) {
                 activeGames.forEach((game, gameId) => {
                     if (game && game.participants && Array.isArray(game.participants)) {
                         game.participants = game.participants.filter(p => String(p.userId) !== stringTelegramId);
-                        if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) { // Assumes GAME_IDS available
+                        // Check GAME_IDS_INTERNAL definition if this part is critical
+                        if (game.participants.length === 0 && game.type !== GAME_IDS_INTERNAL.DICE_ESCALATOR && game.type !== GAME_IDS_INTERNAL.DICE_21) {
                             activeGames.delete(gameId);
                         }
                     }
                     if (game && String(game.initiatorId) === stringTelegramId) activeGames.delete(gameId);
-                    if (game && String(game.userId) === stringTelegramId) activeGames.delete(gameId);
+                    if (game && String(game.userId) === stringTelegramId) activeGames.delete(gameId); // For single player games
                 });
             }
             if (userCooldowns && userCooldowns instanceof Map) userCooldowns.delete(stringTelegramId);
@@ -1215,7 +1214,6 @@ async function deleteUserAccount(telegramId) {
                 groupGameSessions.forEach((session, chatId) => {
                     if (session.players && session.players[stringTelegramId]) delete session.players[stringTelegramId];
                     if (session.initiator === stringTelegramId && Object.keys(session.players || {}).length === 0) groupGameSessions.delete(chatId);
-                    // else if (session.initiator === stringTelegramId) console.warn(`${LOG_PREFIX_DUA} Initiator ${stringTelegramId} of group game in chat ${chatId} deleted. Session state: ${JSON.stringify(session)}`); // Reduced log
                 });
             }
             if (walletCache && walletCache instanceof Map) walletCache.delete(stringTelegramId);
