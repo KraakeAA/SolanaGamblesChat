@@ -4374,54 +4374,6 @@ async function handleStartDice21Command(msg, betAmountLamports, gameModeArg = 'b
     }
 }
 
-
-async function forwardDice21Callback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_D21_CB_FWD = `[D21_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    const gameId = params[0]; 
-    const chatData = { id: originalChatId, type: originalChatType, message_id: originalMessageId };
-
-    await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
-
-    switch (action) {
-        case 'd21_stand': // PvB stand by player (No 'd21_hit' as it's emoji based now)
-            if (!gameId) { console.error("d21_stand: gameId missing"); return; }
-            await handleDice21PvBStand(gameId, userObject, originalMessageId, callbackQueryId, chatData);
-            break;
-        case 'play_again_d21': // PvB Play Again
-            const betAmountPvB = params[0] ? BigInt(params[0]) : null;
-            if (!betAmountPvB) { console.error("play_again_d21: bet missing"); return; }
-            if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-            await handleStartDice21Command({ from: userObject, chat: chatData, message_id: originalMessageId }, betAmountPvB, 'bot');
-            break;
-        case 'd21_pvb_cancel':
-             if (!gameId) { console.error("d21_pvb_cancel: gameId missing"); return; }
-             await handleDice21PvBCancel(gameId, userObject, originalMessageId, callbackQueryId, chatData);
-             break;
-        case 'd21_accept_pvp':
-            if (!gameId) { console.error("d21_accept_pvp: offerId missing"); return; }
-            await handleDice21PvPAccept(gameId, userObject, originalMessageId, callbackQueryId, chatData);
-            break;
-        case 'd21_cancel_offer':
-            if (!gameId) { console.error("d21_cancel_offer: offerId missing"); return; }
-            await handleDice21CancelOffer(gameId, userObject, originalMessageId, callbackQueryId, chatData);
-            break;
-        case 'd21_pvp_stand':
-            if (!gameId) { console.error("d21_pvp_stand: gameId missing"); return; }
-            const actingPlayerIdForStand = String(userObject.id || userObject.telegram_id);
-            await handleDice21PvPStandAction(gameId, actingPlayerIdForStand, originalMessageId, chatData);
-            break;
-        case 'play_again_d21_pvp':
-            const betAmountPvP = params[0] ? BigInt(params[0]) : null;
-            if (!betAmountPvP) { console.error("play_again_d21_pvp: bet missing"); return; }
-            if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-            await handleStartDice21Command({ from: userObject, chat: chatData, message_id: originalMessageId }, betAmountPvP, 'pvp');
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_D21_CB_FWD} Unknown Dice 21 action in forwarder: ${action}`);
-            // await bot.answerCallbackQuery(callbackQueryId, { text: `⚠️ Unknown game action: ${escapeMarkdownV2(action)}`, show_alert: true }); // Optional
-    }
-}
-
 async function handleDice21PvBCancel(gameId, userObj, originalMessageId, callbackQueryId, chatData) {
     const playerId = String(userObj.id || userObj.telegram_id);
     const chatId = String(chatData.id);
