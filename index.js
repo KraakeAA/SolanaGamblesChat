@@ -60,13 +60,13 @@ const CASINO_ENV_DEFAULTS = {
   'MIN_BET_AMOUNT_LAMPORTS': '5000000',  // 0.005 SOL
   'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
   'COMMAND_COOLDOWN_MS': '1500',
-  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes
+  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes (for PvP offers)
   'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
   'TARGET_JACKPOT_SCORE': '100',
   'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
   'DICE_ESCALATOR_BUST_ON': '1',
-  'DICE_21_TARGET_SCORE': '21',
-  'DICE_21_BOT_STAND_SCORE': '17',
+  'DICE_21_TARGET_SCORE': '21', // Default is 21
+  'DICE_21_BOT_STAND_SCORE': '17', // Default is 17
   'OU7_DICE_COUNT': '2',
   'OU7_PAYOUT_NORMAL': '1', // Pays 1x the bet (total 2x back)
   'OU7_PAYOUT_SEVEN': '4',  // Pays 4x the bet (total 5x back)
@@ -80,8 +80,9 @@ const CASINO_ENV_DEFAULTS = {
   'MAX_RETRY_POLLING_DELAY': '60000', 
   'INITIAL_RETRY_POLLING_DELAY': '5000',
   'BOT_NAME': 'Solana Casino Royale',
-  'DICE_ROLL_POLL_INTERVAL_MS': '2500', // How often to check DB for dice roll result
-  'DICE_ROLL_POLL_ATTEMPTS': '24',      // Max attempts (24 * 2.5s = 60 seconds timeout)
+  // Environment variables used by your existing polling constants
+  'DICE_ROLL_POLL_INTERVAL_MS': '2500', 
+  'DICE_ROLL_POLL_ATTEMPTS': '24',      
 };
 
 const PAYMENT_ENV_DEFAULTS = {
@@ -93,18 +94,16 @@ const PAYMENT_ENV_DEFAULTS = {
   'MIN_WITHDRAWAL_LAMPORTS': '10000000', // 0.01 SOL
   'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',  // For payouts
   'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',             // For payouts
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',               // For payouts
   'PAYOUT_JOB_RETRIES': '3',
   'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
-  'SWEEP_INTERVAL_MS': '300000',                    // 5 minutes
+  'SWEEP_INTERVAL_MS': '300000',                      // 5 minutes
   'SWEEP_BATCH_SIZE': '15',
-  // **IMPORTANT CHANGE**: This is now just for the transaction fee of the sweep itself.
-  // Rent is calculated dynamically in sweepDepositAddresses.
-  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',             // 0.00005 SOL (covers base fee + priority)
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',             // For sweep transactions
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',      // For sweep transactions
-  'SWEEP_ADDRESS_DELAY_MS': '1500',                 // Delay between processing each address in sweep batch
-  'SWEEP_RETRY_ATTEMPTS': '2',                      // For individual sweep transaction attempts
+  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',               // 0.00005 SOL (covers base fee + priority)
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',                // For sweep transactions
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',         // For sweep transactions
+  'SWEEP_ADDRESS_DELAY_MS': '1500',                   // Delay between processing each address in sweep batch
+  'SWEEP_RETRY_ATTEMPTS': '2',                        // For individual sweep transaction attempts
   'SWEEP_RETRY_DELAY_MS': '10000',
   'RPC_MAX_CONCURRENT': '10',
   'RPC_RETRY_BASE_DELAY': '750',
@@ -120,11 +119,10 @@ const PAYMENT_ENV_DEFAULTS = {
   'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', // To respect Telegram rate limits
   'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', // Interval between sends
   'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',    // Max 1 message per interval
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',    // Check for new deposits every 15s
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',     // Check for new deposits every 15s
   'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75',// How many active deposit addrs to check per cycle
   'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', // How many signatures to fetch per address
   'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), // 15 minutes for linked wallet cache
-  // DEPOSIT_ADDR_CACHE_TTL_MS now depends on DEPOSIT_ADDRESS_EXPIRY_MINUTES from CASINO_ENV_DEFAULTS
   'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), // Deposit address expiry + 5 min buffer
   'MAX_PROCESSED_TX_CACHE': '10000', // Max size for processedDepositTxSignatures set
   'INIT_DELAY_MS': '7000', // General delay for starting background tasks
@@ -156,11 +154,38 @@ const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE; // BI
 const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY; // bs58 encoded secret key for main payout/sweep wallet
 const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY; // Optional, for referral payouts
 
-// Dice Roll Polling Constants (from CASINO_ENV_DEFAULTS)
-const DICE_ROLL_POLLING_INTERVAL_MS = parseInt(process.env.DICE_ROLL_POLL_INTERVAL_MS, 10);
-const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLL_ATTEMPTS, 10);
+// --- GAME_IDS Constant - ENSURE IT'S UPDATED LIKE THIS (Inserted as requested) ---
+const GAME_IDS = {
+    COINFLIP: 'coinflip',
+    RPS: 'rps',
+    DICE_ESCALATOR: 'dice_escalator',
+    DICE_21: 'dice21', // This now clearly represents Player vs. Bot (PvB) Dice 21
+    DICE_21_PVP_OFFER: 'dice21_pvp_offer', // For the initial PvP game offer message
+    DICE_21_PVP: 'dice21_pvp',          // For an active PvP Dice 21 game
+    OVER_UNDER_7: 'ou7',
+    DUEL: 'duel',
+    LADDER: 'ladder',
+    SEVEN_OUT: 'sevenout',
+    SLOT_FRENZY: 'slotfrenzy',
+    // ... any other game IDs you have ...
+};
 
-// Game Specific Constants (from CASINO_ENV_DEFAULTS)
+// Dice 21 Specific Constants (Values are derived from CASINO_ENV_DEFAULTS which match your spec)
+const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10); // Defaults to 21
+const DICE_21_BOT_STAND_SCORE = parseInt(process.env.DICE_21_BOT_STAND_SCORE, 10); // Defaults to 17
+
+// Constants for Helper Bot dice roll polling (Modified as per your specification)
+const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLLING_MAX_ATTEMPTS) || 20; // e.g., 20 attempts
+const DICE_ROLL_POLLING_INTERVAL_MS = parseInt(process.env.DICE_ROLL_POLLING_INTERVAL_MS) || 1000; // e.g., 1 second interval
+// Note: The above will look for env vars DICE_ROLL_POLLING_MAX_ATTEMPTS and DICE_ROLL_POLLING_INTERVAL_MS.
+// Your CASINO_ENV_DEFAULTS setup uses DICE_ROLL_POLL_ATTEMPTS and DICE_ROLL_POLL_INTERVAL_MS.
+// If you intend these to use the values from CASINO_ENV_DEFAULTS, ensure the process.env keys match,
+// or adjust CASINO_ENV_DEFAULTS to include 'DICE_ROLL_POLLING_MAX_ATTEMPTS' and 'DICE_ROLL_POLLING_INTERVAL_MS'.
+
+// Timeout for PvP game offers (Value is derived from CASINO_ENV_DEFAULTS which matches your spec)
+const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS, 10); // Defaults to 120000
+
+// Other Game Specific Constants (from your original code)
 const OU7_DICE_COUNT = parseInt(process.env.OU7_DICE_COUNT, 10);
 const OU7_PAYOUT_NORMAL = parseFloat(process.env.OU7_PAYOUT_NORMAL);
 const OU7_PAYOUT_SEVEN = parseFloat(process.env.OU7_PAYOUT_SEVEN);
@@ -235,8 +260,7 @@ const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION
 const MAIN_JACKPOT_ID = 'dice_escalator_main'; 
 const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE_ESCALATOR, 10);
-const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
-const DICE_21_BOT_STAND_SCORE = parseInt(process.env.DICE_21_BOT_STAND_SCORE, 10);
+// DICE_21_TARGET_SCORE and DICE_21_BOT_STAND_SCORE are already defined above using the same process.env keys.
 
 const MIN_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MIN_BET_AMOUNT_LAMPORTS);
 const MAX_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MAX_BET_AMOUNT_LAMPORTS);
@@ -244,7 +268,7 @@ const MIN_BET_USD_val = parseFloat(process.env.MIN_BET_USD);
 const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
-const JOIN_GAME_TIMEOUT_MS = parseInt(process.env.JOIN_GAME_TIMEOUT_MS, 10);
+// JOIN_GAME_TIMEOUT_MS is already defined above using the same process.env key.
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
 const RULES_CALLBACK_PREFIX = process.env.RULES_CALLBACK_PREFIX;
 const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
@@ -264,10 +288,8 @@ if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 
-// combinedRpcEndpointsForConnection check already done and includes a fallback.
-
-const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
-for (const [key, value] of Object.entries(criticalGameScores)) {
+const criticalGameScoresCheck = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
+for (const [key, value] of Object.entries(criticalGameScoresCheck)) {
     if (isNaN(value) || value <=0) {
         console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number.`);
         process.exit(1);
@@ -281,7 +303,7 @@ if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
     console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
     process.exit(1);
 }
-if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) { // Ensure it's positive
+if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) { 
     console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
     process.exit(1);
 }
@@ -308,7 +330,6 @@ function formatLamportsToSolStringForLog(lamports) {
         try { lamports = BigInt(lamports); }
         catch (e) { return 'Invalid_Lamports'; }
     }
-    // Use toFixed with SOL_DECIMALS for consistent decimal places in logs
     return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
@@ -319,11 +340,11 @@ console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
   Bet Limits (USD): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} (Lamports Ref: ${formatLamportsToSolStringForLog(MIN_BET_AMOUNT_LAMPORTS_config)} SOL - ${formatLamportsToSolStringForLog(MAX_BET_AMOUNT_LAMPORTS_config)} SOL)
   Default Starting Credits: ${formatLamportsToSolStringForLog(DEFAULT_STARTING_BALANCE_LAMPORTS)} SOL
-  Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s, Game Join Timeout: ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min
+  Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s, Game Join Timeout (PvP Offers): ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min
   Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LAMPORTS)} SOL, Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL
   Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
   SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
-  Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
+  Dice Roll Polling (Helper Bot System): Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
   Sweep Fee Buffer (for TX cost): ${formatLamportsToSolStringForLog(BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS))} SOL
 -------------------------------------------------`);
 
@@ -344,7 +365,7 @@ const pool = new Pool({
 pool.on('error', (err, client) => {
   console.error('❌ Unexpected error on idle PostgreSQL client', err);
   if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
-    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details.`; // Removed \\. for MarkdownV2
+    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details.`; 
     safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
       .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
   } else {
@@ -473,7 +494,6 @@ async function safeSendMessage(chatId, text, options = {}) {
                     let plainTextFallbackOptions = { ...options };
                     delete plainTextFallbackOptions.parse_mode; // Remove parse_mode for plain text
                     
-                    // Use original full text for fallback, then re-truncate if necessary for plain text
                     let plainTextForFallback = text; 
                     if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
                         const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`;
@@ -600,7 +620,7 @@ const SLOT_PAYOUTS = { // Key is the dice value from Telegram's slot machine (1-
     64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, // BAR BAR BAR (Value 64)
     1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" }, // SEVEN SEVEN SEVEN (Value 1)
     22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },  // LEMON LEMON LEMON (Value 22)
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },   // GRAPE GRAPE GRAPE (Value 43) - (assuming bell emoji represents grape for example)
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },  // GRAPE GRAPE GRAPE (Value 43) - (assuming bell emoji represents grape for example)
     // Add other winning combinations as needed
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; // Represents loss of the bet
