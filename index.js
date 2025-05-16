@@ -8518,8 +8518,18 @@ async function handleHistoryCommand(msg) {
 }
 
 async function handleMenuAction(userId, originalChatId, originalMessageId, menuType, params = [], isFromCallback = true, originalChatType = 'private') {
-    const stringUserId = String(userId); 
-    const logPrefix = `[MenuAction UID:${stringUserId} Type:${menuType}]`; // Shortened
+    // --- BEGIN DEBUG LOGS ---
+    console.log(`[DEBUG handleMenuAction ENTER] RAW userId param: ${userId} (type: ${typeof userId})`);
+    const stringUserId = String(userId);
+    console.log(`[DEBUG handleMenuAction AFTER String()] stringUserId: ${stringUserId} (type: ${typeof stringUserId})`);
+    // --- END DEBUG LOGS ---
+
+    const logPrefix = `[MenuAction UID:${stringUserId} Type:${menuType}]`; // Log prefix uses stringUserId
+
+    // Check if stringUserId itself is "undefined" (the string) or an empty string after conversion
+    if (stringUserId === "undefined" || stringUserId === "") {
+        console.error(`[DEBUG handleMenuAction] stringUserId is problematic before calling getOrCreateUser: '${stringUserId}'`);
+    }
 
     let userObject = await getOrCreateUser(stringUserId); 
     if(!userObject) {
