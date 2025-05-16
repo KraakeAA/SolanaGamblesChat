@@ -8274,18 +8274,20 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
 
         // Using your example's line-by-line concatenation style and escaping
         const depositMessage =
-            `💰 *Your Personal Solana Deposit Address*\n\n` +
-            `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` + // Changed "your SOL deposits to the following unique address"
-            `\`${escapeMarkdownV2(depositAddress)}\`\n` + // Added newline consistency
-            `_\\(Tap the address above to copy\\)_\\n\n` +
-            `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires <t:${expiryTimestamp}:R>\\)\\. __Do not use after expiry\\.__\n` +
-            `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
-            `⚠️ *Important Information:*\n` +
-            `* Send *only SOL* to this address\\.\n` +
-            `* Do *not* send NFTs or other tokens\\.\n` +
-            `* Deposits from exchanges may take longer to confirm\\.\n` +
-            `* This address is *unique to you* for this deposit session\\. Do not share it\\.\n` +
-            `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your \`/wallet\` menu\\.`;
+    `💰 *Your Personal Solana Deposit Address* 💰\n\n` +
+    `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
+    `\`${escapeMarkdownV2(depositAddress)}\`\n` +
+    `_\\(Tap the address above to copy\\)_\\n\n` +
+    // Isolating the timestamp part a bit more, ensuring spaces, and confirming escapes
+    `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires ${'<t:' + expiryTimestamp + ':R>'}\\)\\.\n` +
+    `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
+    `⚠️ *Important Information:*\n` +
+    `* Send *only SOL* to this address\\.\n` +
+    `* Do *not* send NFTs or other tokens\\.\n` +
+    `* Deposits from exchanges may take longer to confirm\\.\n` +
+    `* This address is *unique to you* for this deposit session\\. Do not share it\\.\n` +
+    `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your \`/wallet\` menu\\.`;
+
         
         const keyboard = {
             inline_keyboard: [
