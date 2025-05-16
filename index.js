@@ -2427,37 +2427,37 @@ async function handleHelpCommand(originalMessageObject) {
     }
 
     const helpTextParts = [
-        `🌟 Greetings, ${playerMention}! Welcome to the **${botNameEscaped} Casino Royale v${BOT_VERSION}**! 🌟`,
-        `\nYour ultimate destination for electrifying Solana\\-powered casino games and big wins! Here’s your guide to the action:`,
+        `🌟 Greetings, ${playerMention}\\! Welcome to the **${botNameEscaped} Casino Royale v${BOT_VERSION}**\\! 🌟`, // Escaped !
+        `\nYour ultimate destination for electrifying Solana\\-powered casino games and big wins\\! Here’s your guide to the action:`, // Escaped !
         `\n\n*🏦 Your Casino Account & Funds:*`,
         `▫️ \`/balance\` or \`/bal\` \\- Peek at your current treasure chest\\. *(Summary in groups, full details in DM)*`,
-        `▫️ \`/wallet\` \\- Your personal casino vault! Manage deposits, withdrawals, and link your SOL address\\. *(Best experienced in DM)*`,
+        `▫️ \`/wallet\` \\- Your personal casino vault\\! Manage deposits, withdrawals, and link your SOL address\\. *(Best experienced in DM)*`, // Escaped !
         `▫️ \`/deposit\` \\- Instantly get your unique SOL deposit address\\. *(Handled securely in DM)*`,
         `▫️ \`/withdraw\` \\- Cash out your SOL winnings smoothly\\. *(Handled securely in DM)*`,
         `▫️ \`/setwallet <YourSolanaAddress>\` \\- Link or update your SOL withdrawal wallet\\. *(Use this in DM for privacy)*`,
         `▫️ \`/history\` \\- Review your recent transaction and game history\\. *(Available in DM)*`,
-        `▫️ \`/referral\` \\- Grab your unique referral link & track your earnings from inviting friends\\! *(Details in DM)*`,
+        `▫️ \`/referral\` \\- Grab your unique referral link & track your earnings from inviting friends\\! *(Details in DM)*`, // Escaped !
         `\n*📖 Casino Info & Support:*`,
-        `▫️ \`/help\` \\- You're looking at it! This comprehensive guide to all things casino\\.`,
+        `▫️ \`/help\` \\- You're looking at it\\! This comprehensive guide to all things casino\\.`, // Escaped !
         `▫️ \`/rules\` or \`/info\` \\- Delve into the detailed rules for all our thrilling games\\. *(Interactive menu in DM)*`,
-        `▫️ \`/jackpot\` \\- Check the current eye\\-watering amount of the Dice Escalator Super Jackpot\\!`,
-        `▫️ \`/leaderboards\` \\- See who's topping the charts\\! *(Coming Soon!)*`,
-        `\n*🎲 Available Games \\(Play in groups or PM against the Bot Dealer!\\):*`,
+        `▫️ \`/jackpot\` \\- Check the current eye\\-watering amount of the Dice Escalator Super Jackpot\\!`, // Escaped !
+        `▫️ \`/leaderboards\` \\- See who's topping the charts\\! *(Coming Soon\\!)*`, // Escaped ! twice
+        `\n*🎲 Available Games \\(Play in groups or PM against the Bot Dealer\\!\\):*`, // Escaped ! (parentheses are for grouping text, not Markdown entities here)
         `▫️ \`/coinflip <bet>\` \\- 🪙 Classic Heads or Tails for two players\\.`,
         `▫️ \`/rps <bet>\` \\- 🪨📄✂️ Epic Rock Paper Scissors duel for two players\\.`,
-        `▫️ \`/de <bet>\` \\(or \`/diceescalator\`\\) \\- 🎲 Climb the score ladder for escalating wins & Jackpot glory\\! (vs\\. Bot)`,
+        `▫️ \`/de <bet>\` \\(or \`/diceescalator\`\\) \\- 🎲 Climb the score ladder for escalating wins & Jackpot glory\\! (vs\\. Bot)`, // Escaped !
         `▫️ \`/d21 <bet>\` \\(or \`/blackjack\`\\) \\- 🃏 Fast\\-paced Dice Blackjack against the Bot Dealer\\. (vs\\. Bot)`,
-        `▫️ \`/ou7 <bet>\` \\(or \`/overunder7\`\\) \\- 🎲 Bet on the sum: Over 7, Under 7, or Exactly 7\\! (vs\\. Bot)`,
+        `▫️ \`/ou7 <bet>\` \\(or \`/overunder7\`\\) \\- 🎲 Bet on the sum: Over 7, Under 7, or Exactly 7\\! (vs\\. Bot)`, // Escaped !
         `▫️ \`/duel <bet>\` \\(or \`/highroller\`\\) \\- ⚔️ High\\-stakes dice duel against the Bot Dealer\\. (vs\\. Bot)`,
-        `▫️ \`/ladder <bet>\` \\(or \`/greedsladder\`\\) \\- 🪜 Risk it all in Greed's Ladder \\- climb high, don't bust\\! (vs\\. Bot)`,
+        `▫️ \`/ladder <bet>\` \\(or \`/greedsladder\`\\) \\- 🪜 Risk it all in Greed's Ladder \\- climb high, don't bust\\! (vs\\. Bot)`, // Escaped !
         `▫️ \`/s7 <bet>\` \\(or \`/sevenout\`, \`/craps\`\\) \\- 🎲 Simplified & lightning\\-fast Craps action\\. (vs\\. Bot)`,
-        `▫️ \`/slot <bet>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- 🎰 Spin the Telegram Slot Machine for dazzling prizes\\! (vs\\. Bot)`,
+        `▫️ \`/slot <bet>\` \\(or \`/slots\`, \`/slotfrenzy\`\\) \\- 🎰 Spin the Telegram Slot Machine for dazzling prizes\\! (vs\\. Bot)`, // Escaped !
         `\n*💰 Betting Guide:*`,
         `To place a bet, use the game command followed by your bet amount in *USD* (e\\.g\\., \`/d21 5\` for $5 USD), or *SOL* (e\\.g\\., \`/d21 0.1 sol\`, \`/d21 0.05\`), or *Lamports* (e\\.g\\. \`/d21 10000000 lamports\`).`,
         `If no bet is specified, the game typically defaults to the minimum USD bet\\.`,
         `Current Bet Limits (USD): *${escapeMarkdownV2(minBetUsdDisplay)}* to *${escapeMarkdownV2(maxBetUsdDisplay)}*\\.${referenceLamportLimits}`,
         `\n*🏆 Dice Escalator Super Jackpot:*`,
-        `Achieve a score of *${jackpotScoreInfo} or higher* in Dice Escalator AND beat the Bot Dealer to seize the magnificent Super Jackpot\\! A portion of every Dice Escalator bet fuels its growth\\.`,
+        `Achieve a score of *${jackpotScoreInfo} or higher* in Dice Escalator AND beat the Bot Dealer to seize the magnificent Super Jackpot\\! A portion of every Dice Escalator bet fuels its growth\\.`, // Escaped !
         ADMIN_USER_ID ? `For support or issues, feel free to contact an admin or our dedicated support channels\\. (Admin Ref: ${escapeMarkdownV2(String(ADMIN_USER_ID).slice(0, 4))}\\.\\.\\.)` : `For support, please refer to group administrators or the casino's official support channels\\.`,
         `\n💡 *Pro Tip:* For sensitive actions like managing your wallet or viewing personal history, it's always best to DM me directly: @${escapeMarkdownV2(botUsername)}`
     ];
