@@ -8221,6 +8221,7 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* Reduced log */ }
 
+    // DM Redirection Logic
     if (String(commandChatId) !== userId) {
         if (msg.message_id && msg.chat?.id && String(msg.chat.id) !== userId) {
             if (!msg.isCallbackRedirect) {
@@ -8230,6 +8231,7 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         await safeSendMessage(commandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs\\.`, { parse_mode: 'MarkdownV2' });
     }
 
+    // Loading message - keeping this one with its minimal, known-good escaping
     const loadingDmMsgText = `Generating your personal Solana deposit address\\.\\.\\. This may take a moment\\. ⚙️`;
     const loadingDmMsg = await safeSendMessage(userId, loadingDmMsgText, { parse_mode: 'MarkdownV2' });
     const loadingDmMsgId = loadingDmMsg?.message_id;
@@ -8251,7 +8253,7 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         } else {
             const newAddress = await generateUniqueDepositAddress(userId, client);
             if (!newAddress) {
-                throw new Error("Failed to generate a new deposit address\\. Please try again or contact support\\.");
+                throw new Error("Failed to generate a new deposit address. Please try again or contact support."); // Raw error, escaping will happen in catch block
             }
             depositAddress = newAddress;
             newAddressGenerated = true;
@@ -8277,20 +8279,22 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`;
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
 
-        // --- MODIFIED depositMessage: Removed internal bolding from list items ---
+        // --- ULTRA SIMPLE depositMessage ---
+        // No explicit bolding, italics, underlines, or escaped . ( ) etc., in the static parts.
+        // escapeMarkdownV2 is still used for dynamic variables.
         const depositMessage =
-            `💰 *Your Personal Solana Deposit Address*\n\n` +
+            `Your Personal Solana Deposit Address\n\n` +
             `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
-            `\`${escapeMarkdownV2(depositAddress)}\`\n` +
-            `_\\(Tap the address above to copy\\)_\\n\n` +
-            `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemainingMinutes))} minutes* \\(expires around ${escapeMarkdownV2(expiryDateTimeString)}\\)\\. __Do not use after expiry\\.__\n` +
-            `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
-            `⚠️ *Important Information:*\n` +
-            `* Send SOL to this address\\.\n` + // Bolding removed from "only SOL"
-            `* Do not send NFTs or other tokens\\.\n` + // Bolding removed from "not"
-            `* Deposits from exchanges may take longer to confirm\\.\n` +
-            `* This address is unique to you for this deposit session\\. Do not share it\\.\n` + // Bolding removed from "unique to you"
-            `* To generate a new address later, please use the \`/deposit\` command or the "Deposit SOL" option in your \`/wallet\` menu\\.`;
+            `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
+            `(Tap the address above to copy)\n\n` +
+            `This address is valid for approximately ${escapeMarkdownV2(String(timeRemainingMinutes))} minutes (expires around ${escapeMarkdownV2(expiryDateTimeString)}). Do not use after expiry.\n` +
+            `Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
+            `Important Information:\n` +
+            `- Send only SOL to this address.\n` +
+            `- Do not send NFTs or other tokens.\n` +
+            `- Deposits from exchanges may take longer to confirm.\n` +
+            `- This address is unique to you for this deposit session. Do not share it.\n` +
+            `- To generate a new address later, please use the /deposit command or the "Deposit SOL" option in your /wallet menu.`;
 
         const keyboard = {
             inline_keyboard: [
@@ -8309,6 +8313,7 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
         console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack?.substring(0, 500));
 
+        // The errorText message still uses escapes for its own structure, this is fine.
         const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`;
 
         const errorKeyboard = { inline_keyboard: [[{ text: "Try Again", callback_data: DEPOSIT_CALLBACK_ACTION }]] };
