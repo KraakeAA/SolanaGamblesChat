@@ -1906,122 +1906,316 @@ bot.on('message', async (msg) => {
 });
 
 
-// --- Callback Query Handler (`bot.on('callback_query')`) ---
+// --- Callback Query Handler (`bot.on('callback_query')`) - UPDATED ---
 bot.on('callback_query', async (callbackQuery) => {
     const LOG_PREFIX_CBQ = `[CBQ ID:${callbackQuery.id} User:${callbackQuery.from.id}]`;
-    if (isShuttingDown) { /* ... */ return; }
+    if (isShuttingDown) {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: "Bot is shutting down." }).catch(() => {});
+        return;
+    }
 
     const msg = callbackQuery.message;
     const userFromCb = callbackQuery.from;
     const callbackQueryId = callbackQuery.id;
     const data = callbackQuery.data;
 
-    if (!msg || !userFromCb || !data) { /* ... malformed error ... */ return; }
+    if (!msg || !userFromCb || !data) {
+        console.warn(`${LOG_PREFIX_CBQ} Ignoring malformed/incomplete callback query.`);
+        await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
+        return;
+    }
 
     const userId = String(userFromCb.id);
-    if (!userId || userId === "undefined") { /* ... undefined userId error ... */ return; }
-    
+    if (!userId || userId === "undefined") {
+        console.error(`${LOG_PREFIX_CBQ} CRITICAL: User ID undefined for callback. Data: ${data}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "⚠️ Error with user session.", show_alert: true }).catch(() => {});
+        return;
+    }
+
     const originalChatId = String(msg.chat.id);
     const originalChatType = msg.chat.type;
-    const originalMessageId = msg.message_id;
+    const originalMessageId = String(msg.message_id); // Ensure it's a string for comparisons
 
-    await bot.answerCallbackQuery(callbackQueryId).catch(()=>{});
+    // Answer callback query immediately to remove "loading" state on button
+    await bot.answerCallbackQuery(callbackQueryId).catch(()=>{ console.warn(`${LOG_PREFIX_CBQ} Failed to answer callback query ${callbackQueryId} initially.`); });
 
     let userObjectForCallback = await getOrCreateUser(userId, userFromCb.username, userFromCb.first_name, userFromCb.last_name);
-    if (!userObjectForCallback) { /* ... user fetch error ... */ return; }
+    if (!userObjectForCallback) {
+        console.error(`${LOG_PREFIX_CBQ} Failed to get/create user for callback. User ID: ${userId}`);
+        // No message sent back to user here, as callback was answered. Error is logged.
+        return;
+    }
 
     const [action, ...params] = data.split(':');
-    console.log(`${LOG_PREFIX_CBQ} Action: "${action}", Params: [${params.join(', ')}] (Chat: ${originalChatId}, Type: ${originalChatType})`);
+    console.log(`${LOG_PREFIX_CBQ} Action: "${action}", Params: [${params.join(', ')}] (Chat: ${originalChatId}, Type: ${originalChatType}, MsgID: ${originalMessageId})`);
 
-    if (action === 'menu' && (params[0] === 'main' || params[0] === 'wallet' || params[0] === 'game_selection')) {
-        if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+    // Clear user state for menu navigations
+    if (action === 'menu' && (params[0] === 'main' || params[0] === 'wallet' || params[0] === 'game_selection' || params[0] === 'rules')) {
+        if (typeof clearUserState === 'function') clearUserState(userId);
+        else userStateCache.delete(userId);
     }
 
+    // --- Redirection logic for sensitive actions (remains the same from your original Part 5a S1) ---
     let isCallbackRedirectedToDm = false;
-    const sensitiveActions = [ /* ... as defined before ... */ ];
+    const sensitiveActions = [
+        DEPOSIT_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION, 'quick_deposit',
+        WITHDRAW_CALLBACK_ACTION, 'menu:wallet', 'menu:history', 'menu:link_wallet_prompt',
+        'menu:referral', 'process_withdrawal_confirm' // process_withdrawal_confirm is new here
+    ];
     const fullCallbackActionForSensitivityCheck = action === 'menu' ? `${action}:${params[0]}` : action;
+
     if ((originalChatType === 'group' || originalChatType === 'supergroup') && sensitiveActions.includes(fullCallbackActionForSensitivityCheck)) {
         isCallbackRedirectedToDm = true;
-        // ... (DM redirection message sending logic from your original Part 5a S1) ...
-    }
+        let botUsernameForRedirect = "our bot";
+        try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsernameForRedirect = selfInfo.username; } catch (e) { console.warn("Could not fetch bot username for redirect message"); }
 
-    const mockMsgObjectForHandler = { /* ... as defined before ... */
+        const redirectText = `${getPlayerDisplayReference(userObjectForCallback)}, for your privacy and security, please continue this action in our direct message. I've sent you a prompt there: @${escapeMarkdownV2(botUsernameForRedirect)}`;
+        const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
+        const menuActionForUrl = action === 'menu' ? `${action}_${params[0]}` : action;
+
+        if (originalMessageId && bot) { // Check if originalMessageId is valid
+            await bot.editMessageText(redirectText, {
+                chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'MarkdownV2', // Ensure message_id is number
+                reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeMarkdownV2(botUsernameForRedirect)}`, url: `https://t.me/${botUsernameForRedirect}?start=cb_${menuActionForUrl}${callbackParamsForUrl}`}]] }
+            }).catch(e => {
+                if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                    console.warn(`${LOG_PREFIX_CBQ} Failed to edit redirect message: ${e.message}. Sending new.`);
+                    safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'}); // Fallback to new message
+                }
+            });
+        } else {
+            await safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'});
+        }
+    }
+    // --- End of redirection logic ---
+
+    const mockMsgObjectForHandler = {
         from: userObjectForCallback,
         chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
-        message_id: isCallbackRedirectedToDm ? null : originalMessageId,
+        message_id: isCallbackRedirectedToDm ? null : originalMessageId, // message_id might be null if new msg needed in DM
         isCallbackRedirect: isCallbackRedirectedToDm,
         originalChatInfo: isCallbackRedirectedToDm ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
     };
 
     try {
-        if (action.startsWith(RULES_CALLBACK_PREFIX.substring(0, RULES_CALLBACK_PREFIX.lastIndexOf('_') + 1))) {
-            // ... (rules display logic from your original Part 5a S1) ...
+        if (action.startsWith(RULES_CALLBACK_PREFIX)) { // Handles rules_game_GAMEID
+            const gameCodeForRule = action.substring(RULES_CALLBACK_PREFIX.length);
+            if (typeof handleDisplayGameRules === 'function') {
+                 await handleDisplayGameRules(mockMsgObjectForHandler.chat.id, mockMsgObjectForHandler.message_id, gameCodeForRule, userObjectForCallback, mockMsgObjectForHandler.chat.type);
+            } else console.error("Missing handler: handleDisplayGameRules");
         } else {
             switch (action) {
-                case 'show_rules_menu': /* ... */ break;
-                case DEPOSIT_CALLBACK_ACTION: case QUICK_DEPOSIT_CALLBACK_ACTION: case 'quick_deposit': /* ... */ break;
-                case WITHDRAW_CALLBACK_ACTION: /* ... */ break;
-                case 'menu': /* ... (calls handleMenuAction) ... */ break;
-                case 'process_withdrawal_confirm': /* ... (calls handleWithdrawalConfirmation) ... */ break;
-                case 'join_game': case 'cancel_game': case 'rps_choose': 
-                    if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    else console.warn(`forwardGameCallback not defined`); break;
-                
-                case 'de_roll_prompt': case 'de_cashout': case 'jackpot_display_noop': case 'play_again_de': case 'de_cancel_game':
-                    if (typeof forwardDiceEscalatorCallback === 'function') await forwardDiceEscalatorCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    else console.warn(`forwardDiceEscalatorCallback not defined`); break;
-
-                // Dice 21 Callbacks - All routed to forwardDice21Callback
-                case 'd21_stand':       // PvB stand
-                case 'play_again_d21':  // PvB play again
-                case 'd21_pvb_cancel':  // PvB cancel game
-                case 'd21_accept_pvp':
-                case 'd21_cancel_offer':
-                case 'd21_pvp_stand':   // PvP stand
-                case 'play_again_d21_pvp':
-                    if (typeof forwardDice21Callback === 'function') {
-                        await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.warn(`forwardDice21Callback not defined for ${action}`);
+                case 'show_rules_menu':
+                    if (typeof handleRulesCommand === 'function') await handleRulesCommand(mockMsgObjectForHandler.chat.id, userObjectForCallback, mockMsgObjectForHandler.message_id, true, mockMsgObjectForHandler.chat.type);
+                    else console.error("Missing handler: handleRulesCommand");
+                    break;
+                case DEPOSIT_CALLBACK_ACTION:
+                case QUICK_DEPOSIT_CALLBACK_ACTION:
+                case 'quick_deposit':
+                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(mockMsgObjectForHandler, params, userId); // Pass userId for clarity
+                    else console.error("Missing handler: handleDepositCommand");
+                    break;
+                case WITHDRAW_CALLBACK_ACTION:
+                    if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(mockMsgObjectForHandler, params, userId); // Pass userId
+                    else console.error("Missing handler: handleWithdrawCommand");
+                    break;
+                case 'menu':
+                    if (typeof handleMenuAction === 'function') await handleMenuAction(userId, originalChatId, originalMessageId, params[0], params.slice(1), true, originalChatType);
+                    else console.error("Missing handler: handleMenuAction");
+                    break;
+                case 'process_withdrawal_confirm':
+                    if(typeof processWithdrawalConfirmation === 'function') { // Renamed from handleWithdrawalConfirmation for clarity
+                        const decision = params[0];
+                        const currentState = userStateCache.get(userId); // State should be in DM (userId as chatId)
+                        if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === userId) {
+                           await processWithdrawalConfirmation(
+                                userId,
+                                currentState.chatId, // DM chat ID
+                                currentState.messageId, // Confirmation message ID in DM
+                                currentState.data.linkedWallet,
+                                currentState.data.amountLamportsStr,
+                                currentState.data.feeLamportsStr,
+                                currentState.data.originalGroupChatId, // For updating group message if any
+                                currentState.data.originalGroupMessageId
+                            );
+                        } else if (decision === 'no') {
+                            if (bot && originalMessageId) bot.editMessageText("Withdrawal cancelled by user.", {chat_id: originalChatId, message_id: Number(originalMessageId), reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}}).catch(()=>{});
+                            clearUserState(userId);
+                        } else {
+                            if (bot && originalMessageId) bot.editMessageText("Invalid confirmation or state expired. Withdrawal cancelled.", {chat_id: originalChatId, message_id: Number(originalMessageId), reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}}).catch(()=>{});
+                            clearUserState(userId);
+                        }
+                    } else console.error("Missing handler: processWithdrawalConfirmation");
                     break;
 
-                // Other game callbacks
-                case 'ou7_choice': case 'play_again_ou7':
-                case 'duel_roll': case 'play_again_duel':
-                case 'ladder_roll': case 'play_again_ladder': 
-                case 's7_roll': case 'play_again_s7':
-                case 'play_again_slot': 
-                    if (typeof forwardAdditionalGamesCallback === 'function') await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    else console.warn(`forwardAdditionalGamesCallback not defined`); break;
+                // Coinflip / RPS specific
+                case 'join_game':
+                case 'cancel_game':
+                case 'rps_choose':
+                    if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    else console.warn(`forwardGameCallback not defined for ${action}`);
+                    break;
 
-                default: /* ... existing default unknown callback logic ... */ break;
+                // Dice Escalator specific
+                case 'de_roll_prompt':
+                case 'de_cashout':
+                case 'jackpot_display_noop':
+                case 'play_again_de':
+                case 'de_cancel_game':
+                    if (typeof forwardDiceEscalatorCallback === 'function') await forwardDiceEscalatorCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    else console.warn(`forwardDiceEscalatorCallback not defined for ${action}`);
+                    break;
+
+                // Dice 21 Callbacks - UPDATED ROUTING
+                case 'd21_accept_bot_game':      // Initiator chooses PvB from unified offer
+                case 'd21_accept_pvp_challenge': // Another player accepts PvP from unified offer
+                case 'd21_cancel_unified_offer': // Initiator cancels unified offer
+                case 'd21_stand':                // PvB stand
+                case 'play_again_d21':           // PvB play again
+                case 'd21_pvb_cancel':           // PvB cancel active game
+                case 'd21_pvp_stand':            // PvP stand
+                case 'play_again_d21_pvp':       // PvP play again
+                    if (typeof forwardDice21Callback === 'function') {
+                        await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else console.warn(`forwardDice21Callback not defined for D21 action: ${action}`);
+                    break;
+
+                // Other generic game callbacks (Over/Under 7, Duel, Ladder, Seven Out, Slot Frenzy)
+                case 'ou7_choice': case 'play_again_ou7':
+                case 'duel_roll': case 'play_again_duel': // duel_roll for player's action in Duel
+                case 'ladder_roll': case 'play_again_ladder': // ladder_roll (if manual, but current logic is auto)
+                case 's7_roll': case 'play_again_s7':     // s7_roll for point phase roll
+                case 'play_again_slot':
+                    if (typeof forwardAdditionalGamesCallback === 'function') await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    else console.warn(`forwardAdditionalGamesCallback not defined for ${action}`);
+                    break;
+
+                default:
+                    console.warn(`${LOG_PREFIX_CBQ} Unknown callback action: "${action}"`);
+                    // No alert here as callback was answered initially.
+                    break;
             }
         }
-    } catch (callbackError) { /* ... existing callback router error handling ... */ }
+    } catch (callbackError) {
+        console.error(`${LOG_PREFIX_CBQ} 🚨 UNHANDLED ERROR IN CALLBACK ROUTER for action ${action}: ${callbackError.message}`, callbackError.stack?.substring(0, 700));
+        // Don't try to answer callbackQuery here again if it might have been answered.
+        // Send a message to user if it's a critical failure.
+        await safeSendMessage(userId, `⚙️ Oops! A critical error occurred processing your action (\`${escapeMarkdownV2(action)}\`). Please try again. If the problem persists, contact support.`, { parse_mode: 'MarkdownV2' });
+        if (typeof notifyAdmin === 'function') {
+            notifyAdmin(`🚨 Callback Router Error for ${escapeMarkdownV2(action)} User: ${userId}\nErr: \`${escapeMarkdownV2(String(callbackError.message || callbackError))}\``).catch(()=>{});
+        }
+    }
 });
 
 
-// --- Helper function to forward game callbacks for Coinflip/RPS ---
+// --- Helper function to forward game callbacks for Coinflip/RPS (Remains as in your Part 5a, S1) ---
 async function forwardGameCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
     const LOG_PREFIX_GAME_CB_FWD = `[GameCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    const gameId = params[0]; // Assuming gameId is always the first param after action
+    const gameId = params[0];
 
     switch (action) {
         case 'join_game':
-            if (!gameId) { /* ... error handling ... */ return; }
+            if (!gameId) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId for join_game.`); return; }
             if (typeof handleJoinGameCallback === 'function') await handleJoinGameCallback(originalChatId, userObject, gameId, originalMessageId, callbackQueryId, originalChatType);
-            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleJoinGameCallback`); break;
+            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleJoinGameCallback`);
+            break;
         case 'cancel_game':
-            if (!gameId) { /* ... error handling ... */ return; }
+            if (!gameId) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId for cancel_game.`); return; }
             if (typeof handleCancelGameCallback === 'function') await handleCancelGameCallback(originalChatId, userObject, gameId, originalMessageId, callbackQueryId, originalChatType);
-            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleCancelGameCallback`); break;
+            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleCancelGameCallback`);
+            break;
         case 'rps_choose':
-            if (!gameId || params.length < 2) { /* ... error handling ... */ return; }
+            if (!gameId || params.length < 2) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId or choice for rps_choose.`); return; }
             const choice = params[1];
             if (typeof handleRPSChoiceCallback === 'function') await handleRPSChoiceCallback(originalChatId, userObject, gameId, choice, originalMessageId, callbackQueryId, originalChatType);
-            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleRPSChoiceCallback`); break;
+            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleRPSChoiceCallback`);
+            break;
         default:
             console.warn(`${LOG_PREFIX_GAME_CB_FWD} Unhandled action in forwardGameCallback: ${action}`);
-            // No answerCallbackQuery here as it was answered at the start of main callback handler
+    }
+}
+
+// --- Helper function to forward Dice 21 callbacks - UPDATED ---
+async function forwardDice21Callback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
+    const LOG_PREFIX_D21_CB_FWD = `[D21_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    const gameId = params[0]; // gameId is usually the first parameter for game actions
+
+    const chatDataForHandler = { id: originalChatId, type: originalChatType }; // Standardized context
+
+    switch (action) {
+        // Unified Offer Actions
+        case 'd21_accept_bot_game': // Initiator chooses to play PvB from unified offer
+            if (!gameId) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_accept_bot_game.`); return; }
+            if (typeof handleDice21AcceptBotGame === 'function') {
+                await handleDice21AcceptBotGame(gameId, userObject, originalMessageId, originalChatId, originalChatType);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21AcceptBotGame`);
+            break;
+        case 'd21_accept_pvp_challenge': // Another player accepts PvP from unified offer
+            if (!gameId) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_accept_pvp_challenge.`); return; }
+            if (typeof handleDice21AcceptPvPChallenge === 'function') {
+                await handleDice21AcceptPvPChallenge(gameId, userObject, originalMessageId, originalChatId, originalChatType);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21AcceptPvPChallenge`);
+            break;
+        case 'd21_cancel_unified_offer': // Initiator cancels the unified offer
+            if (!gameId) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_cancel_unified_offer.`); return; }
+            if (typeof handleDice21CancelUnifiedOffer === 'function') {
+                await handleDice21CancelUnifiedOffer(gameId, userObject, originalMessageId, originalChatId);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21CancelUnifiedOffer`);
+            break;
+
+        // PvB Active Game Actions
+        case 'd21_stand': // Player stands in PvB game
+            if (!gameId) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_stand.`); return; }
+            if (typeof handleDice21PvBStand === 'function') { // Corrected handler name
+                await handleDice21PvBStand(gameId, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBStand`);
+            break;
+        case 'play_again_d21': // Player wants to play PvB again
+            const betAmountPvBStr = params[0]; // Bet amount is the first param for play_again
+            if (!betAmountPvBStr || isNaN(BigInt(betAmountPvBStr))) {
+                console.error(`${LOG_PREFIX_D21_CB_FWD} Invalid or missing bet amount for play_again_d21: '${betAmountPvBStr}'`);
+                return;
+            }
+            const betAmountPvB = BigInt(betAmountPvBStr);
+            const mockMsgForPvBReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+            if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+            if (typeof handleStartDice21Command === 'function') { // This will now present the unified offer again, or start PvB if in DM
+                await handleStartDice21Command(mockMsgForPvBReplay, betAmountPvB);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleStartDice21Command for PvB replay`);
+            break;
+        case 'd21_pvb_cancel': // Player cancels an active PvB game
+            if (!gameId) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvb_cancel.`); return; }
+            if (typeof handleDice21PvBCancel === 'function') {
+                await handleDice21PvBCancel(gameId, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBCancel`);
+            break;
+
+        // PvP Active Game Actions
+        case 'd21_pvp_stand': // Player stands in PvP game
+            if (!gameId) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvp_stand.`); return; }
+            if (typeof handleDice21PvPStandAction === 'function') {
+                await handleDice21PvPStandAction(gameId, userObject.id || userObject.telegram_id, originalMessageId, chatDataForHandler); // Needs actingPlayerId
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvPStandAction`);
+            break;
+        case 'play_again_d21_pvp': // Player wants to play PvP again
+             const betAmountPvPStr = params[0];
+            if (!betAmountPvPStr || isNaN(BigInt(betAmountPvPStr))) {
+                console.error(`${LOG_PREFIX_D21_CB_FWD} Invalid or missing bet amount for play_again_d21_pvp: '${betAmountPvPStr}'`);
+                return;
+            }
+            const betAmountPvP = BigInt(betAmountPvPStr);
+            const mockMsgForPvPReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+            if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+            if (typeof handleStartDice21Command === 'function') { // This will present the unified offer
+                await handleStartDice21Command(mockMsgForPvPReplay, betAmountPvP);
+            } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleStartDice21Command for PvP replay`);
+            break;
+        // Note: 'd21_hit' is removed as player hits are via emoji.
+
+        default:
+            console.warn(`${LOG_PREFIX_D21_CB_FWD} Unhandled Dice 21 action in forwarder: ${action}`);
+            // No alert needed here, as main router's default would catch it if truly unknown
+            break;
     }
 }
 
