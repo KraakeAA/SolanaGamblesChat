@@ -7955,7 +7955,8 @@ async function handleWalletAddressInput(msg, currentState) {
     // Ensure any static punctuation is escaped.
     // Using escapeMarkdownV2 on potentialNewAddress is correct.
     // The "..." ellipses don't need escaping. Periods at the end of sentences do.
-    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on a moment\\.`; // Escaped trailing period.
+    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on a moment\\.` ; // Escaped final period, ellipsis already escaped
+
     
     const linkingMsg = await safeSendMessage(dmChatId, linkingMsgText, { parse_mode: 'MarkdownV2' });
     const displayMsgIdInDm = linkingMsg ? linkingMsg.message_id : null;
@@ -8755,7 +8756,7 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
         case 'link_wallet_prompt':
             clearUserState(stringUserId);
             // This action sends a new prompt message in DM, previous menu message in DM was deleted if messageIdToEdit was set
-            const promptText = `🔗 *Link/Update Your Withdrawal Wallet*\n\nPlease reply to this message with your personal Solana wallet address where you'd like to receive withdrawals. Ensure it's correct as transactions are irreversible.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\``;
+            const promptText = `🔗 *Link/Update Your Withdrawal Wallet*\n\nPlease reply to this message with your personal Solana wallet address where you'd like to receive withdrawals\\. Ensure it's correct as transactions are irreversible\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\``;
             const kbd = { inline_keyboard: [ [{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }] ] };
             const sentDmPrompt = await safeSendMessage(stringUserId, promptText, { parse_mode: 'MarkdownV2', reply_markup: kbd });
 
