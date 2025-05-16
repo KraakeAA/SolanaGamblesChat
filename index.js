@@ -7889,6 +7889,7 @@ async function getDiceRollRequestResult(dbClient, requestId) {
 }
 
 // --- End of Part P2 ---
+// --- Start of Part P3 ---
 // index.js - Part P3: Payment System UI Handlers, Stateful Logic & Webhook Setup
 //---------------------------------------------------------------------------
 // Assumed global utilities, constants, DB ops, Solana utils, cache utils,
@@ -7912,8 +7913,8 @@ async function routeStatefulInput(msg, currentState) {
     const logPrefix = `[StatefulInput UID:${userId} State:${stateName}]`;
 
     if (currentState.chatId && String(currentState.chatId) !== chatId) {
-        console.warn(`${logPrefix} Stateful input in wrong chat (${chatId}) vs expected (${currentState.chatId}).`);
-        await safeSendMessage(chatId, "Please respond to my previous question in our direct message chat. 💬", {parse_mode: 'MarkdownV2'});
+        console.warn(`${logPrefix} Stateful input in wrong chat (${chatId}) vs expected (${currentState.chatId})\\.`);
+        await safeSendMessage(chatId, "Please respond to my previous question in our direct message chat\\. 💬", {parse_mode: 'MarkdownV2'});
         return;
     }
 
@@ -7925,9 +7926,9 @@ async function routeStatefulInput(msg, currentState) {
             await handleWithdrawalAmountInput(msg, currentState);
             break;
         default:
-            console.warn(`${logPrefix} Unknown or unhandled state: ${stateName}. Clearing state.`);
+            console.warn(`${logPrefix} Unknown or unhandled state: ${stateName}\\. Clearing state\\.`);
             clearUserState(userId);
-            await safeSendMessage(chatId, "Your previous action seems to have expired or was unclear. Please try again using a command from the main menu. 🤔", { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(chatId, "Your previous action seems to have expired or was unclear\\. Please try again using a command from the main menu\\. 🤔", { parse_mode: 'MarkdownV2' });
     }
 }
 
@@ -7938,9 +7939,8 @@ async function handleWalletAddressInput(msg, currentState) {
     const logPrefix = `[WalletAddrInput UID:${userId}]`;
 
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_address' || dmChatId !== userId) {
-        console.error(`${logPrefix} Invalid state or context for wallet address input. State ChatID: ${currentState?.chatId}, Msg ChatID: ${dmChatId}, State: ${currentState?.state}`);
+        console.error(`${logPrefix} Invalid state or context for wallet address input\\. State ChatID: ${currentState?.chatId}, Msg ChatID: ${dmChatId}, State: ${currentState?.state}`);
         clearUserState(userId);
-        // Escaped period
         await safeSendMessage(dmChatId, "⚙️ There was an issue processing your address input\\. Please try linking your wallet again via the \`/wallet\` menu or \`/setwallet\` command\\.", { parse_mode: 'MarkdownV2' });
         return;
     }
@@ -7949,63 +7949,43 @@ async function handleWalletAddressInput(msg, currentState) {
     if (originalPromptMessageId && bot) { await bot.deleteMessage(dmChatId, originalPromptMessageId).catch(() => {}); }
     clearUserState(userId);
 
-    // This is the "linkingMsgText" that previously caused a '.' or '!' error.
-    // Ensure any static punctuation is escaped.
-    // Using escapeMarkdownV2 on potentialNewAddress is correct.
-    // The "..." ellipses don't need escaping. Periods at the end of sentences do.
-    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on a moment\\.` ; // Escaped final period, ellipsis already escaped
+    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on a moment\\.`; // Escaped period and ellipsis
 
-    
     const linkingMsg = await safeSendMessage(dmChatId, linkingMsgText, { parse_mode: 'MarkdownV2' });
     const displayMsgIdInDm = linkingMsg ? linkingMsg.message_id : null;
 
     try {
         if (!isValidSolanaAddress(potentialNewAddress)) {
-            // Escaped periods in this error message string.
             throw new Error("The provided address has an invalid Solana address format\\. Please double\\-check and try again\\.");
         }
 
-        const linkResult = await linkUserWallet(userId, potentialNewAddress); // This function (Part 2) also sends messages.
-                                                                            // We need to ensure ITS messages are also correctly escaped.
+        const linkResult = await linkUserWallet(userId, potentialNewAddress); // Ensure linkUserWallet returns MarkdownV2 safe messages
         let feedbackText;
         const finalKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
 
         if (linkResult.success) {
-            // linkResult.message ALREADY CONTAINS MARKDOWN AND IS ESCAPED BY linkUserWallet.
-            // So, we should use it as is if it's MarkdownV2 compatible, or re-escape if it's plain text meant for Markdown.
-            // Assuming linkUserWallet's success message is already good for MarkdownV2:
-            feedbackText = linkResult.message || `✅ Success\\! Wallet \`${escapeMarkdownV2(potentialNewAddress)}\` has been successfully linked to your account\\.`; // Escaped ! and .
-            
+            // Assuming linkUserWallet's message is already MarkdownV2 safe (e.g., "linked\\!")
+            feedbackText = linkResult.message || `✅ Success\\! Wallet \`${escapeMarkdownV2(potentialNewAddress)}\` has been successfully linked to your account\\.`;
             if (originalGroupChatId && originalGroupMessageId && bot) {
-                const userForGroupMsg = await getOrCreateUser(userId);
-                // Escaped period
+                const userForGroupMsg = await getOrCreateUser(userId); // Get fresh details
                 await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)} has successfully updated their linked wallet\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
             }
         } else {
-            // linkResult.error might contain Telegram API errors with special characters. So, escape it.
-            // Also escape periods in our static text.
             feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Reason:* ${escapeMarkdownV2(linkResult.error || "Please ensure the address is valid and not already in use\\.")}`;
-            
             if (originalGroupChatId && originalGroupMessageId && bot) {
                 const userForGroupMsg = await getOrCreateUser(userId);
-                // Escaped period
                 await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)}, there was an issue linking your wallet\\. Please check my DM for details and try again\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
             }
         }
 
         if (displayMsgIdInDm && bot) {
-            // The feedbackText might be pre-formatted with Markdown from linkUserWallet, or we format it here.
-            // If linkUserWallet's message is already MarkdownV2, parse_mode should be 'MarkdownV2'.
-            // If we construct it here with escapeMarkdownV2, parse_mode should be 'MarkdownV2'.
             await bot.editMessageText(feedbackText, { chat_id: dmChatId, message_id: displayMsgIdInDm, parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
         } else {
             await safeSendMessage(dmChatId, feedbackText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
         }
-    } catch (e) { // This 'e' could be from isValidSolanaAddress or other issues BEFORE linkUserWallet
+    } catch (e) {
         console.error(`${logPrefix} Error linking wallet ${potentialNewAddress}: ${e.message}`);
-        // e.message itself might contain special characters. So, escape it.
-        // Also escape periods in our static text.
-        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Details:* ${escapeMarkdownV2(e.message || "An unexpected error occurred\\.")}\nPlease ensure it's a valid Solana public key and try again\\.`;
+        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Details:* ${escapeMarkdownV2(String(e.message || "An unexpected error occurred\\."))}\nPlease ensure it's a valid Solana public key and try again\\.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Try Again (Wallet Menu)', callback_data: 'menu:wallet' }]] };
         
         if (displayMsgIdInDm && bot) {
@@ -8015,7 +7995,6 @@ async function handleWalletAddressInput(msg, currentState) {
         }
         if (originalGroupChatId && originalGroupMessageId && bot) {
             const userForGroupMsg = await getOrCreateUser(userId);
-            // Escaped period
             await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || msg.from)}, there was an error processing your wallet address\\. Please check my DM\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'MarkdownV2', reply_markup: {}}).catch(()=>{});
         }
     }
@@ -8031,7 +8010,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         !currentState.data.linkedWallet || typeof currentState.data.currentBalanceLamportsStr !== 'string') {
         console.error(`${logPrefix} Invalid state or data for withdrawal amount. State: ${stringifyWithBigInt(currentState).substring(0,300)}`);
         clearUserState(userId);
-        await safeSendMessage(dmChatId, "⚙️ Error: Withdrawal context lost or invalid. Please restart the withdrawal process from the `/wallet` menu.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(dmChatId, "⚙️ Error: Withdrawal context lost or invalid\\. Please restart the withdrawal process from the \`/wallet\` menu\\.", { parse_mode: 'MarkdownV2' });
         return;
     }
 
@@ -8045,7 +8024,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         if (textAmount.toLowerCase() === 'max') {
             const availableToWithdraw = currentBalanceLamports - WITHDRAWAL_FEE_LAMPORTS;
             if (availableToWithdraw < MIN_WITHDRAWAL_LAMPORTS) {
-                 throw new Error(`Your balance is too low to withdraw the maximum after fees. You need at least *${escapeMarkdownV2(await formatBalanceForDisplay(MIN_WITHDRAWAL_LAMPORTS + WITHDRAWAL_FEE_LAMPORTS, 'SOL'))}* total to cover minimum withdrawal and fee.`);
+                 throw new Error(`Your balance is too low to withdraw the maximum after fees\\. You need at least *${escapeMarkdownV2(await formatBalanceForDisplay(MIN_WITHDRAWAL_LAMPORTS + WITHDRAWAL_FEE_LAMPORTS, 'SOL'))}* total to cover minimum withdrawal and fee\\.`);
             }
             amountSOL = parseFloat( (Number(availableToWithdraw) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS) );
         } else if (textAmount.toLowerCase().endsWith('sol')) {
@@ -8054,7 +8033,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
             amountSOL = parseFloat(String(textAmount).replace(/[^0-9.]/g, ''));
         }
 
-        if (isNaN(amountSOL) || amountSOL <= 0) throw new Error("Invalid number format or non-positive amount. Please enter a value like `0.5` or `10` or `0.1 sol`.");
+        if (isNaN(amountSOL) || amountSOL <= 0) throw new Error("Invalid number format or non\\-positive amount\\. Please enter a value like \`0.5\` or \`10\` or \`0.1 sol\`\\.");
 
         const amountLamports = BigInt(Math.floor(amountSOL * Number(LAMPORTS_PER_SOL)));
         const feeLamports = WITHDRAWAL_FEE_LAMPORTS;
@@ -8066,10 +8045,10 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         const totalDeductionDisplaySOL = await formatBalanceForDisplay(totalDeductionLamports, 'SOL');
 
         if (amountLamports < MIN_WITHDRAWAL_LAMPORTS) {
-            throw new Error(`Withdrawal amount of *${escapeMarkdownV2(amountToWithdrawDisplaySOL)}* is less than the minimum of *${escapeMarkdownV2(minWithdrawDisplaySOL)}*.`);
+            throw new Error(`Withdrawal amount of *${escapeMarkdownV2(amountToWithdrawDisplaySOL)}* is less than the minimum of *${escapeMarkdownV2(minWithdrawDisplaySOL)}*\\.`);
         }
         if (currentBalanceLamports < totalDeductionLamports) {
-            throw new Error(`Insufficient balance. You need *${escapeMarkdownV2(totalDeductionDisplaySOL)}* (amount + fee) to withdraw *${escapeMarkdownV2(amountToWithdrawDisplaySOL)}*. Your balance is *${escapeMarkdownV2(balanceDisplaySOL)}*.`);
+            throw new Error(`Insufficient balance\\. You need *${escapeMarkdownV2(totalDeductionDisplaySOL)}* \\(amount \\+ fee\\) to withdraw *${escapeMarkdownV2(amountToWithdrawDisplaySOL)}*\\. Your balance is *${escapeMarkdownV2(balanceDisplaySOL)}*\\.`);
         }
 
         const confirmationText = `*Withdrawal Confirmation* ⚜️\n\n` +
@@ -8078,7 +8057,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
                                  `🔹 Withdrawal Fee: *${escapeMarkdownV2(feeDisplaySOL)}*\n` +
                                  `🔹 Total Deducted: *${escapeMarkdownV2(totalDeductionDisplaySOL)}*\n` +
                                  `🔹 Recipient Wallet: \`${escapeMarkdownV2(linkedWallet)}\`\n\n` +
-                                 `⚠️ Double-check the recipient address! Transactions are irreversible. Proceed?`;
+                                 `⚠️ Double\\-check the recipient address\\! Transactions are irreversible\\. Proceed?`; // Escaped !
 
         const sentConfirmMsg = await safeSendMessage(dmChatId, confirmationText, {
             parse_mode: 'MarkdownV2',
@@ -8097,21 +8076,21 @@ async function handleWithdrawalAmountInput(msg, currentState) {
                 timestamp: Date.now()
             });
             if (originalGroupChatId && originalGroupMessageId && bot) {
-                const userForGroupMsg = await getOrCreateUser(userId); // Get fresh user obj for display name
-                await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"})}, please check your DMs to confirm your withdrawal request.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
+                const userForGroupMsg = await getOrCreateUser(userId);
+                await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"})}, please check your DMs to confirm your withdrawal request\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
             }
         } else {
-            throw new Error("Failed to send withdrawal confirmation message. Please try again.");
+            throw new Error("Failed to send withdrawal confirmation message\\. Please try again\\.");
         }
     } catch (e) {
         console.error(`${logPrefix} Error processing withdrawal amount: ${e.message}`);
-        const errorText = `⚠️ *Withdrawal Error:*\n${escapeMarkdownV2(e.message)}\n\nPlease restart the withdrawal process from the \`/wallet\` menu.`;
+        const errorText = `⚠️ *Withdrawal Error:*\n${escapeMarkdownV2(e.message)}\n\nPlease restart the withdrawal process from the \`/wallet\` menu\\.`;
         await safeSendMessage(dmChatId, errorText, {
             parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] }
         });
         if (originalGroupChatId && originalGroupMessageId && bot) {
-            const userForGroupMsg = await getOrCreateUser(userId); // Get fresh user obj for display name
-            await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"})}, there was an error with your withdrawal amount. Please check my DM.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
+            const userForGroupMsg = await getOrCreateUser(userId);
+            await bot.editMessageText(`${getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"})}, there was an error with your withdrawal amount\\. Please check my DM\\.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
         }
     }
 }
@@ -8119,7 +8098,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 
 // --- UI Command Handler Implementations ---
 
-// REFINED handleWalletCommand
+// Fully REVISED handleWalletCommand
 async function handleWalletCommand(receivedMsgObject) {
     const isFromMenuAction = receivedMsgObject && receivedMsgObject.originalChatInfo !== undefined;
 
@@ -8127,9 +8106,9 @@ async function handleWalletCommand(receivedMsgObject) {
     const actualChatObject = receivedMsgObject.chat;
 
     let userIdFromInput;
-    if (actualFromObject && actualFromObject.telegram_id) {
+    if (actualFromObject && actualFromObject.telegram_id) { // If it's our DB user object from actionMsgContext.from
         userIdFromInput = String(actualFromObject.telegram_id);
-    } else if (actualFromObject && actualFromObject.id) {
+    } else if (actualFromObject && actualFromObject.id) { // If it's a Telegram `from` object from a direct msg
         userIdFromInput = String(actualFromObject.id);
     } else {
         const tempChatIdError = actualChatObject?.id || ADMIN_USER_ID || 'unknown_chat';
@@ -8140,13 +8119,11 @@ async function handleWalletCommand(receivedMsgObject) {
 
     const userId = userIdFromInput;
     const commandChatId = String(actualChatObject.id); // The chat where /wallet or originating callback happened
-    // const chatType = actualChatObject.type; // Not strictly needed if all actions are forced to DM
 
     let userObject = await getOrCreateUser(userId, actualFromObject?.username, actualFromObject?.first_name, actualFromObject?.last_name);
     if (!userObject) {
         const tempPlayerRef = getPlayerDisplayReference(actualFromObject);
         const errorMessage = `Error fetching your player profile, ${tempPlayerRef}\\. Please try \`/start\` again\\.`;
-        // Send error to DM if possible, or original chat if that's all we have
         const errorChatTarget = (commandChatId === userId) ? commandChatId : userId;
         await safeSendMessage(errorChatTarget, errorMessage, { parse_mode: 'MarkdownV2' });
         if (commandChatId !== userId) {
@@ -8154,45 +8131,40 @@ async function handleWalletCommand(receivedMsgObject) {
         }
         return;
     }
-    const playerRef = getPlayerDisplayReference(userObject); // playerRef is ALREADY escaped
+    const playerRef = getPlayerDisplayReference(userObject);
     clearUserState(userId);
 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
-    const targetDmChatId = userId; // Wallet Dashboard is always shown in DM
+    const targetDmChatId = userId;
     let messageIdToEditOrDeleteInDm = null;
 
-    // If /wallet command was typed in a group, inform about DM redirection
     if (commandChatId !== targetDmChatId && !isFromMenuAction) {
         if (receivedMsgObject.message_id) await bot.deleteMessage(commandChatId, receivedMsgObject.message_id).catch(() => {});
         await safeSendMessage(commandChatId, `${playerRef}, I've sent your Wallet Dashboard to our private chat: @${escapeMarkdownV2(botUsername)} 💳 For your security, all wallet actions are handled there\\.`, { parse_mode: 'MarkdownV2' });
     } else if (commandChatId === targetDmChatId && receivedMsgObject.message_id) {
-        // If /wallet typed in DM, or callback already in DM
         messageIdToEditOrDeleteInDm = receivedMsgObject.message_id;
-        // For /wallet command typed directly in DM, delete the command message
-        if (!isFromMenuAction) {
+        if (!isFromMenuAction) { // /wallet typed in DM
              await bot.deleteMessage(targetDmChatId, messageIdToEditOrDeleteInDm).catch(()=>{});
-             messageIdToEditOrDeleteInDm = null; // New dashboard message will be sent
+             messageIdToEditOrDeleteInDm = null;
         }
     }
     
-    // "Loading..." message handling in DM
-    const loadingDmMsgText = "Loading your Wallet Dashboard... ⏳"; // Plain text, no MarkdownV2 needed for this simple message
-    let workingMessageId = messageIdToEditOrDeleteInDm; // If from DM callback, this is the menu message ID
+    const loadingDmMsgText = "Loading your Wallet Dashboard... ⏳"; // Plain text
+    let workingMessageId = messageIdToEditOrDeleteInDm;
 
-    if (workingMessageId) { // If we have a message in DM to edit (e.g. menu button was clicked in DM)
+    if (workingMessageId) {
         try {
-            // Edit with plain text first, then update with Markdown later
-            await bot.editMessageText(loadingDmMsgText, { chat_id: targetDmChatId, message_id: workingMessageId, reply_markup: {inline_keyboard: []} });
+            await bot.editMessageText(loadingDmMsgText, { chat_id: targetDmChatId, message_id: workingMessageId, reply_markup: {inline_keyboard: []} }); // No parse_mode
         } catch (editError) {
             if (!editError.message?.includes("message is not modified")) {
-                const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText); // Send as plain text
+                const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText);
                 workingMessageId = tempMsg?.message_id;
             }
         }
-    } else { // Send a new "Loading..." message in DM
-        const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText); // Send as plain text
+    } else {
+        const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText);
         workingMessageId = tempMsg?.message_id;
     }
     
@@ -8200,37 +8172,31 @@ async function handleWalletCommand(receivedMsgObject) {
         console.error(`[WalletCmd UID:${userId}] Failed to establish message context (workingMessageId) for wallet display in DM.`);
         return;
     }
-    // This workingMessageId is now the ID of the "Loading..." message in the DM that we will edit with the full dashboard.
+    messageIdToEditOrDeleteInDm = workingMessageId;
     
     try {
         const userDetails = await getPaymentSystemUserDetails(userId); 
         if (!userDetails) {
-            const noUserText = "😕 Could not retrieve your player profile\\. Please try sending \`/start\` to the bot first\\."; // Escaped period
-            await bot.editMessageText(noUserText, {chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text: "Go to /start", callback_data:"menu:main"}]]}});
+            const noUserText = "😕 Could not retrieve your player profile\\. Please try sending \`/start\` to the bot first\\.";
+            await bot.editMessageText(noUserText, {chat_id: targetDmChatId, message_id: messageIdToEditOrDeleteInDm, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text: "Go to /start", callback_data:"menu:main"}]]}});
             return;
         }
 
         const balanceLamports = BigInt(userDetails.balance || '0');
         const linkedAddress = userDetails.solana_wallet_address;
-        
-        // Get raw display strings; escaping will happen during interpolation
         const balanceDisplayUSD_raw = await formatBalanceForDisplay(balanceLamports, 'USD'); 
         const balanceDisplaySOL_raw = await formatBalanceForDisplay(balanceLamports, 'SOL'); 
-        const linkedAddress_display_raw = linkedAddress ? linkedAddress : "_Not Set_"; // _Not Set_ is Markdown for italics
+        const linkedAddress_display_raw = linkedAddress ? linkedAddress : "_Not Set_";
 
-        // Construct the main wallet dashboard text
-        // All dynamic parts are wrapped with escapeMarkdownV2.
-        // All static literal periods at ends of sentences are escaped with \\.
         let text = `⚜️ **${escapeMarkdownV2(BOT_NAME)} Wallet Dashboard** ⚜️\n\n` +
-                   `👤 Player: ${playerRef}\n\n` + // playerRef is already escaped
+                   `👤 Player: ${playerRef}\n\n` +
                    `💰 Current Balance:\n   Approx\\. *${escapeMarkdownV2(balanceDisplayUSD_raw)}*\n   SOL: *${escapeMarkdownV2(balanceDisplaySOL_raw)}*\n\n` +
-                   `🔗 Linked Withdrawal Address:\n   \`${escapeMarkdownV2(linkedAddress_display_raw)}\`\n\n`; // If linkedAddress_display_raw is "_Not Set_", escapeMarkdownV2 will handle underscores.
+                   `🔗 Linked Withdrawal Address:\n   \`${escapeMarkdownV2(linkedAddress_display_raw)}\`\n\n`;
         
         if (!linkedAddress) {
-            // This line requires the period to be escaped.
-            text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat\\.\n\n`;
+            text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat\\.\n\n`; // Escaped period
         }
-        text += `What would you like to do?`; // Question mark is generally safe.
+        text += `What would you like to do?`;
 
         const keyboardActions = [
             [{ text: "💰 Deposit SOL", callback_data: "menu:deposit" }, { text: "💸 Withdraw SOL", callback_data: "menu:withdraw" }],
@@ -8243,26 +8209,24 @@ async function handleWalletCommand(receivedMsgObject) {
         ];
         const keyboard = { inline_keyboard: keyboardActions };
 
-        // This is where the parsing error for '.' was occurring
-        await bot.editMessageText(text, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
+        await bot.editMessageText(text, { chat_id: targetDmChatId, message_id: messageIdToEditOrDeleteInDm, parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
 
-    } catch (error) { // This catch block would be hit by the Markdown parsing error
+    } catch (error) {
         console.error(`[WalletCmd UID:${userId}] ❌ Error displaying wallet: ${error.message}`, error.stack?.substring(0,500));
-        const errorTextForUser = `⚙️ Apologies, we encountered an issue displaying your wallet information\\. (${escapeMarkdownV2(error.message)})\\. You can try \`/start\`\\.`; // Escaped periods
-        // Try to edit the "Loading..." message with the error.
+        const errorTextForUser = `⚙️ Apologies, we encountered an issue displaying your wallet information\\. (${escapeMarkdownV2(error.message)})\\. You can try \`/start\`\\.`;
         await bot.editMessageText(errorTextForUser, {
             chat_id: targetDmChatId, 
-            message_id: workingMessageId, 
+            message_id: messageIdToEditOrDeleteInDm, 
             parse_mode: 'MarkdownV2', 
             reply_markup: {inline_keyboard: [[{text: "Try /start", callback_data:"menu:main"}]]}
-        }).catch(async (editFallbackError) => { // If editing itself fails (e.g., message not found)
+        }).catch(async (editFallbackError) => {
             console.warn(`[WalletCmd UID:${userId}] Failed to edit error message, sending new. Edit fallback error: ${editFallbackError.message}`);
             await safeSendMessage(targetDmChatId, errorTextForUser, {parse_mode: 'MarkdownV2'}); 
         });
     }
 }
 
-// REVISED handleSetWalletCommand to ensure it only works in DMs
+// REVISED handleSetWalletCommand
 async function handleSetWalletCommand(msg, args) {
     const userId = String(msg.from.id);
     const commandChatId = String(msg.chat.id);
@@ -8270,11 +8234,11 @@ async function handleSetWalletCommand(msg, args) {
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) { 
-        await safeSendMessage(commandChatId, "Error fetching your player profile. Please try `/start`.", {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'});
         return; 
     }
     const playerRef = getPlayerDisplayReference(userObject);
-    clearUserState(userId); // Clear any pending input states
+    clearUserState(userId);
 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
@@ -8283,47 +8247,45 @@ async function handleSetWalletCommand(msg, args) {
         if(msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
         const dmPrompt = `${playerRef}, for your security, please set your wallet address by sending the command \`/setwallet YOUR_ADDRESS\` directly to me in our private chat: @${escapeMarkdownV2(botUsername)} 💳`;
         await safeSendMessage(commandChatId, dmPrompt, { parse_mode: 'MarkdownV2' });
-        // Optionally send a prompt to DM as well
-        await safeSendMessage(userId, `Hi ${playerRef}, to set or update your withdrawal wallet, please reply here with the command: \`/setwallet YOUR_SOLANA_ADDRESS\`\nExample: \`/setwallet YourSoLaddressHere...\``, {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(userId, `Hi ${playerRef}, to set or update your withdrawal wallet, please reply here with the command: \`/setwallet YOUR_SOLANA_ADDRESS\`\nExample: \`/setwallet YourSoLaddressHere\\.\\.\\.\``, {parse_mode: 'MarkdownV2'}); // Escaped ellipsis
         return;
     }
 
-    // Now we are definitely in a private chat with the user
     if (args.length < 1 || !args[0].trim()) {
         await safeSendMessage(userId, `💡 To link your Solana wallet for withdrawals, please use the format: \`/setwallet YOUR_SOLANA_ADDRESS\`\nExample: \`/setwallet SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\``, { parse_mode: 'MarkdownV2' });
         return;
     }
     const potentialNewAddress = args[0].trim();
 
-    // Delete the user's /setwallet command message in the DM for cleanliness
     if(msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
 
-    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`... Please hold on.`;
+    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on\\.`; // Escaped punctuation
     const linkingMsg = await safeSendMessage(userId, linkingMsgText, { parse_mode: 'MarkdownV2' });
     const displayMsgIdInDm = linkingMsg ? linkingMsg.message_id : null;
 
     try {
         if (!isValidSolanaAddress(potentialNewAddress)) {
-            throw new Error("The provided address has an invalid Solana address format.");
+            throw new Error("The provided address has an invalid Solana address format\\.");
         }
-        const linkResult = await linkUserWallet(userId, potentialNewAddress);
+        const linkResult = await linkUserWallet(userId, potentialNewAddress); // Ensure linkUserWallet returns MarkdownV2 safe messages
         let feedbackText;
         const finalKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
 
         if (linkResult.success) {
-            feedbackText = `✅ Success! ${escapeMarkdownV2(linkResult.message || `Wallet \`${potentialNewAddress}\` is now linked.`)}`;
+            // linkUserWallet messages should already be safe (e.g. "linked\\!")
+            feedbackText = linkResult.message || `✅ Success\\! Wallet \`${escapeMarkdownV2(potentialNewAddress)}\` is now linked\\.`;
         } else {
-            feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`.\n*Reason:* ${escapeMarkdownV2(linkResult.error || "Please check the address and try again.")}`;
+            feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Reason:* ${escapeMarkdownV2(linkResult.error || "Please check the address and try again\\.")}`;
         }
 
         if (displayMsgIdInDm && bot) {
             await bot.editMessageText(feedbackText, { chat_id: userId, message_id: displayMsgIdInDm, parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
-        } else { // Fallback if linkingMsg wasn't sent or ID wasn't captured
+        } else {
             await safeSendMessage(userId, feedbackText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
         }
     } catch (e) {
         console.error(`[SetWalletCmd UID:${userId}] Error linking wallet ${potentialNewAddress}: ${e.message}`);
-        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`.\n*Details:* ${escapeMarkdownV2(e.message || "An unexpected error occurred.")}\nPlease ensure it's a valid Solana public key.`;
+        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Details:* ${escapeMarkdownV2(e.message || "An unexpected error occurred\\.")}\nPlease ensure it's a valid Solana public key\\.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Try Again (Wallet Menu)', callback_data: 'menu:wallet' }]] };
         if (displayMsgIdInDm && bot) {
             await bot.editMessageText(errorTextToDisplay, { chat_id: userId, message_id: displayMsgIdInDm, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
@@ -8334,19 +8296,19 @@ async function handleSetWalletCommand(msg, args) {
 }
 
 
-// REVISED handleDepositCommand to align with "working example" structure and fixes
+// REVISED handleDepositCommand
 async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb = null) {
     const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
-    const targetDmChatId = userId; // Deposit info always goes to DM
+    const targetDmChatId = userId;
     const originalCommandChatId = String(msgOrCbMsg.chat.id);
     const originalMessageId = msgOrCbMsg.message_id;
-    const isCallbackRedirect = msgOrCbMsg.isCallbackRedirect || false; // Check if this came from callback router's redirect logic
+    const isCallbackRedirect = msgOrCbMsg.isCallbackRedirect || false;
 
     const logPrefix = `[DepositCmd UID:${userId} OrigChat:${originalCommandChatId}]`;
 
     let userObject = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!userObject) {
-        await safeSendMessage(targetDmChatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(targetDmChatId, "Error fetching your player profile\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
         return;
     }
     const playerRef = getPlayerDisplayReference(userObject);
@@ -8357,38 +8319,38 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
 
     if (originalCommandChatId !== targetDmChatId && !isCallbackRedirect) {
         if (originalMessageId) await bot.deleteMessage(originalCommandChatId, originalMessageId).catch(() => {});
-        await safeSendMessage(originalCommandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs.`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(originalCommandChatId, `${playerRef}, for your security and convenience, I've sent your unique deposit address to our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs\\.`, { parse_mode: 'MarkdownV2' });
     }
     
-    const generatingText = "⏳ Generating your deposit address... Please wait..."; // MarkdownV2 escaping not strictly needed for this simple text
+    const generatingText = "⏳ Generating your deposit address... Please wait..."; // Plain text
     let workingMessageId;
 
-    if (originalCommandChatId === targetDmChatId && originalMessageId && !isCallbackRedirect) { // Command typed in DM
-        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{}); // Delete the /deposit command
-        const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+    if (originalCommandChatId === targetDmChatId && originalMessageId && !isCallbackRedirect && !msgOrCbMsg.isCallbackRedirect) { // Command typed in DM
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
+        const tempMsg = await safeSendMessage(targetDmChatId, generatingText);
         workingMessageId = tempMsg?.message_id;
-    } else if (isCallbackRedirect || (originalCommandChatId === targetDmChatId && isCallbackRedirect)) { // Callback redirected to DM, or callback was already in DM from a menu
+    } else if (isCallbackRedirect || (originalCommandChatId === targetDmChatId && (msgOrCbMsg.isCallbackRedirect !== undefined || !!correctUserIdFromCb) )) { 
+        // Callback redirected to DM, or callback was already in DM from a menu
         if (originalMessageId && originalCommandChatId === targetDmChatId) { // If callback was in DM, edit that message
             try {
-                await bot.editMessageText(generatingText, { chat_id: targetDmChatId, message_id: originalMessageId, parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] } });
+                await bot.editMessageText(generatingText, { chat_id: targetDmChatId, message_id: originalMessageId, reply_markup: { inline_keyboard: [] } });
                 workingMessageId = originalMessageId;
             } catch (editError) {
                 if (!editError.message?.includes("message is not modified")) {
-                    const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+                    const tempMsg = await safeSendMessage(targetDmChatId, generatingText);
                     workingMessageId = tempMsg?.message_id;
                 } else {
                     workingMessageId = originalMessageId;
                 }
             }
         } else { // Was a group callback, just send new to DM
-            const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+            const tempMsg = await safeSendMessage(targetDmChatId, generatingText);
             workingMessageId = tempMsg?.message_id;
         }
-    } else { // Fallback, should ideally not be hit if logic above is correct
-         const tempMsg = await safeSendMessage(targetDmChatId, generatingText, { parse_mode: 'MarkdownV2' });
+    } else { 
+         const tempMsg = await safeSendMessage(targetDmChatId, generatingText);
          workingMessageId = tempMsg?.message_id;
     }
-
 
     if (!workingMessageId) {
         console.error(`${logPrefix} Failed to establish message context (workingMessageId) for deposit address display in DM.`);
@@ -8411,14 +8373,11 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
         let newAddressGenerated = false;
 
         if (existingAddressesRes.rows.length > 0) {
-            const existing = existingAddressesRes.rows[0];
-            depositAddress = existing.public_key;
-            expiresAtDate = new Date(existing.expires_at);
+            depositAddress = existingAddressesRes.rows[0].public_key;
+            expiresAtDate = new Date(existingAddressesRes.rows[0].expires_at);
         } else {
             const newAddressStr = await generateUniqueDepositAddress(userId, client);
-            if (!newAddressStr) {
-                throw new Error("Failed to generate a new deposit address. Please try again or contact support.");
-            }
+            if (!newAddressStr) { throw new Error("Failed to generate a new deposit address\\. Please try again or contact support\\."); }
             depositAddress = newAddressStr;
             newAddressGenerated = true;
             const newAddrDetails = await client.query("SELECT expires_at FROM user_deposit_wallets WHERE public_key = $1 AND user_telegram_id = $2", [depositAddress, userId]);
@@ -8435,9 +8394,7 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
 
         const timeRemainingMs = expiresAtDate.getTime() - Date.now();
         const timeRemainingMinutes = Math.max(1, Math.ceil(timeRemainingMs / (60 * 1000)));
-        const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', {
-            hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short', timeZone: 'UTC'
-        }) + " UTC";
+        const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short', timeZone: 'UTC' }) + " UTC";
 
         const escapedAddress = escapeMarkdownV2(depositAddress);
         const timeRemainingMinutesEscaped = escapeMarkdownV2(String(timeRemainingMinutes));
@@ -8446,7 +8403,7 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
         const message = `💰 *Your ${newAddressGenerated ? 'New' : 'Active'} Deposit Address*\n\n` +
                         `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
                         `\`${escapedAddress}\`\n` +
-                        `_\\(Tap the address above to copy\\)_\\n\n` + // Escaped parentheses
+                        `_\\(Tap the address above to copy\\)_\\n\n` +
                         `This address is valid for approximately *${timeRemainingMinutesEscaped} minutes* \\(expires around ${expiryDateTimeStringEscaped}\\)\\. __Do not use after expiry\\.__\n\n` +
                         `Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\.\n\n` +
                         `⚠️ *Important Information:*\n` +
@@ -8471,7 +8428,7 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
                 const plainMessage = `Your ${newAddressGenerated ? 'New' : 'Active'} Deposit Address (Tap to copy):\n${depositAddress}\n\nExpires in approx. ${timeRemainingMinutes} minutes (around ${expiryDateTimeString}). Confirmations: ${DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'}.\nImportant: Valid for this session only. Do not use after expiry. Use /deposit for new address. Send SOL only.`;
                 const plainKeyboard = {inline_keyboard: [[{ text: 'Back to Wallet', callback_data: 'menu:wallet' }]]};
                 await safeSendMessage(targetDmChatId, plainMessage, { reply_markup: plainKeyboard, disable_web_page_preview: true });
-                if (workingMessageId) await bot.deleteMessage(targetDmChatId, workingMessageId).catch(()=>{}); // Clean up old "generating" msg
+                if (workingMessageId) await bot.deleteMessage(targetDmChatId, workingMessageId).catch(()=>{});
             } else if (!e.message?.includes("message is not modified")) {
                 console.warn(`${logPrefix} Failed to edit message ${workingMessageId} with deposit address, sending new. Error: ${e.message}`);
                 await safeSendMessage(targetDmChatId, message, options);
@@ -8482,16 +8439,12 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
     } catch (error) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
         console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack?.substring(0, 500));
-
-        const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`. Please try again shortly or contact support.`;
+        const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`;
         const errorKeyboardButtons = [[{ text: "Try Again", callback_data: DEPOSIT_CALLBACK_ACTION }, { text: "💳 Wallet", callback_data: "menu:wallet" }]];
         const errorOptions = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: errorKeyboardButtons} };
-
         if (workingMessageId) {
             await bot.editMessageText(errorText, { chat_id: targetDmChatId, message_id: workingMessageId, ...errorOptions })
-                .catch(async () => {
-                    await safeSendMessage(targetDmChatId, errorText, errorOptions);
-                });
+                .catch(async () => { await safeSendMessage(targetDmChatId, errorText, errorOptions); });
         } else {
             await safeSendMessage(targetDmChatId, errorText, errorOptions);
         }
@@ -8500,23 +8453,136 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
     }
 }
 
+// Newly ADDED and REVISED handleWithdrawCommand
+async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb = null) {
+    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
+    const targetDmChatId = userId; // Withdraw actions are handled in DM
+    const originalCommandChatId = String(msgOrCbMsg.chat.id);
+    const originalMessageId = msgOrCbMsg.message_id;
+    const isFromMenuActionOrRedirect = msgOrCbMsg.isCallbackRedirect !== undefined || !!correctUserIdFromCb;
 
-async function handleReferralCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg for consistency
+    const logPrefix = `[WithdrawCmd UID:${userId} OrigChat:${originalCommandChatId}]`;
+
+    let userObject = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
+    if (!userObject) {
+        await safeSendMessage(targetDmChatId, "Error fetching your player profile for withdrawal\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    const playerRef = getPlayerDisplayReference(userObject);
+    clearUserState(userId);
+
+    let botUsername = "our bot";
+    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* Reduced log */ }
+
+    if (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) {
+        if (originalMessageId) await bot.deleteMessage(originalCommandChatId, originalMessageId).catch(() => {});
+        await safeSendMessage(originalCommandChatId, `${playerRef}, for your security, withdrawal requests are handled in our private chat: @${escapeMarkdownV2(botUsername)} 📬 Please check your DMs\\.`, { parse_mode: 'MarkdownV2' });
+    }
+    
+    if (originalCommandChatId === targetDmChatId && originalMessageId && (isFromMenuActionOrRedirect || !msgOrCbMsg.isCallbackRedirect) ) {
+        // If it's a callback from a menu in DM, or a command typed in DM, delete the initiating message
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
+    }
+
+    const loadingDmMsgText = "Preparing your withdrawal request... ⏳";
+    const loadingDmMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText);
+    const workingMessageId = loadingDmMsg?.message_id;
+
+    if (!workingMessageId) {
+        console.error(`${logPrefix} Failed to send 'Preparing withdrawal' message to DM.`);
+        return;
+    }
+
+    try {
+        const linkedWallet = await getUserLinkedWallet(userId);
+        const currentBalanceLamports = await getUserBalance(userId);
+
+        if (currentBalanceLamports === null) {
+            throw new Error("Could not retrieve your current balance\\. Please try again shortly\\.");
+        }
+
+        if (!linkedWallet) {
+            const noWalletText = `⚠️ ${playerRef}, you don't have a Solana withdrawal wallet linked to your account yet\\!\n\n` +
+                                 `Please link a wallet first using the button below, or by typing \`/setwallet YOUR_SOL_ADDRESS\` in this chat\\.`;
+            const noWalletKeyboard = { inline_keyboard: [
+                [{ text: "🔗 Link Withdrawal Wallet Now", callback_data: "menu:link_wallet_prompt" }],
+                [{ text: "💳 Back to Wallet Menu", callback_data: "menu:wallet" }]
+            ]};
+            await bot.editMessageText(noWalletText, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: noWalletKeyboard });
+            return;
+        }
+
+        const minWithdrawalDisplay = await formatBalanceForDisplay(MIN_WITHDRAWAL_LAMPORTS, 'SOL');
+        const feeDisplay = await formatBalanceForDisplay(WITHDRAWAL_FEE_LAMPORTS, 'SOL');
+        const currentBalanceDisplay = await formatBalanceForDisplay(currentBalanceLamports, 'SOL');
+
+        const promptText = `💸 *Initiate Withdrawal*\n\n` +
+                           `Player: ${playerRef}\n` +
+                           `Linked Wallet: \`${escapeMarkdownV2(linkedWallet)}\`\n` +
+                           `Available Balance: *${escapeMarkdownV2(currentBalanceDisplay)}*\n\n` +
+                           `Minimum Withdrawal: *${escapeMarkdownV2(minWithdrawalDisplay)}*\n` +
+                           `Withdrawal Fee: *${escapeMarkdownV2(feeDisplay)}* \\(deducted from withdrawal amount\\)\n\n` + // Escaped ()
+                           `Please reply with the amount of SOL you wish to withdraw \\(e\\.g\\., \`0.5\` or \`10 sol\` or type \`max\` to withdraw your maximum available balance after fees\\)\\.`; // Escaped ()
+
+        const promptKeyboard = { inline_keyboard: [[{ text: "❌ Cancel & Back to Wallet", callback_data: "menu:wallet" }]] };
+        await bot.editMessageText(promptText, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: promptKeyboard, disable_web_page_preview: true });
+
+        userStateCache.set(userId, {
+            state: 'awaiting_withdrawal_amount',
+            chatId: targetDmChatId,
+            messageId: workingMessageId,
+            data: {
+                linkedWallet: linkedWallet,
+                currentBalanceLamportsStr: currentBalanceLamports.toString(),
+                originalPromptMessageId: workingMessageId, 
+                originalGroupChatId: (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) ? originalCommandChatId : (msgOrCbMsg.isCallbackRedirect ? msgOrCbMsg.originalChatInfo?.id : null),
+                originalGroupMessageId: (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) ? null : (msgOrCbMsg.isCallbackRedirect ? msgOrCbMsg.originalChatInfo?.messageId : null)
+            },
+            timestamp: Date.now()
+        });
+
+    } catch (error) {
+        console.error(`${logPrefix} Error preparing withdrawal: ${error.message}`, error.stack?.substring(0,500));
+        const errorText = `⚙️ Apologies, ${playerRef}, an error occurred while preparing your withdrawal request: \`${escapeMarkdownV2(error.message)}\`\\. Please try again from the wallet menu\\.`;
+        const errorKeyboard = { inline_keyboard: [[{ text: "💳 Back to Wallet Menu", callback_data: "menu:wallet" }]] };
+        if (workingMessageId) {
+            await bot.editMessageText(errorText, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard })
+                .catch(async () => {
+                    await safeSendMessage(targetDmChatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+                });
+        } else {
+            await safeSendMessage(targetDmChatId, errorText, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+        }
+    }
+}
+
+
+async function handleReferralCommand(msgOrCbMsg) {
     const userId = String(msgOrCbMsg.from.id);
     const commandChatId = String(msgOrCbMsg.chat.id);
-    const chatType = msgOrCbMsg.chat.type;
-    const isFromMenuAction = msgOrCbMsg.isCallbackRedirect !== undefined; // Check if it's the enriched object
+    const originalMessageId = msgOrCbMsg.message_id;
+    const isFromMenuAction = msgOrCbMsg.isCallbackRedirect !== undefined || !!(correctUserIdFromCb && correctUserIdFromCb === userId); // A way to check if it's from menu
 
     let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!user) {
-        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for referral info. Please try `/start`.", {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for referral info\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'});
         return;
     }
     const playerRef = getPlayerDisplayReference(user);
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
-    clearUserState(userId); // Clear any pending state
+    clearUserState(userId);
+    const targetDmChatId = userId;
+
+    if (commandChatId !== targetDmChatId) {
+        if (originalMessageId) await bot.deleteMessage(commandChatId, originalMessageId).catch(() => {});
+        await safeSendMessage(commandChatId, `${playerRef}, I've sent your referral details and earnings to our private chat: @${escapeMarkdownV2(botUsername)} 🤝`, { parse_mode: 'MarkdownV2' });
+    }
+    
+    if (commandChatId === targetDmChatId && originalMessageId && (isFromMenuAction || !msgOrCbMsg.isCallbackRedirect) ) { // If it's from menu in DM OR typed command in DM
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
+    }
 
     let referralCode = user.referral_code;
     if (!referralCode) {
@@ -8531,11 +8597,11 @@ async function handleReferralCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg 
     }
     const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
 
-    let messageText = `🤝 *Your Referral Zone, ${playerRef}!* \n\n` + // Added space after exclamation
-                      `Invite friends to ${escapeMarkdownV2(BOT_NAME)} and earn rewards!\n\n` + // Escaped !
+    let messageText = `🤝 *Your Referral Zone, ${playerRef}\\!*\n\n` +
+                      `Invite friends to ${escapeMarkdownV2(BOT_NAME)} and earn rewards\\!\n\n` +
                       `🔗 Your Unique Referral Link:\n\`${escapeMarkdownV2(referralLink)}\`\n` +
-                      `_\\(Tap to copy or share\\)_\n\n` +
-                      `Share this link with friends. When they join using your link and meet criteria (e.g., make a deposit or play games), you could earn commissions! Details of the current referral program can be found on our official channel/group.`; // Escaped !
+                      `_\\(Tap to copy or share\\)_\\n\n` +
+                      `Share this link with friends\\. When they join using your link and meet criteria \\(e\\.g\\., make a deposit or play games\\), you could earn commissions\\! Details of the current referral program can be found on our official channel/group\\.`;
 
     const earnings = await getTotalReferralEarningsDB(userId);
     const totalEarnedPaidDisplay = await formatBalanceForDisplay(earnings.total_earned_paid_lamports, 'USD');
@@ -8543,37 +8609,22 @@ async function handleReferralCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg 
 
     messageText += `\n\n*Your Referral Stats:*\n` +
                    `▫️ Total Earned & Paid Out: *${escapeMarkdownV2(totalEarnedPaidDisplay)}*\n` +
-                   `▫️ Commissions Earned (Pending Payout): *${escapeMarkdownV2(pendingPayoutDisplay)}*\n\n` + // Escaped ()
-                   `_(Payouts are processed periodically to your linked wallet once they meet a minimum threshold or per program rules)_`; // Escaped ()
+                   `▫️ Commissions Earned \\(Pending Payout\\): *${escapeMarkdownV2(pendingPayoutDisplay)}*\n\n` +
+                   `_\\(Payouts are processed periodically to your linked wallet once they meet a minimum threshold or per program rules\\)_`;
 
     const keyboard = {inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]]};
-    const targetDmChatId = userId; // Referral info always goes to DM
-
-    if (commandChatId !== targetDmChatId) { // If triggered from group
-        if (msgOrCbMsg.message_id) await bot.deleteMessage(commandChatId, msgOrCbMsg.message_id).catch(() => {});
-        await safeSendMessage(commandChatId, `${playerRef}, I've sent your referral details and earnings to our private chat: @${escapeMarkdownV2(botUsername)} 🤝`, { parse_mode: 'MarkdownV2' });
-    }
-    
-    // If the original message in DM was a menu we are navigating from, delete it before sending new info.
-    if (commandChatId === targetDmChatId && msgOrCbMsg.message_id && isFromMenuAction) {
-        await bot.deleteMessage(targetDmChatId, msgOrCbMsg.message_id).catch(()=>{});
-    } else if (commandChatId === targetDmChatId && msgOrCbMsg.message_id && !isFromMenuAction) { // /referral typed in DM
-        await bot.deleteMessage(targetDmChatId, msgOrCbMsg.message_id).catch(()=>{});
-    }
-
-
     await safeSendMessage(targetDmChatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
 }
 
-async function handleHistoryCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg
+async function handleHistoryCommand(msgOrCbMsg) {
     const userId = String(msgOrCbMsg.from.id);
     const commandChatId = String(msgOrCbMsg.chat.id);
-    const chatType = msgOrCbMsg.chat.type;
-    const isFromMenuAction = msgOrCbMsg.isCallbackRedirect !== undefined;
+    const originalMessageId = msgOrCbMsg.message_id;
+    const isFromMenuAction = msgOrCbMsg.isCallbackRedirect !== undefined || !!(correctUserIdFromCb && correctUserIdFromCb === userId);
 
     let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!user) {
-        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for history. Please try `/start`.", {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for history\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'});
         return;
     }
     const playerRef = getPlayerDisplayReference(user);
@@ -8581,35 +8632,21 @@ async function handleHistoryCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
     clearUserState(userId);
-    const targetDmChatId = userId; // History always to DM
+    const targetDmChatId = userId;
 
     if (commandChatId !== targetDmChatId) {
-        if (msgOrCbMsg.message_id) await bot.deleteMessage(commandChatId, msgOrCbMsg.message_id).catch(()=>{});
+        if (originalMessageId) await bot.deleteMessage(commandChatId, originalMessageId).catch(()=>{});
         await safeSendMessage(commandChatId, `${playerRef}, your transaction history has been sent to our private chat: @${escapeMarkdownV2(botUsername)} 📜`, { parse_mode: 'MarkdownV2' });
     }
 
     let workingMessageId = null;
-    if (commandChatId === targetDmChatId && msgOrCbMsg.message_id && isFromMenuAction) { // From a menu in DM
-        workingMessageId = msgOrCbMsg.message_id;
-    } else if (commandChatId === targetDmChatId && msgOrCbMsg.message_id && !isFromMenuAction) { // /history typed in DM
-        await bot.deleteMessage(targetDmChatId, msgOrCbMsg.message_id).catch(()=>{});
+    if (commandChatId === targetDmChatId && originalMessageId && (isFromMenuAction || !msgOrCbMsg.isCallbackRedirect)) { // From a menu in DM OR typed command in DM
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
     }
-
-
-    const loadingDmMsgText = "Fetching your transaction history... ⏳ This might take a moment.";
-    if (workingMessageId) { // Edit existing menu message
-        try {
-            await bot.editMessageText(loadingDmMsgText, {chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard:[]}});
-        } catch (e) {
-            if (!e.message?.includes("message is not modified")){
-                 const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText, {parse_mode:'MarkdownV2'});
-                 workingMessageId = tempMsg?.message_id;
-            }
-        }
-    } else { // Send new loading message
-        const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText, {parse_mode:'MarkdownV2'});
-        workingMessageId = tempMsg?.message_id;
-    }
+    
+    const loadingDmMsgText = "Fetching your transaction history... ⏳"; // Plain text
+    const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText);
+    workingMessageId = tempMsg?.message_id;
 
     if (!workingMessageId) {
         console.error(`[HistoryCmd UID:${userId}] Failed to establish message context for history display.`);
@@ -8621,7 +8658,7 @@ async function handleHistoryCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg
         let historyText = `📜 *Your Recent Casino Activity, ${playerRef}:*\n\n`;
 
         if (historyEntries.length === 0) {
-            historyText += "You have no recorded transactions yet. Time to make some moves!"; // Escaped !
+            historyText += "You have no recorded transactions yet\\. Time to make some moves\\!";
         } else {
             for (const entry of historyEntries) {
                 const date = new Date(entry.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -8630,33 +8667,33 @@ async function handleHistoryCommand(msgOrCbMsg) { // Changed msg to msgOrCbMsg
                 const sign = BigInt(entry.amount_lamports) >= 0n ? '+' : '';
                 const txSig = entry.deposit_tx || entry.withdrawal_tx;
 
-                historyText += `🗓️ \`${escapeMarkdownV2(date)}\` | ${typeDisplay}\n` +
+                historyText += `🗓️ \`${escapeMarkdownV2(date)}\` \\| ${typeDisplay}\n` +
                                `   Amount: *${sign}${escapeMarkdownV2(amountDisplay)}*\n`;
                 if (txSig) {
-                    historyText += `   Tx: \`${escapeMarkdownV2(txSig.substring(0, 10))}...${escapeMarkdownV2(txSig.substring(txSig.length - 4))}\`\n`; // Show beginning and end
+                    historyText += `   Tx: \`${escapeMarkdownV2(txSig.substring(0, 10))}...${escapeMarkdownV2(txSig.substring(txSig.length - 4))}\`\n`;
                 }
                 if (entry.game_log_type) {
-                    historyText += `   Game: ${escapeMarkdownV2(entry.game_log_type)} ${entry.game_log_outcome ? `(${escapeMarkdownV2(entry.game_log_outcome)})` : ''}\n`; // Escaped ()
+                    historyText += `   Game: ${escapeMarkdownV2(entry.game_log_type)} ${entry.game_log_outcome ? `\\(${escapeMarkdownV2(entry.game_log_outcome)}\\)` : ''}\n`;
                 }
                 if (entry.notes) {
-                    historyText += `   Notes: _${escapeMarkdownV2(entry.notes.substring(0,50))}${entry.notes.length > 50 ? '...':''}_\n`; // Markdown ellipsis
+                    historyText += `   Notes: _${escapeMarkdownV2(entry.notes.substring(0,50))}${entry.notes.length > 50 ? '\\.\\.\\.':''}_\n`; // Escaped ellipsis
                 }
                 historyText += `   Balance After: *${escapeMarkdownV2(await formatBalanceForDisplay(entry.balance_after_lamports, 'USD'))}*\n\n`;
             }
         }
-        historyText += `\n_Displaying up to 15 most recent transactions._`;
+        historyText += `\n_Displaying up to 15 most recent transactions\\._`; // Escaped period
         const keyboard = {inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]]};
 
         await bot.editMessageText(historyText, {chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview:true});
 
     } catch (error) {
         console.error(`[HistoryCmd UID:${userId}] Error fetching history: ${error.message}`);
-        const errText = "⚙️ Sorry, we couldn't fetch your transaction history right now. Please try again later.";
+        const errText = "⚙️ Sorry, we couldn't fetch your transaction history right now\\. Please try again later\\."; // Escaped period
         await bot.editMessageText(errText, {chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text:"Try /start", callback_data:"menu:main"}]]}});
     }
 }
 
-// REVISED handleMenuAction with DEBUG logs
+// REVISED handleMenuAction with DEBUG logs (essential for Issue 1 diagnosis)
 async function handleMenuAction(userId, originalChatId, originalMessageId, menuType, params = [], isFromCallback = true, originalChatType = 'private') {
     // --- BEGIN DEBUG LOGS for handleMenuAction ---
     console.log(`[DEBUG handleMenuAction ENTER] RAW userId param: ${userId} (type: ${typeof userId})`);
@@ -8670,72 +8707,66 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
         console.error(`[DEBUG handleMenuAction] stringUserId is problematic before calling getOrCreateUser: '${stringUserId}'`);
     }
     console.log(`[DEBUG handleMenuAction] About to CALL getOrCreateUser with stringUserId: '${stringUserId}' (type: ${typeof stringUserId})`);
-    let userObject = await getOrCreateUser(stringUserId); // Called with only ID. User details will be their defaults or existing.
+    // This call is crucial for Issue 1 diagnosis.
+    // It now only passes the ID. getOrCreateUser defaults other params if it's creating a new user.
+    // If user exists, it fetches them. The userObject should have telegram_id, username, first_name etc.
+    let userObject = await getOrCreateUser(stringUserId);
 
     if(!userObject) {
-        console.error(`${logPrefix} Could not fetch user profile for menu action (userObject is null after getOrCreateUser).`);
-        await safeSendMessage(originalChatId, "Error fetching your player profile. Please try `/start` again.", {parse_mode:'MarkdownV2'});
+        // This log is critical if "Error fetching profile" appears
+        console.error(`${logPrefix} Could not fetch user profile for menu action (userObject is null after getOrCreateUser). CHECK getOrCreateUser logs for DB errors for ID: ${stringUserId}`);
+        await safeSendMessage(originalChatId, "Error fetching your player profile\\. Please try \`/start\` again\\.", {parse_mode:'MarkdownV2'});
         return;
     }
 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
-    let targetChatIdForAction = stringUserId; // Most menu actions handled in DM
-    let messageIdToEdit = isFromCallback ? originalMessageId : null; // Only edit if it's from a callback
+    let targetChatIdForAction = stringUserId;
+    let messageToEdit = isFromCallback ? originalMessageId : null;
     let isGroupActionRedirect = false;
     const sensitiveMenuTypes = ['deposit', 'quick_deposit', 'withdraw', 'history', 'link_wallet_prompt', 'referral'];
 
     if ((originalChatType === 'group' || originalChatType === 'supergroup') && sensitiveMenuTypes.includes(menuType)) {
         isGroupActionRedirect = true;
         if (originalMessageId && bot) {
-            // Use the userObject we just fetched for the display name
-            const playerRefForRedirect = getPlayerDisplayReference(userObject);
-            const redirectText = `${playerRefForRedirect}, for your privacy, please continue this action in our direct message. I've sent you a prompt there: @${escapeMarkdownV2(botUsername)}`;
+            const playerRefForRedirect = getPlayerDisplayReference(userObject); // Use fetched userObject
+            const redirectText = `${playerRefForRedirect}, for your privacy, please continue this action in our direct message\\. I've sent you a prompt there: @${escapeMarkdownV2(botUsername)}`;
+            const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
             await bot.editMessageText(redirectText, {
                 chat_id: originalChatId, message_id: originalMessageId, parse_mode: 'MarkdownV2',
-                reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=menu_${menuType}_${params.join('_')}`}]] } // Pass params in start link if any
-            }).catch(e => {
-                if(!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                    safeSendMessage(originalChatId, redirectText, {
-                        parse_mode: 'MarkdownV2',
-                        reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=menu_${menuType}_${params.join('_')}`}]] }
-                    });
-                }
-            });
+                reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=menu_${menuType}${callbackParamsForUrl}`}]] }
+            }).catch(e => { /* Reduced log for "message not modified" */ });
         }
-         messageIdToEdit = null; // Action will be a new message in DM
+         messageToEdit = null; // Action will be a new message in DM
     } else if (originalChatType === 'private') {
-        targetChatIdForAction = originalChatId; // Action in the same DM
-        // messageIdToEdit is already set if it's a callback
+        targetChatIdForAction = originalChatId;
     }
 
-
+    // actionMsgContext.from now correctly contains the userObject from DB
     const actionMsgContext = {
-        from: userObject, // This is the userObject from getOrCreateUser(stringUserId)
-        chat: { id: targetChatIdForAction, type: 'private' }, // Actions are processed as if in DM
-        message_id: messageIdToEdit, // This will be null if a new message is needed in DM, or the DM menu message ID
-        isCallbackRedirect: isGroupActionRedirect, // Custom flag to know if it was a group redirect
+        from: userObject,
+        chat: { id: targetChatIdForAction, type: 'private' },
+        message_id: messageToEdit,
+        isCallbackRedirect: isGroupActionRedirect,
         originalChatInfo: isGroupActionRedirect ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null
     };
     
-    // If we are in DM and an action will send a new message, delete the menu message first
     const actionsSendingNewMessagesInDm = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main'];
-    if (targetChatIdForAction === stringUserId && messageIdToEdit && actionsSendingNewMessagesInDm.includes(menuType)) {
-        await bot.deleteMessage(targetChatIdForAction, messageIdToEdit).catch(()=>{});
-        actionMsgContext.message_id = null; // Handlers will send a new message
+    if (targetChatIdForAction === stringUserId && messageToEdit && actionsSendingNewMessagesInDm.includes(menuType)) {
+        await bot.deleteMessage(targetChatIdForAction, messageToEdit).catch(()=>{});
+        actionMsgContext.message_id = null;
     }
-
 
     switch(menuType) {
         case 'wallet':
-            await handleWalletCommand(actionMsgContext);
+            await handleWalletCommand(actionMsgContext); // handleWalletCommand now expects this context
             break;
         case 'deposit': case 'quick_deposit':
-            await handleDepositCommand(actionMsgContext, [], stringUserId); // Pass stringUserId as correctUserIdFromCb
+            await handleDepositCommand(actionMsgContext, [], stringUserId);
             break;
         case 'withdraw':
-            await handleWithdrawCommand(actionMsgContext, [], stringUserId); // Pass stringUserId as correctUserIdFromCb
+            await handleWithdrawCommand(actionMsgContext, [], stringUserId); // CALLS THE NEWLY ADDED FUNCTION
             break;
         case 'referral':
             await handleReferralCommand(actionMsgContext);
@@ -8744,25 +8775,23 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
             await handleHistoryCommand(actionMsgContext);
             break;
         case 'leaderboards':
-            // Leaderboards might show in original chat or DM based on its own logic.
-            // For now, let's assume it might edit the original message if not redirected.
             const leaderboardsContext = isGroupActionRedirect ?
-                {...actionMsgContext, chat: {id: stringUserId, type: 'private'}, message_id: null } : // Send new to DM
-                {...actionMsgContext, chat: {id: originalChatId, type: originalChatType}, message_id: originalMessageId}; // Try to use original
+                {...actionMsgContext, chat: {id: stringUserId, type: 'private'}, message_id: null } :
+                {...actionMsgContext, chat: {id: originalChatId, type: originalChatType}, message_id: originalMessageId};
             await handleLeaderboardsCommand(leaderboardsContext, params);
             break;
         case 'link_wallet_prompt':
             clearUserState(stringUserId);
-            // This action sends a new prompt message in DM, previous menu message in DM was deleted if messageIdToEdit was set
+            if (actionMsgContext.message_id && targetChatIdForAction === stringUserId) {
+                await bot.deleteMessage(targetChatIdForAction, actionMsgContext.message_id).catch(()=>{});
+            }
             const promptText = `🔗 *Link/Update Your Withdrawal Wallet*\n\nPlease reply to this message with your personal Solana wallet address where you'd like to receive withdrawals\\. Ensure it's correct as transactions are irreversible\\.\n\nExample: \`SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\``;
             const kbd = { inline_keyboard: [ [{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }] ] };
             const sentDmPrompt = await safeSendMessage(stringUserId, promptText, { parse_mode: 'MarkdownV2', reply_markup: kbd });
 
             if (sentDmPrompt?.message_id) {
                 userStateCache.set(stringUserId, {
-                    state: 'awaiting_withdrawal_address',
-                    chatId: stringUserId,
-                    messageId: sentDmPrompt.message_id,
+                    state: 'awaiting_withdrawal_address', chatId: stringUserId, messageId: sentDmPrompt.message_id,
                     data: {
                         originalPromptMessageId: sentDmPrompt.message_id,
                         originalGroupChatId: isGroupActionRedirect ? originalChatId : null,
@@ -8771,15 +8800,15 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
                     timestamp: Date.now()
                 });
             } else {
-                await safeSendMessage(stringUserId, "Failed to send the wallet address prompt. Please try again from the Wallet menu.", {parse_mode: 'MarkdownV2'});
+                await safeSendMessage(stringUserId, "Failed to send the wallet address prompt\\. Please try again from the Wallet menu\\.", {parse_mode: 'MarkdownV2'});
             }
             break;
         case 'main':
-            await handleHelpCommand(actionMsgContext); // handleHelpCommand sends a new message
+            await handleHelpCommand(actionMsgContext);
             break;
         default:
             console.warn(`${logPrefix} Unrecognized menu type: ${menuType}`);
-            await safeSendMessage(stringUserId, `❓ Unrecognized menu option: \`${escapeMarkdownV2(menuType)}\`. Please try again or use \`/help\`.`, {parse_mode:'MarkdownV2'});
+            await safeSendMessage(stringUserId, `❓ Unrecognized menu option: \`${escapeMarkdownV2(menuType)}\`\\. Please try again or use \`/help\`\\.`, {parse_mode:'MarkdownV2'});
     }
 }
 
@@ -8792,9 +8821,8 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
     const amountLamports = BigInt(amountLamportsStr);
     const feeLamports = WITHDRAWAL_FEE_LAMPORTS;
     const totalDeduction = amountLamports + feeLamports;
-    // Get fresh user object for notification, original in currentState might be stale
     const userObjForNotif = await getOrCreateUser(stringUserId); 
-    const playerRef = getPlayerDisplayReference(userObjForNotif || { id: stringUserId, first_name: "Player" }); // Fallback for playerRef
+    const playerRef = getPlayerDisplayReference(userObjForNotif || { id: stringUserId, first_name: "Player" });
     let client = null;
 
     try {
@@ -8803,16 +8831,16 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
 
         const userDetailsCheck = await client.query('SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE', [stringUserId]);
         if (userDetailsCheck.rowCount === 0) {
-            throw new Error("User profile not found during withdrawal confirmation.");
+            throw new Error("User profile not found during withdrawal confirmation\\.");
         }
         const currentBalanceOnConfirm = BigInt(userDetailsCheck.rows[0].balance);
         if (currentBalanceOnConfirm < totalDeduction) {
-            throw new Error(`Insufficient balance at time of confirmation. Current: ${escapeMarkdownV2(formatCurrency(currentBalanceOnConfirm, 'SOL'))}, Needed: ${escapeMarkdownV2(formatCurrency(totalDeduction, 'SOL'))}. Withdrawal cancelled.`);
+            throw new Error(`Insufficient balance at time of confirmation\\. Current: ${escapeMarkdownV2(formatCurrency(currentBalanceOnConfirm, 'SOL'))}, Needed: ${escapeMarkdownV2(formatCurrency(totalDeduction, 'SOL'))}\\. Withdrawal cancelled\\.`);
         }
 
         const wdReq = await createWithdrawalRequestDB(client, stringUserId, amountLamports, feeLamports, recipientAddress);
         if (!wdReq.success || !wdReq.withdrawalId) {
-            throw new Error(wdReq.error || "Failed to create database withdrawal request record.");
+            throw new Error(wdReq.error || "Failed to create database withdrawal request record\\.");
         }
 
         const balUpdate = await updateUserBalanceAndLedger(
@@ -8822,14 +8850,14 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
             `Withdrawal confirmed to ${recipientAddress.slice(0,6)}...${recipientAddress.slice(-4)}`
         );
         if (!balUpdate.success) {
-            throw new Error(balUpdate.error || "Failed to deduct balance for withdrawal. Withdrawal not queued.");
+            throw new Error(balUpdate.error || "Failed to deduct balance for withdrawal\\. Withdrawal not queued\\.");
         }
 
         await client.query('COMMIT');
 
         if (typeof addPayoutJob === 'function') {
             await addPayoutJob({ type: 'payout_withdrawal', withdrawalId: wdReq.withdrawalId, userId: stringUserId });
-            const successMsgDm = `✅ *Withdrawal Queued!* Your request to withdraw *${escapeMarkdownV2(formatCurrency(amountLamports, 'SOL'))}* to \`${escapeMarkdownV2(recipientAddress)}\` is now in the payout queue. You'll be notified by DM once it's processed.`;
+            const successMsgDm = `✅ *Withdrawal Queued\\!* Your request to withdraw *${escapeMarkdownV2(formatCurrency(amountLamports, 'SOL'))}* to \`${escapeMarkdownV2(recipientAddress)}\` is now in the payout queue\\. You'll be notified by DM once it's processed\\.`;
             if (confirmationMessageIdInDm && bot) {
                 await bot.editMessageText(successMsgDm, {chat_id: dmChatId, message_id: confirmationMessageIdInDm, parse_mode:'MarkdownV2', reply_markup:{}});
             } else {
@@ -8837,28 +8865,28 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
             }
             
             if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) {
-                 await bot.editMessageText(`${playerRef}'s withdrawal request for *${escapeMarkdownV2(formatCurrency(amountLamports, 'SOL'))}* has been queued successfully. Details in DM.`, {chat_id: currentState.data.originalGroupChatId, message_id: currentState.data.originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
+                 await bot.editMessageText(`${playerRef}'s withdrawal request for *${escapeMarkdownV2(formatCurrency(amountLamports, 'SOL'))}* has been queued successfully\\. Details in DM\\.`, {chat_id: currentState.data.originalGroupChatId, message_id: currentState.data.originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
             }
         } else {
             console.error(`${logPrefix} 🚨 CRITICAL: addPayoutJob function is not defined! Cannot queue withdrawal ${wdReq.withdrawalId}.`);
-            await notifyAdmin(`🚨 CRITICAL: Withdrawal ${wdReq.withdrawalId} for user ${stringUserId} had balance deducted BUT FAILED TO QUEUE for payout (addPayoutJob missing). MANUAL INTERVENTION REQUIRED TO REFUND OR PROCESS.`, {parse_mode:'MarkdownV2'});
-            throw new Error("Payout processing system is unavailable. Your funds were deducted but the payout could not be queued. Please contact support immediately.");
+            await notifyAdmin(`🚨 CRITICAL: Withdrawal ${wdReq.withdrawalId} for user ${stringUserId} had balance deducted BUT FAILED TO QUEUE for payout (addPayoutJob missing)\\. MANUAL INTERVENTION REQUIRED TO REFUND OR PROCESS\\.`, {parse_mode:'MarkdownV2'});
+            throw new Error("Payout processing system is unavailable\\. Your funds were deducted but the payout could not be queued\\. Please contact support immediately\\.");
         }
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
         console.error(`${logPrefix} ❌ Error processing withdrawal confirmation: ${e.message}`, e.stack?.substring(0,500));
-        const errorMsgDm = `⚠️ *Withdrawal Failed:*\n${escapeMarkdownV2(e.message)}\n\nPlease try again or contact support if the issue persists.`;
+        const errorMsgDm = `⚠️ *Withdrawal Failed:*\n${escapeMarkdownV2(e.message)}\n\nPlease try again or contact support if the issue persists\\.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] };
         if(confirmationMessageIdInDm && bot) {
             await bot.editMessageText(errorMsgDm, {chat_id: dmChatId, message_id: confirmationMessageIdInDm, parse_mode:'MarkdownV2', reply_markup: errorKeyboard}).catch(async ()=>{
-                 await safeSendMessage(dmChatId, errorMsgDm, {parse_mode:'MarkdownV2', reply_markup: errorKeyboard}); // Fallback if edit fails
+                 await safeSendMessage(dmChatId, errorMsgDm, {parse_mode:'MarkdownV2', reply_markup: errorKeyboard});
             });
         } else {
             await safeSendMessage(dmChatId, errorMsgDm, {parse_mode:'MarkdownV2', reply_markup: errorKeyboard});
         }
         
         if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) {
-            await bot.editMessageText(`${playerRef}, there was an error processing your withdrawal confirmation. Please check your DMs.`, {chat_id: currentState.data.originalGroupChatId, message_id: currentState.data.originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
+            await bot.editMessageText(`${playerRef}, there was an error processing your withdrawal confirmation\\. Please check your DMs\\.`, {chat_id: currentState.data.originalGroupChatId, message_id: currentState.data.originalGroupMessageId, parse_mode:'MarkdownV2', reply_markup:{}}).catch(()=>{});
         }
     } finally {
         if (client) client.release();
@@ -8867,10 +8895,6 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
 
 
 // --- Webhook Setup Function ---
-/**
- * Configures the Express app to handle incoming payment webhooks.
- * @param {import('express').Application} expressAppInstance - The Express application.
- */
 function setupPaymentWebhook(expressAppInstance) {
     const logPrefix = '[SetupWebhook]';
     if (!expressAppInstance) {
@@ -8888,15 +8912,8 @@ function setupPaymentWebhook(expressAppInstance) {
         const signatureFromHeader = req.headers['x-signature'] || req.headers['X-Signature'] || req.headers['helius-signature'] || req.headers['shyft-signature']; 
 
         if (PAYMENT_WEBHOOK_SECRET) {
-            // CRITICAL: Implement robust signature validation here based on your webhook provider's specification.
             if(!signatureFromHeader) console.warn(`${webhookLogPrefix} Webhook secret is SET, but NO signature header found. Processing insecurely (NOT FOR PRODUCTION).`);
             else console.log(`${webhookLogPrefix} Received signature. Implement provider-specific validation for PAYMENT_WEBHOOK_SECRET.`);
-            // Example (conceptual - actual validation depends on provider):
-            // const expectedSignature = crypto.createHmac('sha256', PAYMENT_WEBHOOK_SECRET).update(req.rawBody).digest('hex');
-            // if (signatureFromHeader !== expectedSignature) {
-            //     console.warn(`${webhookLogPrefix} 🚨 Invalid webhook signature. Rejecting.`);
-            //     return res.status(403).send('Invalid signature.');
-            // }
         } else {
             console.warn(`${webhookLogPrefix} PAYMENT_WEBHOOK_SECRET NOT SET. Processing insecurely (NOT FOR PRODUCTION).`);
         }
@@ -8905,35 +8922,28 @@ function setupPaymentWebhook(expressAppInstance) {
             const payload = req.body; 
             let relevantTransactions = []; 
 
-            // --- CRITICAL: ADAPT THIS PAYLOAD PARSING TO YOUR ACTUAL WEBHOOK PROVIDER ---
-            // This is a generic example assuming a Helius-like structure. You MUST tailor this.
             if (Array.isArray(payload)) { 
                 payload.forEach(event => {
-                    // Looking for native SOL transfers (not SPL token transfers unless SOL is wrapped)
-                    if (event.type === "TRANSFER" && event.transaction?.signature && Array.isArray(event.nativeTransfers)) {
+                    if (event.type === "TRANSFER" && event.transaction?.signature && Array.isArray(event.nativeTransfers)) { // Example for Helius native SOL
                         event.nativeTransfers.forEach(transfer => {
-                            if (transfer.toUserAccount && // Ensure there's a recipient
-                                (transfer.mint === "So11111111111111111111111111111111111111112" || !transfer.mint) && // Native SOL or no mint specified
-                                transfer.amount && transfer.amount > 0) { // Ensure there's an amount
-                                
+                            if (transfer.toUserAccount && 
+                                (transfer.mint === "So11111111111111111111111111111111111111112" || !transfer.mint) && 
+                                transfer.amount && transfer.amount > 0) { 
                                 relevantTransactions.push({
                                     signature: event.transaction.signature,
                                     depositToAddress: transfer.toUserAccount,
-                                    // amount: BigInt(transfer.amount) // Amount in lamports, useful for pre-check
                                 });
                             }
                         });
                     }
-                    // Example for another provider structure (e.g., Shyft might be different)
-                    // else if (event.type === "SOL_TRANSFER" && event.signatures && event.info) {
-                    // relevantTransactions.push({ signature: event.signatures[0], depositToAddress: event.info.receiver });
-                    // }
+                    // Add other 'else if' blocks here for different webhook providers or event types
                 });
-            } 
-            // --- END OF PROVIDER-SPECIFIC PARSING ---
+            } else {
+                // Handle non-array payloads if your provider sends them differently
+                 console.warn(`${webhookLogPrefix} Received non-array payload: ${typeof payload}. Adapt parsing logic.`);
+            }
 
             if (relevantTransactions.length === 0) {
-                // console.log(`${webhookLogPrefix} Webhook received; no actionable SOL transfer data identified. Payload: ${JSON.stringify(payload).substring(0,300)}`);
                 return res.status(200).send('Webhook received; no actionable SOL transfer data identified.');
             }
 
@@ -8952,16 +8962,14 @@ function setupPaymentWebhook(expressAppInstance) {
                         console.log(`${webhookLogPrefix} ✅ Valid webhook for active address ${depositToAddress}. Queuing TX: ${signature} for User: ${addrInfo.userId}`);
                         depositProcessorQueue.add(() => processDepositTransaction(signature, depositToAddress, addrInfo.walletId, addrInfo.userId));
                         processedDepositTxSignatures.add(signature); 
-                        if(processedDepositTxSignatures.size > (parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10) || 10000) * 1.2) { // Prevent unbounded growth
+                        if(processedDepositTxSignatures.size > (parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10) || 10000) * 1.2) {
                            const oldSigs = Array.from(processedDepositTxSignatures).slice(0, processedDepositTxSignatures.size - (parseInt(process.env.MAX_PROCESSED_TX_CACHE, 10) || 10000));
                            oldSigs.forEach(s => processedDepositTxSignatures.delete(s));
                         }
                     } else {
                         console.warn(`${webhookLogPrefix} ⚠️ Webhook for inactive/expired/unknown address ${depositToAddress}. TX ${signature}. AddrInfo found: ${!!addrInfo}`);
-                        if(addrInfo) processedDepositTxSignatures.add(signature); // Add even if inactive to prevent re-processing if state changes
+                        if(addrInfo) processedDepositTxSignatures.add(signature);
                     }
-                } else {
-                    // console.log(`${webhookLogPrefix} TX ${signature} already processed (in cache). Skipping webhook queueing.`);
                 }
             }
             res.status(200).send('Webhook data queued for processing where applicable');
