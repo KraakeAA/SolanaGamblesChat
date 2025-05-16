@@ -1,4 +1,4 @@
-// --- Start of Part 1 (with new Dice Roll Polling constants) ---
+// --- Start of Part 1 (REVISED - With escapeMarkdownV2 fix, Dice 21 Unified Offer ID, and original import) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
@@ -29,7 +29,7 @@ import nacl from 'tweetnacl';
 import axios from 'axios';
 
 // Assuming this path is correct relative to your project structure
-import RateLimitedConnection from './lib/solana-connection.js';
+import RateLimitedConnection from './lib/solana-connection.js'; // Kept as original import
 
 // Helper function to stringify objects with BigInts and Functions for logging
 function stringifyWithBigInt(obj) {
@@ -70,7 +70,7 @@ const CASINO_ENV_DEFAULTS = {
   'OU7_DICE_COUNT': '2',
   'OU7_PAYOUT_NORMAL': '1', // Pays 1x the bet (total 2x back)
   'OU7_PAYOUT_SEVEN': '4',  // Pays 4x the bet (total 5x back)
-  'DUEL_DICE_COUNT': '2',
+  'DUEL_DICE_COUNT': '2', // Number of dice for Duel game
   'LADDER_ROLL_COUNT': '5',
   'LADDER_BUST_ON': '1',
   'RULES_CALLBACK_PREFIX': 'rules_game_',
@@ -81,8 +81,8 @@ const CASINO_ENV_DEFAULTS = {
   'INITIAL_RETRY_POLLING_DELAY': '5000',
   'BOT_NAME': 'Solana Casino Royale',
   // Environment variables used by your existing polling constants
-  'DICE_ROLL_POLL_INTERVAL_MS': '2500',
-  'DICE_ROLL_POLL_ATTEMPTS': '24',
+  'DICE_ROLL_POLL_INTERVAL_MS': '2500', // Interval for polling dice_roll_requests table
+  'DICE_ROLL_POLL_ATTEMPTS': '24',    // Max attempts for polling a single dice_roll_request
 };
 
 const PAYMENT_ENV_DEFAULTS = {
@@ -99,7 +99,7 @@ const PAYMENT_ENV_DEFAULTS = {
   'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
   'SWEEP_INTERVAL_MS': '300000',                      // 5 minutes
   'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',               // 0.00005 SOL (covers base fee + priority)
+  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',               // Buffer for sweep transaction fees
   'SWEEP_COMPUTE_UNIT_LIMIT': '30000',                // For sweep transactions
   'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',         // For sweep transactions
   'SWEEP_ADDRESS_DELAY_MS': '1500',                   // Delay between processing each address in sweep batch
@@ -145,21 +145,21 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
 
 // --- Core Configuration Constants ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID; // Optional, for admin notifications
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
 const BOT_NAME = process.env.BOT_NAME;
 
 // Payment System Keys & Seeds
-const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE; // BIP39 Mnemonic
-const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY; // bs58 encoded secret key for main payout/sweep wallet
-const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY; // Optional, for referral payouts
+const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
+const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY;
+const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
 
-// --- GAME_IDS Constant - UPDATED ---
+// --- GAME_IDS Constant - UPDATED for Dice 21 Unified Offer ---
 const GAME_IDS = {
     COINFLIP: 'coinflip',
     RPS: 'rps',
     DICE_ESCALATOR: 'dice_escalator',
-    DICE_21_UNIFIED_OFFER: 'dice21_unified_offer', // NEW: For the initial unified game offer
+    DICE_21_UNIFIED_OFFER: 'dice21_unified_offer', // For the initial unified game offer (PvB or PvP choice)
     DICE_21: 'dice21',                             // For an active Player vs. Bot (PvB) Dice 21 game
     DICE_21_PVP: 'dice21_pvp',                     // For an active Player vs. Player (PvP) Dice 21 game
     OVER_UNDER_7: 'ou7',
@@ -256,6 +256,7 @@ const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION
 const MAIN_JACKPOT_ID = 'dice_escalator_main';
 const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
 const BOT_STAND_SCORE_DICE_ESCALATOR = parseInt(process.env.BOT_STAND_SCORE_DICE_ESCALATOR, 10);
+// DICE_21_TARGET_SCORE and DICE_21_BOT_STAND_SCORE are already defined above.
 
 const MIN_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MIN_BET_AMOUNT_LAMPORTS);
 const MAX_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MAX_BET_AMOUNT_LAMPORTS);
@@ -263,6 +264,7 @@ const MIN_BET_USD_val = parseFloat(process.env.MIN_BET_USD);
 const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
+// JOIN_GAME_TIMEOUT_MS is already defined above.
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
 const RULES_CALLBACK_PREFIX = process.env.RULES_CALLBACK_PREFIX;
 const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
@@ -359,7 +361,7 @@ const pool = new Pool({
 pool.on('error', (err, client) => {
   console.error('❌ Unexpected error on idle PostgreSQL client', err);
   if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
-    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details.`;
+    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details\\.`; // Escaped period
     safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
       .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
   } else {
@@ -390,7 +392,7 @@ async function queryDatabase(sql, params = [], dbClient = pool) {
 
 // --- Solana Connection Setup ---
 const connectionOptions = {
-    commitment: process.env.RPC_COMMITMENT, // from PAYMENT_ENV_DEFAULTS
+    commitment: process.env.RPC_COMMITMENT,
     maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
     retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
     maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
@@ -400,7 +402,7 @@ const connectionOptions = {
 };
 
 const solanaConnection = new RateLimitedConnection(
-    combinedRpcEndpointsForConnection, // This was set up earlier
+    combinedRpcEndpointsForConnection,
     connectionOptions
 );
 
@@ -411,39 +413,38 @@ let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
-        verify: (req, res, buf) => { // For raw body access if needed by webhook signature verification
+        verify: (req, res, buf) => {
             req.rawBody = buf;
         }
     }));
 }
 
 // --- Global State Variables & Caches ---
-const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes'; // Default if not set
+const BOT_VERSION = process.env.BOT_VERSION || '3.3.6-d21fixes'; // Updated version example
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 
-let isShuttingDown = false; // Flag for graceful shutdown
+let isShuttingDown = false;
 
-let activeGames = new Map();        // Stores active game instances { gameId: gameData }
-let userCooldowns = new Map();      // Stores user command cooldowns { userId: lastCommandTimestamp }
-let groupGameSessions = new Map();    // Stores group game sessions { chatId: sessionData }
+let activeGames = new Map();
+let userCooldowns = new Map();
+let groupGameSessions = new Map();
 
-// Payment System Caches
-const walletCache = new Map();                // { userId: { solanaAddress, timestamp } }
-const activeDepositAddresses = new Map();       // { depositAddress: { userId, expiresAtTimestamp } }
-const processedDepositTxSignatures = new Set();   // { txSignature } - To prevent double processing
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for pending referrals (example)
-const pendingReferrals = new Map();               // { referredUserId: { referrerId, timestamp } } (Example structure)
-
-const userStateCache = new Map(); // For stateful interactions { userId: { state, data, messageId, chatId } }
-
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
+const processedDepositTxSignatures = new Set();
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
+const pendingReferrals = new Map();
+const userStateCache = new Map();
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map(); // { SOL_PRICE_CACHE_KEY: { price, timestamp } }
+const solPriceCache = new Map();
 
 // --- Core Utility Functions ---
 
+// CORRECTED escapeMarkdownV2 to include single quote
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+  // Escapes: _ * [ ] ( ) ~ ` > # + - = | { } . ! ' \ (single quote and backslash itself)
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!'\\])/g, '\\$1');
 };
 
 async function safeSendMessage(chatId, text, options = {}) {
@@ -454,43 +455,39 @@ async function safeSendMessage(chatId, text, options = {}) {
     }
 
     let messageToSend = text;
-    let finalOptions = { ...options }; // Clone options
+    let finalOptions = { ...options };
 
-    // Truncation logic
     if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-        const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`; // Escaped ellipsis for MDv2
+        const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Plain text or other parse_mode
+    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
     }
 
-    if (!bot) {
+    if (!bot || typeof bot.sendMessage !== 'function') {
         console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance not available.`);
         return undefined;
     }
 
     try {
-        if (typeof bot.sendMessage !== 'function') {
-            throw new Error("'bot.sendMessage' is not a function. Bot may not be initialized.");
-        }
         const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
         return sentMessage;
     } catch (error) {
         console.error(`${LOG_PREFIX_SSM} ❌ Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
-        if (error.response && error.response.body) {
-            if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description &&
-                (error.response.body.description.toLowerCase().includes("can't parse entities") || error.response.body.description.toLowerCase().includes("bad request")) ) {
-                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected by API. Attempting plain text fallback.`);
+        if (error.response && error.response.body && error.response.body.description) {
+             const errorDescription = error.response.body.description.toLowerCase();
+            if (finalOptions.parse_mode === 'MarkdownV2' && (errorDescription.includes("can't parse entities") || errorDescription.includes("bad request"))) {
+                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected by API: "${error.response.body.description}". Attempting plain text fallback for original text.`);
                 try {
                     let plainTextFallbackOptions = { ...options };
-                    delete plainTextFallbackOptions.parse_mode; // Remove parse_mode for plain text
+                    delete plainTextFallbackOptions.parse_mode;
 
-                    let plainTextForFallback = text;
+                    let plainTextForFallback = text; // Use original full 'text' for fallback
                     if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`;
+                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME}, original was Markdown error)`;
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
                         plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
                     }
@@ -501,7 +498,7 @@ async function safeSendMessage(chatId, text, options = {}) {
                 }
             }
         }
-        return undefined; // Original error was not a parse error or fallback failed
+        return undefined;
     }
 }
 
@@ -510,7 +507,6 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function notifyAdmin(message, options = {}) {
     if (ADMIN_USER_ID) {
         const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`;
-        // Always use MarkdownV2 for admin alerts, assuming message content is pre-escaped if needed
         return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
     } else {
         return null;
@@ -522,7 +518,7 @@ async function fetchSolUsdPriceFromAPI() {
     const apiUrl = process.env.SOL_PRICE_API_URL;
     const logPrefix = '[PriceFeed API]';
     try {
-        const response = await axios.get(apiUrl, { timeout: 8000 }); // 8 second timeout
+        const response = await axios.get(apiUrl, { timeout: 8000 });
         if (response.data && response.data.solana && typeof response.data.solana.usd === 'number') {
             const price = parseFloat(response.data.solana.usd);
             if (isNaN(price) || price <= 0) {
@@ -560,9 +556,9 @@ async function getSolUsdPrice() {
             console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
             return cachedEntry.price;
         }
-        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available. USD conversions will be severely impacted.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
+        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available\\. USD conversions will be severely impacted\\.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
         console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`);
-        if (typeof notifyAdmin === 'function') { // Ensure notifyAdmin is defined
+        if (typeof notifyAdmin === 'function') {
             await notifyAdmin(criticalErrorMessage);
         }
         throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`);
@@ -589,8 +585,8 @@ function convertUSDToLamports(usdAmount, solUsdPrice) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
         throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
     }
-    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,"")); // Allow negative for internal adjustments if needed, though typically positive.
-    if (isNaN(parsedUsdAmount)) { // Non-positive check removed to allow for potential negative values internally, though UI usually prevents.
+    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,""));
+    if (isNaN(parsedUsdAmount)) {
         throw new Error("Invalid USD amount for conversion.");
     }
     const solAmount = parsedUsdAmount / solUsdPrice;
@@ -610,16 +606,15 @@ const depositProcessorQueue = new PQueue({
 });
 
 // --- Game Constants (Example - Slots) ---
-const SLOT_PAYOUTS = { // Key is the dice value from Telegram's slot machine (1-64)
-    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, // BAR BAR BAR (Value 64)
-    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" }, // SEVEN SEVEN SEVEN (Value 1)
-    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },  // LEMON LEMON LEMON (Value 22)
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },  // GRAPE GRAPE GRAPE (Value 43) - (assuming bell emoji represents grape for example)
-    // Add other winning combinations as needed
+const SLOT_PAYOUTS = {
+    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" },
+    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
+    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },
 };
-const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; // Represents loss of the bet
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 
-// --- End of Part 1 ---
+// --- End of Part 1 (REVISED - With escapeMarkdownV2 fix and Dice 21 Unified Offer ID) ---
 // --- Start of Part 2 (Modified for dice_roll_requests table) ---
 // index.js - Part 2: Database Schema Initialization & Core User Management
 //---------------------------------------------------------------------------
