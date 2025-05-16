@@ -864,6 +864,12 @@ async function initializeDatabaseSchema() {
 //---------------------------------------------------------------------------
 
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
+    // --- BEGIN TEMPORARY DEBUG ---
+    console.log(`[DEBUG getOrCreateUser ENTER] Received telegramId: ${telegramId} (type: ${typeof telegramId})`);
+    const argsArray = Array.from(arguments);
+    console.log(`[DEBUG getOrCreateUser ENTER] All arguments received: ${JSON.stringify(argsArray)}`);
+    // --- END TEMPORARY DEBUG ---
+
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
         console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
         if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) { 
