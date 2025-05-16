@@ -1610,22 +1610,6 @@ function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey) {
 // Part 3: createUserMention, formatCurrency
 // Part P3: clearUserState, routeStatefulInput, handleMenuAction, handleWithdrawalConfirmation
 
-// Game IDs are used extensively in routing
-// Ensure this is THE definitive GAME_IDS object or consistent with one in Part 1
-const GAME_IDS = {
-    COINFLIP: 'coinflip',
-    RPS: 'rps',
-    DICE_ESCALATOR: 'dice_escalator',
-    DICE_21: 'dice21', // Represents Player vs. Bot (PvB)
-    DICE_21_PVP_OFFER: 'dice21_pvp_offer', // For the initial PvP game offer message
-    DICE_21_PVP: 'dice21_pvp',         // For an active PvP game
-    OVER_UNDER_7: 'ou7',
-    DUEL: 'duel',
-    LADDER: 'ladder',
-    SEVEN_OUT: 'sevenout',
-    SLOT_FRENZY: 'slotfrenzy',
-};
-
 
 // --- Helper to parse bet amount for game commands (USD primary) ---
 const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationChatType, userIdForLog = 'N/A') => {
