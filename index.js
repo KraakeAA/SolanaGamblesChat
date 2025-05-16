@@ -1,5 +1,5 @@
 // --- Start of Part 1 (with new Dice Roll Polling constants) ---
-// index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)
+// index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
 import 'dotenv/config';
@@ -7,16 +7,16 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Pool } from 'pg';
 import express from 'express';
 import {
-    Connection, 
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
-    sendAndConfirmTransaction, 
-    ComputeBudgetProgram,
-    SendTransactionError, 
-    TransactionExpiredBlockheightExceededError 
+    Connection, 
+    PublicKey,
+    LAMPORTS_PER_SOL,
+    Keypair,
+    Transaction,
+    SystemProgram,
+    sendAndConfirmTransaction, 
+    ComputeBudgetProgram,
+    SendTransactionError, 
+    TransactionExpiredBlockheightExceededError 
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto';
@@ -28,119 +28,119 @@ import { derivePath } from 'ed25519-hd-key';
 import nacl from 'tweetnacl';
 import axios from 'axios';
 
-import RateLimitedConnection from './lib/solana-connection.js';
+import RateLimitedConnection from './lib/solana-connection.js'; // Assuming this path is correct relative to your project structure
 
-console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)...");
+// console.log("Loading Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed)..."); // Removed
 
 function stringifyWithBigInt(obj) {
-  return JSON.stringify(obj, (key, value) => {
-    if (typeof value === 'bigint') {
-      return value.toString() + 'n'; 
-    }
-    if (typeof value === 'function') {
-      return `[Function: ${value.name || 'anonymous'}]`;
-    }
-    if (value === undefined) {
-      return 'undefined_value';
-    }
-    return value;
-  }, 2);
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'bigint') {
+      return value.toString() + 'n'; 
+    }
+    if (typeof value === 'function') {
+      return `[Function: ${value.name || 'anonymous'}]`;
+    }
+    if (value === undefined) {
+      return 'undefined_value';
+    }
+    return value;
+  }, 2);
 }
-console.log("[Global Utils] stringifyWithBigInt helper function defined.");
+// console.log("[Global Utils] stringifyWithBigInt helper function defined."); // Removed
 
 const CASINO_ENV_DEFAULTS = {
-  'DB_POOL_MAX': '25',
-  'DB_POOL_MIN': '5',
-  'DB_IDLE_TIMEOUT': '30000',
-  'DB_CONN_TIMEOUT': '5000',
-  'DB_SSL': 'true',
-  'DB_REJECT_UNAUTHORIZED': 'true', 
-  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000', 
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', 
-  'COMMAND_COOLDOWN_MS': '1500',
-  'JOIN_GAME_TIMEOUT_MS': '120000', 
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', 
-  'TARGET_JACKPOT_SCORE': '100',       // Dice Escalator
-  'BOT_STAND_SCORE_DICE_ESCALATOR': '10',// Dice Escalator
-  'DICE_ESCALATOR_BUST_ON': '1',       // Dice Escalator (already present as a const later, good to have default here)
-  'DICE_21_TARGET_SCORE': '21',          // Dice 21
-  'DICE_21_BOT_STAND_SCORE': '17',       // Dice 21
-  'OU7_DICE_COUNT': '2',                 // Over/Under 7: Number of dice to roll
-  'OU7_PAYOUT_NORMAL': '1',              // Over/Under 7: Profit multiplier for Under/Over 7 (e.g., 1 = 2x total return)
-  'OU7_PAYOUT_SEVEN': '4',               // Over/Under 7: Profit multiplier for Exactly 7 (e.g., 4 = 5x total return)
-  'DUEL_DICE_COUNT': '2',                // High Roller Duel: Number of dice per player
-  'LADDER_ROLL_COUNT': '5',              // Greed's Ladder: Number of dice rolled
-  'LADDER_BUST_ON': '1',                 // Greed's Ladder: Value that busts the roll
-  'RULES_CALLBACK_PREFIX': 'rules_game_',
-  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
-  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
-  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
-  'MAX_RETRY_POLLING_DELAY': '60000', 
-  'INITIAL_RETRY_POLLING_DELAY': '5000', 
-  'BOT_NAME': 'Solana Casino Royale',
+  'DB_POOL_MAX': '25',
+  'DB_POOL_MIN': '5',
+  'DB_IDLE_TIMEOUT': '30000',
+  'DB_CONN_TIMEOUT': '5000',
+  'DB_SSL': 'true',
+  'DB_REJECT_UNAUTHORIZED': 'true', 
+  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000', 
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', 
+  'COMMAND_COOLDOWN_MS': '1500',
+  'JOIN_GAME_TIMEOUT_MS': '120000', 
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', 
+  'TARGET_JACKPOT_SCORE': '100',    
+  'BOT_STAND_SCORE_DICE_ESCALATOR': '10',
+  'DICE_ESCALATOR_BUST_ON': '1',    
+  'DICE_21_TARGET_SCORE': '21',        
+  'DICE_21_BOT_STAND_SCORE': '17',     
+  'OU7_DICE_COUNT': '2',               
+  'OU7_PAYOUT_NORMAL': '1',            
+  'OU7_PAYOUT_SEVEN': '4',             
+  'DUEL_DICE_COUNT': '2',              
+  'LADDER_ROLL_COUNT': '5',            
+  'LADDER_BUST_ON': '1',               
+  'RULES_CALLBACK_PREFIX': 'rules_game_',
+  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
+  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
+  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
+  'MAX_RETRY_POLLING_DELAY': '60000', 
+  'INITIAL_RETRY_POLLING_DELAY': '5000', 
+  'BOT_NAME': 'Solana Casino Royale',
   'DICE_ROLL_POLL_INTERVAL_MS': '2500', 
   'DICE_ROLL_POLL_ATTEMPTS': '24',     
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', 
-  'RPC_URLS': '', 
-  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed', 
-  'WITHDRAWAL_FEE_LAMPORTS': '10000', 
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000', 
-  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', 
-  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', 
-  'PAYOUT_JOB_RETRIES': '3',
-  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
-  'SWEEP_INTERVAL_MS': '300000', 
-  'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', 
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', 
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', 
-  'SWEEP_ADDRESS_DELAY_MS': '1500', 
-  'SWEEP_RETRY_ATTEMPTS': '2', 
-  'SWEEP_RETRY_DELAY_MS': '10000',
-  'RPC_MAX_CONCURRENT': '10', 
-  'RPC_RETRY_BASE_DELAY': '750', 
-  'RPC_MAX_RETRIES': '4', 
-  'RPC_RATE_LIMIT_COOLOFF': '3000', 
-  'RPC_RETRY_MAX_DELAY': '25000', 
-  'RPC_RETRY_JITTER': '0.3', 
-  'RPC_COMMITMENT': 'confirmed', 
-  'PAYOUT_QUEUE_CONCURRENCY': '4', 
-  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', 
-  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', 
-  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', 
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 
-  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 
-  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', 
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', 
-  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', 
-  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', 
-  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), 
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), 
-  'MAX_PROCESSED_TX_CACHE': '10000', 
-  'INIT_DELAY_MS': '7000', 
-  'ENABLE_PAYMENT_WEBHOOKS': 'false', 
-  'PAYMENT_WEBHOOK_PORT': '3000', 
-  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', 
-  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
-  'MIN_BET_USD': '0.50',
-  'MAX_BET_USD': '100.00',
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/', 
+  'RPC_URLS': '', 
+  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
+  'DEPOSIT_CONFIRMATIONS': 'confirmed', 
+  'WITHDRAWAL_FEE_LAMPORTS': '10000', 
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000', 
+  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000', 
+  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000', 
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000', 
+  'PAYOUT_JOB_RETRIES': '3',
+  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
+  'SWEEP_INTERVAL_MS': '300000', 
+  'SWEEP_BATCH_SIZE': '15',
+  'SWEEP_FEE_BUFFER_LAMPORTS': '20000', 
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000', 
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000', 
+  'SWEEP_ADDRESS_DELAY_MS': '1500', 
+  'SWEEP_RETRY_ATTEMPTS': '2', 
+  'SWEEP_RETRY_DELAY_MS': '10000',
+  'RPC_MAX_CONCURRENT': '10', 
+  'RPC_RETRY_BASE_DELAY': '750', 
+  'RPC_MAX_RETRIES': '4', 
+  'RPC_RATE_LIMIT_COOLOFF': '3000', 
+  'RPC_RETRY_MAX_DELAY': '25000', 
+  'RPC_RETRY_JITTER': '0.3', 
+  'RPC_COMMITMENT': 'confirmed', 
+  'PAYOUT_QUEUE_CONCURRENCY': '4', 
+  'PAYOUT_QUEUE_TIMEOUT_MS': '90000', 
+  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5', 
+  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000', 
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1', 
+  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050', 
+  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1', 
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000', 
+  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75', 
+  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15', 
+  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(), 
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(), 
+  'MAX_PROCESSED_TX_CACHE': '10000', 
+  'INIT_DELAY_MS': '7000', 
+  'ENABLE_PAYMENT_WEBHOOKS': 'false', 
+  'PAYMENT_WEBHOOK_PORT': '3000', 
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments', 
+  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
+  'MIN_BET_USD': '0.50',
+  'MAX_BET_USD': '100.00',
 };
 
 const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
 
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
-  if (process.env[key] === undefined) {
-    console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`);
-    process.env[key] = defaultValue;
-  }
+  if (process.env[key] === undefined) {
+    // console.log(`[ENV_DEFAULT] Setting default for ${key}: ${defaultValue}`); // Reduced log
+    process.env[key] = defaultValue;
+  }
 });
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -156,64 +156,61 @@ const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY
 const DICE_ROLL_POLLING_INTERVAL_MS = parseInt(process.env.DICE_ROLL_POLL_INTERVAL_MS, 10);
 const DICE_ROLL_POLLING_MAX_ATTEMPTS = parseInt(process.env.DICE_ROLL_POLL_ATTEMPTS, 10);
 
-// Game Specific Constants (loaded from ENV via defaults)
+// Game Specific Constants
 const OU7_DICE_COUNT = parseInt(process.env.OU7_DICE_COUNT, 10);
-const OU7_PAYOUT_NORMAL = parseFloat(process.env.OU7_PAYOUT_NORMAL); // Profit Multiplier
-const OU7_PAYOUT_SEVEN = parseFloat(process.env.OU7_PAYOUT_SEVEN);   // Profit Multiplier
+const OU7_PAYOUT_NORMAL = parseFloat(process.env.OU7_PAYOUT_NORMAL); 
+const OU7_PAYOUT_SEVEN = parseFloat(process.env.OU7_PAYOUT_SEVEN);  
 const DUEL_DICE_COUNT = parseInt(process.env.DUEL_DICE_COUNT, 10);
 const LADDER_ROLL_COUNT = parseInt(process.env.LADDER_ROLL_COUNT, 10);
 const LADDER_BUST_ON = parseInt(process.env.LADDER_BUST_ON, 10);
-const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10); // Already a const later, ensure consistency
+const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10); 
 
-// Greed's Ladder Payout Tiers (Hardcoded for structure, values can be tuned)
 const LADDER_PAYOUTS = [
-    // Example: { min: 5, max: 9, multiplier: 0, label: "Small Steps" }, // 0 multiplier = bet back (no profit)
-    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },      // 1x profit = 2x total return
-    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },      // 2x profit = 3x total return
-    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },  // 5x profit = 6x total return
-    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" }, // 10x profit = 11x total return
-    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" }    // Max possible with 5x 6-sided dice (if LADDER_ROLL_COUNT is 5)
+    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },    
+    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },    
+    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },  
+    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" }, 
+    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" }   
 ];
-// Adjust LADDER_PAYOUTS min/max values based on LADDER_ROLL_COUNT (e.g. if 5 dice, max sum is 30)
 
 
 let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
-    try {
-        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
-        process.exit(1);
-    }
+    try {
+        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
+        process.exit(1);
+    }
 } else {
-    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
-    process.exit(1);
+    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
+    process.exit(1);
 }
 
 let REFERRAL_PAYOUT_KEYPAIR = null;
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
-    try {
-        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null; 
-    }
+    try {
+        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
+        REFERRAL_PAYOUT_KEYPAIR = null; 
+    }
 } else {
-    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
+    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
 
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
-    .split(',')
-    .map(u => u.trim())
-    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+    .split(',')
+    .map(u => u.trim())
+    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
 
 const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
 
 let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
-    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
+    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
 
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
@@ -246,84 +243,83 @@ const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCas
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
 
+// Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 
 if (combinedRpcEndpointsForConnection.length === 0) {
-    console.warn("⚠️ WARNING: No RPC URLs provided via environment (RPC_URLS, SOLANA_RPC_URL). RateLimitedConnection might rely on its internal defaults, if any. RPC functionality may be impaired if no defaults are present.");
+    console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). RPC functionality may be impaired.");
 }
 
 const criticalGameScores = { TARGET_JACKPOT_SCORE, BOT_STAND_SCORE_DICE_ESCALATOR, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
 for (const [key, value] of Object.entries(criticalGameScores)) {
-    if (isNaN(value) || value <=0) {
-        console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number. Check .env file or defaults.`);
-        process.exit(1);
-    }
+    if (isNaN(value) || value <=0) {
+        console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number.`);
+        process.exit(1);
+    }
 }
 if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
+    process.exit(1);
 }
 if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be greater than or equal to MIN_BET_USD and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
+    process.exit(1);
 }
 if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
+    process.exit(1);
 }
 if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be greater than or equal to MIN_BET_AMOUNT_LAMPORTS and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`);
+    process.exit(1);
 }
 if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) {
-    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive). E.g., 0.01 for 1%.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive).`);
+    process.exit(1);
 }
-// Validate OU7 Payouts
-if (isNaN(OU7_PAYOUT_NORMAL) || OU7_PAYOUT_NORMAL < 0) { // Can be 0 for bet back
+if (isNaN(OU7_PAYOUT_NORMAL) || OU7_PAYOUT_NORMAL < 0) { 
     console.error(`🚨 FATAL ERROR: OU7_PAYOUT_NORMAL must be a non-negative number.`); process.exit(1);
 }
 if (isNaN(OU7_PAYOUT_SEVEN) || OU7_PAYOUT_SEVEN < 0) {
     console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);
 }
 
-
-console.log("✅ BOT_TOKEN loaded successfully.");
-if (ADMIN_USER_ID) console.log(`🔑 Admin User ID: ${ADMIN_USER_ID} loaded.`);
-else console.log("ℹ️ INFO: No ADMIN_USER_ID set (optional, for admin alerts).");
-console.log(`🔑 Payment System: DEPOSIT_MASTER_SEED_PHRASE is set (value not logged).`);
-console.log(`📡 Using RPC Endpoints (from env): [${combinedRpcEndpointsForConnection.join(', ')}] (RateLimitedConnection may use internal defaults if this list is empty or fails).`);
-console.log(`헬 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}`);
+// console.log("✅ BOT_TOKEN loaded."); // Reduced log
+if (ADMIN_USER_ID) console.log(`ℹ️ Admin User ID: ${ADMIN_USER_ID} loaded.`);
+// else console.log("ℹ️ INFO: No ADMIN_USER_ID set (optional)."); // Reduced log
+// console.log(`ℹ️ Payment System: DEPOSIT_MASTER_SEED_PHRASE is set.`); // Reduced log
+// console.log(`📡 Using RPC Endpoints (from env): [${combinedRpcEndpointsForConnection.join(', ')}]`); // Reduced log
+// console.log(`🎲 Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}`); // Reduced log
 
 
 function formatLamportsToSolStringForLog(lamports) {
-    if (typeof lamports !== 'bigint') {
-        try { lamports = BigInt(lamports); }
-        catch (e) { return 'Invalid_Lamports'; }
-    }
-    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
+    if (typeof lamports !== 'bigint') {
+        try { lamports = BigInt(lamports); }
+        catch (e) { return 'Invalid_Lamports'; }
+    }
+    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
-console.log("--- 🎲 Game Settings Loaded 🎲 ---");
-console.log(`Escalator: Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Bot Stand: ${BOT_STAND_SCORE_DICE_ESCALATOR}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%`);
-console.log(`Blackjack (21): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}`);
-console.log(`💰 Bet Limits (USD): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)}`);
-console.log(`⚙️ Bet Limits (Lamports Ref): ${formatLamportsToSolStringForLog(MIN_BET_AMOUNT_LAMPORTS_config)} SOL - ${formatLamportsToSolStringForLog(MAX_BET_AMOUNT_LAMPORTS_config)} SOL`);
-console.log(`🏦 Default Starting Credits: ${formatLamportsToSolStringForLog(DEFAULT_STARTING_BALANCE_LAMPORTS)} SOL`);
-console.log(`⏱️ Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s`);
-console.log(`⏳ Game Join Timeout: ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min`);
-console.log("--- 💸 Payment Settings Loaded 💸 ---");
-console.log(`Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LAMPORTS)} SOL, Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL`);
-console.log(`Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes`);
-console.log(`📈 SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}`);
-console.log("------------------------------------");
+// Summarized Startup Config Log
+console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
+  Dice Escalator: Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Bot Stand: ${BOT_STAND_SCORE_DICE_ESCALATOR}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
+  Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
+  Bet Limits (USD): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} (Lamports Ref: ${formatLamportsToSolStringForLog(MIN_BET_AMOUNT_LAMPORTS_config)} SOL - ${formatLamportsToSolStringForLog(MAX_BET_AMOUNT_LAMPORTS_config)} SOL)
+  Default Starting Credits: ${formatLamportsToSolStringForLog(DEFAULT_STARTING_BALANCE_LAMPORTS)} SOL
+  Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s, Game Join Timeout: ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min
+  Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LAMPORTS)} SOL, Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL
+  Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
+  SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
+  Dice Roll Polling: Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
+-------------------------------------------------`);
 
-console.log("⚙️ Setting up PostgreSQL Pool...");
+
+// console.log("⚙️ Setting up PostgreSQL Pool..."); // Reduced log
 const useSsl = process.env.DB_SSL === 'true';
 const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
-console.log(`DB_SSL configuration: Use SSL = '${useSsl}', Reject Unauthorized = '${rejectUnauthorizedSsl}'`);
+// console.log(`DB_SSL config: Use SSL = '${useSsl}', Reject Unauthorized = '${rejectUnauthorizedSsl}'`); // Reduced log
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -335,7 +331,7 @@ const pool = new Pool({
 });
 
 pool.on('connect', client => {
-  console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.');
+  // console.log('ℹ️ [DB Pool] Client connected to PostgreSQL.'); // Can be noisy, removed
 });
 pool.on('error', (err, client) => {
   console.error('❌ Unexpected error on idle PostgreSQL client', err);
@@ -344,35 +340,39 @@ pool.on('error', (err, client) => {
     safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
       .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
   } else {
-    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage or escapeMarkdownV2 might not be available or ADMIN_USER_ID not set)`);
+    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage, escapeMarkdownV2, or ADMIN_USER_ID unavailable)`);
   }
 });
-console.log("✅ PostgreSQL Pool created.");
+// console.log("✅ PostgreSQL Pool created."); // Reduced log
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[queryDatabase]';
-    const sqlPreview = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
-    const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
+    const logPrefix = '[DB_Query]'; // Shortened
+    // const sqlPreview = sql.length > 100 ? `${sql.substring(0, 97)}...` : sql; // Reduced length for preview
+    // const paramsPreview = params.map(p => (typeof p === 'string' && p.length > 30) ? `${p.substring(0, 27)}...` : p);
     
-    console.log(`${logPrefix} Attempting to execute SQL (Full length: ${sql.length}): [${sqlPreview}] with PARAMS: [${paramsPreview.join(', ')}]`);
+    // Reduced logging for successful queries
+    // console.log(`${logPrefix} Attempting SQL (Preview: ${sqlPreview}) PARAMS: [${paramsPreview.join(', ')}]`);
 
     try {
         const result = await dbClient.query(sql, params);
         return result;
     } catch (error) {
+        const sqlPreviewOnError = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
+        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : p);
+
         console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL that failed (Full length: ${sql.length}): [${sqlPreview}]`);
-        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreview.join(', ')}]`);
+        console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
+        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
         console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
         if (error.stack) {
-            console.error(`${logPrefix} Stack: ${error.stack}`);
+            console.error(`${logPrefix} Stack: ${error.stack.substring(0,500)}...`); // Log partial stack
         }
         throw error;
     }
 }
-console.log("[Global Utils] queryDatabase helper function (with enhanced logging) defined.");
+// console.log("[Global Utils] queryDatabase helper function (with reduced success logging) defined."); // Removed
 
-console.log("⚙️ Setting up Solana Connection...");
+// console.log("⚙️ Setting up Solana Connection..."); // Reduced log
 const connectionOptions = {
     commitment: process.env.RPC_COMMITMENT,
     maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
@@ -389,7 +389,7 @@ const solanaConnection = new RateLimitedConnection(
 );
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-console.log("🤖 Telegram Bot instance created and configured for polling.");
+// console.log("🤖 Telegram Bot instance created and configured for polling."); // Reduced log
 
 let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
@@ -399,9 +399,9 @@ if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
             req.rawBody = buf;
         }
     }));
-    console.log("🚀 Express app initialized for payment webhooks (JSON body parser with rawBody enabled).");
+    // console.log("🚀 Express app initialized for payment webhooks."); // Reduced log
 } else {
-    console.log("ℹ️ Payment webhooks are disabled via ENABLE_PAYMENT_WEBHOOKS env var.");
+    // console.log("ℹ️ Payment webhooks are disabled."); // Reduced log
 }
 
 const BOT_VERSION = process.env.BOT_VERSION || '3.3.3-fixes';
@@ -424,20 +424,20 @@ const userStateCache = new Map();
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map();
 
-console.log(`🚀 Initializing ${BOT_NAME} v${BOT_VERSION}...`);
-console.log(`🕰️ Current system time: ${new Date().toISOString()}`);
-console.log(`💻 Node.js Version: ${process.version}`);
+// console.log(`🚀 Initializing ${BOT_NAME} v${BOT_VERSION}...`); // Moved to main() in Part 6
+// console.log(`🕰️ Current system time: ${new Date().toISOString()}`); // Moved to main()
+// console.log(`💻 Node.js Version: ${process.version}`); // Moved to main()
 
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 };
-console.log("[Global Utils] escapeMarkdownV2 helper function defined.");
+// console.log("[Global Utils] escapeMarkdownV2 helper function defined."); // Removed
 
 async function safeSendMessage(chatId, text, options = {}) {
-    const LOG_PREFIX_SSM = `[safeSendMessage CH:${chatId}]`;
+    const LOG_PREFIX_SSM = `[SafeSend CH:${chatId}]`; // Shortened
     if (!chatId || typeof text !== 'string') {
-        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID is ${chatId}, Text type is ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
+        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID ${chatId}, Text type ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
         return undefined;
     }
     
@@ -448,12 +448,12 @@ async function safeSendMessage(chatId, text, options = {}) {
         const ellipsisBase = ` \\.\\.\\. \\(_message truncated by ${escapeMarkdownV2(BOT_NAME)}_\\)`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-        console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) was too long (${text.length} chars) and has been truncated.`);
+        // console.warn(`${LOG_PREFIX_SSM} Message (MarkdownV2) truncated (${text.length} chars).`); // Reduced log
     } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-        console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) was too long (${text.length} chars) and has been truncated.`);
+        // console.warn(`${LOG_PREFIX_SSM} Message (Plain Text) truncated (${text.length} chars).`); // Reduced log
     }
 
     if (!bot) {
@@ -468,17 +468,17 @@ async function safeSendMessage(chatId, text, options = {}) {
         const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
         return sentMessage;
     } catch (error) {
-        console.error(`${LOG_PREFIX_SSM} ❌ Failed to send message. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
+        console.error(`${LOG_PREFIX_SSM} ❌ Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
         if (error.response && error.response.body) {
-            console.error(`${LOG_PREFIX_SSM} Telegram API Response: ${stringifyWithBigInt(error.response.body)}`);
+            // console.error(`${LOG_PREFIX_SSM} Telegram API Response: ${stringifyWithBigInt(error.response.body)}`); // Can be verbose
             if (finalOptions.parse_mode === 'MarkdownV2' && error.response.body.description && error.response.body.description.toLowerCase().includes("can't parse entities")) {
-                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected. Attempting to send as plain text.`);
-                console.error(`${LOG_PREFIX_SSM} Original MarkdownV2 text (first 200 chars): "${text.substring(0,200)}"`);
+                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error. Attempting plain text fallback.`);
+                // console.error(`${LOG_PREFIX_SSM} Original MDv2 (first 200): "${text.substring(0,200)}"`); // Reduced log
                 try {
                     let plainTextFallbackOptions = { ...options };
                     delete plainTextFallbackOptions.parse_mode;
                     
-                    let plainTextForFallback = text;
+                    let plainTextForFallback = text; // Use original full text for fallback attempt before re-truncating
                     if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
                         const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME})`;
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
@@ -494,54 +494,53 @@ async function safeSendMessage(chatId, text, options = {}) {
         return undefined;
     }
 }
-console.log("[Global Utils] safeSendMessage (with MarkdownV2 fallback & refined truncation) defined.");
+// console.log("[Global Utils] safeSendMessage (with MarkdownV2 fallback & refined truncation) defined."); // Removed
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-console.log("[Global Utils] sleep helper function defined.");
+// console.log("[Global Utils] sleep helper function defined."); // Removed
 
 async function notifyAdmin(message, options = {}) {
     if (ADMIN_USER_ID) {
         const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`;
         return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
     } else {
-        console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID set. Message (first 100 chars): ${String(message).substring(0,100)}...`);
+        // console.warn(`[Admin Notify - SKIPPED] No ADMIN_USER_ID. Message (first 100): ${String(message).substring(0,100)}...`); // Reduced log
         return null;
     }
 }
-console.log("[Global Utils] notifyAdmin helper function defined.");
+// console.log("[Global Utils] notifyAdmin helper function defined."); // Removed
 
-console.log("⚙️ Setting up Price Feed Utilities...");
+// console.log("⚙️ Setting up Price Feed Utilities..."); // Removed
 
 async function fetchSolUsdPriceFromAPI() {
     const apiUrl = process.env.SOL_PRICE_API_URL;
     const logPrefix = '[PriceFeed API]';
     try {
-        console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`);
+        // console.log(`${logPrefix} Fetching SOL/USD price from ${apiUrl}...`); // Reduced log
         const response = await axios.get(apiUrl, { timeout: 8000 });
         if (response.data && response.data.solana && response.data.solana.usd) {
             const price = parseFloat(response.data.solana.usd);
             if (isNaN(price) || price <= 0) {
-                throw new Error('Invalid or non-positive price data received from API.');
+                throw new Error('Invalid or non-positive price data from API.');
             }
-            console.log(`${logPrefix} ✅ Successfully fetched SOL/USD price: $${price.toFixed(2)}`);
+            // console.log(`${logPrefix} ✅ Fetched SOL/USD price: $${price.toFixed(2)}`); // Reduced log
             return price;
         } else {
-            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data));
+            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data).substring(0,300));
             throw new Error('SOL price not found or invalid structure in API response.');
         }
     } catch (error) {
         const errMsg = error.isAxiosError ? error.message : String(error);
         console.error(`${logPrefix} ❌ Error fetching SOL/USD price: ${errMsg}`);
         if (error.response) {
-            console.error(`${logPrefix} API Response Status: ${error.response.status}`);
-            console.error(`${logPrefix} API Response Data:`, stringifyWithBigInt(error.response.data));
+            console.error(`${logPrefix} API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(error.response.data).substring(0,300));
         }
         throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`);
     }
 }
 
 async function getSolUsdPrice() {
-    const logPrefix = '[getSolUsdPrice]';
+    const logPrefix = '[GetSolUsdPrice]'; // Shortened
     const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
     const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
@@ -551,7 +550,7 @@ async function getSolUsdPrice() {
     try {
         const price = await fetchSolUsdPriceFromAPI();
         solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
-        console.log(`${logPrefix} Fetched and cached new SOL/USD price: $${price.toFixed(2)}`);
+        // console.log(`${logPrefix} Fetched and cached new SOL/USD price: $${price.toFixed(2)}`); // Reduced log
         return price;
     } catch (error) {
         if (cachedEntry) {
@@ -566,18 +565,18 @@ async function getSolUsdPrice() {
         throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`);
     }
 }
-console.log("[PriceFeed Utils] getSolUsdPrice and fetchSolUsdPriceFromAPI defined.");
+// console.log("[PriceFeed Utils] getSolUsdPrice and fetchSolUsdPriceFromAPI defined."); // Removed
 
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
-        console.warn(`[Convert] Invalid solUsdPrice (${solUsdPrice}) for lamports to USD conversion. Lamports: ${lamports}`);
+        // console.warn(`[Convert] Invalid solUsdPrice (${solUsdPrice}) for lamports to USD. Lamports: ${lamports}`); // Reduced log
         return '⚠️ Price N/A';
     }
     let lamportsBigInt;
     try {
         lamportsBigInt = BigInt(lamports);
     } catch (e) {
-        console.warn(`[Convert] Invalid lamport amount for USD conversion: ${lamports}. Error: ${e.message}`);
+        // console.warn(`[Convert] Invalid lamport amount for USD conversion: ${lamports}. Error: ${e.message}`); // Reduced log
         return '⚠️ Amount Error';
     }
     
@@ -585,7 +584,7 @@ function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) 
     const usdValue = solAmount * solUsdPrice;
     return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: displayDecimals, maximumFractionDigits: displayDecimals })}`;
 }
-console.log("[PriceFeed Utils] convertLamportsToUSDString defined.");
+// console.log("[PriceFeed Utils] convertLamportsToUSDString defined."); // Removed
 
 function convertUSDToLamports(usdAmount, solUsdPrice) {
     if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
@@ -598,7 +597,7 @@ function convertUSDToLamports(usdAmount, solUsdPrice) {
     const solAmount = parsedUsdAmount / solUsdPrice;
     return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL)));
 }
-console.log("[PriceFeed Utils] convertUSDToLamports defined.");
+// console.log("[PriceFeed Utils] convertUSDToLamports defined."); // Removed
 
 const payoutProcessorQueue = new PQueue({
     concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
@@ -610,7 +609,7 @@ const depositProcessorQueue = new PQueue({
     timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
     throwOnTimeout: true
 });
-console.log("✅ Payment processing queues (Payout & Deposit) initialized.");
+// console.log("✅ Payment processing queues (Payout & Deposit) initialized."); // Reduced log
 
 const SLOT_PAYOUTS = {
     64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" },
@@ -620,18 +619,12 @@ const SLOT_PAYOUTS = {
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 
-console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed) - Complete.");
+// console.log("Part 1: Core Imports, Basic Setup, Global State & Utilities (Enhanced & Integrated with Payment System & Price Feed) - Complete."); // Removed
 // --- End of Part 1 ---
 // --- Start of Part 2 (Modified for dice_roll_requests table) ---
-// index.js - Part 2: Database Schema Initialization & Core User Management (Integrated)
+// index.js - Part 2: Database Schema Initialization & Core User Management
 //---------------------------------------------------------------------------
-console.log("Loading Part 2: Database Schema Initialization & Core User Management (Integrated)...");
-
-// Assumes pool, DEFAULT_STARTING_BALANCE_LAMPORTS, stringifyWithBigInt, MAIN_JACKPOT_ID, queryDatabase,
-// ADMIN_USER_ID, notifyAdmin, escapeMarkdownV2, PublicKey, Keypair (for linkUserWallet validation),
-// activeGames, userCooldowns, groupGameSessions, walletCache, activeDepositAddresses,
-// pendingReferrals, userStateCache, GAME_IDS (for deleteUserAccount cache clearing)
-// are available from Part 1 or other preceding parts.
+// Assumed necessary functions and constants from Part 1 are available.
 
 // --- Helper function for referral code generation ---
 const generateReferralCode = (length = 8) => {
@@ -642,13 +635,12 @@ const generateReferralCode = (length = 8) => {
     }
     return result;
 };
-console.log("[User Management] generateReferralCode helper function defined.");
 
 //---------------------------------------------------------------------------
 // Database Schema Initialization
 //---------------------------------------------------------------------------
 async function initializeDatabaseSchema() {
-    console.log("🚀 Initializing database schema...");
+    console.log("⚙️ Initializing database schema...");
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -677,7 +669,6 @@ async function initializeDatabaseSchema() {
             total_won_lamports BIGINT DEFAULT 0,
             notes TEXT
         );`);
-        console.log("  [DB Schema] 'users' table checked/created.");
 
         // Jackpots Table
         await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
@@ -687,12 +678,10 @@ async function initializeDatabaseSchema() {
             last_won_timestamp TIMESTAMPTZ,
             updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );`);
-        console.log("  [DB Schema] 'jackpots' table checked/created.");
         await client.query(
             `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
             [MAIN_JACKPOT_ID]
         );
-        console.log(`  [DB Schema] Ensured '${MAIN_JACKPOT_ID}' exists in 'jackpots'.`);
 
         // Games Table (Game Log)
         await client.query(`CREATE TABLE IF NOT EXISTS games (
@@ -706,7 +695,6 @@ async function initializeDatabaseSchema() {
             jackpot_contribution_lamports BIGINT,
             game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );`);
-        console.log("  [DB Schema] 'games' table (game log) checked/created.");
 
         // User Deposit Wallets Table
         await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
@@ -724,7 +712,6 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-        console.log("  [DB Schema] 'user_deposit_wallets' table and indexes checked/created.");
 
         // Deposits Table
         await client.query(`CREATE TABLE IF NOT EXISTS deposits (
@@ -746,7 +733,6 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-        console.log("  [DB Schema] 'deposits' table and indexes checked/created.");
 
         // Withdrawals Table
         await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
@@ -768,7 +754,6 @@ async function initializeDatabaseSchema() {
         );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
-        console.log("  [DB Schema] 'withdrawals' table and indexes checked/created.");
 
         // Referrals Table
         await client.query(`CREATE TABLE IF NOT EXISTS referrals (
@@ -785,7 +770,6 @@ async function initializeDatabaseSchema() {
         );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
-        console.log("  [DB Schema] 'referrals' table and indexes checked/created.");
 
         // Processed Sweeps Table
         await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
@@ -797,7 +781,6 @@ async function initializeDatabaseSchema() {
             swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-        console.log("  [DB Schema] 'processed_sweeps' table and index checked/created.");
         
         // Ledger Table
         await client.query(`CREATE TABLE IF NOT EXISTS ledger (
@@ -818,7 +801,6 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
-        console.log("  [DB Schema] 'ledger' table and indexes checked/created.");
 
         // Dice Roll Requests Table
         await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
@@ -833,10 +815,7 @@ async function initializeDatabaseSchema() {
             processed_at TIMESTAMPTZ NULL,
             notes TEXT NULL
         );`);
-        console.log("  [DB Schema] 'dice_roll_requests' table checked/created.");
-
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
-        console.log("  [DB Schema] Index for 'dice_roll_requests' (status, requested_at) checked/created.");
 
         // Update function for 'updated_at' columns
         await client.query(`
@@ -859,19 +838,18 @@ async function initializeDatabaseSchema() {
                     BEFORE UPDATE ON ${tableName}
                     FOR EACH ROW
                     EXECUTE FUNCTION trigger_set_timestamp();
-                `).then(() => console.log(`  [DB Schema] 'updated_at' trigger created for '${tableName}'.`))
-                  .catch(err => console.warn(`  [DB Schema] Could not set update trigger for ${tableName} (may require permissions or function issue): ${err.message}`));
+                `).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
             }
         }
-        console.log("  [DB Schema] 'updated_at' trigger function and assignments checked/created.");
+        // console.log("  [DB Schema] All tables, indexes, and 'updated_at' triggers checked/created."); // Consolidated log for schema part
 
         await client.query('COMMIT');
         console.log("✅ Database schema initialization complete.");
     } catch (e) {
         await client.query('ROLLBACK');
         if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
-             console.error('❌ Error during database schema initialization (Likely an empty/malformed query, or invisible characters at the START of an SQL DDL string):', e);
-            console.error(`Hint: The error occurred at position ${e.position} of the failing SQL query. This often indicates an issue right at the beginning of the statement, possibly due to invisible characters from copy-pasting DDL.`);
+             console.error('❌ Error during DB schema initialization (Likely empty/malformed query or invisible chars at START of SQL DDL):', e);
+             console.error(`Hint: Error at position ${e.position} of failing SQL. Check for invisible characters if copy-pasting DDL.`);
         } else {
             console.error('❌ Error during database schema initialization:', e);
         }
@@ -882,22 +860,22 @@ async function initializeDatabaseSchema() {
 }
 
 //---------------------------------------------------------------------------
-// Core User Management Functions (Integrated)
+// Core User Management Functions
 //---------------------------------------------------------------------------
 
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
-        console.error(`[getOrCreateUser CRITICAL] Attempted to get or create user with invalid telegramId: '${telegramId}'. Aborting operation.`);
-        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) { // ADMIN_USER_ID from Part 1
-            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}. Check calling function.`)
+        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
+        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) { 
+            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Check calling function\\.`)
                 .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
         }
         return null;
     }
 
     const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_GOCU = `[getOrCreateUser TG:${stringTelegramId}]`;
-    console.log(`${LOG_PREFIX_GOCU} Attempting to get or create user. Username: ${username || 'N/A'}, Name: ${firstName || 'N/A'}`);
+    const LOG_PREFIX_GOCU = `[GetCreateUser TG:${stringTelegramId}]`; // Shortened
+    // console.log(`${LOG_PREFIX_GOCU} Attempting. User: ${username || 'N/A'}, Name: ${firstName || 'N/A'}`); // Reduced log
 
     const client = await pool.connect();
     try {
@@ -908,7 +886,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             try {
                 referrerId = BigInt(referrerIdInput);
             } catch (parseError) {
-                console.warn(`${LOG_PREFIX_GOCU} Invalid referrerIdInput '${referrerIdInput}', cannot parse to BigInt. Setting referrer to null.`);
+                // console.warn(`${LOG_PREFIX_GOCU} Invalid referrerIdInput '${referrerIdInput}', cannot parse. Setting referrer to null.`); // Reduced log
                 referrerId = null;
             }
         }
@@ -923,8 +901,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             user.total_won_lamports = BigInt(user.total_won_lamports || '0');
             if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
-
-            console.log(`${LOG_PREFIX_GOCU} User found. Balance: ${user.balance} lamports.`);
+            // console.log(`${LOG_PREFIX_GOCU} User found. Balance: ${user.balance}`); // Reduced log
             
             let detailsChanged = false;
             const currentUsername = user.username || '';
@@ -940,13 +917,12 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
                     'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
                     [stringTelegramId, username || user.username, firstName || user.first_name, lastName || user.last_name]
                 );
-                console.log(`${LOG_PREFIX_GOCU} User details updated.`);
+                // console.log(`${LOG_PREFIX_GOCU} User details updated.`); // Reduced log
             } else {
                 await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
             }
             await client.query('COMMIT');
-            // Return the potentially updated user object, ensuring BigInts are consistent
-            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]); // Re-fetch after commit
+            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]); 
             const finalUser = updatedUserRow.rows[0];
             finalUser.balance = BigInt(finalUser.balance);
             finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
@@ -963,7 +939,6 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
                 VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 RETURNING *;
             `;
-            // DEFAULT_STARTING_BALANCE_LAMPORTS from Part 1
             const values = [stringTelegramId, username, firstName, lastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
             result = await client.query(insertQuery, values);
             const newUser = result.rows[0];
@@ -975,24 +950,20 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
             if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
 
-
-            console.log(`${LOG_PREFIX_GOCU} New user created with ID ${newUser.telegram_id}, Balance: ${newUser.balance} lamports, Referral Code: ${newUser.referral_code}.`);
+            console.log(`${LOG_PREFIX_GOCU} New user created: ${newUser.telegram_id}, Bal: ${newUser.balance}, RefCode: ${newUser.referral_code}.`);
 
             if (referrerId) {
-                console.log(`${LOG_PREFIX_GOCU} User was referred by ${referrerId}. Recording referral link.`);
+                // console.log(`${LOG_PREFIX_GOCU} User referred by ${referrerId}. Recording link.`); // Reduced log
                 try {
-                    // Ensure the referred_telegram_id constraint in referrals table is `UNIQUE`
                     await client.query(
                         `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
                          VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria', CURRENT_TIMESTAMP) 
                          ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Handles both unique constraints (pair and just referred_id)
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
                         [referrerId, newUser.telegram_id]
                     );
-                    console.log(`${LOG_PREFIX_GOCU} Referral link recorded for ${referrerId} -> ${newUser.telegram_id}.`);
                 } catch (referralError) {
                    console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
-                    // Don't let referral error stop user creation, but log it.
                 }
             }
             await client.query('COMMIT');
@@ -1000,24 +971,21 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
         }
     } catch (error) {
         await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}:`, stringifyWithBigInt(error)); // stringifyWithBigInt from Part 1
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message}`, error.stack?.substring(0,500)); 
         return null;
     } finally {
         client.release();
     }
 }
-console.log("[User Management] getOrCreateUser (with telegramId validation and BigInt handling) defined.");
-
 
 async function updateUserActivity(telegramId) {
     const stringTelegramId = String(telegramId);
     try {
         await pool.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
     } catch (error) {
-        console.error(`[updateUserActivity TG:${stringTelegramId}] Error updating last active timestamp for telegramId ${stringTelegramId}:`, error);
+        // console.error(`[UpdateUserActivity TG:${stringTelegramId}] Error updating last active timestamp:`, error); // Reduced: log only if it's a persistent problem
     }
 }
-console.log("[User Management] updateUserActivity defined.");
 
 async function getUserBalance(telegramId) {
     const stringTelegramId = String(telegramId);
@@ -1026,27 +994,25 @@ async function getUserBalance(telegramId) {
         if (result.rows.length > 0) {
             return BigInt(result.rows[0].balance);
         }
-        console.warn(`[getUserBalance TG:${stringTelegramId}] User not found, cannot retrieve balance.`);
+        // console.warn(`[GetUserBalance TG:${stringTelegramId}] User not found, cannot retrieve balance.`); // Reduced log
         return null;
     } catch (error) {
-        console.error(`[getUserBalance TG:${stringTelegramId}] Error retrieving balance for telegramId ${stringTelegramId}:`, error);
+        console.error(`[GetUserBalance TG:${stringTelegramId}] Error retrieving balance:`, error);
         return null;
     }
 }
-console.log("[User Management] getUserBalance defined.");
 
 async function updateUserBalance(telegramId, newBalanceLamports, client = pool) {
     const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_UUB = `[updateUserBalance TG:${stringTelegramId}]`;
+    const LOG_PREFIX_UUB = `[UpdateUserBal TG:${stringTelegramId}]`; // Shortened
     try {
         if (typeof newBalanceLamports !== 'bigint') {
             console.error(`${LOG_PREFIX_UUB} Invalid newBalanceLamports type: ${typeof newBalanceLamports}. Must be BigInt.`);
             return false;
         }
         
-        // This function deliberately allows setting negative balance for admin corrections, but logs a strong warning.
         if (newBalanceLamports < 0n) {
-            console.warn(`${LOG_PREFIX_UUB} 🚨 CAUTION: Attempt to set negative balance (${newBalanceLamports.toString()}). This function bypasses ledger and should be used with EXTREME CAUTION for admin corrections ONLY.`);
+            console.warn(`${LOG_PREFIX_UUB} 🚨 CAUTION: Attempt to set negative balance (${newBalanceLamports.toString()}). This bypasses ledger and is for admin corrections ONLY.`);
         }
 
         const result = await client.query(
@@ -1054,32 +1020,29 @@ async function updateUserBalance(telegramId, newBalanceLamports, client = pool) 
             [newBalanceLamports.toString(), stringTelegramId]
         );
         if (result.rowCount > 0) {
-            console.warn(`${LOG_PREFIX_UUB} ⚠️ Balance directly set to ${newBalanceLamports.toString()} lamports. LEDGER NOT UPDATED by this specific function. This is for special administrative use cases ONLY.`);
+            console.warn(`${LOG_PREFIX_UUB} ⚠️ Balance directly set to ${newBalanceLamports.toString()} lamports. LEDGER NOT UPDATED. Admin use ONLY.`);
             return true;
         } else {
-            console.warn(`${LOG_PREFIX_UUB} User not found or balance not updated for telegramId ${stringTelegramId}.`);
+            // console.warn(`${LOG_PREFIX_UUB} User not found or balance not updated for telegramId ${stringTelegramId}.`); // Reduced log
             return false;
         }
     } catch (error) {
-        console.error(`${LOG_PREFIX_UUB} Error updating balance for telegramId ${stringTelegramId} to ${newBalanceLamports.toString()}:`, error);
+        console.error(`${LOG_PREFIX_UUB} Error updating balance for ${stringTelegramId} to ${newBalanceLamports.toString()}:`, error);
         return false;
     }
 }
-console.log("[User Management] updateUserBalance (direct set, bypasses ledger - USE WITH CAUTION) defined.");
-
 
 async function linkUserWallet(telegramId, solanaAddress) {
     const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_LUW = `[linkUserWallet TG:${stringTelegramId}]`;
-    console.log(`${LOG_PREFIX_LUW} Attempting to link wallet ${solanaAddress}.`);
+    const LOG_PREFIX_LUW = `[LinkUserWallet TG:${stringTelegramId}]`;
+    // console.log(`${LOG_PREFIX_LUW} Attempting to link wallet ${solanaAddress}.`); // Reduced log
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // Basic Base58 check (improves upon simple regex by trying to construct PublicKey)
         try {
-            new PublicKey(solanaAddress); // PublicKey from @solana/web3.js (Part 1)
+            new PublicKey(solanaAddress); 
         } catch (e) {
-            console.warn(`${LOG_PREFIX_LUW} Invalid Solana address format provided: ${solanaAddress}. Error: ${e.message}`);
+            // console.warn(`${LOG_PREFIX_LUW} Invalid Solana address format: ${solanaAddress}. Error: ${e.message}`); // Reduced log
             await client.query('ROLLBACK');
             return { success: false, error: "Invalid Solana address format. Please provide a valid Base58 encoded public key." };
         }
@@ -1087,7 +1050,7 @@ async function linkUserWallet(telegramId, solanaAddress) {
         const existingLink = await client.query('SELECT telegram_id FROM users WHERE solana_wallet_address = $1 AND telegram_id != $2', [solanaAddress, stringTelegramId]);
         if (existingLink.rows.length > 0) {
             const linkedToExistingUserId = existingLink.rows[0].telegram_id;
-            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to another user ID ${linkedToExistingUserId}.`);
+            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} already linked to user ID ${linkedToExistingUserId}.`);
             await client.query('ROLLBACK');
             return { success: false, error: `This wallet address is already associated with another player (ID ending with ${String(linkedToExistingUserId).slice(-4)}). Please use a different address.` };
         }
@@ -1099,47 +1062,44 @@ async function linkUserWallet(telegramId, solanaAddress) {
 
         if (result.rowCount > 0) {
             await client.query('COMMIT');
-            console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked in DB.`);
-            if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() }); // Update cache
-            return { success: true, message: `Your Solana wallet \`${escapeMarkdownV2(solanaAddress)}\` has been successfully linked!` }; // escapeMarkdownV2 from Part 1
+            // console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} successfully linked in DB.`); // Reduced log
+            if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() }); 
+            return { success: true, message: `Your Solana wallet \`${escapeMarkdownV2(solanaAddress)}\` has been successfully linked!` }; 
         } else {
             const currentUserState = await client.query('SELECT solana_wallet_address FROM users WHERE telegram_id = $1', [stringTelegramId]);
-            await client.query('ROLLBACK'); // Rollback as no update occurred
+            await client.query('ROLLBACK'); 
             if (currentUserState.rowCount === 0) {
                 console.error(`${LOG_PREFIX_LUW} User ${stringTelegramId} not found. Cannot link wallet.`);
-                return { success: false, error: "Your player profile was not found. Please try /start again." };
+                return { success: false, error: "Your player profile was not found. Please try \`/start\` again." };
             }
             if (currentUserState.rows[0].solana_wallet_address === solanaAddress) {
-                console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} was already linked to this user. No change.`);
+                // console.log(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} already linked to this user.`); // Reduced log
                 if (walletCache) walletCache.set(stringTelegramId, { solanaAddress, timestamp: Date.now() });
                 return { success: true, message: `Your wallet \`${escapeMarkdownV2(solanaAddress)}\` was already linked to your account.` };
             }
-            console.warn(`${LOG_PREFIX_LUW} User ${stringTelegramId} found, but wallet not updated (rowCount: ${result.rowCount}). Current DB wallet: ${currentUserState.rows[0].solana_wallet_address}, Attempted: ${solanaAddress}.`);
-            return { success: false, error: "Failed to update wallet in the database. It might be the same as your current one, or an unknown issue occurred. Please try again." };
+            console.warn(`${LOG_PREFIX_LUW} User ${stringTelegramId} found, but wallet not updated. DB wallet: ${currentUserState.rows[0].solana_wallet_address}, Attempted: ${solanaAddress}.`);
+            return { success: false, error: "Failed to update wallet in DB. It might be the same, or an unknown issue occurred." }; // Simplified error
         }
     } catch (error) {
         await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LUW} Rollback error: ${rbErr.message}`));
-        if (error.code === '23505') { // Unique constraint violation
-            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} is already linked to another user (unique constraint violation).`);
+        if (error.code === '23505') { 
+            console.warn(`${LOG_PREFIX_LUW} Wallet ${solanaAddress} already linked to another user (unique constraint).`);
             return { success: false, error: "This wallet address is already in use by another player. Please choose a different one." };
         }
         console.error(`${LOG_PREFIX_LUW} Error linking wallet ${solanaAddress}:`, error);
-        return { success: false, error: error.message || "An unexpected server error occurred while linking your wallet. Please try again." };
+        return { success: false, error: error.message || "An unexpected server error occurred while linking your wallet." };
     } finally {
         client.release();
     }
 }
-console.log("[User Management] linkUserWallet (with PublicKey validation) defined.");
 
 async function getUserLinkedWallet(telegramId) {
     const stringTelegramId = String(telegramId);
-    // WALLET_CACHE_TTL_MS from Part 1 env defaults
     const cacheTTL = parseInt(process.env.WALLET_CACHE_TTL_MS || (15 * 60 * 1000).toString(), 10);
     
-    if (walletCache) { // walletCache from Part 1
+    if (walletCache) { 
         const cachedData = walletCache.get(stringTelegramId);
         if (cachedData && cachedData.solanaAddress && (Date.now() - (cachedData.timestamp || 0) < cacheTTL)) {
-            // console.log(`[getUserLinkedWallet TG:${stringTelegramId}] Cache hit for wallet.`);
             return cachedData.solanaAddress;
         }
     }
@@ -1150,25 +1110,23 @@ async function getUserLinkedWallet(telegramId) {
             if (walletCache) walletCache.set(stringTelegramId, { solanaAddress: result.rows[0].solana_wallet_address, timestamp: Date.now() });
             return result.rows[0].solana_wallet_address;
         }
-        return null; // No wallet linked
+        return null; 
     } catch (error) {
-        console.error(`[getUserLinkedWallet TG:${stringTelegramId}] Error getting linked wallet:`, error);
+        console.error(`[GetUserWallet TG:${stringTelegramId}] Error getting linked wallet:`, error); // Shortened prefix
         return null;
     }
 }
-console.log("[User Management] getUserLinkedWallet (with cache) defined.");
 
 async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
     const stringUserId = String(userId);
-    const LOG_PREFIX_GNAI = `[getNextAddressIndexForUser TG:${stringUserId}]`;
+    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`; // Shortened
     try {
         const query = `
             SELECT derivation_path
             FROM user_deposit_wallets
             WHERE user_telegram_id = $1
-            ORDER BY created_at DESC;
+            ORDER BY created_at DESC; 
         `;
-        // queryDatabase from Part 1
         const res = await queryDatabase(query, [stringUserId], dbClient);
         let maxIndex = -1;
 
@@ -1176,9 +1134,7 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
             for (const row of res.rows) {
                 const path = row.derivation_path;
                 const parts = path.split('/');
-                // Standard path m/44'/501'/USER_ACCOUNT_INDEX'/0'/ADDRESS_INDEX' has 6 parts (0-5) if 'm' is part 0
-                // We are interested in ADDRESS_INDEX', which is the last part.
-                if (parts.length >= 6) {
+                if (parts.length >= 6) { 
                     const lastPart = parts[parts.length - 1];
                     if (lastPart.endsWith("'")) {
                         const indexStr = lastPart.substring(0, lastPart.length - 1);
@@ -1187,52 +1143,40 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
                             maxIndex = currentIndex;
                         }
                     } else {
-                        console.warn(`${LOG_PREFIX_GNAI} Malformed last part of derivation path (missing trailing quote): ${lastPart} in ${path}`);
+                        // console.warn(`${LOG_PREFIX_GNAI} Malformed last part of derivation path (no quote): ${lastPart} in ${path}`); // Reduced log
                     }
                 } else {
-                    console.warn(`${LOG_PREFIX_GNAI} Malformed derivation path (too short): ${path}`);
+                    // console.warn(`${LOG_PREFIX_GNAI} Malformed derivation path (too short): ${path}`); // Reduced log
                 }
             }
         }
         const nextIndex = maxIndex + 1;
-        console.log(`${LOG_PREFIX_GNAI} Determined next addressIndex: ${nextIndex}`);
+        // console.log(`${LOG_PREFIX_GNAI} Determined next addressIndex: ${nextIndex}`); // Reduced log
         return nextIndex;
     } catch (error) {
-        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack);
-        throw error; // Re-throw for caller to handle (e.g., within a transaction)
+        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack?.substring(0,300));
+        throw error; 
     }
 }
-console.log("[User Management] getNextAddressIndexForUserDB helper function defined.");
-
 
 async function deleteUserAccount(telegramId) {
     const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_DUA = `[deleteUserAccount TG:${stringTelegramId}]`;
+    const LOG_PREFIX_DUA = `[DeleteUser TG:${stringTelegramId}]`; // Shortened
     console.warn(`${LOG_PREFIX_DUA} CRITICAL ACTION: Attempting to delete user account and associated data for Telegram ID: ${stringTelegramId}.`);
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        console.log(`${LOG_PREFIX_DUA} Anonymizing references in 'jackpots' table...`);
+        // console.log(`${LOG_PREFIX_DUA} Anonymizing references in 'jackpots'...`); // Reduced log
         await client.query('UPDATE jackpots SET last_won_by_telegram_id = NULL WHERE last_won_by_telegram_id = $1', [stringTelegramId]);
         
-        console.log(`${LOG_PREFIX_DUA} Anonymizing initiator references in 'games' (game log) table...`);
+        // console.log(`${LOG_PREFIX_DUA} Anonymizing initiator references in 'games'...`); // Reduced log
         await client.query('UPDATE games SET initiator_telegram_id = NULL WHERE initiator_telegram_id = $1', [stringTelegramId]);
         
-        // For participants_ids (BIGINT[]): removing a specific ID from an array is more complex.
-        // If strict anonymization of this array is needed, it would require fetching rows, modifying arrays in JS, and updating.
-        // A simpler DB-side approach if okay with just nullifying if the user is the *only* participant (less common for group games):
-        // For now, we leave participants_ids as is, assuming game logs are for historical/statistical use, not direct user identification if primary links are cut.
-        // If GDPR requires full array filtering:
-        // const gamesToUpdate = await client.query('SELECT game_log_id, participants_ids FROM games WHERE $1 = ANY(participants_ids)', [BigInt(stringTelegramId)]);
-        // for (const game of gamesToUpdate.rows) {
-        //   const newParticipants = game.participants_ids.filter(id => String(id) !== stringTelegramId);
-        //   await client.query('UPDATE games SET participants_ids = $1 WHERE game_log_id = $2', [newParticipants, game.game_log_id]);
-        // }
-        // console.log(`${LOG_PREFIX_DUA} Filtered deleted user from 'games.participants_ids' if present.`);
+        // Note: participants_ids anonymization in 'games' table is complex and currently omitted for brevity in original.
+        // If strict anonymization is needed, it would require fetching, filtering arrays, and updating.
 
-
-        console.log(`${LOG_PREFIX_DUA} Preparing to delete user from 'users' table. This will CASCADE to: user_deposit_wallets, deposits, withdrawals, ledger, referrals (where user is referrer or referred).`);
+        console.log(`${LOG_PREFIX_DUA} Preparing to delete user from 'users' table (CASCADE to related tables).`);
         
         const result = await client.query('DELETE FROM users WHERE telegram_id = $1', [stringTelegramId]);
 
@@ -1241,54 +1185,37 @@ async function deleteUserAccount(telegramId) {
         if (result.rowCount > 0) {
             console.log(`${LOG_PREFIX_DUA} User account ${stringTelegramId} and cascaded data deleted successfully from database.`);
             
-            // Clear in-memory caches associated with the user
-            // activeGames, userCooldowns, etc. from Part 1
+            // Clear in-memory caches
             if (activeGames && activeGames instanceof Map) {
                 activeGames.forEach((game, gameId) => {
                     if (game && game.participants && Array.isArray(game.participants)) {
                         game.participants = game.participants.filter(p => String(p.userId) !== stringTelegramId);
-                        // GAME_IDS assumed to be available (from Part 5a-S1 New)
-                        if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) {
+                        if (game.participants.length === 0 && game.type !== GAME_IDS.DICE_ESCALATOR && game.type !== GAME_IDS.DICE_21) { // Assumes GAME_IDS available
                             activeGames.delete(gameId);
-                            console.log(`${LOG_PREFIX_DUA} Removed empty group game ${gameId} from activeGames cache.`);
                         }
                     }
-                    if (game && String(game.initiatorId) === stringTelegramId) {
-                        activeGames.delete(gameId);
-                         console.log(`${LOG_PREFIX_DUA} Removed game ${gameId} (user was initiator) from activeGames cache.`);
-                    }
-                    if (game && String(game.userId) === stringTelegramId) { // For single player games vs bot
-                        activeGames.delete(gameId);
-                        console.log(`${LOG_PREFIX_DUA} Removed single-player game ${gameId} for deleted user from activeGames cache.`);
-                    }
+                    if (game && String(game.initiatorId) === stringTelegramId) activeGames.delete(gameId);
+                    if (game && String(game.userId) === stringTelegramId) activeGames.delete(gameId);
                 });
             }
             if (userCooldowns && userCooldowns instanceof Map) userCooldowns.delete(stringTelegramId);
             if (groupGameSessions && groupGameSessions instanceof Map) {
                 groupGameSessions.forEach((session, chatId) => {
-                    if (session.players && session.players[stringTelegramId]) {
-                        delete session.players[stringTelegramId];
-                    }
-                    if (session.initiator === stringTelegramId && Object.keys(session.players || {}).length === 0) {
-                        groupGameSessions.delete(chatId);
-                    } else if (session.initiator === stringTelegramId) {
-                        console.warn(`${LOG_PREFIX_DUA} Initiator ${stringTelegramId} of group game in chat ${chatId} deleted. Session state: ${JSON.stringify(session)}`);
-                        // Potentially mark session as needing cleanup or re-assignment of initiator if applicable to game type
-                    }
+                    if (session.players && session.players[stringTelegramId]) delete session.players[stringTelegramId];
+                    if (session.initiator === stringTelegramId && Object.keys(session.players || {}).length === 0) groupGameSessions.delete(chatId);
+                    // else if (session.initiator === stringTelegramId) console.warn(`${LOG_PREFIX_DUA} Initiator ${stringTelegramId} of group game in chat ${chatId} deleted. Session state: ${JSON.stringify(session)}`); // Reduced log
                 });
             }
             if (walletCache && walletCache instanceof Map) walletCache.delete(stringTelegramId);
             if (activeDepositAddresses && activeDepositAddresses instanceof Map) {
                 activeDepositAddresses.forEach((value, key) => {
-                    if (String(value.userId) === stringTelegramId) {
-                        activeDepositAddresses.delete(key);
-                    }
+                    if (String(value.userId) === stringTelegramId) activeDepositAddresses.delete(key);
                 });
             }
-            if (pendingReferrals && pendingReferrals instanceof Map) { // pendingReferrals from Part 1
+            if (pendingReferrals && pendingReferrals instanceof Map) { 
                 pendingReferrals.forEach((value, key) => {
-                    if (String(key) === stringTelegramId) pendingReferrals.delete(key); // User was referred
-                    if (value && String(value.referrerId) === stringTelegramId) pendingReferrals.delete(key); // User was referrer
+                    if (String(key) === stringTelegramId) pendingReferrals.delete(key); 
+                    if (value && String(value.referrerId) === stringTelegramId) pendingReferrals.delete(key); 
                 });
             }
             if (userStateCache && userStateCache instanceof Map) userStateCache.delete(stringTelegramId);
@@ -1296,13 +1223,12 @@ async function deleteUserAccount(telegramId) {
             console.log(`${LOG_PREFIX_DUA} Relevant in-memory caches cleared for user ${stringTelegramId}.`);
             return true;
         } else {
-            console.log(`${LOG_PREFIX_DUA} User ${stringTelegramId} not found in 'users' table, no account deleted from DB.`);
+            console.log(`${LOG_PREFIX_DUA} User ${stringTelegramId} not found in 'users' table, no account deleted.`);
             return false;
         }
     } catch (error) {
         await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_DUA} Rollback error: ${rbErr.message}`));
         console.error(`${LOG_PREFIX_DUA} Error deleting user account ${stringTelegramId}:`, error);
-        // Notify admin about failed deletion attempt if it's critical
         if(typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
             notifyAdmin(`🚨 User Account Deletion FAILED for ${stringTelegramId} 🚨\nError: ${escapeMarkdownV2(error.message)}`, {parse_mode:'MarkdownV2'});
         }
@@ -1311,347 +1237,347 @@ async function deleteUserAccount(telegramId) {
         client.release();
     }
 }
-console.log("[User Management] deleteUserAccount defined.");
 
-
-console.log("Part 2: Database Schema Initialization & Core User Management (Integrated) - Complete.");
 // --- End of Part 2 ---
 // --- Start of Part 3 ---
-// index.js - Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities (Integrated)
+// index.js - Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities
 //---------------------------------------------------------------------------
-console.log("Loading Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities (Integrated)...");
-
-// Assumes escapeMarkdownV2, LAMPORTS_PER_SOL, SOL_DECIMALS, getSolUsdPrice, convertLamportsToUSDString,
-// crypto (module), BOT_NAME are available from Part 1.
+// Assumed escapeMarkdownV2, LAMPORTS_PER_SOL, SOL_DECIMALS, getSolUsdPrice,
+// convertLamportsToUSDString, crypto (module), BOT_NAME are available from Part 1.
 
 // --- Telegram Specific Helper Functions ---
 
-// Gets a display name from a user object (msg.from or a fetched user object) and escapes it for MarkdownV2
+/**
+ * Gets a display name from a user object and escapes it for MarkdownV2.
+ * @param {object} userObject - msg.from or a fetched user object.
+ * @returns {string} MarkdownV2 escaped display name.
+ */
 function getEscapedUserDisplayName(userObject) {
-  if (!userObject) return escapeMarkdownV2("Valued Player");
+    if (!userObject) return escapeMarkdownV2("Valued Player");
 
-  const firstName = userObject.first_name || userObject.firstName; // Handles both Telegram API and DB user object naming
-  const username = userObject.username;
-  const id = userObject.id || userObject.telegram_id; // Handles both
+    const firstName = userObject.first_name || userObject.firstName; 
+    const username = userObject.username;
+    const id = userObject.id || userObject.telegram_id; 
 
-  let name = "Player";
-  if (firstName) {
-    name = firstName;
-  } else if (username) {
-    name = `@${username}`; // Using username if first name is not available
-  } else if (id) {
-    name = `Player ${String(id).slice(-4)}`; // Fallback to a generic ID-based name
-  } else {
-    name = "Valued Player"; // Ultimate fallback
-  }
-  return escapeMarkdownV2(name);
+    let name = "Player";
+    if (firstName) {
+        name = firstName;
+    } else if (username) {
+        name = `@${username}`; 
+    } else if (id) {
+        name = `Player ${String(id).slice(-4)}`; 
+    } else {
+        name = "Valued Player"; 
+    }
+    return escapeMarkdownV2(name);
 }
 
-// Creates a MarkdownV2 mention link for a user object
+/**
+ * Creates a MarkdownV2 mention link for a user object.
+ * @param {object} userObject - msg.from or a fetched user object.
+ * @returns {string} MarkdownV2 mention string.
+ */
 function createUserMention(userObject) {
-  if (!userObject) return escapeMarkdownV2("Esteemed Guest");
+    if (!userObject) return escapeMarkdownV2("Esteemed Guest");
 
-  const id = userObject.id || userObject.telegram_id;
-  if (!id) return escapeMarkdownV2("Unknown Player"); // Should not happen if userObject is valid
+    const id = userObject.id || userObject.telegram_id;
+    if (!id) return escapeMarkdownV2("Unknown Player"); 
 
-  // Use a simpler name for the mention text part to keep it concise and friendly.
-  const simpleName = userObject.first_name || userObject.firstName || userObject.username || `Player ${String(id).slice(-4)}`;
-  return `[${escapeMarkdownV2(simpleName)}](tg://user?id=${id})`;
+    const simpleName = userObject.first_name || userObject.firstName || userObject.username || `Player ${String(id).slice(-4)}`;
+    return `[${escapeMarkdownV2(simpleName)}](tg://user?id=${id})`;
 }
 
-// Gets a player's display reference, preferring @username, falls back to name. Escapes for MarkdownV2.
+/**
+ * Gets a player's display reference, preferring @username, falls back to name. Escapes for MarkdownV2.
+ * @param {object} userObject - msg.from or a fetched user object.
+ * @param {boolean} [preferUsernameTag=true] - Whether to prefer @username.
+ * @returns {string} MarkdownV2 escaped player reference.
+ */
 function getPlayerDisplayReference(userObject, preferUsernameTag = true) {
-  if (!userObject) return escapeMarkdownV2("Mystery Player"); 
+    if (!userObject) return escapeMarkdownV2("Mystery Player"); 
 
-  const username = userObject.username;
-  if (preferUsernameTag && username) {
-    // Usernames for @mentions don't typically need escaping for the @ symbol itself, but the content of the username might if it contained Markdown characters.
-    // For safety in broader MarkdownV2 contexts, escaping the username content is good practice.
-    return `@${escapeMarkdownV2(username)}`;
-  }
-  // Fallback to the more detailed (and already escaped) display name if no username or if not preferred.
-  return getEscapedUserDisplayName(userObject);
+    const username = userObject.username;
+    if (preferUsernameTag && username) {
+        return `@${escapeMarkdownV2(username)}`;
+    }
+    return getEscapedUserDisplayName(userObject);
 }
-console.log("[Telegram Utils] User display helper functions (getEscapedUserDisplayName, createUserMention, getPlayerDisplayReference) defined.");
 
 // --- General Utility Functions ---
 
 /**
- * Formats a BigInt lamports amount into a SOL string representation or raw lamports.
- * @param {bigint|string|number} amountLamports - The amount in lamports.
- * @param {string} [currencyName='SOL'] - The currency to display (primarily 'SOL' or 'lamports').
- * @param {boolean} [displayRawLamportsOverride=false] - If true, forces display of raw lamports regardless of currencyName.
- * @param {number} [solDecimals=SOL_DECIMALS] - Number of decimal places for SOL.
- * @returns {string} Formatted currency string.
- */
+ * Formats a BigInt lamports amount into a SOL string representation or raw lamports.
+ * @param {bigint|string|number} amountLamports - The amount in lamports.
+ * @param {string} [currencyName='SOL'] - The currency to display ('SOL' or 'lamports').
+ * @param {boolean} [displayRawLamportsOverride=false] - If true, forces raw lamports.
+ * @param {number} [solDecimals=SOL_DECIMALS] - Decimal places for SOL.
+ * @returns {string} Formatted currency string.
+ */
 function formatCurrency(amountLamports, currencyName = 'SOL', displayRawLamportsOverride = false, solDecimals = SOL_DECIMALS) {
-    let lamportsAsBigInt;
+    let lamportsAsBigInt;
     try {
-        lamportsAsBigInt = BigInt(amountLamports);
-    } catch (e) {
-        console.warn(`[formatCurrency] Received non-BigInt convertible amount: '${amountLamports}' (Type: ${typeof amountLamports}). Error: ${e.message}`);
-        return '⚠️ Amount Invalid';
-    }
+        lamportsAsBigInt = BigInt(amountLamports);
+    } catch (e) {
+        // console.warn(`[formatCurrency] Invalid amount: '${amountLamports}'. Error: ${e.message}`); // Reduced log
+        return '⚠️ Amount Invalid';
+    }
 
-    if (displayRawLamportsOverride || String(currencyName).toLowerCase() === 'lamports') {
-        return `${lamportsAsBigInt.toLocaleString('en-US')} lamports`;
-    }
+    if (displayRawLamportsOverride || String(currencyName).toLowerCase() === 'lamports') {
+        return `${lamportsAsBigInt.toLocaleString('en-US')} lamports`;
+    }
 
-    if (typeof LAMPORTS_PER_SOL === 'undefined' || Number(LAMPORTS_PER_SOL) <= 0) {
-        console.error("[formatCurrency] LAMPORTS_PER_SOL is not defined or invalid. Cannot format SOL.");
-        return `${lamportsAsBigInt.toLocaleString('en-US')} lamports (⚠️ SOL Config Err)`;
-    }
+    if (typeof LAMPORTS_PER_SOL === 'undefined' || Number(LAMPORTS_PER_SOL) <= 0) {
+        console.error("[formatCurrency] LAMPORTS_PER_SOL not defined or invalid. Cannot format SOL.");
+        return `${lamportsAsBigInt.toLocaleString('en-US')} lamports (⚠️ SOL Config Err)`;
+    }
 
-    const solValue = Number(lamportsAsBigInt) / Number(LAMPORTS_PER_SOL);
-    let effectiveDecimals = solDecimals;
+    const solValue = Number(lamportsAsBigInt) / Number(LAMPORTS_PER_SOL);
+    let effectiveDecimals = solDecimals;
 
-    if (solValue === Math.floor(solValue)) { // It's a whole number
-        effectiveDecimals = 0;
-    } else {
-        const stringValue = solValue.toString();
-        const decimalPart = stringValue.split('.')[1];
-        if (decimalPart) {
-            // Use the smaller of actual decimal places or configured solDecimals
-            effectiveDecimals = Math.min(decimalPart.length, solDecimals);
-        } else { // Should be caught by whole number check, but for safety
-            effectiveDecimals = 0;
-        }
-    }
-    // Ensure at least 2 decimal places if there are any fractional parts,
-    // but only if solDecimals allows for at least 2.
-    // And don't force 2 if effectiveDecimals ended up as 0 (whole number).
-    if (effectiveDecimals > 0 && effectiveDecimals < 2 && solDecimals >= 2) {
+    if (solValue === Math.floor(solValue)) { 
+        effectiveDecimals = 0;
+    } else {
+        const stringValue = solValue.toString();
+        const decimalPart = stringValue.split('.')[1];
+        if (decimalPart) {
+            effectiveDecimals = Math.min(decimalPart.length, solDecimals);
+        } else { 
+            effectiveDecimals = 0;
+        }
+    }
+    if (effectiveDecimals > 0 && effectiveDecimals < 2 && solDecimals >= 2) {
         effectiveDecimals = 2;
     }
-    // If configured solDecimals is less than 2 (e.g. 0 or 1), respect that for fractional numbers.
     if (effectiveDecimals > 0 && solDecimals < 2) {
         effectiveDecimals = solDecimals;
     }
 
-
-    try {
-        return `${solValue.toLocaleString('en-US', {
-            minimumFractionDigits: effectiveDecimals, // Use effectiveDecimals here
-            maximumFractionDigits: effectiveDecimals
-        })} SOL`;
-    } catch (e) {
-        console.error(`[formatCurrency] Error formatting SOL for ${lamportsAsBigInt} lamports: ${e.message}`);
-        return `${lamportsAsBigInt.toLocaleString('en-US')} lamports (⚠️ Format Err)`;
-    }
+    try {
+        return `${solValue.toLocaleString('en-US', {
+            minimumFractionDigits: effectiveDecimals, 
+            maximumFractionDigits: effectiveDecimals
+        })} SOL`;
+    } catch (e) {
+        console.error(`[formatCurrency] Error formatting SOL for ${lamportsAsBigInt} lamports: ${e.message}`);
+        return `${lamportsAsBigInt.toLocaleString('en-US')} lamports (⚠️ Format Err)`;
+    }
 }
-console.log("[Currency Utils] formatCurrency helper function defined.");
-
 
 /**
- * Formats a BigInt lamports amount for display, defaulting to USD, with fallbacks.
- * @param {bigint|string|number} lamports - The amount in lamports.
- * @param {string} [targetCurrency='USD'] - The target currency ('USD', 'SOL', or 'lamports').
- * @returns {Promise<string>} Formatted currency string.
- */
+ * Formats a BigInt lamports amount for display, defaulting to USD, with fallbacks.
+ * @param {bigint|string|number} lamports - The amount in lamports.
+ * @param {string} [targetCurrency='USD'] - Target currency ('USD', 'SOL', or 'lamports').
+ * @returns {Promise<string>} Formatted currency string.
+ */
 async function formatBalanceForDisplay(lamports, targetCurrency = 'USD') {
     let lamportsAsBigInt;
-    try {
-        lamportsAsBigInt = BigInt(lamports);
-    } catch (e) {
-        console.warn(`[formatBalanceForDisplay] Invalid lamport amount: '${lamports}'. Error: ${e.message}`);
-        return '⚠️ Amount Invalid';
-    }
+    try {
+        lamportsAsBigInt = BigInt(lamports);
+    } catch (e) {
+        // console.warn(`[formatBalanceForDisplay] Invalid lamport amount: '${lamports}'. Error: ${e.message}`); // Reduced log
+        return '⚠️ Amount Invalid';
+    }
 
-    const upperTargetCurrency = String(targetCurrency).toUpperCase();
+    const upperTargetCurrency = String(targetCurrency).toUpperCase();
 
-    if (upperTargetCurrency === 'USD') {
-        try {
-            if (typeof getSolUsdPrice !== 'function' || typeof convertLamportsToUSDString !== 'function') {
-                console.error("[formatBalanceForDisplay] Price conversion functions (getSolUsdPrice or convertLamportsToUSDString) are not available. Falling back to SOL display.");
-                return formatCurrency(lamportsAsBigInt, 'SOL'); 
-            }
-            const price = await getSolUsdPrice();
-            return convertLamportsToUSDString(lamportsAsBigInt, price);
-        } catch (e) {
-            console.error(`[formatBalanceForDisplay] Failed to get SOL/USD price for USD display: ${e.message}. Falling back to SOL display.`);
-            return formatCurrency(lamportsAsBigInt, 'SOL'); 
-        }
-    } else if (upperTargetCurrency === 'LAMPORTS') {
-        return formatCurrency(lamportsAsBigInt, 'lamports', true); 
-    }
-    // Default to SOL
-    return formatCurrency(lamportsAsBigInt, 'SOL');
+    if (upperTargetCurrency === 'USD') {
+        try {
+            if (typeof getSolUsdPrice !== 'function' || typeof convertLamportsToUSDString !== 'function') {
+                console.error("[formatBalanceForDisplay] Price conversion functions not available. Falling back to SOL.");
+                return formatCurrency(lamportsAsBigInt, 'SOL'); 
+            }
+            const price = await getSolUsdPrice();
+            return convertLamportsToUSDString(lamportsAsBigInt, price);
+        } catch (e) {
+            console.error(`[formatBalanceForDisplay] Failed to get SOL/USD price for USD display: ${e.message}. Falling back to SOL.`);
+            return formatCurrency(lamportsAsBigInt, 'SOL'); 
+        }
+    } else if (upperTargetCurrency === 'LAMPORTS') {
+        return formatCurrency(lamportsAsBigInt, 'lamports', true); 
+    }
+    // Default to SOL
+    return formatCurrency(lamportsAsBigInt, 'SOL');
 }
-console.log("[Currency Utils] formatBalanceForDisplay helper function defined.");
 
-
-// Generates a unique-ish ID for game instances
+/**
+ * Generates a unique-ish ID for game instances.
+ * @param {string} [prefix="game"] - Prefix for the game ID.
+ * @returns {string} A game ID.
+ */
 function generateGameId(prefix = "game") {
-  const timestamp = Date.now().toString(36); // Base36 timestamp
-  const randomSuffix = Math.random().toString(36).substring(2, 10); // 8 char random Base36 string
-  return `${prefix}_${timestamp}_${randomSuffix}`;
+  const timestamp = Date.now().toString(36); 
+  const randomSuffix = Math.random().toString(36).substring(2, 10); 
+  return `${prefix}_${timestamp}_${randomSuffix}`;
 }
-console.log("[Game Utils] generateGameId helper function defined.");
 
 // --- Dice Display Utilities ---
 
-// Formats an array of dice roll numbers into a string with emoji and number
+/**
+ * Formats an array of dice roll numbers into a string with emoji and number.
+ * @param {number[]} rollsArray - Array of dice roll numbers.
+ * @param {string} [diceEmoji='🎲'] - Emoji to use for dice.
+ * @returns {string} Formatted dice rolls string.
+ */
 function formatDiceRolls(rollsArray, diceEmoji = '🎲') {
-  if (!Array.isArray(rollsArray) || rollsArray.length === 0) return '';
-  const diceVisuals = rollsArray.map(roll => {
-      const rollValue = Number(roll); // Ensure it's a number for isNaN check
-      return `${diceEmoji} ${isNaN(rollValue) ? '?' : rollValue}`;
-  });
-  return diceVisuals.join(' \u00A0 '); // Use non-breaking spaces for better layout in Telegram
+  if (!Array.isArray(rollsArray) || rollsArray.length === 0) return '';
+  const diceVisuals = rollsArray.map(roll => {
+      const rollValue = Number(roll); 
+      return `${diceEmoji} ${isNaN(rollValue) ? '?' : rollValue}`;
+  });
+  return diceVisuals.join(' \u00A0 '); // Non-breaking spaces for better layout
 }
-console.log("[Game Utils] formatDiceRolls helper function defined.");
 
-// Generates an internal dice roll
+/**
+ * Generates an internal dice roll.
+ * @param {number} [sides=6] - Number of sides on the die.
+ * @returns {number} Result of the die roll.
+ */
 function rollDie(sides = 6) {
-  sides = Number.isInteger(sides) && sides > 1 ? sides : 6;
-  return Math.floor(Math.random() * sides) + 1;
+  sides = Number.isInteger(sides) && sides > 1 ? sides : 6;
+  return Math.floor(Math.random() * sides) + 1;
 }
-console.log("[Game Utils] rollDie helper function defined.");
 
 // --- Payment Transaction ID Generation (Optional Utility) ---
 /**
- * Generates a unique transaction ID for internal tracking of payments.
- * @param {'deposit' | 'withdrawal' | 'sweep' | 'referral' | 'bet' | 'win' | 'refund' | 'ledger_adjustment' | 'admin_grant'} type - The type of payment/ledger entry.
- * @param {string} [userId='system'] - Optional user ID if related to a specific user.
- * @returns {string} A unique-ish transaction ID.
- */
+ * Generates a unique transaction ID for internal tracking of payments/ledger entries.
+ * @param {string} type - Type of payment/ledger entry.
+ * @param {string} [userId='system'] - Optional user ID.
+ * @returns {string} A unique-ish transaction ID.
+ */
 function generateInternalPaymentTxId(type, userId = 'system') {
-    const now = Date.now().toString(36);
-    let randomPart;
-    if (typeof crypto !== 'undefined' && typeof crypto.randomBytes === 'function') {
-        randomPart = crypto.randomBytes(4).toString('hex'); // 8 hex characters
-    } else {
-        console.warn('[generateInternalPaymentTxId] Crypto module not available for random part. Using Math.random (less secure).');
-        randomPart = Math.random().toString(36).substring(2, 10); // Fallback, less unique
-    }
-    
-    const userPartCleaned = String(userId).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 10) || 'sys'; // Allow underscore, limit length
-    let prefix = String(type).toLowerCase().substring(0, 6).replace(/[^a-z0-9_]/g, '') || 'gen'; // Allow underscore, limit length
+    const now = Date.now().toString(36);
+    let randomPart;
+    if (typeof crypto !== 'undefined' && typeof crypto.randomBytes === 'function') {
+        randomPart = crypto.randomBytes(4).toString('hex'); 
+    } else {
+        // console.warn('[GenInternalTxId] Crypto module not available for random part. Using Math.random.'); // Reduced log
+        randomPart = Math.random().toString(36).substring(2, 10); 
+    }
+    
+    const userPartCleaned = String(userId).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 10) || 'sys'; 
+    let prefix = String(type).toLowerCase().substring(0, 6).replace(/[^a-z0-9_]/g, '') || 'gen'; 
 
-    return `${prefix}_${userPartCleaned}_${now}_${randomPart}`;
+    return `${prefix}_${userPartCleaned}_${now}_${randomPart}`;
 }
-console.log("[Payment Utils] generateInternalPaymentTxId helper function defined.");
 
-
-console.log("Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities (Integrated) - Complete.");
 // --- End of Part 3 ---
 // --- Start of Part 4 ---
 // index.js - Part 4: Simplified Game Logic (Enhanced)
 //---------------------------------------------------------------------------
-console.log("Loading Part 4: Simplified Game Logic (Enhanced)...");
-
 // Assumes rollDie (from Part 3) is available.
 
 // --- Coinflip Logic ---
-// Returns an object with the outcome, a display string, and an emoji.
+/**
+ * Determines the outcome of a coin flip.
+ * @returns {object} Object with outcome ('heads'/'tails'), outcomeString ("Heads"/"Tails"), and emoji.
+ */
 function determineCoinFlipOutcome() {
-  const isHeads = Math.random() < 0.5; // 50% chance for heads
-  return isHeads
-    ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' } 
-    : { outcome: 'tails', outcomeString: "Tails", emoji: '🪙' };
+  const isHeads = Math.random() < 0.5; 
+  return isHeads
+    ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' } 
+    : { outcome: 'tails', outcomeString: "Tails", emoji: '🪙' };
 }
-console.log("[Game Logic] Coinflip: determineCoinFlipOutcome defined.");
 
 // --- Dice Logic (Internal for Bot's Turn or Fallback) ---
-// This determines the outcome for the BOT's internal rolls or when `bot.sendDice` fails.
-// It uses the internal `rollDie` function defined in Part 3.
+/**
+ * Determines the outcome for an internal die roll.
+ * Uses the `rollDie` function.
+ * @param {number} [sides=6] - Number of sides for the die.
+ * @returns {object} Object with the roll result and emoji.
+ */
 function determineDieRollOutcome(sides = 6) {
-  if (typeof rollDie !== 'function') {
-     console.error("[determineDieRollOutcome] CRITICAL Error: rollDie function is not defined from Part 3. Fallback to 1.");
-     return { roll: 1, emoji: '🎲' }; 
-  }
-  sides = Number.isInteger(sides) && sides > 1 ? sides : 6; 
-  const roll = rollDie(sides); 
+  if (typeof rollDie !== 'function') {
+     console.error("[DetermineDieRollOutcome] CRITICAL Error: rollDie function is not defined. Fallback to 1.");
+     return { roll: 1, emoji: '🎲' }; 
+  }
+  sides = Number.isInteger(sides) && sides > 1 ? sides : 6; 
+  const roll = rollDie(sides); 
 
-  // The emoji here is for potential direct use if not formatting via formatDiceRolls.
-  return { roll: roll, emoji: '🎲' }; 
+  return { roll: roll, emoji: '🎲' }; 
 }
-console.log("[Game Logic] Dice: determineDieRollOutcome defined.");
-
 
 // --- Rock Paper Scissors (RPS) Logic ---
 const RPS_CHOICES = {
-  ROCK: 'rock',
-  PAPER: 'paper',
-  SCISSORS: 'scissors'
+  ROCK: 'rock',
+  PAPER: 'paper',
+  SCISSORS: 'scissors'
 };
 const RPS_EMOJIS = { // Emojis are generally MarkdownV2 safe
-  [RPS_CHOICES.ROCK]: '🪨',   
-  [RPS_CHOICES.PAPER]: '📄',  
-  [RPS_CHOICES.SCISSORS]: '✂️' 
+  [RPS_CHOICES.ROCK]: '🪨',   
+  [RPS_CHOICES.PAPER]: '📄',  
+  [RPS_CHOICES.SCISSORS]: '✂️' 
 };
 // Defines what each choice beats and the verb for the action.
 const RPS_RULES = {
-  [RPS_CHOICES.ROCK]: { beats: RPS_CHOICES.SCISSORS, verb: "crushes" },
-  [RPS_CHOICES.PAPER]: { beats: RPS_CHOICES.ROCK, verb: "covers" },
-  [RPS_CHOICES.SCISSORS]: { beats: RPS_CHOICES.PAPER, verb: "cuts" }
+  [RPS_CHOICES.ROCK]: { beats: RPS_CHOICES.SCISSORS, verb: "crushes" },
+  [RPS_CHOICES.PAPER]: { beats: RPS_CHOICES.ROCK, verb: "covers" },
+  [RPS_CHOICES.SCISSORS]: { beats: RPS_CHOICES.PAPER, verb: "cuts" }
 };
-console.log("[Game Logic] RPS: Choices, Emojis, and Rules constants defined.");
 
-// Gets a random RPS choice for the bot or an opponent if needed.
+/**
+ * Gets a random RPS choice for the bot or an opponent.
+ * @returns {object} Object with the choice key and emoji.
+ */
 function getRandomRPSChoice() {
-  const choicesArray = Object.values(RPS_CHOICES);
-  const randomChoiceKey = choicesArray[Math.floor(Math.random() * choicesArray.length)];
-  return { choice: randomChoiceKey, emoji: RPS_EMOJIS[randomChoiceKey] };
+  const choicesArray = Object.values(RPS_CHOICES);
+  const randomChoiceKey = choicesArray[Math.floor(Math.random() * choicesArray.length)];
+  return { choice: randomChoiceKey, emoji: RPS_EMOJIS[randomChoiceKey] };
 }
-console.log("[Game Logic] RPS: getRandomRPSChoice defined.");
 
 /**
  * Determines the outcome of an RPS match given two choices.
  * @param {string} player1ChoiceKey - Player 1's choice (e.g., RPS_CHOICES.ROCK).
  * @param {string} player2ChoiceKey - Player 2's choice.
- * @returns {object} A detailed result object.
- * The `description` field is pre-formatted for MarkdownV2
- * and should NOT be escaped again by the calling function.
+ * @returns {object} A detailed result object including:
+ * - result: 'win_player1', 'win_player2', 'draw', or 'error'.
+ * - description: A string pre-formatted for MarkdownV2. **Do NOT escape this again.**
+ * - player1: { choice, emoji, choiceFormatted }.
+ * - player2: { choice, emoji, choiceFormatted }.
  */
 function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey) {
-  const LOG_PREFIX_RPS_OUTCOME = "[RPS_Outcome]";
-  
-  const p1c = String(player1ChoiceKey).toLowerCase();
-  const p2c = String(player2ChoiceKey).toLowerCase();
+  const LOG_PREFIX_RPS_OUTCOME = "[RPS_Outcome]"; // Shortened
+  
+  const p1c = String(player1ChoiceKey).toLowerCase();
+  const p2c = String(player2ChoiceKey).toLowerCase();
 
-  if (!Object.values(RPS_CHOICES).includes(p1c) || !Object.values(RPS_CHOICES).includes(p2c)) {
-    console.warn(`${LOG_PREFIX_RPS_OUTCOME} Invalid choices: P1='${player1ChoiceKey}', P2='${player2ChoiceKey}'. This should be caught before calling.`);
-    return {
-        result: 'error',
-        description: "An internal error occurred due to invalid RPS choices. Please try again.", // User-friendly generic error
-        player1: { choice: player1ChoiceKey, emoji: '❓', choiceFormatted: 'Invalid' },
-        player2: { choice: player2ChoiceKey, emoji: '❓', choiceFormatted: 'Invalid' }
-    };
-  }
+  if (!Object.values(RPS_CHOICES).includes(p1c) || !Object.values(RPS_CHOICES).includes(p2c)) {
+    console.warn(`${LOG_PREFIX_RPS_OUTCOME} Invalid choices: P1='${player1ChoiceKey}', P2='${player2ChoiceKey}'.`);
+    return {
+        result: 'error',
+        description: "An internal error occurred due to invalid RPS choices\\. Please try again\\.", // User-friendly generic error
+        player1: { choice: player1ChoiceKey, emoji: '❓', choiceFormatted: 'Invalid' },
+        player2: { choice: player2ChoiceKey, emoji: '❓', choiceFormatted: 'Invalid' }
+    };
+  }
 
-  const p1Emoji = RPS_EMOJIS[p1c];
-  const p2Emoji = RPS_EMOJIS[p2c];
-  const p1ChoiceFormatted = p1c.charAt(0).toUpperCase() + p1c.slice(1);
-  const p2ChoiceFormatted = p2c.charAt(0).toUpperCase() + p2c.slice(1);
+  const p1Emoji = RPS_EMOJIS[p1c];
+  const p2Emoji = RPS_EMOJIS[p2c];
+  const p1ChoiceFormatted = p1c.charAt(0).toUpperCase() + p1c.slice(1);
+  const p2ChoiceFormatted = p2c.charAt(0).toUpperCase() + p2c.slice(1);
 
-  let resultDescription;
-  let outcome; // 'win_player1', 'win_player2', 'draw'
+  let resultDescription;
+  let outcome; // 'win_player1', 'win_player2', 'draw'
 
-  if (p1c === p2c) { // Draw case
-    outcome = 'draw';
+  if (p1c === p2c) { // Draw case
+    outcome = 'draw';
     // Note: MarkdownV2 pre-formatted string. Do not escape this again.
-    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} clashes with ${p2Emoji} ${p2ChoiceFormatted}\\! It's a *Draw*\\!`;
-  } else if (RPS_RULES[p1c]?.beats === p2c) { // Player 1 wins
-    outcome = 'win_player1';
-    // Note: MarkdownV2 pre-formatted string. Do not escape this again.
-    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} *${RPS_RULES[p1c].verb}* ${p2Emoji} ${p2ChoiceFormatted}\\! Player 1 *claims victory*\\!`;
-  } else { // Player 2 wins
-    outcome = 'win_player2';
-    // Note: MarkdownV2 pre-formatted string. Do not escape this again.
-    resultDescription = `${p2Emoji} ${p2ChoiceFormatted} *${RPS_RULES[p2c]?.verb || 'outplays'}* ${p1Emoji} ${p1ChoiceFormatted}\\! Player 2 *is the winner*\\!`;
-  }
+    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} clashes with ${p2Emoji} ${p2ChoiceFormatted}\\! It's a *Draw*\\!`;
+  } else if (RPS_RULES[p1c]?.beats === p2c) { // Player 1 wins
+    outcome = 'win_player1';
+    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} *${RPS_RULES[p1c].verb}* ${p2Emoji} ${p2ChoiceFormatted}\\! Player 1 *claims victory*\\!`;
+  } else { // Player 2 wins
+    outcome = 'win_player2';
+    resultDescription = `${p2Emoji} ${p2ChoiceFormatted} *${RPS_RULES[p2c]?.verb || 'outplays'}* ${p1Emoji} ${p1ChoiceFormatted}\\! Player 2 *is the winner*\\!`;
+  }
 
-  return {
-    result: outcome,
-    description: resultDescription, // This string is already MarkdownV2 formatted.
-    player1: { choice: p1c, emoji: p1Emoji, choiceFormatted: p1ChoiceFormatted },
-    player2: { choice: p2c, emoji: p2Emoji, choiceFormatted: p2ChoiceFormatted }
-  };
+  return {
+    result: outcome,
+    description: resultDescription, // This string is already MarkdownV2 formatted.
+    player1: { choice: p1c, emoji: p1Emoji, choiceFormatted: p1ChoiceFormatted },
+    player2: { choice: p2c, emoji: p2Emoji, choiceFormatted: p2ChoiceFormatted }
+  };
 }
-console.log("[Game Logic] RPS: determineRPSOutcome defined (description is MarkdownV2 pre-formatted).");
 
-console.log("Part 4: Simplified Game Logic (Enhanced) - Complete.");
 // --- End of Part 4 ---
 // --- Start of Part 5a, Section 1 (NEW): Core Listeners & Populated Command/Callback Routers ---
 // index.js - Part 5a, Section 1: Core Listeners Setup (Message & Callback) and Populated Routers
