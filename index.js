@@ -8169,7 +8169,7 @@ async function handleWalletCommand(receivedMsgObject) {
                    `💰 Current Balance:\n   Approx. *${escapeMarkdownV2(balanceDisplayUSD)}*\n   SOL: *${escapeMarkdownV2(balanceDisplaySOL)}*\n\n` +
                    `🔗 Linked Withdrawal Address:\n   \`${escapedLinkedAddress}\`\n\n`;
         if (!linkedAddress) {
-            text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat.\n\n`;
+            text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat\\.\n\n`;
         }
         text += `What would you like to do?`;
         
