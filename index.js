@@ -8210,14 +8210,14 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
 
     let userObject = await getOrCreateUser(userId, msg.from?.username, msg.from?.first_name, msg.from?.last_name);
     if (!userObject) {
-        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'}); // Note: . and / are escaped
         return;
     }
     const playerRef = getPlayerDisplayReference(userObject);
     clearUserState(userId); 
-    const logPrefix = `[DepositCmd UID:${userId} OrigChat:${commandChatId}]`; // Shortened
+    const logPrefix = `[DepositCmd UID:${userId} OrigChat:${commandChatId}]`;
     let botUsername = "our bot";
-    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* console.error(`${logPrefix} Error getting bot username:`, e.message); */ } // Reduced log
+    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
     if (String(commandChatId) !== userId) {
         if (msg.message_id && msg.chat?.id && String(msg.chat.id) !== userId) { 
@@ -8245,10 +8245,10 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         if (existingAddresses.rows.length > 0) {
             depositAddress = existingAddresses.rows[0].public_key;
             expiresAt = new Date(existingAddresses.rows[0].expires_at);
-            // console.log(`${logPrefix} Found existing active deposit address: ${depositAddress}`); // Reduced log
         } else {
             const newAddress = await generateUniqueDepositAddress(userId, client); 
             if (!newAddress) {
+                // This error message will be constructed by the catch block below
                 throw new Error("Failed to generate a new deposit address\\. Please try again or contact support\\.");
             }
             depositAddress = newAddress;
@@ -8262,28 +8262,27 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
                 `UPDATE users SET last_deposit_address = $1, last_deposit_address_generated_at = $2, updated_at = NOW() WHERE telegram_id = $3`,
                 [depositAddress, expiresAt, userId]
             );
-            // console.log(`${logPrefix} Updated users table last_deposit_address: ${depositAddress} for ${userId}.`); // Reduced log
         }
         await client.query('COMMIT');
-
 
         const expiryTimestamp = Math.floor(expiresAt.getTime() / 1000);
         const timeRemaining = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 60000)); 
         const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`;
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
 
+        // --- THIS IS THE MAIN DEPOSIT MESSAGE WE REVIEWED ---
         const depositMessage =
-    `💰 *Your Personal Solana Deposit Address* 💰\n\n` +
-    `Hi ${playerRef}, please send your SOL deposits to the following unique address:\n\n` +
-    `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-    `_(Tap address to copy)_ \n\n` +
-    `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires <t:${expiryTimestamp}:R>\\)\\.\n` +
-    `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
-    `⚠️ *Important:*\n` +
-    `   ▫️ Send *only SOL* to this address\\.\n` +
-    `   ▫️ Do *not* send NFTs or other tokens\\.\n` +
-    `   ▫️ Deposits from exchanges may take longer to confirm\\.\n` +
-    `   ▫️ This address is *unique to you* for this deposit session\\. Do not share it\\.`;
+            `💰 *Your Personal Solana Deposit Address* 💰\n\n` +
+            `Hi ${playerRef}, please send your SOL deposits to the following unique address:\n\n` +
+            `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
+            `_(Tap address to copy)_ \n\n` +
+            `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires <t:${expiryTimestamp}:R>\\)\\.\n` + // Key: \( and \) and \.
+            `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
+            `⚠️ *Important:*\n` +
+            `   ▫️ Send *only SOL* to this address\\.\n` +                 // Key: \.
+            `   ▫️ Do *not* send NFTs or other tokens\\.\n` +              // Key: \.
+            `   ▫️ Deposits from exchanges may take longer to confirm\\.\n` +  // Key: \.
+            `   ▫️ This address is *unique to you* for this deposit session\\. Do not share it\\.`; // Key: \.
         
         const keyboard = {
             inline_keyboard: [
@@ -8298,10 +8297,18 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         } else {
             await safeSendMessage(userId, depositMessage, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
         }
-    } catch (error) {
+    } catch (error) { // This is where the error message you saw gets constructed
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
         console.error(`${logPrefix} ❌ Error handling deposit command: ${error.message}`, error.stack?.substring(0,500));
+
+        // --- THIS IS THE ERROR MESSAGE TEMPLATE ---
+        // It takes the error.message (which might contain unescaped special characters like '(' from a Telegram error)
+        // and tries to display it safely.
         const errorText = `⚙️ Apologies, ${playerRef}, we couldn't generate a deposit address for you at this moment: \`${escapeMarkdownV2(error.message)}\`\\. Please try again shortly or contact support\\.`;
+                        // Key: `escapeMarkdownV2(error.message)` makes the original error safe.
+                        // Key: `\\.` escapes the period after the code block.
+                        // Key: `\\.` escapes the period at the end of "support".
+
         const errorKeyboard = {inline_keyboard: [[{text:"Try Again", callback_data:DEPOSIT_CALLBACK_ACTION}]]};
         if (loadingDmMsgId) {
             await bot.editMessageText(errorText, {chat_id: userId, message_id: loadingDmMsgId, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard}).catch(async () => {
