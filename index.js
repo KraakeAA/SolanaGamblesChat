@@ -8272,17 +8272,18 @@ async function handleDepositCommand(msg, args = [], correctUserIdFromCb = null) 
         const solanaPayUrl = `solana:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}&message=${encodeURIComponent("Casino Deposit for " + playerRef)}`;
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
 
-        const depositMessage = `💰 *Your Personal Solana Deposit Address* 💰\n\n` +
-                               `Hi ${playerRef}, please send your SOL deposits to the following unique address:\n\n` +
-                               `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
-                               `_(Tap address to copy)_ \n\n` +
-                               `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires <t:${expiryTimestamp}:R>\\)\\.\n` +
-                               `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
-                               `⚠️ *Important:*\n` +
-                               `   ▫️ Send *only SOL* to this address\\.\n` +
-                               `   ▫️ Do *not* send NFTs or other tokens\\.\n` +
-                               `   ▫️ Deposits from exchanges may take longer to confirm\\.\n` +
-                               `   ▫️ This address is *unique to you* for this deposit session\\. Do not share it\\.`;
+        const depositMessage =
+    `💰 *Your Personal Solana Deposit Address* 💰\n\n` +
+    `Hi ${playerRef}, please send your SOL deposits to the following unique address:\n\n` +
+    `\`${escapeMarkdownV2(depositAddress)}\`\n\n` +
+    `_(Tap address to copy)_ \n\n` +
+    `⏳ This address is valid for approximately *${escapeMarkdownV2(String(timeRemaining))} minutes* \\(expires <t:${expiryTimestamp}:R>\\)\\.\n` +
+    `💎 Confirmation Level: \`${escapeMarkdownV2(String(DEPOSIT_CONFIRMATION_LEVEL || 'confirmed'))}\`\n\n` +
+    `⚠️ *Important:*\n` +
+    `   ▫️ Send *only SOL* to this address\\.\n` +
+    `   ▫️ Do *not* send NFTs or other tokens\\.\n` +
+    `   ▫️ Deposits from exchanges may take longer to confirm\\.\n` +
+    `   ▫️ This address is *unique to you* for this deposit session\\. Do not share it\\.`;
         
         const keyboard = {
             inline_keyboard: [
