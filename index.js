@@ -8074,105 +8074,115 @@ async function handleWithdrawalAmountInput(msg, currentState) {
 async function handleWalletCommand(receivedMsgObject) {
     const isFromMenuAction = receivedMsgObject && receivedMsgObject.originalChatInfo !== undefined;
 
-    const actualFromObject = receivedMsgObject.from; // In both cases (direct msg or actionMsgContext), .from holds the user-like object
+    const actualFromObject = receivedMsgObject.from;
     const actualChatObject = receivedMsgObject.chat;
 
     let userIdFromInput;
-    if (actualFromObject && actualFromObject.telegram_id) { // If it's our DB user object from actionMsgContext.from
+    if (actualFromObject && actualFromObject.telegram_id) {
         userIdFromInput = String(actualFromObject.telegram_id);
-    } else if (actualFromObject && actualFromObject.id) { // If it's a Telegram `from` object from a direct msg
+    } else if (actualFromObject && actualFromObject.id) {
         userIdFromInput = String(actualFromObject.id);
     } else {
-        const tempChatIdError = actualChatObject?.id || ADMIN_USER_ID || 'unknown_chat'; // Fallback chat for error
+        const tempChatIdError = actualChatObject?.id || ADMIN_USER_ID || 'unknown_chat';
         console.error(`[WalletCmd] CRITICAL: Could not determine userId from receivedMsgObject.from: ${JSON.stringify(actualFromObject)}`);
-        await safeSendMessage(tempChatIdError, "An internal error occurred (User ID missing for Wallet). Please try `/start`.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(tempChatIdError, "An internal error occurred (User ID missing for Wallet)\\. Please try `/start`\\.", { parse_mode: 'MarkdownV2' });
         return;
     }
 
-    const userId = userIdFromInput; // Finalized userId
-    const commandChatId = String(actualChatObject.id); // The chat where the /wallet command or originating callback happened
-    const chatType = actualChatObject.type;
+    const userId = userIdFromInput;
+    const commandChatId = String(actualChatObject.id); // The chat where /wallet or originating callback happened
+    // const chatType = actualChatObject.type; // Not strictly needed if all actions are forced to DM
 
-    // This call is to ensure we have the latest user details, especially if called by a direct /wallet command
     let userObject = await getOrCreateUser(userId, actualFromObject?.username, actualFromObject?.first_name, actualFromObject?.last_name);
     if (!userObject) {
-        const tempPlayerRef = getPlayerDisplayReference(actualFromObject); // Use original msg.from info if fresh getOrCreateUser fails
-        await safeSendMessage(commandChatId === userId ? commandChatId : userId, `Error fetching your player profile, ${tempPlayerRef}. Please try \`/start\` again.`, { parse_mode: 'MarkdownV2' });
-        if (commandChatId !== userId) { // If original was group, inform group too
-             await safeSendMessage(commandChatId, `${tempPlayerRef}, there was an error accessing your wallet. Please check DMs or try \`/start\`.`, {parse_mode: 'MarkdownV2'});
+        const tempPlayerRef = getPlayerDisplayReference(actualFromObject);
+        const errorMessage = `Error fetching your player profile, ${tempPlayerRef}\\. Please try \`/start\` again\\.`;
+        // Send error to DM if possible, or original chat if that's all we have
+        const errorChatTarget = (commandChatId === userId) ? commandChatId : userId;
+        await safeSendMessage(errorChatTarget, errorMessage, { parse_mode: 'MarkdownV2' });
+        if (commandChatId !== userId) {
+             await safeSendMessage(commandChatId, `${tempPlayerRef}, there was an error accessing your wallet\\. Please check DMs or try \`/start\`\\.`, {parse_mode: 'MarkdownV2'});
         }
         return;
     }
-    const playerRef = getPlayerDisplayReference(userObject);
+    const playerRef = getPlayerDisplayReference(userObject); // playerRef is ALREADY escaped
     clearUserState(userId);
 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
-    let targetChatIdForMenu = userId; // Wallet Dashboard always shown in DM
+    const targetDmChatId = userId; // Wallet Dashboard is always shown in DM
     let messageIdToEditOrDeleteInDm = null;
 
-    if (commandChatId !== targetChatIdForMenu) { // Command was from group
+    // If /wallet command was typed in a group, inform about DM redirection
+    if (commandChatId !== targetDmChatId && !isFromMenuAction) {
         if (receivedMsgObject.message_id) await bot.deleteMessage(commandChatId, receivedMsgObject.message_id).catch(() => {});
-        await safeSendMessage(commandChatId, `${playerRef}, I've sent your Wallet Dashboard to our private chat: @${escapeMarkdownV2(botUsername)} 💳 For your security, all wallet actions are handled there.`, { parse_mode: 'MarkdownV2' });
-    } else { // Command or callback was already in DM
+        await safeSendMessage(commandChatId, `${playerRef}, I've sent your Wallet Dashboard to our private chat: @${escapeMarkdownV2(botUsername)} 💳 For your security, all wallet actions are handled there\\.`, { parse_mode: 'MarkdownV2' });
+    } else if (commandChatId === targetDmChatId && receivedMsgObject.message_id) {
+        // If /wallet typed in DM, or callback already in DM
         messageIdToEditOrDeleteInDm = receivedMsgObject.message_id;
-        // If it was the /wallet command typed in DM, delete it before sending the dashboard
-        if (!isFromMenuAction && messageIdToEditOrDeleteInDm) {
-             await bot.deleteMessage(targetChatIdForMenu, messageIdToEditOrDeleteInDm).catch(()=>{});
-             messageIdToEditOrDeleteInDm = null; // Dashboard will be a new message
+        // For /wallet command typed directly in DM, delete the command message
+        if (!isFromMenuAction) {
+             await bot.deleteMessage(targetDmChatId, messageIdToEditOrDeleteInDm).catch(()=>{});
+             messageIdToEditOrDeleteInDm = null; // New dashboard message will be sent
         }
     }
     
-    const loadingDmMsgText = "Loading your Wallet Dashboard... ⏳";
-    let workingMessageId = messageIdToEditOrDeleteInDm; // If it's a callback in DM, this is the menu message ID
+    // "Loading..." message handling in DM
+    const loadingDmMsgText = "Loading your Wallet Dashboard... ⏳"; // Plain text, no MarkdownV2 needed for this simple message
+    let workingMessageId = messageIdToEditOrDeleteInDm; // If from DM callback, this is the menu message ID
 
-    if (workingMessageId) { // If we have a message in DM to edit (e.g. menu a user clicked)
+    if (workingMessageId) { // If we have a message in DM to edit (e.g. menu button was clicked in DM)
         try {
-            await bot.editMessageText(loadingDmMsgText, { chat_id: targetChatIdForMenu, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: []} });
+            // Edit with plain text first, then update with Markdown later
+            await bot.editMessageText(loadingDmMsgText, { chat_id: targetDmChatId, message_id: workingMessageId, reply_markup: {inline_keyboard: []} });
         } catch (editError) {
             if (!editError.message?.includes("message is not modified")) {
-                console.warn(`[WalletCmd UID:${userId}] Failed to edit DM message ${workingMessageId} for loading state, sending new. Error: ${editError.message}`);
-                const tempMsg = await safeSendMessage(targetChatIdForMenu, loadingDmMsgText, { parse_mode: 'MarkdownV2' });
-                workingMessageId = tempMsg?.message_id; // Update workingMessageId to the new message
+                const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText); // Send as plain text
+                workingMessageId = tempMsg?.message_id;
             }
-            // If message is not modified, workingMessageId remains the same
         }
     } else { // Send a new "Loading..." message in DM
-        const tempMsg = await safeSendMessage(targetChatIdForMenu, loadingDmMsgText, { parse_mode: 'MarkdownV2' });
+        const tempMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText); // Send as plain text
         workingMessageId = tempMsg?.message_id;
     }
     
-    if (!workingMessageId) { // If sending/editing loading message failed
+    if (!workingMessageId) {
         console.error(`[WalletCmd UID:${userId}] Failed to establish message context (workingMessageId) for wallet display in DM.`);
-        // An error message might have already been sent by safeSendMessage if it failed critically
         return;
     }
-    // This workingMessageId is now the ID of the "Loading..." message in the DM.
+    // This workingMessageId is now the ID of the "Loading..." message in the DM that we will edit with the full dashboard.
     
     try {
         const userDetails = await getPaymentSystemUserDetails(userId); 
-        if (!userDetails) { // This uses the confirmed `userId`
-            const noUserText = "😕 Could not retrieve your player profile. Please try sending `/start` to the bot first.";
-            await bot.editMessageText(noUserText, {chat_id: targetChatIdForMenu, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text: "Go to /start", callback_data:"menu:main"}]]}});
+        if (!userDetails) {
+            const noUserText = "😕 Could not retrieve your player profile\\. Please try sending \`/start\` to the bot first\\."; // Escaped period
+            await bot.editMessageText(noUserText, {chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text: "Go to /start", callback_data:"menu:main"}]]}});
             return;
         }
 
         const balanceLamports = BigInt(userDetails.balance || '0');
         const linkedAddress = userDetails.solana_wallet_address;
-        const balanceDisplayUSD = await formatBalanceForDisplay(balanceLamports, 'USD');
-        const balanceDisplaySOL = await formatBalanceForDisplay(balanceLamports, 'SOL'); // Changed from 'USD' to 'SOL' for this line
-        const escapedLinkedAddress = linkedAddress ? escapeMarkdownV2(linkedAddress) : "_Not Set_";
+        
+        // Get raw display strings; escaping will happen during interpolation
+        const balanceDisplayUSD_raw = await formatBalanceForDisplay(balanceLamports, 'USD'); 
+        const balanceDisplaySOL_raw = await formatBalanceForDisplay(balanceLamports, 'SOL'); 
+        const linkedAddress_display_raw = linkedAddress ? linkedAddress : "_Not Set_"; // _Not Set_ is Markdown for italics
 
+        // Construct the main wallet dashboard text
+        // All dynamic parts are wrapped with escapeMarkdownV2.
+        // All static literal periods at ends of sentences are escaped with \\.
         let text = `⚜️ **${escapeMarkdownV2(BOT_NAME)} Wallet Dashboard** ⚜️\n\n` +
-                   `👤 Player: ${playerRef}\n\n` +
-                   `💰 Current Balance:\n   Approx. *${escapeMarkdownV2(balanceDisplayUSD)}*\n   SOL: *${escapeMarkdownV2(balanceDisplaySOL)}*\n\n` +
-                   `🔗 Linked Withdrawal Address:\n   \`${escapedLinkedAddress}\`\n\n`;
+                   `👤 Player: ${playerRef}\n\n` + // playerRef is already escaped
+                   `💰 Current Balance:\n   Approx\\. *${escapeMarkdownV2(balanceDisplayUSD_raw)}*\n   SOL: *${escapeMarkdownV2(balanceDisplaySOL_raw)}*\n\n` +
+                   `🔗 Linked Withdrawal Address:\n   \`${escapeMarkdownV2(linkedAddress_display_raw)}\`\n\n`; // If linkedAddress_display_raw is "_Not Set_", escapeMarkdownV2 will handle underscores.
+        
         if (!linkedAddress) {
+            // This line requires the period to be escaped.
             text += `💡 You can link a wallet using the button below or by typing \`/setwallet YOUR_ADDRESS\` in this chat\\.\n\n`;
         }
-        text += `What would you like to do?`;
-        
+        text += `What would you like to do?`; // Question mark is generally safe.
+
         const keyboardActions = [
             [{ text: "💰 Deposit SOL", callback_data: "menu:deposit" }, { text: "💸 Withdraw SOL", callback_data: "menu:withdraw" }],
             [{ text: "📜 Transaction History", callback_data: "menu:history" }],
@@ -8184,14 +8194,21 @@ async function handleWalletCommand(receivedMsgObject) {
         ];
         const keyboard = { inline_keyboard: keyboardActions };
 
-        await bot.editMessageText(text, { chat_id: targetChatIdForMenu, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard });
+        // This is where the parsing error for '.' was occurring
+        await bot.editMessageText(text, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
 
-    } catch (error) {
+    } catch (error) { // This catch block would be hit by the Markdown parsing error
         console.error(`[WalletCmd UID:${userId}] ❌ Error displaying wallet: ${error.message}`, error.stack?.substring(0,500));
-        const errorText = "⚙️ Apologies, we encountered an issue while fetching your wallet information. Please try again in a moment.";
-        await bot.editMessageText(errorText, {chat_id: targetChatIdForMenu, message_id: workingMessageId, parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: [[{text: "Try /start", callback_data:"menu:main"}]]}}).catch(async () => {
-            // Fallback if editing the "Loading..." message fails
-            await safeSendMessage(targetChatIdForMenu, errorText, {parse_mode: 'MarkdownV2'}); 
+        const errorTextForUser = `⚙️ Apologies, we encountered an issue displaying your wallet information\\. (${escapeMarkdownV2(error.message)})\\. You can try \`/start\`\\.`; // Escaped periods
+        // Try to edit the "Loading..." message with the error.
+        await bot.editMessageText(errorTextForUser, {
+            chat_id: targetDmChatId, 
+            message_id: workingMessageId, 
+            parse_mode: 'MarkdownV2', 
+            reply_markup: {inline_keyboard: [[{text: "Try /start", callback_data:"menu:main"}]]}
+        }).catch(async (editFallbackError) => { // If editing itself fails (e.g., message not found)
+            console.warn(`[WalletCmd UID:${userId}] Failed to edit error message, sending new. Edit fallback error: ${editFallbackError.message}`);
+            await safeSendMessage(targetDmChatId, errorTextForUser, {parse_mode: 'MarkdownV2'}); 
         });
     }
 }
