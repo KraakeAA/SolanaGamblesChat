@@ -6248,7 +6248,7 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, BigInt(-betAmountLamports),
             'bet_placed_ou7', { game_id_custom_field: gameId },
-            `Bet for Over/Under 7 game ${gameId}` // Simplified note
+            `Bet for Over/Under 7 game ${gameId}` 
         );
 
         if (!balanceUpdateResult || !balanceUpdateResult.success) {
@@ -6259,7 +6259,6 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
         }
         await client.query('COMMIT');
         userObj.balance = balanceUpdateResult.newBalanceLamports; 
-        // console.log(`${LOG_PREFIX_OU7_START} Wager ${betAmountLamports} placed. New balance for ${userId}: ${userObj.balance}`); // Reduced log
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_OU7_START} DB Rollback Error: ${rbErr.message}`));
         console.error(`${LOG_PREFIX_OU7_START} Database error during Over/Under 7 bet placement: ${dbError.message}`, dbError.stack?.substring(0,500));
@@ -6299,7 +6298,6 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
             await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_ou7_setup_fail', {}, `Refund OU7 game ${gameId} (message send failure)`);
             await refundClient.query('COMMIT');
-            // console.log(`${LOG_PREFIX_OU7_START} Successfully refunded bet for game ${gameId} due to message send failure.`); // Reduced log
         } catch (err) {
             if (refundClient) await refundClient.query('ROLLBACK').catch(rbErr => console.error("Rollback error on OU7 setup refund:", rbErr));
             console.error(`${LOG_PREFIX_OU7_START} CRITICAL: Failed to refund user for OU7 setup fail ${gameId}: ${err.message}`);
@@ -6317,7 +6315,7 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     const gameData = activeGames.get(gameId);
 
     if (!gameData || gameData.userId !== userId || gameData.status !== 'waiting_player_choice' || Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true }); // Simplified
+        await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true }); 
         if (originalMessageIdFromCallback && bot && gameData && gameData.chatId && Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
             bot.editMessageReplyMarkup({}, { chat_id: String(gameData.chatId), message_id: Number(originalMessageIdFromCallback) }).catch(() => {});
         }
@@ -6325,7 +6323,7 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     }
     
     const choiceTextDisplay = choice.charAt(0).toUpperCase() + choice.slice(1);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `🎯 Locked In: ${choiceTextDisplay} 7! Requesting dice from Helper Bot...` }).catch(() => {});
+    await bot.answerCallbackQuery(callbackQueryId, { text: `🎯 Locked In: ${escapeMarkdownV2(choiceTextDisplay)} 7! Requesting dice from Helper Bot...` }).catch(() => {});
 
     gameData.playerChoice = choice;
     gameData.status = 'rolling_dice_waiting_helper';
@@ -6343,7 +6341,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
             await bot.editMessageText(rollingMessageText, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: {} }); 
         } catch (e) {
             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                // console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to edit rolling message (ID: ${currentMessageId}), sending new: ${e.message}`); // Reduced log
                 const newMsg = await safeSendMessage(String(chatId), rollingMessageText, { parse_mode: 'MarkdownV2' });
                 if (newMsg?.message_id && activeGames.has(gameId)) { 
                     activeGames.get(gameId).gameMessageId = newMsg.message_id;
@@ -6362,7 +6359,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     let diceRolls = [];
     let diceSum = 0;
     let helperBotError = null;
-    // let requestIds = []; // Not strictly needed if not cleaning up individual requests on partial failure here
 
     for (let i = 0; i < OU7_DICE_COUNT; i++) {
         if (isShuttingDown) { helperBotError = "Shutdown during OU7 dice requests."; break; }
@@ -6377,9 +6373,7 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
                 throw new Error(requestResult.error || `Failed to create OU7 roll request ${i+1}.`);
             }
             requestId = requestResult.requestId;
-            // requestIds.push(requestId); 
             client.release(); client = null;
-            // console.log(`${LOG_PREFIX_OU7_CHOICE} OU7 roll ${i+1} (request ${requestId}) sent to Helper Bot.`); // Reduced log
 
             let attempts = 0;
             while (attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
@@ -6418,13 +6412,14 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     }
 
     if (helperBotError) {
-        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue rolling the dice via the Helper Bot for your Over/Under 7 game: \`${escapeMarkdownV2(String(helperBotError).substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded.`;
+        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue rolling the dice via the Helper Bot for your Over/Under 7 game: \`${escapeMarkdownV2(String(helperBotError).substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded\\.`;
+        const errorKeyboard = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
         if (currentMessageId && bot) {
-            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount) }).catch(async () => {
-                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount) });
+            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: errorKeyboard }).catch(async () => {
+                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
             });
         } else {
-            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount) });
+            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
         }
         let refundClient = null;
         try {
@@ -6435,7 +6430,7 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         } catch (dbErr) {
             if (refundClient) await refundClient.query('ROLLBACK');
             console.error(`${LOG_PREFIX_OU7_CHOICE} CRITICAL: Failed to refund after OU7 helper error for game ${gameId}: ${dbErr.message}`);
-            notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE (Helper Error) 🚨\nGame ID: \`${gameId}\`, User: ${userId}\nError: ${helperBotError}\nDB Refund Error: ${dbErr.message}. MANUAL REFUND REQUIRED.`);
+            notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE (Helper Error) 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\`, User: ${userId}\nError: ${escapeMarkdownV2(helperBotError)}\nDB Refund Error: ${escapeMarkdownV2(dbErr.message)}. MANUAL REFUND REQUIRED.`);
         } finally {
             if (refundClient) refundClient.release();
         }
@@ -6455,18 +6450,19 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     else if (choice === 'seven' && diceSum === 7) { win = true; profitMultiplier = OU7_PAYOUT_SEVEN; }
 
     let payoutAmountLamports = 0n; 
-    let outcomeReasonLog = "";
+    // THIS IS THE FIX for transaction_type length: outcomeReasonLog becomes the concise type
+    let outcomeReasonLog = `loss_ou7_${choice}_sum${diceSum}`; // Default to loss
     let resultTextPart = "";
-    const profitAmountLamports = win ? betAmount * BigInt(profitMultiplier) : 0n;
+    const profitAmountLamports = win ? betAmount * BigInt(Math.floor(profitMultiplier)) : 0n; // Ensure multiplier is integer for BigInt
 
     if (win) {
         payoutAmountLamports = betAmount + profitAmountLamports; 
-        outcomeReasonLog = `win_ou7_${choice}_sum${diceSum}`;
+        outcomeReasonLog = `win_ou7_${choice}_sum${diceSum}`; // Corrected to be concise
         const winEmoji = choice === 'seven' ? "🎯 JACKPOT!" : "🎉 WINNER!";
         resultTextPart = `${winEmoji} Your prediction of *${escapeMarkdownV2(choiceTextDisplay)} 7* was spot on! You've won a handsome *${escapeMarkdownV2(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}* in profit!`;
     } else {
         payoutAmountLamports = 0n; 
-        outcomeReasonLog = `loss_ou7_${choice}_sum${diceSum}`;
+        // outcomeReasonLog is already set for loss
         resultTextPart = `💔 *So Close!* The dice didn't favor your prediction of *${escapeMarkdownV2(choiceTextDisplay)} 7* this round\\. Better luck next time!`;
     }
 
@@ -6475,13 +6471,23 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
-        const ledgerReason = `${outcomeReasonLog} (Game ID: ${gameId})`;
-        const balanceUpdate = await updateUserBalanceAndLedger(clientOutcome, userId, payoutAmountLamports, ledgerReason, { game_id_custom_field: gameId }, `Outcome of OU7 game ${gameId}`);
+        // Use the concise outcomeReasonLog as transaction_type
+        const balanceUpdate = await updateUserBalanceAndLedger(
+            clientOutcome, 
+            userId, 
+            payoutAmountLamports, 
+            outcomeReasonLog, // THIS IS THE FIX - passing the concise string
+            { 
+                game_id_custom_field: gameId, 
+                dice_rolls_info: diceRolls.join(','), // Store full rolls in metadata/notes
+                player_choice_info: choice 
+            }, 
+            `Outcome of OU7 game ${gameId}. Player chose ${choice}, sum was ${diceSum}. Rolls: ${diceRolls.join(',')}.` // Detailed note for ledger.notes
+        );
         
         if (balanceUpdate.success) {
             finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
             await clientOutcome.query('COMMIT');
-            // console.log(`${LOG_PREFIX_OU7_CHOICE} Outcome processed. User ${userId} new balance: ${finalUserBalanceLamports}`); // Reduced log
         } else {
             await clientOutcome.query('ROLLBACK');
             resultTextPart += `\n\n⚠️ A critical error occurred settling your bet: \`${escapeMarkdownV2(balanceUpdate.error || "DB Error")}\`\\. Our casino staff has been alerted\\.`;
@@ -6492,15 +6498,16 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
         console.error(`${LOG_PREFIX_OU7_CHOICE} DB error during OU7 outcome processing for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
         resultTextPart += `\n\n⚠️ A severe database error occurred\\. Our casino staff has been notified\\.`;
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 DB Transaction Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\`\nError: ${dbError.message}\\. Balance state may be inconsistent\\.`, {parse_mode:'MarkdownV2'});
+        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 DB Transaction Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\`\nError: ${escapeMarkdownV2(dbError.message)}\\. Balance state may be inconsistent\\.`, {parse_mode:'MarkdownV2'});
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
 
     const titleResult = createStandardTitle("Over/Under 7 - Result!", "🏁");
+    // Ensure all parts of finalMessageText are properly escaped for MarkdownV2
     let finalMessageText = `${titleResult}\n\nYour Bet: *${betDisplayUSD}* on *${escapeMarkdownV2(choiceTextDisplay)} 7*\\.\n\n`;
-    finalMessageText += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of *${escapeMarkdownV2(String(diceSum))}*!\n\n${resultTextPart}`;
-    finalMessageText += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`;
+    finalMessageText += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of *${escapeMarkdownV2(String(diceSum))}*!${/* Explicitly escape exclamation */'\\!'}\n\n${resultTextPart}`; // resultTextPart should already be escaped where necessary
+    finalMessageText += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`; // Escaped period
 
     const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
 
@@ -6509,7 +6516,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
             await bot.editMessageText(finalMessageText, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardOU7 });
         } catch (e) {
             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                // console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to edit OU7 result message (ID: ${currentMessageId}), sending new: ${e.message}`); // Reduced log
                 await safeSendMessage(String(chatId), finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardOU7 });
             }
         }
@@ -8011,7 +8017,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, BigInt(-betAmountLamports),
             'bet_placed_slot', { game_id_custom_field: gameId },
-            `Bet for Slot Frenzy game ${gameId}` // Simplified note
+            `Bet for Slot Frenzy game ${gameId}`
         );
 
         if (!balanceUpdateResult || !balanceUpdateResult.success) {
@@ -8022,7 +8028,6 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         }
         await client.query('COMMIT');
         userObj.balance = balanceUpdateResult.newBalanceLamports;
-        // console.log(`${LOG_PREFIX_SLOT_START} Wager ${betAmountLamports} placed. New balance for ${userId}: ${userObj.balance}`); // Reduced log
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_SLOT_START} DB Rollback Error: ${dbError.message}`));
         console.error(`${LOG_PREFIX_SLOT_START} Database error during Slot Frenzy bet: ${dbError.message}`, dbError.stack?.substring(0,500));
@@ -8074,7 +8079,6 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         }
         requestId = requestResult.requestId;
         dbPollClient.release(); dbPollClient = null; 
-        // console.log(`${LOG_PREFIX_SLOT_START} Slot spin request ${requestId} created for Helper Bot.`); // Reduced log
 
         let attempts = 0;
         while(attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
@@ -8107,13 +8111,14 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     }
     
     if (helperBotError || diceRollValue === null) {
-        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue with your Slot Frenzy spin via the Helper Bot: \`${escapeMarkdownV2(String(helperBotError || "No result from helper").substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded.`;
+        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue with your Slot Frenzy spin via the Helper Bot: \`${escapeMarkdownV2(String(helperBotError || "No result from helper").substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded\\.`;
+        const errorKeyboard = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
         if (gameData.gameMessageId && bot) {
-            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports) }).catch(async () => {
-                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports) });
+            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: errorKeyboard }).catch(async () => {
+                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
             });
         } else {
-            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports) });
+            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
         }
         let refundClient = null;
         try {
@@ -8133,7 +8138,8 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     gameData.payoutInfo = payoutInfo;
     let payoutAmountLamports = 0n;
     let profitAmountLamports = 0n;
-    let outcomeReasonLog = "";
+    // THIS IS THE FIX for transaction_type length: outcomeReasonLog becomes the concise type
+    let outcomeReasonLog = `loss_slot_val${diceRollValue}`; // Default to loss
     let resultTextPart = "";
 
     const titleResult = createStandardTitle("Slot Frenzy - The Result!", "🎉");
@@ -8142,13 +8148,12 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     if (payoutInfo) {
         profitAmountLamports = betAmountLamports * BigInt(payoutInfo.multiplier);
         payoutAmountLamports = betAmountLamports + profitAmountLamports; 
-        outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`;
+        outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`; // Corrected concise type
         resultTextPart = `🌟 **${escapeMarkdownV2(payoutInfo.label)}** ${escapeMarkdownV2(payoutInfo.symbols)} 🌟\nCongratulations! You've won a dazzling *${escapeMarkdownV2(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}* in profit!`;
         gameData.status = 'game_over_win';
     } else {
         payoutAmountLamports = 0n; 
-        // profitAmountLamports = betAmountLamports * BigInt(SLOT_DEFAULT_LOSS_MULTIPLIER); // This line seems to calculate negative profit, but payout is 0, so bet is lost.
-        outcomeReasonLog = `loss_slot_val${diceRollValue}`;
+        // outcomeReasonLog already set for loss
         resultTextPart = `💔 Reel mismatch this time\\.\\.\\. The machine keeps your wager\\. Better luck on the next spin!`;
         gameData.status = 'game_over_loss';
     }
@@ -8159,11 +8164,17 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
-        const ledgerReason = `${outcomeReasonLog} (Game ID: ${gameId})`;
+        // Use the concise outcomeReasonLog as transaction_type
         const balanceUpdate = await updateUserBalanceAndLedger(
-            clientOutcome, userId, payoutAmountLamports, 
-            ledgerReason, { game_id_custom_field: gameId }, 
-            `Outcome of Slot Frenzy game ${gameId}`
+            clientOutcome, 
+            userId, 
+            payoutAmountLamports, 
+            outcomeReasonLog, // THIS IS THE FIX - passing the concise string
+            { 
+                game_id_custom_field: gameId, 
+                slot_dice_value: diceRollValue // Store specific slot value in metadata
+            }, 
+            `Outcome of Slot Frenzy game ${gameId}. Slot value: ${diceRollValue}.` // Detailed note for ledger.notes
         );
         
         if (balanceUpdate.success) {
@@ -8189,7 +8200,6 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     if (gameData.gameMessageId && bot) { 
         await bot.editMessageText(messageText, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardSlot })
             .catch(async (e) => {
-                // console.warn(`${LOG_PREFIX_SLOT_START} Failed to edit final Slot message (ID: ${gameData.gameMessageId}), sending new: ${e.message}`); // Reduced log
                 await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardSlot });
             });
     } else { 
