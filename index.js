@@ -1766,7 +1766,7 @@ bot.on('message', async (msg) => {
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
                     }
                 }
-                if (gData.type === GAME_IDS.DUEL_PVP') {
+                if (gData.type === GAME_IDS.DUEL_PVP) { // <--- Corrected: removed the stray single quote
                     if (gData.initiator?.userId === userId && gData.initiator?.isTurn && (gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji')) {
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
                     }
