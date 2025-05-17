@@ -4655,13 +4655,13 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
     const userId = String(initiatorUserObj.telegram_id);
     const logPrefix = `[D21_PvB_Start UID:${userId} CH:${chatId}]`;
     
-    // playerRef is obtained from getPlayerDisplayReference, which ALREADY ESCAPES its output.
-    // Do NOT escape playerRef again.
     const playerRef = getPlayerDisplayReference(initiatorUserObj); 
-    
-    // betDisplayUSD is obtained from escapeMarkdownV2(await formatBalanceForDisplay(...))
-    // This means betDisplayUSD is ALREADY ESCAPED. Do NOT escape it again.
     const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+
+    // --- ADDED LOGS ---
+    console.log(`${logPrefix} Debug: playerRef (should be pre-escaped) = "${playerRef}"`);
+    console.log(`${logPrefix} Debug: betDisplayUSD (should be pre-escaped) = "${betDisplayUSD}"`);
+    // --- END ADDED LOGS ---
 
     if (unifiedOfferIdIfAny && originalCmdOrOfferMsgId && bot) {
         await bot.deleteMessage(chatId, originalCmdOrOfferMsgId).catch(e => console.warn(`${logPrefix} Non-critical: Could not delete unified offer message ${originalCmdOrOfferMsgId}: ${e.message}`));
@@ -4669,23 +4669,20 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         await bot.deleteMessage(chatId, originalCmdOrOfferMsgId).catch(e => console.warn(`${logPrefix} Non-critical: Could not delete /d21 command message ${originalCmdOrOfferMsgId}: ${e.message}`));
     }
 
-    // Constructing loadingText:
-    // - playerRef is ALREADY ESCAPED.
-    // - betDisplayUSD is ALREADY ESCAPED.
-    // - Static punctuation like '\\\\.' is correctly manually escaped.
-    // If this message still causes a `Character '(' is reserved` error,
-    // it would be highly unusual and might point to a very specific content issue
-    // within playerRef for a particular user, or a Telegram parsing edge case.
     const loadingText = `🃏 Starting Dice 21 vs Bot for ${playerRef} (Bet: *${betDisplayUSD}*)\\\\. Dealing your initial hand via Helper Bot, please wait\\\\.\\\\.\\\\. ⏳`;
+    
+    // --- ADDED LOGS ---
+    console.log(`${logPrefix} Debug: Constructed loadingText to send = "${loadingText}"`);
+    // --- END ADDED LOGS ---
+
     const loadingMsg = await safeSendMessage(chatId, loadingText, { parse_mode: 'MarkdownV2' });
     const gameUiMessageId = loadingMsg?.message_id;
 
     if (!gameUiMessageId) {
         console.error(`${logPrefix} Failed to send loading message for PvB game.`);
-        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) { // Check if offer exists before deleting
+        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) {
             activeGames.delete(unifiedOfferIdIfAny);
         }
-        // playerRef is already escaped.
         await safeSendMessage(chatId, `Sorry, ${playerRef}, there was an issue starting your Dice 21 game\\\\. Please try again\\\\.`, { parse_mode: 'MarkdownV2' });
         return;
     }
@@ -4697,8 +4694,9 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         client = await pool.connect(); await client.query('BEGIN');
         const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, BigInt(-betAmountLamports), 'bet_placed_dice21_pvb', { game_id_custom_field: gameIdForActivePvB }, `Bet for PvB Dice 21 game ${gameIdForActivePvB}`);
         
-        // balanceUpdateResult.error can contain special characters. It should be escaped if displayed.
-        if (!balanceUpdateResult.success) throw new Error(balanceUpdateResult.error || "PvB Dice 21 wager placement failed");
+        if (!balanceUpdateResult.success) {
+            throw new Error(balanceUpdateResult.error || "PvB Dice 21 wager placement failed");
+        }
         
         initiatorUserObj.balance = balanceUpdateResult.newBalanceLamports;
         await client.query('COMMIT');
@@ -4712,13 +4710,12 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         activeGames.set(gameIdForActivePvB, gameDataPvB);
         if (gameDataPvB.chatType !== 'private') await updateGroupGameDetails(chatId, gameIdForActivePvB, GAME_IDS.DICE_21, betAmountLamports);
         
-        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) { // Check if offer exists
+        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) {
             activeGames.delete(unifiedOfferIdIfAny);
         }
 
         const initialPlayerRollsResult = await getMultipleDiceRollsFromHelper(gameIdForActivePvB, chatId, userId, 2, '🎲', 'Player Initial D21 PvB', logPrefix);
         
-        // initialPlayerRollsResult.error can contain special characters. It needs escaping if displayed.
         if (initialPlayerRollsResult.error || initialPlayerRollsResult.rolls.length !== 2) {
             throw new Error(initialPlayerRollsResult.error || "Failed to get player\\'s initial two dice from Helper Bot\\\\.");
         }
@@ -4727,10 +4724,6 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         gameDataPvB.playerScore = initialPlayerRollsResult.rolls.reduce((sum, val) => sum + val, 0);
         gameDataPvB.lastInteractionTime = Date.now();
 
-        // playerRef is already escaped.
-        // betDisplayUSD is already escaped.
-        // DICE_21_TARGET_SCORE is a number, escapeMarkdownV2(String(...)) is safe.
-        // formatDiceRolls output is generally safe.
         let promptText = `🃏 **Dice 21 vs Bot** by ${playerRef} for *${betDisplayUSD}*\\\\!\n\n`;
         promptText += `Your initial hand from Helper Bot: ${formatDiceRolls(gameDataPvB.playerHandRolls)} \\(Score: *${escapeMarkdownV2(String(gameDataPvB.playerScore))}*\\)\\\\.\\n`;
 
@@ -4741,14 +4734,14 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
             await bot.editMessageText(promptText, { chat_id: chatId, message_id: gameUiMessageId, parse_mode: 'MarkdownV2', reply_markup: {} });
             await finalizeDice21PvBGame(gameDataPvB);
         } else if (gameDataPvB.playerScore === DICE_21_TARGET_SCORE) {
-            promptText += `✨ Perfect ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}\\\\! You automatically stand\\\\. Bot\\'s turn\\\\.\\\\.\\\\.`; // Escaped Bot's
+            promptText += `✨ Perfect ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}\\\\! You automatically stand\\\\. Bot\\'s turn\\\\.\\\\.\\\\.`;
             gameDataPvB.status = 'bot_turn';
             activeGames.set(gameIdForActivePvB, gameDataPvB);
             await bot.editMessageText(promptText, { chat_id: chatId, message_id: gameUiMessageId, parse_mode: 'MarkdownV2', reply_markup: {} });
             await sleep(1500);
             await processDice21BotTurn(gameDataPvB);
         } else {
-            promptText += `\nIt\\'s your turn, ${playerRef}\\\\. Send a 🎲 emoji to Hit, or use the button to Stand\\\\.`; // Escaped "It's"
+            promptText += `\nIt\\'s your turn, ${playerRef}\\\\. Send a 🎲 emoji to Hit, or use the button to Stand\\\\.`;
             gameDataPvB.status = 'player_turn_awaiting_emoji';
             const gameKeyboard = {
                 inline_keyboard: [
@@ -4760,102 +4753,116 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
             activeGames.set(gameIdForActivePvB, gameDataPvB);
             await bot.editMessageText(promptText, { chat_id: chatId, message_id: gameUiMessageId, parse_mode: 'MarkdownV2', reply_markup: gameKeyboard });
         }
-    } catch (error) { // THIS CATCH BLOCK IS REVISED
+    } catch (error) { 
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} PvB Start DB Rollback Error (outer catch): ${rbErr.message}`));
-        console.error(`${logPrefix} Error starting PvB Dice 21 (auto-deal stage): ${error.message}`, error.stack?.substring(0, 500));
+        
+        // --- ADDED LOGS ---
+        console.error(`${logPrefix} Error starting PvB Dice 21 (auto-deal stage): ${error.message}`, error.stack?.substring(0, 800)); // Increased stack trace log
+        const rawErrorMessageFromCaughtError = error.message || "Unknown error starting game";
+        console.log(`${logPrefix} Debug Catch: rawErrorMessageFromCaughtError = "${rawErrorMessageFromCaughtError}"`);
+        // --- END ADDED LOGS ---
 
-        // **FIXED ERROR MESSAGE HANDLING HERE**
-        const rawErrorMessageFromCatch = error.message || "Unknown error starting game";
-        // This ensures ANY error message content (including those from Telegram API containing '!') is escaped.
-        const displayableErrorContent = escapeMarkdownV2(rawErrorMessageFromCatch);
+        const displayableErrorContentForUser = escapeMarkdownV2(rawErrorMessageFromCaughtError);
+        
+        // --- ADDED LOGS ---
+        console.log(`${logPrefix} Debug Catch: displayableErrorContentForUser (escaped) = "${displayableErrorContentForUser}"`);
+        // --- END ADDED LOGS ---
 
-        // playerRef and betDisplayUSD are assumed to be correctly pre-escaped from the top of the function
-        let errorRefundUserMessage = `⚙️ A system error occurred starting your Dice 21 game: ${displayableErrorContent}`;
+        let finalUserErrorMessage = `⚙️ A system error occurred starting your Dice 21 game: ${displayableErrorContentForUser}`;
 
-        const userBalanceBeforeBet = initiatorUserObj.balance + betAmountLamports; // Original balance + attempted bet
-        const currentBalanceAfterError = await getUserBalance(userId); // Fetch current balance from DB
+        const userBalanceBeforeBetAttempt = initiatorUserObj.balance + betAmountLamports;
+        const currentBalanceInDbAfterError = await getUserBalance(userId);
 
-        let refundAttempted = false;
-        let refundSuccessful = false;
-        let refundDbError = null;
+        let refundAttemptedForThisError = false;
+        let refundOperationSuccessful = false;
+        let refundSpecificErrorMsg = null; // Raw error message from refund attempt
 
-        // Check if a refund is likely needed and attempt it
-        if (currentBalanceAfterError !== null && currentBalanceAfterError < userBalanceBeforeBet) {
-            refundAttempted = true;
+        if (currentBalanceInDbAfterError !== null && currentBalanceInDbAfterError < userBalanceBeforeBetAttempt) {
+            refundAttemptedForThisError = true;
             let refundClient = null;
             try {
                 refundClient = await pool.connect(); await refundClient.query('BEGIN');
-                const refundOp = await updateUserBalanceAndLedger(
+                const refundOpDetails = await updateUserBalanceAndLedger(
                     refundClient, 
                     userId, 
                     betAmountLamports, 
                     'refund_d21_pvb_autodeal_fail', 
-                    { game_id_custom_field: gameIdForActivePvB || 'N/A_GID' }, 
-                    `Refund for failed PvB D21 auto-deal. Initial error: ${rawErrorMessageFromCatch.substring(0,100)}`
+                    { game_id_custom_field: gameIdForActivePvB || 'N/A_GID_REFUND' }, 
+                    `Refund for failed PvB D21 auto-deal. Initial error: ${rawErrorMessageFromCaughtError.substring(0,100)}`
                 );
-                if (refundOp.success) {
+                if (refundOpDetails.success) {
                     await refundClient.query('COMMIT');
-                    refundSuccessful = true;
+                    refundOperationSuccessful = true;
                 } else {
-                    await refundClient.query('ROLLBACK'); // Rollback if updateUserBalanceAndLedger reports failure
-                    refundDbError = refundOp.error || "Unknown refund ledger update error";
-                    console.error(`${logPrefix} Refund DB operation reported failure for user ${userId} after PvB auto-deal failure: ${refundDbError}`);
+                    await refundClient.query('ROLLBACK');
+                    refundSpecificErrorMsg = refundOpDetails.error || "Unknown refund ledger update error";
+                    console.error(`${logPrefix} Refund ledger operation reported failure for user ${userId}: ${refundSpecificErrorMsg}`);
                 }
-            } catch (dbErrCaughtDuringRefund) {
-                if (refundClient) await refundClient.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Refund DB Rollback Error: ${rbErr.message}`));
-                refundDbError = dbErrCaughtDuringRefund.message || "DB exception during refund";
-                console.error(`${logPrefix} CRITICAL: DB Exception during REFUND for user ${userId} after PvB auto-deal failure: ${refundDbError}`);
+            } catch (dbExceptionDuringRefund) {
+                if (refundClient) await refundClient.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Refund DB Rollback Exception: ${rbErr.message}`));
+                refundSpecificErrorMsg = dbExceptionDuringRefund.message || "DB exception during refund attempt";
+                console.error(`${logPrefix} CRITICAL: DB Exception during REFUND attempt for user ${userId}: ${refundSpecificErrorMsg}`);
             } finally {
                 if (refundClient) refundClient.release();
             }
         }
 
-        // Construct the final message to the user based on refund status
-        if (refundAttempted) {
-            if (refundSuccessful) {
-                errorRefundUserMessage += ` Your bet of *${betDisplayUSD}* has been refunded\\\\. Please try again\\\\.`;
+        if (refundAttemptedForThisError) {
+            if (refundOperationSuccessful) {
+                finalUserErrorMessage += ` Your bet of *${betDisplayUSD}* has been refunded\\\\. Please try again\\\\.`;
             } else {
-                errorRefundUserMessage += ` Your bet of *${betDisplayUSD}* was taken, but an issue occurred during the refund process: \`${escapeMarkdownV2(refundDbError || "Refund failed")}\`\\\\. Please contact support\\\\.`;
+                const escapedRefundErrorForDisplay = escapeMarkdownV2(refundSpecificErrorMsg || "Refund failed");
+                // --- ADDED LOGS ---
+                console.log(`${logPrefix} Debug Catch: raw refundSpecificErrorMsg = "${refundSpecificErrorMsg}"`);
+                console.log(`${logPrefix} Debug Catch: escapedRefundErrorForDisplay = "${escapedRefundErrorForDisplay}"`);
+                // --- END ADDED LOGS ---
+                finalUserErrorMessage += ` Your bet of *${betDisplayUSD}* was taken, but an issue occurred during the refund process: \`${escapedRefundErrorForDisplay}\`\\\\. Please contact support\\\\.`;
             }
         } else {
-             // If refund wasn't attempted (e.g. balance check didn't indicate bet was taken)
-            errorRefundUserMessage += ` Please try again\\\\. If the issue persists, contact support\\\\.`;
+            finalUserErrorMessage += ` Please try again\\\\. If the issue persists, contact support\\\\.`;
         }
         
-        // Admin notification for failed refund (only if attempted and failed)
-        if (refundAttempted && !refundSuccessful) {
+        if (refundAttemptedForThisError && !refundOperationSuccessful) {
             if(typeof notifyAdmin === 'function') {
-                const adminAlertMsg = `🚨 D21 PvB Auto\\-Deal Error \\+ REFUND FAILED for ${playerRef} \\(${escapeMarkdownV2(String(userId))}\\), Bet: ${betDisplayUSD}\\. MANUAL CHECK REQUIRED\\. Initial Error: ${displayableErrorContent}\\. Refund Attempt Error: \`${escapeMarkdownV2(refundDbError || "N/A")}\`\\.`;
-                notifyAdmin(adminAlertMsg, {parse_mode:'MarkdownV2'});
+                const adminAlertMessage = `🚨 D21 PvB Auto\\-Deal Error \\+ REFUND FAILED for ${playerRef} \\(${escapeMarkdownV2(String(userId))}\\), Bet: ${betDisplayUSD}\\. MANUAL CHECK REQUIRED\\. Initial Error: ${displayableErrorContentForUser}\\. Refund Attempt Error: \`${escapeMarkdownV2(refundSpecificErrorMsg || "N/A")}\`\\.`;
+                notifyAdmin(adminAlertMessage, {parse_mode:'MarkdownV2'});
             }
         }
 
-        // Send the final composed error message to the user
-        const replyMarkupOnError = { inline_keyboard: [[{ text: "Ok", callback_data: "noop_ok" }]] };
-        if (gameUiMessageId && bot) { // Try to edit existing message first
-            await bot.editMessageText(errorRefundUserMessage, { 
+        // --- ADDED LOGS ---
+        console.log(`${logPrefix} Debug Catch: Final finalUserErrorMessage to send = "${finalUserErrorMessage}"`);
+        // --- END ADDED LOGS ---
+
+        const replyMarkupForError = { inline_keyboard: [[{ text: "Dismiss", callback_data: "noop_ok" }]] }; 
+        if (gameUiMessageId && bot) {
+            await bot.editMessageText(finalUserErrorMessage, { 
                 chat_id: chatId, 
                 message_id: Number(gameUiMessageId), 
                 parse_mode: 'MarkdownV2', 
-                reply_markup: replyMarkupOnError 
-            }).catch(async (editError) => { // Fallback to sending a new message
-                console.warn(`${logPrefix} Failed to edit error message, sending new: ${editError.message}`);
-                await safeSendMessage(chatId, errorRefundUserMessage, { parse_mode: 'MarkdownV2', reply_markup: replyMarkupOnError });
+                reply_markup: replyMarkupForError 
+            }).catch(async (editErr) => { 
+                console.warn(`${logPrefix} Failed to edit error message (ID: ${gameUiMessageId}), sending new. Edit Error: ${editErr.message}. Original message that failed edit: "${finalUserErrorMessage}"`);
+                // --- ADDED LOGS for fallback send ---
+                console.log(`${logPrefix} Debug Catch: Fallback safeSendMessage with finalUserErrorMessage = "${finalUserErrorMessage}"`);
+                // --- END ADDED LOGS ---
+                await safeSendMessage(chatId, finalUserErrorMessage, { parse_mode: 'MarkdownV2', reply_markup: replyMarkupForError });
             });
-        } else { // If no gameUiMessageId, send new message
-            await safeSendMessage(chatId, errorRefundUserMessage, { parse_mode: 'MarkdownV2', reply_markup: replyMarkupOnError });
+        } else {
+             // --- ADDED LOGS for direct send ---
+            console.log(`${logPrefix} Debug Catch: Direct safeSendMessage (no gameUiMessageId) with finalUserErrorMessage = "${finalUserErrorMessage}"`);
+            // --- END ADDED LOGS ---
+            await safeSendMessage(chatId, finalUserErrorMessage, { parse_mode: 'MarkdownV2', reply_markup: replyMarkupForError });
         }
 
-        // Cleanup active game states
         if (gameIdForActivePvB && activeGames.has(gameIdForActivePvB)) {
             activeGames.delete(gameIdForActivePvB);
         }
         if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) {
             activeGames.delete(unifiedOfferIdIfAny);
         }
-        await updateGroupGameDetails(chatId, null, null, null); // Clear game from group session
-        return; // Exit function
-    } finally {
+        await updateGroupGameDetails(chatId, null, null, null);
+        return; 
+    } finally { 
         if (client) client.release();
     }
 }
