@@ -4365,10 +4365,6 @@ async function processDiceEscalatorBotTurn(gameData) {
 // --- Start of Part 5b, Section 2 (METICULOUSLY REVISED FOR MARKDOWN & DICE 21 LOGIC) ---
 // --- COMPLETE DICE 21 GAME LOGIC WITH PROPER MARKDOWNV2 ESCAPING ---
 
-// Helper function to format dice rolls display (user provided)
-function formatDiceRolls(rolls) {
-    return rolls.map(r => `🎲${escapeMarkdownV2(String(r))}`).join(' ');
-}
 
 // --- Unified Offer Messages ---
 const UNIFIED_OFFER_MESSAGES = { // Renamed for clarity to avoid conflict if UNIFIED_OFFER is a game ID
