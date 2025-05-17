@@ -1728,8 +1728,7 @@ bot.on('message', async (msg) => {
         try {
             const selfBotInfo = await bot.getMe();
             if (String(msg.from.id) !== String(selfBotInfo.id)) { return; } // Ignore other bots
-            // Generally ignore self messages unless specifically designed for self-interaction
-            if (!msg.dice) return; // Example: only process self-sent dice if that's a mechanism.
+            if (!msg.dice) return; 
         } catch (getMeError) {
             console.error(`${LOG_PREFIX_MSG} Error in getMe self-check: ${getMeError.message}.`);
             return;
@@ -1746,15 +1745,16 @@ bot.on('message', async (msg) => {
         const diceValue = msg.dice.value;
         let gameIdForDiceRoll = null;
         let gameDataForDiceRoll = null;
-        let gameTypeForDiceRoll = null; // To identify which game the dice is for
+        let gameTypeForDiceRoll = null; 
 
         for (const [gId, gData] of activeGames.entries()) {
-            if (String(gData.chatId) === chatId) { // Game must be in the same chat
+            if (String(gData.chatId) === chatId) { 
                 // Dice 21 (PvB and PvP)
                 if (gData.type === GAME_IDS.DICE_21 && gData.playerId === userId && gData.status === 'player_turn_awaiting_emoji') {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; gameTypeForDiceRoll = GAME_IDS.DICE_21; break;
                 }
-                if (gData.type === GAME_IDS.DICE_21_PVP') { // Corrected: stray quote removed
+                // CORRECTED LINE: Removed stray single quote
+                if (gData.type === GAME_IDS.DICE_21_PVP) { 
                     if (gData.initiator?.userId === userId && gData.initiator?.isTurn && gData.status === 'p1_turn_awaiting_emoji') {
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; gameTypeForDiceRoll = GAME_IDS.DICE_21_PVP; break;
                     }
@@ -1776,19 +1776,18 @@ bot.on('message', async (msg) => {
                     }
                 }
 
-                // Dice Escalator (PvB and PvP) - NEW
+                // Dice Escalator (PvB and PvP)
                 if (gData.type === GAME_IDS.DICE_ESCALATOR && gData.playerId === userId && gData.status === 'player_turn_awaiting_emoji') {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; gameTypeForDiceRoll = GAME_IDS.DICE_ESCALATOR; break;
                 }
                 if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
-                    if (gData.initiator?.userId === userId && gData.initiator?.isTurn && gData.status === 'p1_turn_awaiting_emoji') {
+                    if (gData.initiator?.userId === userId && gData.initiator?.isTurn && gData.status === 'p1_turn_awaiting_emoji') { // Assuming p1_turn_awaiting_emoji, adjust if status is different
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; gameTypeForDiceRoll = GAME_IDS.DICE_ESCALATOR_PVP; break;
                     }
-                    if (gData.opponent?.userId === userId && gData.opponent?.isTurn && gData.status === 'p2_turn_awaiting_emoji') {
+                    if (gData.opponent?.userId === userId && gData.opponent?.isTurn && gData.status === 'p2_turn_awaiting_emoji') { // Assuming p2_turn_awaiting_emoji, adjust if status is different
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; gameTypeForDiceRoll = GAME_IDS.DICE_ESCALATOR_PVP; break;
                     }
                 }
-                // Note: Old Dice Escalator (if it was different) is replaced by these checks.
             }
         }
 
@@ -1813,18 +1812,18 @@ bot.on('message', async (msg) => {
                     if (typeof processDuelPvPRollByEmoji === 'function') await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, userId);
                     else console.error("Missing handler: processDuelPvPRollByEmoji");
                     break;
-                case GAME_IDS.DICE_ESCALATOR: // PvB Dice Escalator
+                case GAME_IDS.DICE_ESCALATOR: 
                     if (typeof processDiceEscalatorPlayerRollByEmojiPvB === 'function') await processDiceEscalatorPlayerRollByEmojiPvB(gameDataForDiceRoll, diceValue);
                     else console.error("Missing handler: processDiceEscalatorPlayerRollByEmojiPvB");
                     break;
-                case GAME_IDS.DICE_ESCALATOR_PVP: // PvP Dice Escalator
+                case GAME_IDS.DICE_ESCALATOR_PVP: 
                     if (typeof processDiceEscalatorPlayerRollByEmojiPvP === 'function') await processDiceEscalatorPlayerRollByEmojiPvP(gameDataForDiceRoll, diceValue, userId);
                     else console.error("Missing handler: processDiceEscalatorPlayerRollByEmojiPvP");
                     break;
                 default:
                     console.warn(`[DiceMsg] Unhandled game type ${gameTypeForDiceRoll} for dice emoji processing.`);
             }
-            return;
+            return; 
         }
     }
     // --- End of Dice Emoji Handling ---
