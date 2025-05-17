@@ -4254,42 +4254,6 @@ async function handleDiceEscalatorCancelUnifiedOfferCallback(offerId, initiatorU
     }
 }
 
-// Placeholder for PvB game start function - to be fully implemented next
-async function startDiceEscalatorPvBGame(chatId, initiatorUserObj, betAmountLamports, originalOfferMessageIdToDelete, unifiedOfferIdIfAny) {
-    const logPrefix = `[DE_PvB_StartPlaceholder GID:${unifiedOfferIdIfAny}]`;
-    console.log(`${logPrefix} Placeholder: PvB Dice Escalator game would start here. Initiator: ${initiatorUserObj.telegram_id}, Bet: ${betAmountLamports}. Offer message to delete: ${originalOfferMessageIdToDelete}.`);
-    // Actual implementation will follow: place/confirm bet, set up game state, initial UI.
-    // For now, just clean up the offer.
-    if (bot && originalOfferMessageIdToDelete) {
-        await bot.deleteMessage(chatId, Number(originalOfferMessageIdToDelete)).catch(e => console.warn(`${logPrefix} Error deleting offer message: ${e.message}`));
-    }
-    if (unifiedOfferIdIfAny) {
-        activeGames.delete(unifiedOfferIdIfAny);
-    }
-    // await updateGroupGameDetails(chatId, newPvBGameId, GAME_IDS.DICE_ESCALATOR, betAmountLamports); // When new game ID is created
-    await safeSendMessage(chatId, `⚙️ Dice Escalator (Player vs Bot) for ${getPlayerDisplayReference(initiatorUserObj)} with ${formatCurrency(betAmountLamports)} SOL bet is **under construction**. Offer cleared.`, {parse_mode: 'MarkdownV2'});
-}
-
-// Placeholder for PvP game start function - to be fully implemented next
-async function startDiceEscalatorPvPGame(offerId, initiatorUserObj, joinerUserObj, originalOfferMessageIdToDelete) {
-    const offerData = activeGames.get(offerId); // Re-fetch to be safe, or pass all needed data
-    const logPrefix = `[DE_PvP_StartPlaceholder OfferID:${offerId}]`;
-    if(!offerData) {
-        console.error(`${logPrefix} Offer data missing for PvP start.`);
-        return;
-    }
-    console.log(`${logPrefix} Placeholder: PvP Dice Escalator game would start here. Initiator: ${initiatorUserObj.telegram_id}, Joiner: ${joinerUserObj.telegram_id}, Bet: ${offerData.betAmount}. Offer message to delete: ${originalOfferMessageIdToDelete}.`);
-    // Actual implementation will follow: place/confirm bets for both, set up game state, initial UI.
-    // For now, just clean up the offer.
-     if (bot && originalOfferMessageIdToDelete) {
-        await bot.deleteMessage(offerData.chatId, Number(originalOfferMessageIdToDelete)).catch(e => console.warn(`${logPrefix} Error deleting offer message: ${e.message}`));
-    }
-    activeGames.delete(offerId);
-    // await updateGroupGameDetails(offerData.chatId, newPvPGameId, GAME_IDS.DICE_ESCALATOR_PVP, offerData.betAmount); // When new game ID is created
-    await safeSendMessage(offerData.chatId, `⚙️ Dice Escalator (Player vs Player) between ${getPlayerDisplayReference(initiatorUserObj)} and ${getPlayerDisplayReference(joinerUserObj)} for ${formatCurrency(offerData.betAmount)} SOL bet is **under construction**. Offer cleared.`, {parse_mode: 'MarkdownV2'});
-}
-
-
 console.log("Part 5b, Section 1 (REVISED FOR UNIFIED OFFER): Dice Escalator Offer Logic - Complete.");
 // --- End of Part 5b, Section 1 (REVISED FOR UNIFIED OFFER) ---
 // --- Start of Part 5b, Section 1 (REVISED FOR UNIFIED OFFER & NEW PvB/PvP FLOW - Segment 2: PvB Start & Player Turn) ---
