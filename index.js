@@ -4655,11 +4655,13 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
     const userId = String(initiatorUserObj.telegram_id);
     const logPrefix = `[D21_PvB_Start UID:${userId} CH:${chatId}]`;
     
+    // playerRef is ALREADY ESCAPED by getPlayerDisplayReference.
     const playerRef = getPlayerDisplayReference(initiatorUserObj); 
+    // betDisplayUSD is ALREADY ESCAPED by escapeMarkdownV2(await formatBalanceForDisplay(...)).
     const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    console.log(`${logPrefix} Debug: playerRef (should be pre-escaped) = "${playerRef}"`);
-    console.log(`${logPrefix} Debug: betDisplayUSD (should be pre-escaped) = "${betDisplayUSD}"`);
+    console.log(`${logPrefix} Debug: playerRef (pre-escaped) = "${playerRef}"`);
+    console.log(`${logPrefix} Debug: betDisplayUSD (pre-escaped) = "${betDisplayUSD}"`);
 
     if (unifiedOfferIdIfAny && originalCmdOrOfferMsgId && bot) {
         await bot.deleteMessage(chatId, originalCmdOrOfferMsgId).catch(e => console.warn(`${logPrefix} Non-critical: Could not delete unified offer message ${originalCmdOrOfferMsgId}: ${e.message}`));
@@ -4667,7 +4669,8 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         await bot.deleteMessage(chatId, originalCmdOrOfferMsgId).catch(e => console.warn(`${logPrefix} Non-critical: Could not delete /d21 command message ${originalCmdOrOfferMsgId}: ${e.message}`));
     }
 
-    const loadingText = `🃏 Starting Dice 21 vs Bot for ${playerRef} (Bet: *${betDisplayUSD}*)\\\\. Dealing your initial hand via Helper Bot, please wait\\\\.\\\\.\\\\. ⏳`;
+    // --- REWRITTEN loadingText ---
+    const loadingText = `🃏 ${playerRef} is starting a Dice 21 game vs the Bot for *${betDisplayUSD}*\\.\n\nDealing your initial hand via the Helper Bot, please wait a moment\\.\\.\\. ⏳`;
     
     console.log(`${logPrefix} Debug: Constructed loadingText to send = "${loadingText}"`);
 
@@ -4679,7 +4682,8 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) {
             activeGames.delete(unifiedOfferIdIfAny);
         }
-        await safeSendMessage(chatId, `Sorry, ${playerRef}, there was an issue starting your Dice 21 game\\\\. Please try again\\\\.`, { parse_mode: 'MarkdownV2' });
+        // playerRef is already escaped.
+        await safeSendMessage(chatId, `Sorry, ${playerRef}, there was an issue initiating your Dice 21 game\. Please try again\.`, { parse_mode: 'MarkdownV2' });
         return;
     }
 
@@ -4713,31 +4717,36 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         const initialPlayerRollsResult = await getMultipleDiceRollsFromHelper(gameIdForActivePvB, chatId, userId, 2, '🎲', 'Player Initial D21 PvB', logPrefix);
         
         if (initialPlayerRollsResult.error || initialPlayerRollsResult.rolls.length !== 2) {
-            throw new Error(initialPlayerRollsResult.error || "Failed to get player\\'s initial two dice from Helper Bot\\\\.");
+            throw new Error(initialPlayerRollsResult.error || "Failed to get player's initial two dice from Helper Bot\\.");
         }
 
         gameDataPvB.playerHandRolls = initialPlayerRollsResult.rolls;
         gameDataPvB.playerScore = initialPlayerRollsResult.rolls.reduce((sum, val) => sum + val, 0);
         gameDataPvB.lastInteractionTime = Date.now();
 
-        let promptText = `🃏 **Dice 21 vs Bot** by ${playerRef} for *${betDisplayUSD}*\\\\!\n\n`;
-        promptText += `Your initial hand from Helper Bot: ${formatDiceRolls(gameDataPvB.playerHandRolls)} \\(Score: *${escapeMarkdownV2(String(gameDataPvB.playerScore))}*\\)\\\\.\\n`;
+        // --- REWRITTEN promptText (built in stages) ---
+        let promptHeader = `🃏 **Dice 21 vs Bot**\nPlayer: ${playerRef}\nBet: *${betDisplayUSD}*\n\n`;
+        let handDetails = `Your initial hand: ${formatDiceRolls(gameDataPvB.playerHandRolls)}\nScore: *${escapeMarkdownV2(String(gameDataPvB.playerScore))}*\n\n`;
+        let promptAction = "";
+        let promptText = "";
 
         if (gameDataPvB.playerScore > DICE_21_TARGET_SCORE) {
-            promptText += `💥 BUSTED on the deal\\\\! You went over ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}\\\\. Bot wins\\\\.`;
+            promptAction = `💥 Oh no\\! You BUSTED with *${escapeMarkdownV2(String(gameDataPvB.playerScore))}* (over ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))})\.\\. The Bot wins this round\\.`;
             gameDataPvB.status = 'game_over_player_bust';
             activeGames.set(gameIdForActivePvB, gameDataPvB);
+            promptText = promptHeader + handDetails + promptAction;
             await bot.editMessageText(promptText, { chat_id: chatId, message_id: gameUiMessageId, parse_mode: 'MarkdownV2', reply_markup: {} });
             await finalizeDice21PvBGame(gameDataPvB);
         } else if (gameDataPvB.playerScore === DICE_21_TARGET_SCORE) {
-            promptText += `✨ Perfect ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}\\\\! You automatically stand\\\\. Bot\\'s turn\\\\.\\\\.\\\\.`;
+            promptAction = `✨ Blackjack\\! You hit *${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}* perfectly\\! You automatically stand\\.\nWaiting for the Bot's turn\\.\\.\\.`;
             gameDataPvB.status = 'bot_turn';
             activeGames.set(gameIdForActivePvB, gameDataPvB);
+            promptText = promptHeader + handDetails + promptAction;
             await bot.editMessageText(promptText, { chat_id: chatId, message_id: gameUiMessageId, parse_mode: 'MarkdownV2', reply_markup: {} });
             await sleep(1500);
             await processDice21BotTurn(gameDataPvB);
         } else {
-            promptText += `\nIt\\'s your turn, ${playerRef}\\\\. Send a 🎲 emoji to Hit, or use the button to Stand\\\\.`;
+            promptAction = `It's your turn, ${playerRef}\\. Send a 🎲 emoji to Hit, or use the button to Stand\\.`;
             gameDataPvB.status = 'player_turn_awaiting_emoji';
             const gameKeyboard = {
                 inline_keyboard: [
@@ -4747,6 +4756,7 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
                 ]
             };
             activeGames.set(gameIdForActivePvB, gameDataPvB);
+            promptText = promptHeader + handDetails + promptAction;
             await bot.editMessageText(promptText, { chat_id: chatId, message_id: gameUiMessageId, parse_mode: 'MarkdownV2', reply_markup: gameKeyboard });
         }
     } catch (error) { 
@@ -4755,20 +4765,22 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
         const rawErrorMessageFromCaughtError = error.message || "Unknown error starting game";
         console.log(`${logPrefix} Debug Catch: rawErrorMessageFromCaughtError = "${rawErrorMessageFromCaughtError}"`);
         
-        // ==================== TEST 1 MODIFICATION ====================
-        // Using a manually pre-escaped, simple string for the main error content
+        // Using the simplified test string for the main error part, as per Test 1.
+        // This should be manually escaped if you change it.
         const displayableErrorContentForUser = "An unexpected issue occurred with the game server\\! Our team is looking into it\\."; 
         console.log(`${logPrefix} Debug Catch: displayableErrorContentForUser (USING SIMPLIFIED TEST STRING) = "${displayableErrorContentForUser}"`);
-        // =============================================================
-
-        let finalUserErrorMessage = `⚙️ A system error occurred starting your Dice 21 game: ${displayableErrorContentForUser}`;
+        
+        // --- REWRITTEN finalUserErrorMessage ---
+        // playerRef and betDisplayUSD are pre-escaped.
+        // displayableErrorContentForUser is now our simplified, pre-escaped string.
+        let finalUserErrorMessage = `⚙️ **Game Error**\n${playerRef}, we encountered an issue starting your Dice 21 game for *${betDisplayUSD}*\\.\n\nDetails: ${displayableErrorContentForUser}`;
 
         const userBalanceBeforeBetAttempt = initiatorUserObj.balance + betAmountLamports;
         const currentBalanceInDbAfterError = await getUserBalance(userId);
 
         let refundAttemptedForThisError = false;
         let refundOperationSuccessful = false;
-        let refundSpecificErrorMsg = null; // Raw error message from refund attempt
+        let refundSpecificErrorMsg = null; 
 
         if (currentBalanceInDbAfterError !== null && currentBalanceInDbAfterError < userBalanceBeforeBetAttempt) {
             refundAttemptedForThisError = true;
@@ -4802,24 +4814,22 @@ async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, o
 
         if (refundAttemptedForThisError) {
             if (refundOperationSuccessful) {
-                finalUserErrorMessage += ` Your bet of *${betDisplayUSD}* has been refunded\\\\. Please try again\\\\.`;
+                finalUserErrorMessage += `\n\nYour bet of *${betDisplayUSD}* has been successfully refunded to your account\. Please feel free to try starting a new game\.`;
             } else {
-                // ==================== TEST 1 MODIFICATION ====================
-                // Using a manually pre-escaped, simple string for the refund error part
+                // Using simplified, manually pre-escaped string for refund error part.
                 const escapedRefundErrorForDisplay = "The refund could not be processed automatically at this time\\."; 
-                console.log(`${logPrefix} Debug Catch: raw refundSpecificErrorMsg (if any) = "${refundSpecificErrorMsg}"`); // Still log the original raw refund error
+                console.log(`${logPrefix} Debug Catch: raw refundSpecificErrorMsg (if any) = "${refundSpecificErrorMsg}"`);
                 console.log(`${logPrefix} Debug Catch: escapedRefundErrorForDisplay (USING SIMPLIFIED TEST STRING) = "${escapedRefundErrorForDisplay}"`);
-                // =============================================================
-                finalUserErrorMessage += ` Your bet of *${betDisplayUSD}* was taken, but an issue occurred during the refund process: \`${escapedRefundErrorForDisplay}\`\\\\. Please contact support\\\\.`;
+                finalUserErrorMessage += `\n\nYour bet of *${betDisplayUSD}* was taken, but an issue occurred during the refund process: \`${escapedRefundErrorForDisplay}\` Please contact support for assistance\.`;
             }
         } else {
-            finalUserErrorMessage += ` Please try again\\\\. If the issue persists, contact support\\\\.`;
+            finalUserErrorMessage += `\n\nPlease try starting a new game\. If the issue persists, contact support\.`;
         }
+        // --- END REWRITTEN finalUserErrorMessage ---
         
         if (refundAttemptedForThisError && !refundOperationSuccessful) {
             if(typeof notifyAdmin === 'function') {
-                // For admin, use the more detailed (but still escaped) original error for better diagnostics
-                const adminDisplayableError = escapeMarkdownV2(rawErrorMessageFromCaughtError);
+                const adminDisplayableError = escapeMarkdownV2(rawErrorMessageFromCaughtError); 
                 const adminDisplayableRefundError = escapeMarkdownV2(refundSpecificErrorMsg || "N/A");
                 const adminAlertMessage = `🚨 D21 PvB Auto\\-Deal Error \\+ REFUND FAILED for ${playerRef} \\(${escapeMarkdownV2(String(userId))}\\), Bet: ${betDisplayUSD}\\. MANUAL CHECK REQUIRED\\. Initial Error: ${adminDisplayableError}\\. Refund Attempt Error: \`${adminDisplayableRefundError}\`\\.`;
                 notifyAdmin(adminAlertMessage, {parse_mode:'MarkdownV2'});
