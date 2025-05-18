@@ -4065,23 +4065,25 @@ function createStandardTitle(titleText, emoji = '✨') {
 
 // console.log("Part 5a, Section 4 (REVISED for New Dice Escalator UI) - Complete.");
 // --- End of Part 5a, Section 4 (REVISED for New Dice Escalator UI) ---
-// --- Start of Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - All Fixes & New Messages - Quick Update Flow) ---
+// --- Start of Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - Jackpot Territory & Bust Timing Fix) ---
 // index.js - Part 5b, Section 1: Dice Escalator Game Logic & Handlers (New Unified Offer, PvB, PvP Structure)
 //----------------------------------------------------------------------------------------------
-// console.log("Loading Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - Quick Update Flow)...");
+// console.log("Loading Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - Jackpot Territory & Bust Timing Fix)...");
 
 // Assumed dependencies from previous Parts:
 // Part 1: bot, safeSendMessage, escapeMarkdownV2, getPlayerDisplayReference, formatCurrency, LAMPORTS_PER_SOL,
 //         GAME_IDS (with DICE_ESCALATOR_UNIFIED_OFFER, DICE_ESCALATOR_PVB, DICE_ESCALATOR_PVP),
 //         TARGET_JACKPOT_SCORE, DICE_ESCALATOR_BUST_ON, JACKPOT_CONTRIBUTION_PERCENT, MAIN_JACKPOT_ID,
 //         activeGames, groupGameSessions, JOIN_GAME_TIMEOUT_MS, queryDatabase, pool, stringifyWithBigInt,
-//         DICE_ROLL_POLLING_MAX_ATTEMPTS, DICE_ROLL_POLLING_INTERVAL_MS, sleep, crypto (for randomBytes)
+//         DICE_ROLL_POLLING_MAX_ATTEMPTS, DICE_ROLL_POLLING_INTERVAL_MS, sleep, // Ensure sleep is available
+//         crypto (for randomBytes)
 // Part 2: getOrCreateUser, getUserBalance, updateUserBalanceAndLedger
 // Part 5a-S4: createPostGameKeyboard
 // Payment System: getSolUsdPrice, convertLamportsToUSDString, convertUSDToLamports (for jackpot display)
 
 // --- Constants specific to New Dice Escalator ---
 const DE_PVB_BOT_ROLL_COUNT = 3; // Bot rolls 3 dice in PvB
+const BUST_MESSAGE_DELAY_MS = 2000; // Delay for bust message in milliseconds
 
 // --- Helper Function for DE Game Message Formatting (REVISED Jackpot Query & Professional Tone) ---
 async function formatDiceEscalatorGameMessage_New(gameData) {
@@ -4119,7 +4121,11 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
         }
 
         if (gameData.status === 'player_turn_awaiting_emoji') {
-            messageText += `\n👉 ${player.displayName}, it's *your turn*\\! Send a 🎲 emoji to roll\\. Keep rolling to boost your score, or select "Stand Firm" to lock it in\\!`;
+            if (player.score >= 18) { // Jackpot Territory Message
+                messageText += `\n\n🔥 *You're in Jackpot Territory \\(Score: ${player.score}\\)\\!* 🔥\nTo win the Super Jackpot \\(currently requiring *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}* points\\), you must beat the Bot Dealer *and* achieve a final score of *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}* or higher\\.\nKeep rolling to escalate your score towards the jackpot target, or "Stand Firm" if you're feeling confident\\!\n\n👉 Send a 🎲 emoji to roll, or press "Stand Firm"\\!`;
+            } else {
+                messageText += `\n👉 ${player.displayName}, it's *your turn*\\! Send a 🎲 emoji to roll\\. Keep rolling to boost your score, or select "Stand Firm" to lock it in\\!`;
+            }
         } else if (gameData.status === 'player_stood') {
             messageText += `\n✅ You've stood with a magnificent score of *${player.score}*\\!\n🤖 The Bot Dealer is now making its move, rolling ${DE_PVB_BOT_ROLL_COUNT} dice\\.\\.\\. Hold tight\\!`;
         } else if (gameData.status === 'bot_turn_complete') {
@@ -4143,9 +4149,7 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
         messageText += `👤 **${p2.displayName} (P2):** Score *${p2.score}* ${p2.rolls.length > 0 ? `🎲 \\(Rolls: ${p2.rolls.map(r => `\`${r}\``).join(' ⋅ ')}\\)` : ''}${p2.busted ? " 💥 \\(Busted\\!\\)" : (p2.stood ? " ✅ \\(Stood\\)" : "")}\n\n`;
 
         let actionPrompt = "";
-        // Simplified status check logic as UI updates after every roll.
-        // The statuses p1_awaiting_roll1_emoji, p2_awaiting_roll1_emoji will now generally mean "it's this player's turn to act (roll or stand)"
-        if (gameData.initiator.isTurn && (gameData.status === 'p1_awaiting_roll1_emoji' || gameData.status === 'p1_awaiting_roll2_emoji')) { // Retain _roll2 for direct check if needed
+        if (gameData.initiator.isTurn && (gameData.status === 'p1_awaiting_roll1_emoji' || gameData.status === 'p1_awaiting_roll2_emoji')) {
             actionPrompt = `👉 ${p1.displayName} (P1), it's *your moment*\\! Send a 🎲 to roll again, or "Stand" to lock in your score\\.`;
         } else if (gameData.opponent.isTurn && (gameData.status === 'p2_awaiting_roll1_emoji' || gameData.status === 'p2_awaiting_roll2_emoji')) {
             actionPrompt = `👉 ${p2.displayName} (P2), the gauntlet is thrown\\! ${p1.displayName} (P1) has *${p1.score}* points\\. Send a 🎲 to roll again, or "Stand" to make your play\\.`;
@@ -4161,8 +4165,7 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
     return messageText.trim();
 }
 
-// --- Helper Bot Interaction for Dice Rolls ---
-// [This function remains unchanged as its internal logic is not directly affected by UI update frequency]
+// [getThreeDiceRollsViaHelper_DE_New function remains unchanged]
 async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogContext) {
     const LOG_PREFIX_HELPER = `[DE_HelperBotRolls Game:${gameIdForLog}]`;
     const rolls = [];
@@ -4226,8 +4229,7 @@ async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogConte
     return rolls;
 }
 
-// --- Dice Escalator Unified Offer Command ---
-// [This function remains unchanged as it sets up the initial offer, not the in-game roll flow]
+// [handleStartDiceEscalatorUnifiedOfferCommand_New function remains unchanged]
 async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports) {
     const initiatorUserObj = await getOrCreateUser(String(msg.from.id), msg.from.username, msg.from.first_name, msg.from.last_name);
     const chatId = String(msg.chat.id);
@@ -4289,13 +4291,11 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     }
 }
 
-// --- Dice Escalator Unified Offer Callback Handlers ---
-// [These functions primarily manage offer state and transition to game start; no direct roll handling changed here]
+// [handleDiceEscalatorAcceptBotGame_New function remains unchanged]
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
     const LOG_PREFIX_DE_ACCEPT_BOT = `[DE_AcceptBot UID:${userWhoClicked.telegram_id} Offer:${offerId}]`;
     const offerData = activeGames.get(offerId);
     const callbackQueryId = callbackQueryIdPassed;
-
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
         if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer is no longer valid or has expired.", show_alert: true }).catch(()=>{});
         else if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, {chat_id: originalChatId, message_id: Number(originalMessageId)}).catch(()=>{});
@@ -4306,7 +4306,6 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
         return;
     }
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Summoning the Bot Dealer... Game starting!"}).catch(()=>{});
-
     console.log(`${LOG_PREFIX_DE_ACCEPT_BOT} Initiator chose to play vs Bot for offer ${offerId}.`);
     const initiatorObjFull = await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
     if (!initiatorObjFull) {
@@ -4316,16 +4315,15 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
         if (offerData.offerMessageId && bot) bot.editMessageText("⚙️ Offer Cancelled: An internal snag prevented this game from starting\\. The offer has been removed\\.", { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), reply_markup:{}}).catch(()=>{});
         return;
     }
-
     activeGames.delete(offerId);
     await startDiceEscalatorPvBGame_New({ id: originalChatId, type: originalChatType }, initiatorObjFull, offerData.betAmount, offerData.offerMessageId, false);
 }
 
+// [handleDiceEscalatorAcceptPvPChallenge_New function remains unchanged]
 async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked, originalMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
     const LOG_PREFIX_DE_ACCEPT_PVP = `[DE_AcceptPvP UID:${userWhoClicked.telegram_id} Offer:${offerId}]`;
     const offerData = activeGames.get(offerId);
     const callbackQueryId = callbackQueryIdPassed;
-
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has already been taken or expired.", show_alert: true }).catch(()=>{});
         else if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, {chat_id: originalChatId, message_id: Number(originalMessageId)}).catch(()=>{});
@@ -4335,7 +4333,6 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "You can't battle yourself... or can you? Not in this game!", show_alert: true }).catch(()=>{});
         return;
     }
-
     const opponentUserObjFull = await getOrCreateUser(userWhoClicked.telegram_id, userWhoClicked.username, userWhoClicked.first_name);
     if(!opponentUserObjFull){
         console.error(`${LOG_PREFIX_DE_ACCEPT_PVP} Could not get/create opponent user object for ${userWhoClicked.telegram_id}`);
@@ -4343,7 +4340,6 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked
         return;
     }
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "You've accepted the challenge! Preparing for PvP..."}).catch(()=>{});
-
     const opponentBalance = opponentUserObjFull.balance;
     if (opponentBalance < offerData.betAmount) {
         const neededDisplay = escapeMarkdownV2(formatCurrency(offerData.betAmount, 'SOL'));
@@ -4351,7 +4347,6 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked
         await safeSendMessage(originalChatId, `💰 *Funds Check for ${getPlayerDisplayReference(opponentUserObjFull)}*\\!\n\nTo accept this Dice Escalator PvP challenge for *${neededDisplay}*, your balance needs a little more fuel\\!\nYour Balance: ${currentBalanceDisplay}`, { parse_mode: 'MarkdownV2' });
         return;
     }
-
     const initiatorUserObjFull = await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
     if(!initiatorUserObjFull){
         console.error(`${LOG_PREFIX_DE_ACCEPT_PVP} Could not get full user object for initiator ${offerData.initiator.userId}`);
@@ -4371,17 +4366,16 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked
         activeGames.delete(offerId);
         return;
     }
-
     console.log(`${LOG_PREFIX_DE_ACCEPT_PVP} User ${opponentUserObjFull.telegram_id} has accepted the PvP challenge for Dice Escalator offer ${offerId}.`);
     activeGames.delete(offerId);
     await startDiceEscalatorPvPGame_New(offerData, opponentUserObjFull, offerData.offerMessageId);
 }
 
+// [handleDiceEscalatorCancelUnifiedOffer_New function remains unchanged]
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalMessageId, originalChatId, callbackQueryIdPassed = null) {
     const LOG_PREFIX_DE_CANCEL_OFFER = `[DE_CancelOffer UID:${userWhoClicked.telegram_id} OfferID:${offerId}]`;
     const offerData = activeGames.get(offerId);
     const callbackQueryId = callbackQueryIdPassed;
-
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already concluded or vanished into the ether!", show_alert: false }).catch(()=>{});
         return;
@@ -4395,7 +4389,6 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
         return;
     }
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Retracting the challenge..."}).catch(()=>{});
-
     activeGames.delete(offerId);
     console.log(`${LOG_PREFIX_DE_CANCEL_OFFER} Dice Escalator offer ${offerId} has been cancelled by ${userWhoClicked.telegram_id}.`);
     if (originalMessageId && bot) {
@@ -4434,7 +4427,7 @@ async function startDiceEscalatorPvBGame_New(chat, initiatorUserObj, betAmountLa
             busted: false
         },
         betAmount: betAmountLamports, chatId: chatId, chatType: chatType,
-        status: 'player_turn_awaiting_emoji', // CRITICAL INITIAL STATUS
+        status: 'player_turn_awaiting_emoji',
         createdAt: Date.now(), gameMessageId: null, jackpotContribution: 0n, lastPlayerRoll: null, botRolls: [], botScore: 0
     };
 
@@ -4443,7 +4436,6 @@ async function startDiceEscalatorPvBGame_New(chat, initiatorUserObj, betAmountLa
         await client.query('BEGIN');
         const betTxNotes = `Dice Escalator PvB bet. Game ID: ${gameId}. Player: ${currentPlayerState.telegram_id}.`;
         const betResult = await updateUserBalanceAndLedger(client, currentPlayerState.telegram_id, -betAmountLamports, 'game_bet_de_pvb', { game_id_custom_field: gameId }, betTxNotes);
-
         if (!betResult.success) {
             await client.query('ROLLBACK');
             throw new Error(`Bet placement failed for Dice Escalator PvB: ${betResult.error}`);
@@ -4518,51 +4510,52 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
 
     const rollAnnounceText = `🎲 ${player.displayName} rolled a\\.\\.\\. *${diceValue}*\\! ✨\n🎯 Their score climbs to: *${announcedScore}*`;
     await safeSendMessage(gameData.chatId, rollAnnounceText, { parse_mode: 'MarkdownV2' });
-    await sleep(500); // Brief pause for effect
+    // No sleep here, main game message will update quickly.
 
     if (diceValue === DICE_ESCALATOR_BUST_ON) {
         console.log(`${LOG_PREFIX_DE_PVB_ROLL} Player ${player.displayName} rolled a ${diceValue} (BUST VALUE)! Player busts.`);
         player.busted = true;
         gameData.status = 'player_busted';
-        activeGames.set(gameData.gameId, gameData);
-        // No need to update score here; finalize will handle busted state.
-        await finalizeDiceEscalatorPvBGame_New(gameData, 0); // Bot score doesn't matter if player busts
+        activeGames.set(gameData.gameId, gameData); // Save bust state
+
+        // Add delay before sending the final bust message
+        console.log(`${LOG_PREFIX_DE_PVB_ROLL} Bust detected. Delaying final bust message by ${BUST_MESSAGE_DELAY_MS}ms for animation perception.`);
+        await sleep(BUST_MESSAGE_DELAY_MS); // User-defined delay
+
+        await finalizeDiceEscalatorPvBGame_New(gameData, 0);
         return;
     }
 
     player.score += diceValue;
 
-    // Ensure the status is correct for the next interaction (roll or stand)
     if (!player.busted && gameData.status !== 'player_stood') {
-        gameData.status = 'player_turn_awaiting_emoji';
+        gameData.status = 'player_turn_awaiting_emoji'; // Ensure status is ready for next action
     }
-    activeGames.set(gameData.gameId, gameData);
+    activeGames.set(gameData.gameId, gameData); // Save score and status update
 
-    // Update the main game message after every roll
+    // Update the main game message immediately after every roll
     await updateDiceEscalatorPvBMessage_New(gameData);
 }
 
 async function updateDiceEscalatorPvBMessage_New(gameData, isStanding = false) {
+    // [This function's logic for deleting old message and sending new remains the same]
+    // [It correctly uses formatDiceEscalatorGameMessage_New for the text]
+    // [It correctly sets status to 'player_stood' if isStanding is true]
     const LOG_PREFIX_DE_PVB_UPDATE = `[DE_PvB_Update Game:${gameData.gameId} Standing:${isStanding}]`;
     if (!gameData || !gameData.gameMessageId || !bot) {
         console.warn(`${LOG_PREFIX_DE_PVB_UPDATE} Essential data missing for UI update (Game ID: ${gameData?.gameId}, Msg ID: ${gameData?.gameMessageId}). Cannot update.`);
         return;
     }
-
     const currentMessageId = gameData.gameMessageId;
-    await bot.deleteMessage(gameData.chatId, Number(currentMessageId)).catch(e => {
-        // console.warn(`${LOG_PREFIX_DE_PVB_UPDATE} Non-critical: Failed to delete old PvB msg ${currentMessageId}: ${e.message}`);
-    });
+    await bot.deleteMessage(gameData.chatId, Number(currentMessageId)).catch(e => {});
 
     if (isStanding) {
         gameData.status = 'player_stood';
     }
-    // Persist status change immediately if standing
-    activeGames.set(gameData.gameId, gameData);
+    activeGames.set(gameData.gameId, gameData); // Persist status change if any
 
     const messageText = await formatDiceEscalatorGameMessage_New(gameData);
     let keyboard = { inline_keyboard: [] };
-
     if (gameData.status === 'player_turn_awaiting_emoji' && !isStanding && !gameData.player.busted) {
         keyboard = {
             inline_keyboard: [
@@ -4571,28 +4564,24 @@ async function updateDiceEscalatorPvBMessage_New(gameData, isStanding = false) {
             ]
         };
     } else if (gameData.status === 'player_stood' || gameData.status === 'bot_turn_complete') {
-        // No action buttons if player stood or bot is done, before final result
         keyboard = { inline_keyboard: [ [{ text: "📖 Game Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER}` }] ] };
     }
-    // If game is busted or finalizing, keyboard will be handled by createPostGameKeyboard in finalize function.
-
     const sentMessage = await safeSendMessage(gameData.chatId, messageText, {
         parse_mode: 'MarkdownV2',
         reply_markup: (keyboard.inline_keyboard && keyboard.inline_keyboard.length > 0) ? keyboard : {}
     });
-
     if (sentMessage && sentMessage.message_id) {
         gameData.gameMessageId = String(sentMessage.message_id);
-        activeGames.set(gameData.gameId, gameData); // Update with new message ID
+        activeGames.set(gameData.gameId, gameData);
     } else {
         console.error(`${LOG_PREFIX_DE_PVB_UPDATE} CRITICAL: Failed to send updated PvB game message for ${gameData.gameId}. UI is now broken.`);
     }
 }
 
+// [handleDiceEscalatorPvBStand_New function remains unchanged, calls updated functions]
 async function handleDiceEscalatorPvBStand_New(gameId, userWhoClicked, originalMessageId, callbackQueryId, chatData) {
     const LOG_PREFIX_DE_PVB_STAND = `[DE_PvB_Stand UID:${userWhoClicked.telegram_id} Game:${gameId}]`;
     const gameData = activeGames.get(gameId);
-
     if (!gameData || gameData.type !== GAME_IDS.DICE_ESCALATOR_PVB) {
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator game seems to have vanished!", show_alert: true }).catch(()=>{});
         return;
@@ -4606,18 +4595,14 @@ async function handleDiceEscalatorPvBStand_New(gameId, userWhoClicked, originalM
         return;
     }
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: `You stand strong with ${gameData.player.score} points! Bot's turn...`}).catch(()=>{});
-
     console.log(`${LOG_PREFIX_DE_PVB_STAND} Player ${gameData.player.displayName} stands with a score of ${gameData.player.score}.`);
-    // The status change to 'player_stood' will be handled by updateDiceEscalatorPvBMessage_New
-    // gameData.player.rollsThisSetUi = 0; // Not strictly needed as turn ends, but good for reset
-    activeGames.set(gameData.gameId, gameData);
-
+    activeGames.set(gameData.gameId, gameData); // Save before calling update
     await updateDiceEscalatorPvBMessage_New(gameData, true); // Pass true for isStanding
     await sleep(1000);
     await processDiceEscalatorBotTurnPvB_New(gameData);
 }
 
-// [processDiceEscalatorBotTurnPvB_New remains unchanged]
+// [processDiceEscalatorBotTurnPvB_New function remains unchanged]
 async function processDiceEscalatorBotTurnPvB_New(gameData) {
     const LOG_PREFIX_DE_PVB_BOT = `[DE_PvB_BotTurn Game:${gameData.gameId}]`;
     if (!gameData || gameData.status !== 'player_stood') {
@@ -4636,7 +4621,7 @@ async function processDiceEscalatorBotTurnPvB_New(gameData) {
     await finalizeDiceEscalatorPvBGame_New(gameData, gameData.botScore);
 }
 
-// [finalizeDiceEscalatorPvBGame_New's user-facing messages were already enhanced and remain unchanged]
+// [finalizeDiceEscalatorPvBGame_New function's user-facing messages were already enhanced and remain unchanged]
 async function finalizeDiceEscalatorPvBGame_New(gameData, botScore) {
     const LOG_PREFIX_DE_PVB_FINAL = `[DE_PvB_Final Game:${gameData.gameId}]`;
     const { gameId, chatId, player, betAmount } = gameData;
@@ -4750,25 +4735,23 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScore) {
 }
 
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (NEW) ---
+// [This section also updated to remove rollsThisSetUi and update UI after every roll]
 async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, originalOfferMessageIdToDelete) {
-    // [User-facing error messages were already quite direct and clear, keeping them]
-    // [Main message uses formatDiceEscalatorGameMessage_New]
     const chatId = offerData.chatId;
     const LOG_PREFIX_DE_PVP_START = `[DE_PvP_Start Offer:${offerData.gameId} CH:${chatId}]`;
     const initiatorUserObjFull = await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
     const opponentUserObjFull = await getOrCreateUser(opponentUserObj.telegram_id, opponentUserObj.username, opponentUserObj.first_name);
 
-    if (!initiatorUserObjFull || !opponentUserObjFull) {
+    if (!initiatorUserObjFull || !opponentUserObjFull) { /* ... error handling ... */
         console.error(`${LOG_PREFIX_DE_PVP_START} CRITICAL: Could not retrieve full user objects for Dice Escalator PvP game.`);
         await safeSendMessage(chatId, "⚠️ A critical error occurred retrieving player profiles\\. The Dice Escalator PvP game cannot commence\\.", {parse_mode: 'MarkdownV2'});
         activeGames.delete(offerData.gameId);
         if (originalOfferMessageIdToDelete && bot) bot.editMessageText("⚙️ Offer Cancelled: An issue with player profiles prevented the game from starting\\.", { chat_id: chatId, message_id: Number(originalOfferMessageIdToDelete), reply_markup:{}}).catch(()=>{});
         return;
     }
-    // ... (bet placement logic from before, error messages are fine)
-    const betAmountLamports = offerData.betAmount;
+    const betAmountLamports = offerData.betAmount; // ... (bet placement logic remains the same)
     const client = await pool.connect();
-    try {
+    try { /* ... DB bet logic ... */
         await client.query('BEGIN');
         const gameIdForLedger = `depvp_${offerData.gameId.slice(-6)}`;
         const notesP1 = `Dice Escalator PvP bet vs ${opponentUserObjFull.username || opponentUserObjFull.telegram_id}. Game: ${gameIdForLedger}.`;
@@ -4792,10 +4775,10 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
     const gameId = `de_pvp_${chatId}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
     const gameData = {
         gameId: gameId, type: GAME_IDS.DICE_ESCALATOR_PVP,
-        initiator: { userId: initiatorUserObjFull.telegram_id, displayName: getPlayerDisplayReference(initiatorUserObjFull), score: 0, rolls: [], /*rollsThisSetUi: 0,*/ isTurn: true, busted: false, stood: false }, // rollsThisSetUi removed
-        opponent: { userId: opponentUserObjFull.telegram_id, displayName: getPlayerDisplayReference(opponentUserObjFull), score: 0, rolls: [], /*rollsThisSetUi: 0,*/ isTurn: false, busted: false, stood: false }, // rollsThisSetUi removed
+        initiator: { userId: initiatorUserObjFull.telegram_id, displayName: getPlayerDisplayReference(initiatorUserObjFull), score: 0, rolls: [], /*rollsThisSetUi: 0,*/ isTurn: true, busted: false, stood: false },
+        opponent: { userId: opponentUserObjFull.telegram_id, displayName: getPlayerDisplayReference(opponentUserObjFull), score: 0, rolls: [], /*rollsThisSetUi: 0,*/ isTurn: false, busted: false, stood: false },
         betAmount: betAmountLamports, chatId: chatId, chatType: offerData.chatType,
-        status: 'p1_awaiting_roll1_emoji', // P1 starts, status indicates ready for first action of turn
+        status: 'p1_awaiting_roll1_emoji', // P1 starts
         createdAt: Date.now(), gameMessageId: null, lastRollValue: null,
     };
     activeGames.set(gameId, gameData);
@@ -4809,14 +4792,13 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
             [{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER}` }]
         ]
     };
-    // ... (rest of message sending and error handling for it)
+    // ... (message sending and error handling remains the same)
     const sentMessage = await safeSendMessage(chatId, initialMessageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
     if (sentMessage && sentMessage.message_id) {
         gameData.gameMessageId = String(sentMessage.message_id);
         activeGames.set(gameId, gameData);
     } else {
         console.error(`${LOG_PREFIX_DE_PVP_START} CRITICAL: Failed to send initial Dice Escalator PvP game message for ${gameId}. Terminating game and processing refunds.`);
-        // ... (refund logic from before, admin notification is fine)
         const refundClient = await pool.connect();
         try {
             await refundClient.query('BEGIN');
@@ -4841,8 +4823,7 @@ async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userI
     let isP1Rolling = false;
 
     if (gameData.initiator.userId === userIdWhoRolled && gameData.initiator.isTurn) {
-        // Status check for PvP: expect _awaiting_roll1_emoji for any roll in a turn now
-        if (gameData.status !== 'p1_awaiting_roll1_emoji' && gameData.status !== 'p1_awaiting_roll2_emoji' /* keep _roll2 for backward compatibility if needed by listener temporarily */) {
+        if (gameData.status !== 'p1_awaiting_roll1_emoji' && gameData.status !== 'p1_awaiting_roll2_emoji') {
             console.warn(`${LOG_PREFIX_DE_PVP_ROLL} P1 roll received in wrong status: ${gameData.status}`); return;
         }
         currentPlayer = gameData.initiator; otherPlayer = gameData.opponent; playerKeyForStatus = 'p1'; isP1Rolling = true;
@@ -4855,7 +4836,7 @@ async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userI
         console.warn(`${LOG_PREFIX_DE_PVP_ROLL} Roll from non-active player or not their turn. Ignoring.`);
         return;
     }
-    // currentPlayer.rollsThisSetUi = 0; // No longer needed
+    // currentPlayer.rollsThisSetUi = 0; // REMOVED
 
     currentPlayer.rolls.push(diceValue);
     gameData.lastRollValue = diceValue;
@@ -4865,15 +4846,19 @@ async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userI
 
     const rollAnnounceText = `🎲 ${currentPlayer.displayName} rolls a\\.\\.\\. *${diceValue}*\\! ✨\n🎯 Their score this round is now: *${announcedScore}*`;
     await safeSendMessage(gameData.chatId, rollAnnounceText, { parse_mode: 'MarkdownV2' });
-    await sleep(500);
+    await sleep(500); // Brief pause
 
     if (diceValue === DICE_ESCALATOR_BUST_ON) {
         console.log(`${LOG_PREFIX_DE_PVP_ROLL} Player ${currentPlayer.displayName} rolled ${diceValue} (BUST VALUE). They bust.`);
         currentPlayer.busted = true;
         gameData.status = isP1Rolling ? 'p1_busted' : 'p2_busted';
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvPMessage_New(gameData);
-        await sleep(1000);
+
+        // Add delay before sending the final bust message
+        console.log(`${LOG_PREFIX_DE_PVP_ROLL} PvP Bust detected for ${currentPlayer.displayName}. Delaying final bust message by ${BUST_MESSAGE_DELAY_MS}ms.`);
+        await updateDiceEscalatorPvPMessage_New(gameData); // Update to show bust on board
+        await sleep(BUST_MESSAGE_DELAY_MS);
+
         await resolveDiceEscalatorPvPGame_New(gameData, currentPlayer.userId);
         return;
     }
@@ -4886,21 +4871,20 @@ async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userI
         gameData.status = 'p2_wins_by_crossing_score';
         activeGames.set(gameData.gameId, gameData);
         await updateDiceEscalatorPvPMessage_New(gameData);
-        await sleep(1000);
+        await sleep(1000); // Short delay before final resolution message
         await resolveDiceEscalatorPvPGame_New(gameData);
         return;
     }
 
-    // After any successful roll, set status to allow another roll or stand, then update UI
-    if (!currentPlayer.busted && !currentPlayer.stood) { // Ensure they can still act
-         gameData.status = `${playerKeyForStatus}_awaiting_roll1_emoji`; // General "your turn to act" status
+    // After any successful roll, set status to allow another roll or stand for the current player, then update UI
+    if (!currentPlayer.busted && !currentPlayer.stood) {
+         gameData.status = `${playerKeyForStatus}_awaiting_roll1_emoji`; // General "your turn to act"
     }
     activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvPMessage_New(gameData); // Update UI after every roll
+    await updateDiceEscalatorPvPMessage_New(gameData);
 }
 
-// [updateDiceEscalatorPvPMessage_New uses formatDiceEscalatorGameMessage_New, visual enhancements handled there]
-// [Its error message for failed send is fine]
+// [updateDiceEscalatorPvPMessage_New remains largely the same, as it uses formatDiceEscalatorGameMessage_New]
 async function updateDiceEscalatorPvPMessage_New(gameData) {
     const LOG_PREFIX_DE_PVP_UPDATE = `[DE_PvP_Update Game:${gameData.gameId} Status:${gameData.status}]`;
     if (!gameData || !gameData.gameMessageId || !bot) {
@@ -4918,7 +4902,7 @@ async function updateDiceEscalatorPvPMessage_New(gameData) {
 
     if (currentTurnPlayer && !currentTurnPlayer.stood && !currentTurnPlayer.busted &&
         (gameData.status === `${currentTurnPlayer === gameData.initiator ? 'p1' : 'p2'}_awaiting_roll1_emoji` ||
-         gameData.status === `${currentTurnPlayer === gameData.initiator ? 'p1' : 'p2'}_awaiting_roll2_emoji`)) { // Keep _roll2 check for listener compatibility
+         gameData.status === `${currentTurnPlayer === gameData.initiator ? 'p1' : 'p2'}_awaiting_roll2_emoji`)) {
         keyboard.inline_keyboard.push([{ text: `✋ ${currentTurnPlayer.displayName}, Stand!`, callback_data: `de_stand_pvp:${gameData.gameId}` }]);
     }
     keyboard.inline_keyboard.push([{ text: "📖 Game Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER}` }]);
@@ -4933,7 +4917,7 @@ async function updateDiceEscalatorPvPMessage_New(gameData) {
     }
 }
 
-// [handleDiceEscalatorPvPStand_New - stand announcement message already enhanced]
+// [handleDiceEscalatorPvPStand_New remains largely unchanged, calls updated functions]
 async function handleDiceEscalatorPvPStand_New(gameId, userWhoClicked, originalMessageId, callbackQueryId, chatData) {
     const LOG_PREFIX_DE_PVP_STAND = `[DE_PvP_Stand UID:${userWhoClicked.telegram_id} Game:${gameId}]`;
     const gameData = activeGames.get(gameId);
@@ -4974,7 +4958,7 @@ async function handleDiceEscalatorPvPStand_New(gameId, userWhoClicked, originalM
             await resolveDiceEscalatorPvPGame_New(gameData);
         } else {
             otherPlayer.isTurn = true;
-            gameData.status = 'p2_awaiting_roll1_emoji'; // Set for P2's turn
+            gameData.status = 'p2_awaiting_roll1_emoji';
             activeGames.set(gameData.gameId, gameData);
             await updateDiceEscalatorPvPMessage_New(gameData);
         }
@@ -4988,7 +4972,7 @@ async function handleDiceEscalatorPvPStand_New(gameId, userWhoClicked, originalM
     }
 }
 
-// [resolveDiceEscalatorPvPGame_New - user-facing messages already enhanced]
+// [resolveDiceEscalatorPvPGame_New - user-facing messages already enhanced and remain unchanged]
 async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoBustedId = null) {
     const LOG_PREFIX_DE_PVP_RESOLVE = `[DE_PvP_Resolve Game:${gameData.gameId}]`;
     activeGames.delete(gameData.gameId);
@@ -5078,7 +5062,7 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoBustedId = nul
     console.log(`${LOG_PREFIX_DE_PVP_RESOLVE} Game ${gameData.gameId} finalized. Winner: ${winner ? winner.displayName : (isPush ? 'Push' : 'Error/Unknown')}.`);
 }
 
-// console.log("Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - Quick Update Flow) - Complete.");
+// console.log("Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - Jackpot Territory & Bust Timing Fix) - Complete.");
 // --- End of Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC) ---
 // index.js - Part 5b, Section 2 (COMPLETE REWRITE V5 - Casino Standard, Correct Flow)
 // SEGMENT 1 of 4
