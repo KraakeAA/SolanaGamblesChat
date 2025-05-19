@@ -3306,12 +3306,89 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoBustedId = nul
 // from other parts of your single-file code are available in this scope.
 
 // --- Helper function for a single dice roll via Helper Bot ---
-// (This function 'getSingleDiceRollViaHelper' was already provided in the previous Dice Escalator Part (5b S1)
-// If it's identical, it doesn't strictly need to be repeated if it's in the same global scope.
-// However, for completeness of this "original part" as a standalone thought unit, it's often included
-// in examples. Assuming it's available from its prior definition in the reordered script.)
-// async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, rollPurposeNote) { ... }
+// Returns an object: { roll: number, error: false } on success, 
+// or { error: true, message: string, isTimeout: boolean } on failure.
+async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, rollPurposeNote) {
+    const logPrefix = `[GetSingleDiceRollHelper GID:${gameId} Purpose:"${rollPurposeNote}" UID:${userIdForRoll || 'BOT_INTERNAL'}]`;
+    console.log(`${logPrefix} Requesting die from Helper Bot.`);
+    let client = null;
+    let requestId = null;
+    let specificErrorMessage = `Failed to obtain dice roll for "${rollPurposeNote}" via Helper Bot.`; // Default detailed error
+    let isTimeoutErrorFlag = false;
 
+    try {
+        client = await pool.connect();
+        const requestResult = await insertDiceRollRequest(client, gameId, String(chatIdForLog), userIdForRoll, '🎲', rollPurposeNote);
+        if (!requestResult.success || !requestResult.requestId) {
+            specificErrorMessage = requestResult.error || `Database error when creating roll request for "${rollPurposeNote}".`;
+            console.error(`${logPrefix} ${specificErrorMessage}`);
+            throw new Error(specificErrorMessage);
+        }
+        requestId = requestResult.requestId;
+        console.log(`${logPrefix} Roll request successfully created in DB (Request ID: ${requestId}).`);
+        client.release(); client = null;
+
+        let attempts = 0;
+        console.log(`${logPrefix} Starting to poll for roll result (Request ID: ${requestId}). Max attempts: ${DICE_ROLL_POLLING_MAX_ATTEMPTS}. Interval: ${DICE_ROLL_POLLING_INTERVAL_MS}ms.`);
+        while (attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
+            await sleep(DICE_ROLL_POLLING_INTERVAL_MS);
+            if (isShuttingDown) {
+                specificErrorMessage = "System shutdown initiated while waiting for Helper Bot dice roll response.";
+                console.warn(`${logPrefix} ${specificErrorMessage}`);
+                throw new Error(specificErrorMessage);
+            }
+
+            client = await pool.connect();
+            const statusResult = await getDiceRollRequestResult(client, requestId);
+            client.release(); client = null;
+
+            if (statusResult.success && statusResult.status === 'completed') {
+                if (typeof statusResult.roll_value === 'number' && statusResult.roll_value >= 1 && statusResult.roll_value <= 6) {
+                    console.log(`${logPrefix} Successfully received roll value from Helper Bot: ${statusResult.roll_value} (Request ID: ${requestId}).`);
+                    return { roll: statusResult.roll_value, error: false }; // SUCCESS
+                } else {
+                    specificErrorMessage = `Helper Bot returned a completed roll for "${rollPurposeNote}" (Request ID: ${requestId}), but the dice value was invalid: '${statusResult.roll_value}'.`;
+                    console.error(`${logPrefix} ${specificErrorMessage}`);
+                    throw new Error(specificErrorMessage);
+                }
+            } else if (statusResult.success && statusResult.status === 'error') {
+                specificErrorMessage = statusResult.notes || `Helper Bot explicitly reported an error for "${rollPurposeNote}" (Request ID: ${requestId}).`;
+                console.error(`${logPrefix} ${specificErrorMessage}`);
+                throw new Error(specificErrorMessage);
+            }
+            attempts++;
+            if (attempts % 5 === 0 || attempts === DICE_ROLL_POLLING_MAX_ATTEMPTS -1 || attempts === 1 ) {
+                 console.log(`${logPrefix} Polling attempt ${attempts} of ${DICE_ROLL_POLLING_MAX_ATTEMPTS} for roll request ID ${requestId}... DB Status: ${statusResult.status || 'pending/unknown'}`);
+            }
+        }
+        
+        isTimeoutErrorFlag = true; // Set flag for timeout
+        specificErrorMessage = `Timeout after ${attempts} attempts waiting for Helper Bot response for dice roll: "${rollPurposeNote}" (Request ID: ${requestId}).`;
+        throw new Error(specificErrorMessage); // Timeout error
+
+    } catch (error) {
+        if (client) client.release();
+        
+        const finalErrorMessageForReturn = error.message || specificErrorMessage;
+        console.error(`${logPrefix} Final error state in getSingleDiceRollViaHelper: ${finalErrorMessageForReturn}`);
+        
+        if (requestId) { 
+            let markErrorClient = null;
+            try {
+                markErrorClient = await pool.connect();
+                const statusToUpdate = isTimeoutErrorFlag ? 'timeout' : 'error';
+                console.log(`${logPrefix} Attempting to mark roll request ${requestId} as '${statusToUpdate}' in DB due to error: ${finalErrorMessageForReturn.substring(0,100)}`);
+                await markErrorClient.query("UPDATE dice_roll_requests SET status=$1, notes=$2 WHERE request_id=$3 AND status = 'pending'", 
+                    [statusToUpdate, String(finalErrorMessageForReturn).substring(0,250), requestId]); 
+            } catch (dbMarkError) {
+                console.error(`${logPrefix} CRITICAL: Failed to mark roll request ${requestId} as failed in DB: ${dbMarkError.message}`);
+            } finally {
+                if (markErrorClient) markErrorClient.release();
+            }
+        }
+        return { error: true, message: finalErrorMessageForReturn, isTimeout: isTimeoutErrorFlag }; 
+    }
+}
 
 // --- Dice 21 Main Command Handler (Handles /d21, creates Unified Offer) ---
 // Name: handleStartDice21Command
