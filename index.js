@@ -2424,14 +2424,21 @@ async function forwardDiceEscalatorCallback_New(action, params, userObject, orig
             } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorPvBStand_New`);
             break;
         case 'play_again_de_pvb':
-            const betAmountPvBStr_DE = gameIdOrOfferIdOrBet;
+            const betAmountPvBStr_DE = gameIdOrOfferIdOrBet; // This is params[0]
             if (!betAmountPvBStr_DE) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing bet for play_again_de_pvb.`); return; }
             try {
                 const betAmountPvB_DE = BigInt(betAmountPvBStr_DE);
                 if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+
+                // <<< ADD THIS LINE BELOW >>>
+                console.log(`[DEBUG_HANDLER_CHECK in forwardDiceEscalatorCallback_New for play_again_de_pvb] typeof handleStartDiceEscalatorPvBGame_New is: ${typeof handleStartDiceEscalatorPvBGame_New}`);
+
+                // --- This is where the check is failing ---
                 if (typeof handleStartDiceEscalatorPvBGame_New === 'function') {
                     await handleStartDiceEscalatorPvBGame_New(mockMsgForPlayAgain.chat, userObject, betAmountPvB_DE, null, true);
-                } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleStartDiceEscalatorPvBGame_New`);
+                } else { // This 'else' block is being executed based on your log
+                    console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleStartDiceEscalatorPvBGame_New`);
+                }
             } catch (e) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Invalid bet amount for play_again_de_pvb: '${betAmountPvBStr_DE}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
             break;
         case 'de_stand_pvp':
