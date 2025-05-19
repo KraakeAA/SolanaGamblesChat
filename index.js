@@ -3768,7 +3768,7 @@ async function handleRPSChoiceCallback(chatId, userChoiceObj, gameId, choiceKey,
 
 // console.log("Part 5a, Section 3 (NEW): Group Game Handlers (Coinflip & RPS) - Complete."); // Removed loading log
 // --- End of Part 5a, Section 3 (NEW) ---
-// --- Start of Part 5a, Section 4 (REVISED for New Dice Escalator UI): Shared UI and Utility Functions ---
+// --- Start of Part 5a, Section 4 (REVISED for New Dice Escalator UI & Simplified Post-Game Keyboard) ---
 // index.js - Part 5a, Section 4: UI Helpers and Shared Utilities for General Commands & Simple Group Games
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts:
@@ -3778,103 +3778,71 @@ async function handleRPSChoiceCallback(chatId, userChoiceObj, gameId, choiceKey,
 // Note: `parseBetAmount` is a critical shared utility but is defined in Part 5a, Section 1.
 
 /**
- * Creates a standardized inline keyboard for post-game actions.
+ * Creates a standardized inline keyboard for post-game actions with "Repeat Bet" and "Wallet" options.
  * @param {string} gameCode - The game identifier (e.g., GAME_IDS.COINFLIP, GAME_IDS.DICE_ESCALATOR_PVB).
- * @param {bigint} betAmountLamports - The bet amount for the "Play Again" button.
- * @param {Array<Array<object>>} [additionalFirstRowButtons=[]] - Optional additional buttons for the first row.
+ * @param {bigint} betAmountLamports - The bet amount for the "Repeat Bet" button.
  * @returns {object} Telegram InlineKeyboardMarkup object.
  */
-function createPostGameKeyboard(gameCode, betAmountLamports, additionalFirstRowButtons = []) {
-    const playAgainBetDisplaySOL = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL')); // Ensure SOL display for consistency
+function createPostGameKeyboard(gameCode, betAmountLamports) {
+    // Assuming formatCurrency and escapeMarkdownV2 are available and correctly defined
+    const playAgainBetDisplaySOL = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
 
-    let playAgainCallbackAction = gameCode.toLowerCase(); // Default action based on gameCode
-    let rulesCallbackKey = gameCode; // Default to the specific gameCode for rules
-    let gameEmoji = '🎲'; // Default dice emoji
+    let playAgainCallbackActionPrefix = gameCode.toLowerCase(); // Default action prefix based on gameCode
 
-    // Adjustments for specific games or game families
+    // Adjustments for specific games or game families if their "play_again" callback data
+    // needs a different prefix than the direct gameCode.
+    // This logic should align with how play_again callbacks are handled in Part 5a, Section 1.
     switch (gameCode) {
         case GAME_IDS.COINFLIP:
-            playAgainCallbackAction = 'coinflip'; // Assumes /coinflip command starts it
-            gameEmoji = '🪙';
+            playAgainCallbackActionPrefix = 'coinflip'; // Results in 'play_again_coinflip:bet'
             break;
         case GAME_IDS.RPS:
-            playAgainCallbackAction = 'rps'; // Assumes /rps command starts it
-            gameEmoji = '✂️';
+            playAgainCallbackActionPrefix = 'rps'; // Results in 'play_again_rps:bet'
             break;
         case GAME_IDS.DICE_ESCALATOR_PVB:
-            playAgainCallbackAction = 'de_pvb'; // Specific play again action
-            rulesCallbackKey = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER; // General DE rules
-            gameEmoji = '🎲';
+            playAgainCallbackActionPrefix = 'de_pvb'; // Results in 'play_again_de_pvb:bet'
             break;
         case GAME_IDS.DICE_ESCALATOR_PVP:
-            playAgainCallbackAction = 'de_pvp'; // Specific play again action
-            rulesCallbackKey = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER; // General DE rules
-            gameEmoji = '🎲';
+            playAgainCallbackActionPrefix = 'de_pvp'; // Results in 'play_again_de_pvp:bet'
             break;
         case GAME_IDS.DICE_21: // PvB Dice 21
-            playAgainCallbackAction = 'd21';
-            rulesCallbackKey = GAME_IDS.DICE_21; // Main D21 rules
-            gameEmoji = '🃏';
+            playAgainCallbackActionPrefix = 'd21'; // Results in 'play_again_d21:bet'
             break;
         case GAME_IDS.DICE_21_PVP:
-            playAgainCallbackAction = 'd21_pvp'; // Could also be generic 'd21' if it re-triggers offer
-            rulesCallbackKey = GAME_IDS.DICE_21; // Main D21 rules
-            gameEmoji = '🃏';
+            playAgainCallbackActionPrefix = 'd21_pvp'; // Results in 'play_again_d21_pvp:bet'
             break;
-        case GAME_IDS.DUEL_PVB:
-            playAgainCallbackAction = 'duel'; // Re-triggers unified offer
-            rulesCallbackKey = GAME_IDS.DUEL_UNIFIED_OFFER; // General Duel rules
-            gameEmoji = '⚔️';
-            break;
+        case GAME_IDS.DUEL_PVB: // Both Duel PvB and PvP might restart the unified offer
         case GAME_IDS.DUEL_PVP:
-            playAgainCallbackAction = 'duel'; // Re-triggers unified offer
-            rulesCallbackKey = GAME_IDS.DUEL_UNIFIED_OFFER; // General Duel rules
-            gameEmoji = '⚔️';
+        case GAME_IDS.DUEL_UNIFIED_OFFER: // If resolving to this specific code
+            playAgainCallbackActionPrefix = 'duel'; // Results in 'play_again_duel:bet'
             break;
         case GAME_IDS.OVER_UNDER_7:
-            playAgainCallbackAction = 'ou7';
-            gameEmoji = '🎲';
+            playAgainCallbackActionPrefix = 'ou7'; // Results in 'play_again_ou7:bet'
             break;
         case GAME_IDS.LADDER:
-            playAgainCallbackAction = 'ladder';
-            gameEmoji = '🪜';
+            playAgainCallbackActionPrefix = 'ladder'; // Results in 'play_again_ladder:bet'
             break;
         case GAME_IDS.SEVEN_OUT:
-            playAgainCallbackAction = 's7';
-            gameEmoji = '🎲';
+            playAgainCallbackActionPrefix = 's7'; // Results in 'play_again_s7:bet'
             break;
         case GAME_IDS.SLOT_FRENZY:
-            playAgainCallbackAction = 'slot';
-            gameEmoji = '🎰';
+            playAgainCallbackActionPrefix = 'slot'; // Results in 'play_again_slot:bet'
             break;
         default:
-            // For any other gameCode, use it directly if it's simple
-            // console.warn(`[CreatePostGameKB] Unhandled gameCode '${gameCode}' for specific play_again/rules key, using default.`);
+            // For any other gameCode, use it directly.
+            // Ensure that a 'play_again_[gameCode.toLowerCase()]' callback is handled.
+            console.warn(`[CreatePostGameKB] Using default playAgainCallbackActionPrefix for unhandled gameCode '${gameCode}': '${playAgainCallbackActionPrefix}'`);
             break;
     }
 
-    const playAgainCallbackData = `play_again_${playAgainCallbackAction}:${betAmountLamports.toString()}`;
-    const gameNameClean = rulesCallbackKey.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
+    const playAgainCallbackData = `play_again_${playAgainCallbackActionPrefix}:${betAmountLamports.toString()}`;
 
-
-    const keyboardRows = [];
-    const firstRow = [...additionalFirstRowButtons]; // Add any custom buttons first
-
-    // Add "Play Again" button
-    firstRow.push({ text: `🔁 Play Again (${playAgainBetDisplaySOL})`, callback_data: playAgainCallbackData });
-    keyboardRows.push(firstRow);
-
-    // Second row: Add Funds & Game Rules
-    keyboardRows.push([
-        { text: "💰 Add Funds", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION },
-        { text: `${gameEmoji} ${gameNameClean} Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${rulesCallbackKey}` }
-    ]);
-
-    // Third row: All Games Menu & Wallet
-    keyboardRows.push([
-        { text: "🎲 All Games Menu", callback_data: "show_rules_menu" }, // Points to the general rules menu
-        { text: "💳 Wallet", callback_data: "menu:wallet" }
-    ]);
+    const keyboardRows = [
+        [
+            { text: `🔁 Repeat Bet (${playAgainBetDisplaySOL})`, callback_data: playAgainCallbackData },
+            { text: "💳 Wallet", callback_data: "menu:wallet" }
+        ]
+    ];
 
     return { inline_keyboard: keyboardRows };
 }
@@ -3903,8 +3871,8 @@ function createStandardTitle(titleText, emoji = '✨') {
     return `${emoji} *${escapeMarkdownV2(titleText)}* ${emoji}`;
 }
 
-// console.log("Part 5a, Section 4 (REVISED for New Dice Escalator UI) - Complete.");
-// --- End of Part 5a, Section 4 (REVISED for New Dice Escalator UI) ---
+// console.log("Part 5a, Section 4 (REVISED for Simplified Post-Game Keyboard) - Complete.");
+// --- End of Part 5a, Section 4 ---
 // --- Start of Part 5b, Section 1 (COMPLETE NEW DICE ESCALATOR LOGIC - Refined Jackpot Run UI) ---
 // index.js - Part 5b, Section 1: Dice Escalator Game Logic & Handlers (New Unified Offer, PvB, PvP Structure)
 //----------------------------------------------------------------------------------------------
