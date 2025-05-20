@@ -653,13 +653,14 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ V3 TEST: Initializing database schema (Triggers STILL Temporarily Disabled for Diagnosis)..."); // <-- MODIFIED THIS LINE
+    console.log("⚙️ V4 ULTRA-SIMPLIFIED TEST: Attempting to create ONLY 'users' table...");
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Users Table
-        await client.query(`CREATE TABLE IF NOT EXISTS users (
+        // Users Table ONLY
+        console.log("DEBUG: About to execute CREATE TABLE users...");
+        const usersTableQuery = `CREATE TABLE IF NOT EXISTS users (
             telegram_id BIGINT PRIMARY KEY,
             username VARCHAR(255),
             first_name VARCHAR(255),
@@ -681,194 +682,15 @@ async function initializeDatabaseSchema() {
             total_wagered_lamports BIGINT DEFAULT 0,
             total_won_lamports BIGINT DEFAULT 0,
             notes TEXT
-        );`);
-
-        // Jackpots Table
-        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
-            jackpot_id VARCHAR(255) PRIMARY KEY,
-            current_amount BIGINT DEFAULT 0,
-            last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            last_won_timestamp TIMESTAMPTZ,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(
-            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID]
-        );
-
-        // Games Table (Game Log)
-        await client.query(`CREATE TABLE IF NOT EXISTS games (
-            game_log_id SERIAL PRIMARY KEY,
-            game_type VARCHAR(50) NOT NULL,
-            chat_id BIGINT,
-            initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            participants_ids BIGINT[],
-            bet_amount_lamports BIGINT,
-            outcome TEXT,
-            jackpot_contribution_lamports BIGINT,
-            game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-
-        // User Deposit Wallets Table
-        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
-            wallet_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            public_key VARCHAR(44) NOT NULL UNIQUE,
-            derivation_path VARCHAR(255) NOT NULL UNIQUE,
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMPTZ,
-            swept_at TIMESTAMPTZ,
-            balance_at_sweep BIGINT,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-
-        // Deposits Table
-        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
-            deposit_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
-            transaction_signature VARCHAR(88) NOT NULL UNIQUE,
-            source_address VARCHAR(44),
-            deposit_address VARCHAR(44) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            confirmation_status VARCHAR(20) DEFAULT 'pending',
-            block_time BIGINT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMPTZ,
-            notes TEXT,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-
-        // Withdrawals Table
-        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
-            withdrawal_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            destination_address VARCHAR(44) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            fee_lamports BIGINT NOT NULL,
-            transaction_signature VARCHAR(88) UNIQUE,
-            status VARCHAR(30) DEFAULT 'pending_verification',
-            error_message TEXT,
-            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMPTZ,
-            block_time BIGINT,
-            priority_fee_microlamports INT,
-            compute_unit_price_microlamports INT,
-            compute_unit_limit INT,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
-
-        // Referrals Table
-        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
-            referral_id SERIAL PRIMARY KEY,
-            referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
-            commission_type VARCHAR(20),
-            commission_amount_lamports BIGINT,
-            transaction_signature VARCHAR(88),
-            status VARCHAR(20) DEFAULT 'pending_criteria',
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
-
-        // Processed Sweeps Table
-        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
-            sweep_id SERIAL PRIMARY KEY,
-            source_deposit_address VARCHAR(44) NOT NULL,
-            destination_main_address VARCHAR(44) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            transaction_signature VARCHAR(88) UNIQUE NOT NULL,
-            swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-
-        // Ledger Table
-        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
-            ledger_id SERIAL PRIMARY KEY,
-            user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-            transaction_type VARCHAR(50) NOT NULL,
-            amount_lamports BIGINT NOT NULL,
-            balance_before_lamports BIGINT NOT NULL,
-            balance_after_lamports BIGINT NOT NULL,
-            deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
-            withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
-            game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
-            referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
-            related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
-            notes TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
-
-        // Dice Roll Requests Table
-        await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
-            request_id SERIAL PRIMARY KEY,
-            game_id VARCHAR(255) NULL,
-            chat_id BIGINT NOT NULL,
-            user_id BIGINT NULL, -- Can be null if bot initiated roll for itself
-            emoji_type VARCHAR(50) DEFAULT '🎲',
-            status VARCHAR(50) DEFAULT 'pending', -- pending, completed, error, timeout
-            roll_value INTEGER NULL,
-            requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMPTZ NULL,
-            notes TEXT NULL -- For error messages from helper or other info
-        );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
-
-        // Update function for 'updated_at' columns
-        /* START OF COMMENTED OUT TRIGGER SECTION FOR DIAGNOSIS
-        await client.query(`
-            CREATE OR REPLACE FUNCTION trigger_set_timestamp()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                NEW.updated_at = NOW();
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-        `);
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
-        for (const tableName of tablesWithUpdatedAt) {
-            const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
-            const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
-
-            if (triggerExistsRes.rowCount === 0) {
-                const createTriggerQuery = `
-                    CREATE TRIGGER set_timestamp
-                    BEFORE UPDATE ON ${tableName}
-                    FOR EACH ROW
-                    EXECUTE FUNCTION trigger_set_timestamp();
-                `;
-                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message} (Query: ${createTriggerQuery.substring(0, 100)}...)`));
-            }
-        }
-        END OF COMMENTED OUT TRIGGER SECTION FOR DIAGNOSIS */
-        console.log("INFO: Updated_at trigger creation loop is still temporarily commented out for diagnosis.");
+        );`;
+        await client.query(usersTableQuery);
+        console.log("DEBUG: CREATE TABLE users statement executed.");
 
         await client.query('COMMIT');
-        console.log("✅ Database schema initialization complete (with triggers potentially skipped).");
+        console.log("✅ V4 ULTRA-SIMPLIFIED TEST: 'users' table creation attempt complete.");
     } catch (e) {
         await client.query('ROLLBACK');
-        if (e.code === '42601' && e.message.includes('syntax error at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
-             console.error('❌ Error during DB schema initialization (Likely empty/malformed query or invisible chars at START of SQL DDL):', e);
-             console.error(`Hint: Error at position ${e.position} of failing SQL. Check for invisible characters if copy-pasting DDL.`);
-        } else {
-            console.error('❌ Error during database schema initialization:', e);
-        }
+        console.error('❌ V4 ULTRA-SIMPLIFIED TEST: Error during database schema initialization:', e); // This will show the error if it occurs here
         throw e;
     } finally {
         client.release();
