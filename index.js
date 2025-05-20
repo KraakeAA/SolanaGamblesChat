@@ -653,20 +653,20 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ V6 TEST: Attempting to create 'users' table ONLY...");
+    console.log("⚙️ V7 TEST: 'users' table with HARDCODED default balance...");
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        console.log("DEBUG V6: BEGIN executed.");
+        console.log("DEBUG V7: BEGIN executed.");
 
-        // Users Table ONLY
-        console.log("DEBUG V6: About to execute CREATE TABLE users...");
+        // Users Table ONLY, with hardcoded default balance
+        console.log("DEBUG V7: About to execute CREATE TABLE users (hardcoded default)...");
         const usersTableQuery = `CREATE TABLE IF NOT EXISTS users (
             telegram_id BIGINT PRIMARY KEY,
             username VARCHAR(255),
             first_name VARCHAR(255),
             last_name VARCHAR(255),
-            balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
+            balance BIGINT DEFAULT 10000000, /* MODIFIED THIS LINE - HARDCODED */
             last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             is_banned BOOLEAN DEFAULT FALSE,
             ban_reason TEXT,
@@ -685,22 +685,22 @@ async function initializeDatabaseSchema() {
             notes TEXT
         );`;
         await client.query(usersTableQuery);
-        console.log("DEBUG V6: CREATE TABLE users statement executed.");
+        console.log("DEBUG V7: CREATE TABLE users statement (hardcoded default) executed.");
 
-        console.log("DEBUG V6: About to execute COMMIT...");
+        console.log("DEBUG V7: About to execute COMMIT...");
         await client.query('COMMIT');
-        console.log("✅ V6 TEST: 'users' table creation attempt complete.");
-        console.log("✅ Database schema initialized successfully (only users table attempted).");
+        console.log("✅ V7 TEST: 'users' table (hardcoded default) creation attempt complete.");
+        console.log("✅ Database schema initialized successfully (only users table with hardcoded default attempted).");
 
     } catch (e) {
         try {
-            console.log("DEBUG V6: Error caught, attempting ROLLBACK...");
+            console.log("DEBUG V7: Error caught, attempting ROLLBACK...");
             await client.query('ROLLBACK');
-            console.log("DEBUG V6: ROLLBACK executed.");
+            console.log("DEBUG V7: ROLLBACK executed.");
         } catch (rbError) {
-            console.error("DEBUG V6: Error during ROLLBACK attempt:", rbError);
+            console.error("DEBUG V7: Error during ROLLBACK attempt:", rbError);
         }
-        console.error('❌ V6 TEST: Error during database schema initialization (users table):', e);
+        console.error('❌ V7 TEST: Error during database schema initialization (users table with hardcoded default):', e);
         throw e;
     } finally {
         client.release();
