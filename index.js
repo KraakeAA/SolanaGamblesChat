@@ -901,132 +901,149 @@ EXECUTE FUNCTION trigger_set_timestamp();`;
 // Core User Management Functions
 //---------------------------------------------------------------------------
 
-// This is the getOrCreateUser function with the DEBUG logs and console.trace added
+// Replace your entire existing getOrCreateUser function (in Part 2) with this:
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    // --- BEGIN TEMPORARY DEBUG for getOrCreateUser ---
-    console.log(`[DEBUG getOrCreateUser ENTER] Received telegramId: ${telegramId} (type: ${typeof telegramId}), username: ${username}, firstName: ${firstName}, lastName: ${lastName}, referrerIdInput: ${referrerIdInput}`);
-    try {
-        const argsArray = Array.from(arguments);
-        console.log(`[DEBUG getOrCreateUser ENTER] All arguments received as array: ${JSON.stringify(argsArray)}`);
-    } catch (e) {
-        console.log(`[DEBUG getOrCreateUser ENTER] Could not stringify arguments array: ${e.message}`);
-    }
-    // --- END TEMPORARY DEBUG ---
+    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`; // Keep this for entry logging
+    console.log(`${LOG_PREFIX_GOCU_DEBUG} Received telegramId: ${telegramId} (type: ${typeof telegramId}), username: "${username}", firstName: "${firstName}", lastName: "${lastName}", referrerIdInput: ${referrerIdInput}`);
+    try {
+        const argsArray = Array.from(arguments);
+        console.log(`${LOG_PREFIX_GOCU_DEBUG} All arguments received as array: ${JSON.stringify(argsArray)}`);
+    } catch (e) {
+        console.log(`${LOG_PREFIX_GOCU_DEBUG} Could not stringify arguments array: ${e.message}`);
+    }
 
-    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
-        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
-        console.trace("Trace for undefined telegramId call"); // For diagnosing Issue 3
-        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
-            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
-                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
-        }
-        return null;
-    }
+    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
+        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
+        console.trace("Trace for undefined telegramId call");
+        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
+            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
+                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
+        }
+        return null;
+    }
 
-    const stringTelegramId = String(telegramId);
-    const LOG_PREFIX_GOCU = `[GetCreateUser TG:${stringTelegramId}]`;
+    const stringTelegramId = String(telegramId).trim(); // Added trim here too
+    const LOG_PREFIX_GOCU = `[GetCreateUser TG:${stringTelegramId}]`;
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    // Simple sanitization: replace non-printable ASCII, some problematic chars, and trim.
+    // Allow letters, numbers, spaces, common punctuation like .,!?-#@_
+    // This is a basic sanitizer; for extreme cases, a more robust library might be needed.
+    const sanitizeString = (str) => {
+        if (typeof str !== 'string') return null; // Or return an empty string like ''
+        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim(); // Remove characters not in the allowed set
+        return cleaned.substring(0, 255); // Ensure it fits VARCHAR(255)
+    };
 
-        let referrerId = null;
-        if (referrerIdInput !== null && referrerIdInput !== undefined) {
-            try {
-                referrerId = BigInt(referrerIdInput);
-            } catch (parseError) {
-                referrerId = null;
-            }
-        }
+    const sUsername = username ? sanitizeString(username) : null;
+    const sFirstName = firstName ? sanitizeString(firstName) : null;
+    // For lastName "#2", sanitizeString should keep it as "#2" if # is in the allowed set.
+    // If # was causing issues, we could explicitly remove or replace it.
+    // Let's be a bit more aggressive for testing, then can refine the regex.
+    const sLastName = lastName ? sanitizeString(lastName) : null;
 
-        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0) {
-            const user = result.rows[0];
-            user.balance = BigInt(user.balance);
-            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
-            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
-            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
-            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
-            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
-
-            let detailsChanged = false;
-            const currentUsername = user.username || '';
-            const currentFirstName = user.first_name || '';
-            const currentLastName = user.last_name || '';
-
-            if (username && currentUsername !== username) detailsChanged = true;
-            if (firstName && currentFirstName !== firstName) detailsChanged = true;
-            if (lastName && currentLastName !== lastName) detailsChanged = true;
-            if (!currentUsername && username) detailsChanged = true;
-            if (!currentFirstName && firstName) detailsChanged = true;
-            if (!currentLastName && lastName && lastName !== '') detailsChanged = true;
+    console.log(`${LOG_PREFIX_GOCU} Sanitized inputs - Username: "${sUsername}", FirstName: "${sFirstName}", LastName: "${sLastName}"`);
 
 
-            if (detailsChanged) {
-                await client.query(
-                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
-                    [stringTelegramId, username || user.username, firstName || user.first_name, lastName || user.last_name]
-                );
-            } else {
-                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
-            }
-            await client.query('COMMIT');
-            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-            const finalUser = updatedUserRow.rows[0];
-            finalUser.balance = BigInt(finalUser.balance);
-            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
-            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
-            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
-            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
-            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
-            return finalUser;
-        } else {
-            console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user.`);
-            const newReferralCode = generateReferralCode();
-            const insertQuery = `
-                INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING *;
-            `;
-            const values = [stringTelegramId, username, firstName, lastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
-            result = await client.query(insertQuery, values);
-            const newUser = result.rows[0];
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-            newUser.balance = BigInt(newUser.balance);
-            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
-            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
-            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
-            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
-            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
+        let referrerId = null;
+        if (referrerIdInput !== null && referrerIdInput !== undefined) {
+            try {
+                referrerId = BigInt(referrerIdInput);
+            } catch (parseError) {
+                referrerId = null;
+            }
+        }
 
-            console.log(`${LOG_PREFIX_GOCU} New user created: ${newUser.telegram_id}, Bal: ${newUser.balance}, RefCode: ${newUser.referral_code}.`);
+        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
+            user.balance = BigInt(user.balance);
+            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
+            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
+            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
+            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
+            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
-            if (referrerId) {
-                try {
-                    await client.query(
-                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria', CURRENT_TIMESTAMP) 
-                         ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Ensures referred_id is unique if that's the constraint name
-                        [referrerId, newUser.telegram_id]
-                    );
-                } catch (referralError) {
-                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
-                }
-            }
-            await client.query('COMMIT');
-            return newUser;
-        }
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        // This is the log we are looking for to diagnose Issue 1 (when stringTelegramId is your correct ID)
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message}`, error.stack?.substring(0,700)); // Log more stack
-        return null;
-    } finally {
-        client.release();
-    }
+            let detailsChanged = false;
+            const currentUsername = user.username || '';
+            const currentFirstName = user.first_name || '';
+            const currentLastName = user.last_name || '';
+
+            // Use sanitized values for comparison and update
+            if (sUsername && currentUsername !== sUsername) detailsChanged = true;
+            if (sFirstName && currentFirstName !== sFirstName) detailsChanged = true;
+            if (sLastName && currentLastName !== sLastName) detailsChanged = true;
+            if (!currentUsername && sUsername) detailsChanged = true;
+            if (!currentFirstName && sFirstName) detailsChanged = true;
+            if (!currentLastName && sLastName && sLastName !== '') detailsChanged = true;
+
+            if (detailsChanged) {
+                await client.query(
+                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
+                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
+                );
+            } else {
+                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+            }
+            await client.query('COMMIT');
+            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+            const finalUser = updatedUserRow.rows[0];
+            finalUser.balance = BigInt(finalUser.balance);
+            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
+            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
+            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
+            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
+            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
+            return finalUser;
+        } else {
+            console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user with sanitized details.`);
+            const newReferralCode = generateReferralCode();
+            const insertQuery = `
+                INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING *;
+            `;
+            // Use sanitized values for insert
+            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
+            result = await client.query(insertQuery, values);
+            const newUser = result.rows[0];
+
+            newUser.balance = BigInt(newUser.balance);
+            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
+            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
+            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
+            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
+            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
+
+            console.log(`${LOG_PREFIX_GOCU} New user created: ${newUser.telegram_id}, Bal: ${newUser.balance}, RefCode: ${newUser.referral_code}.`);
+
+            if (referrerId) {
+                try {
+                    await client.query(
+                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
+                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria', CURRENT_TIMESTAMP) 
+                         ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                        [referrerId, newUser.telegram_id]
+                    );
+                } catch (referralError) {
+                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
+                }
+            }
+            await client.query('COMMIT');
+            return newUser;
+        }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message} (SQL State: ${error.code})`, error.stack?.substring(0,700));
+        return null;
+    } finally {
+        client.release();
+    }
 }
-
 
 async function updateUserActivity(telegramId) {
     const stringTelegramId = String(telegramId);
