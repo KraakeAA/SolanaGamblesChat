@@ -8794,7 +8794,10 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
             }
         } else { // No explicit suffix
             if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
-                const usdThreshold = MAX_BET_USD_val * 1.5; // Heuristic threshold to differentiate USD from large lamport numbers
+                // Heuristic: MAX_BET_USD_val * 1.5 (e.g. 150 if MAX_BET_USD_val is 100)
+                // Numbers below this (and above MIN_BET_USD_val if integer) are considered USD.
+                // Numbers above this if integer are considered lamports.
+                const usdThreshold = MAX_BET_USD_val * 1.5;
 
                 if ( (argStr.includes('.')) || (!argStr.includes('.') && parsedValueFloat <= usdThreshold && parsedValueFloat >= MIN_BET_USD_val) ) {
                     // Treat as USD input
@@ -8809,17 +8812,34 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
                     }
                     // Valid USD-like input
                 } else {
-                    // Large integer without decimal or float not fitting USD heuristic -> assume direct lamports (e.g., from Play Again)
+                    // Large integer without decimal, or number not fitting USD heuristic (e.g., very small float if MIN_BET_USD is higher)
+                    // Assume direct lamports (especially for Play Again values like "2971944")
                     if (parsedValueBigInt !== null && parsedValueBigInt > 0n) {
                         betAmountLamports = parsedValueBigInt;
                         const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-                        if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+
+                        // --- START OF REFINED VALIDATION FOR LAMPORT INPUTS (NEWEST FIX for precision) ---
+                        if (betAmountLamports === minBetLamports) {
+                            // This IS the exact minimum lamport value. Accept it.
+                        } else if (betAmountLamports === maxBetLamports) {
+                            // This IS the exact maximum lamport value. Accept it.
+                        } else if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                            // It's not exactly min/maxBetLamports AND it's outside the USD range.
                             const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
-                            const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                            await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                            return minBetLamports;
+                            let adjustmentMessage;
+                            let adjustedBetLamportsValue;
+
+                            if (equivalentUsdValue < MIN_BET_USD_val) {
+                                adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is below the minimum limit of *${minBetDisplay}*. Adjusted to minimum.`;
+                                adjustedBetLamportsValue = minBetLamports;
+                            } else { // equivalentUsdValue > MAX_BET_USD_val
+                                adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) exceeds the maximum limit of *${maxBetDisplay}*. Adjusted to maximum.`;
+                                adjustedBetLamportsValue = maxBetLamports;
+                            }
+                            await safeSendMessage(commandInitiationChatId, adjustmentMessage, { parse_mode: 'MarkdownV2' });
+                            return adjustedBetLamportsValue;
                         }
-                        // Valid lamport amount that fits within overall game limits
+                        // --- END OF REFINED VALIDATION FOR LAMPORT INPUTS ---
                     } else {
                          throw new Error("Invalid numeric bet value provided (large integer path).");
                     }
