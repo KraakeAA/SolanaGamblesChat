@@ -444,12 +444,12 @@ const solPriceCache = new Map(); // Caches SOL/USD price
 
 // --- Core Utility Functions ---
 
-// MODIFIED escapeMarkdownV2 to NOT escape period '.'
+// MODIFIED escapeMarkdownV2 to NOT escape period '.' OR parentheses '()'
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
-  // Escapes: _ * [ ] ( ) ~ ` > # + - = | { } ! ' \ (single quote and backslash itself)
-  // Period '.' is REMOVED from this set.
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}!'\\])/g, '\\$1');
+  // Escapes: _ * [ ] ~ ` > # + - = | { } ! ' \ (single quote and backslash itself)
+  // Period '.' and Parentheses '()' are REMOVED from this set.
+  return String(text).replace(/([_*\[\]~`>#+\-=|{}!'\\])/g, '\\$1');
 };
 
 
