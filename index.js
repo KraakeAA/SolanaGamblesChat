@@ -444,12 +444,14 @@ const solPriceCache = new Map(); // Caches SOL/USD price
 
 // --- Core Utility Functions ---
 
-// CORRECTED escapeMarkdownV2 to include single quote and backslash
+// MODIFIED escapeMarkdownV2 to NOT escape period '.'
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
-  // Escapes: _ * [ ] ( ) ~ ` > # + - = | { } . ! ' \ (single quote and backslash itself)
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!'\\])/g, '\\$1');
+  // Escapes: _ * [ ] ( ) ~ ` > # + - = | { } ! ' \ (single quote and backslash itself)
+  // Period '.' is REMOVED from this set.
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}!'\\])/g, '\\$1');
 };
+
 
 async function safeSendMessage(chatId, text, options = {}) {
     const LOG_PREFIX_SSM = `[SafeSend CH:${chatId}]`;
