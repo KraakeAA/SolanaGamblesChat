@@ -8746,7 +8746,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
     let betAmountLamports;
     let minBetLamports, maxBetLamports;
     let minBetDisplay, maxBetDisplay;
-    let defaultBetDisplay;
+    let defaultBetDisplay; // Used for messages if input is adjusted to MIN_BET_USD_val
 
     try {
         const solPrice = await getSolUsdPrice(); // Assumed from Part 1
@@ -8756,125 +8756,111 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
 
         minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(minBetLamports, solPrice)); // Assumed from Part 1
         maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(maxBetLamports, solPrice)); // Assumed from Part 1
-        defaultBetDisplay = minBetDisplay;
+        defaultBetDisplay = minBetDisplay; // This is the $0.50 USD display
 
         if (!arg || String(arg).trim() === "") {
             betAmountLamports = minBetLamports;
             // console.log(`${LOG_PREFIX_PBA} No bet arg provided, defaulting to min USD bet: ${formatCurrency(betAmountLamports)}`);
-            return betAmountLamports;
-        }
+            // No user message needed here, it just defaults. If it hits safety net later, that will message.
+        } else {
+            const argStr = String(arg).trim().toLowerCase();
+            let isExplicitSol = argStr.endsWith('sol');
+            let isExplicitLamports = argStr.endsWith('lamports');
+            let potentialNumberPart = argStr.replace('sol', '').replace('lamports', '').trim();
+            let parsedValueFloat = parseFloat(potentialNumberPart);
+            let parsedValueBigInt = null;
+            try { parsedValueBigInt = BigInt(potentialNumberPart); } catch {}
 
-        const argStr = String(arg).trim().toLowerCase();
-        let isExplicitSol = argStr.endsWith('sol');
-        let isExplicitLamports = argStr.endsWith('lamports');
-        let potentialNumberPart = argStr.replace('sol', '').replace('lamports', '').trim();
-        let parsedValueFloat = parseFloat(potentialNumberPart);
-        let parsedValueBigInt = null;
-        try { parsedValueBigInt = BigInt(potentialNumberPart); } catch {}
-
-        if (isExplicitSol) {
-            if (isNaN(parsedValueFloat) || parsedValueFloat <= 0) throw new Error("Invalid amount for 'sol' suffix.");
-            betAmountLamports = BigInt(Math.floor(parsedValueFloat * Number(LAMPORTS_PER_SOL)));
-            const equivalentUsdValue = parsedValueFloat * solPrice;
-            if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
-                const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' }); // Assumed from Part 1
-                return minBetLamports;
-            }
-        } else if (isExplicitLamports) {
-            if (parsedValueBigInt === null || parsedValueBigInt <= 0n) throw new Error("Invalid amount for 'lamports' suffix.");
-            betAmountLamports = parsedValueBigInt;
-            const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-            if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                const betInLamportsDisplay = escapeMarkdownV2(formatCurrency(betAmountLamports, 'lamports', true));
-                const message = `⚠️ Your bet of *${betInLamportsDisplay}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                return minBetLamports;
-            }
-        } else { // No explicit suffix
-            if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
-                // Heuristic: MAX_BET_USD_val * 1.5 (e.g. 150 if MAX_BET_USD_val is 100)
-                // Numbers below this (and above MIN_BET_USD_val if integer) are considered USD.
-                // Numbers above this if integer are considered lamports.
-                const usdThreshold = MAX_BET_USD_val * 1.5;
-
-                if ( (argStr.includes('.')) || (!argStr.includes('.') && parsedValueFloat <= usdThreshold && parsedValueFloat >= MIN_BET_USD_val) ) {
-                    // Treat as USD input
-                    let usdAmountToConvert = parsedValueFloat;
-                    betAmountLamports = convertUSDToLamports(usdAmountToConvert, solPrice);
-
-                    if (usdAmountToConvert < MIN_BET_USD_val || usdAmountToConvert > MAX_BET_USD_val) {
-                         const betUsdDisplay = escapeMarkdownV2(usdAmountToConvert.toFixed(2));
-                         const message = `⚠️ Your bet of *${betUsdDisplay} USD* is outside the allowed limits: *${minBetDisplay}* - *${maxBetDisplay}*. Your bet has been adjusted to the minimum: *${defaultBetDisplay}*.`;
-                         await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                         return minBetLamports;
-                    }
-                    // Valid USD-like input
-                } else {
-                    // Large integer without decimal, or number not fitting USD heuristic (e.g., very small float if MIN_BET_USD is higher)
-                    // Assume direct lamports (especially for Play Again values like "2971944")
-                    if (parsedValueBigInt !== null && parsedValueBigInt > 0n) {
-                        betAmountLamports = parsedValueBigInt;
-                        const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-
-                        // --- START OF REFINED VALIDATION FOR LAMPORT INPUTS (NEWEST FIX for precision) ---
-                        if (betAmountLamports === minBetLamports) {
-                            // This IS the exact minimum lamport value. Accept it.
-                        } else if (betAmountLamports === maxBetLamports) {
-                            // This IS the exact maximum lamport value. Accept it.
-                        } else if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                            // It's not exactly min/maxBetLamports AND it's outside the USD range.
-                            const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
-                            let adjustmentMessage;
-                            let adjustedBetLamportsValue;
-
-                            if (equivalentUsdValue < MIN_BET_USD_val) {
-                                adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is below the minimum limit of *${minBetDisplay}*. Adjusted to minimum.`;
-                                adjustedBetLamportsValue = minBetLamports;
-                            } else { // equivalentUsdValue > MAX_BET_USD_val
-                                adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) exceeds the maximum limit of *${maxBetDisplay}*. Adjusted to maximum.`;
-                                adjustedBetLamportsValue = maxBetLamports;
-                            }
-                            await safeSendMessage(commandInitiationChatId, adjustmentMessage, { parse_mode: 'MarkdownV2' });
-                            return adjustedBetLamportsValue;
-                        }
-                        // --- END OF REFINED VALIDATION FOR LAMPORT INPUTS ---
-                    } else {
-                         throw new Error("Invalid numeric bet value provided (large integer path).");
-                    }
+            if (isExplicitSol) {
+                if (isNaN(parsedValueFloat) || parsedValueFloat <= 0) throw new Error("Invalid amount for 'sol' suffix.");
+                betAmountLamports = BigInt(Math.floor(parsedValueFloat * Number(LAMPORTS_PER_SOL)));
+                const equivalentUsdValue = parsedValueFloat * solPrice;
+                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                    const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
+                    const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                    betAmountLamports = minBetLamports; // Adjust to min USD equivalent
                 }
-            } else { // Not a number even after stripping suffixes
-                throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
+            } else if (isExplicitLamports) {
+                if (parsedValueBigInt === null || parsedValueBigInt <= 0n) throw new Error("Invalid amount for 'lamports' suffix.");
+                betAmountLamports = parsedValueBigInt;
+                const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                    const betInLamportsDisplay = escapeMarkdownV2(formatCurrency(betAmountLamports, 'lamports', true));
+                    const message = `⚠️ Your bet of *${betInLamportsDisplay}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                    betAmountLamports = minBetLamports; // Adjust to min USD equivalent
+                }
+            } else { // No explicit suffix
+                if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
+                    const usdThreshold = MAX_BET_USD_val * 1.5;
+
+                    if ( (argStr.includes('.')) || (!argStr.includes('.') && parsedValueFloat <= usdThreshold && parsedValueFloat >= MIN_BET_USD_val) ) {
+                        let usdAmountToConvert = parsedValueFloat;
+                        betAmountLamports = convertUSDToLamports(usdAmountToConvert, solPrice);
+
+                        if (usdAmountToConvert < MIN_BET_USD_val || usdAmountToConvert > MAX_BET_USD_val) {
+                             const betUsdDisplay = escapeMarkdownV2(usdAmountToConvert.toFixed(2));
+                             const message = `⚠️ Your bet of *${betUsdDisplay} USD* is outside the allowed limits: *${minBetDisplay}* - *${maxBetDisplay}*. Your bet has been adjusted to the minimum: *${defaultBetDisplay}*.`;
+                             await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                             betAmountLamports = minBetLamports;
+                        }
+                    } else {
+                        if (parsedValueBigInt !== null && parsedValueBigInt > 0n) {
+                            betAmountLamports = parsedValueBigInt;
+                            const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+
+                            if (betAmountLamports === minBetLamports) {
+                                // Exact minimum lamport value, accept.
+                            } else if (betAmountLamports === maxBetLamports) {
+                                // Exact maximum lamport value, accept.
+                            } else if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                                const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
+                                let adjustmentMessage;
+                                if (equivalentUsdValue < MIN_BET_USD_val) {
+                                    adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is below the minimum limit of *${minBetDisplay}*. Adjusted to minimum.`;
+                                    betAmountLamports = minBetLamports;
+                                } else { // equivalentUsdValue > MAX_BET_USD_val
+                                    adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) exceeds the maximum limit of *${maxBetDisplay}*. Adjusted to maximum.`;
+                                    betAmountLamports = maxBetLamports;
+                                }
+                                await safeSendMessage(commandInitiationChatId, adjustmentMessage, { parse_mode: 'MarkdownV2' });
+                            }
+                        } else {
+                             throw new Error("Invalid numeric bet value provided (large integer path).");
+                        }
+                    }
+                } else {
+                    throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
+                }
             }
-        }
+        } // End of initial parsing and USD-range validation
 
         // Final safety net based on absolute lamport configs
-        if (betAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config || betAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) {
-            const betIsTooLow = betAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config;
-            const betIsTooHigh = betAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config;
+        const effectiveMinLamportsSystem = MIN_BET_AMOUNT_LAMPORTS_config;
+        const effectiveMaxLamportsSystem = MAX_BET_AMOUNT_LAMPORTS_config;
 
-            if (betIsTooLow) {
-                // console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} after conversion is BELOW absolute lamport limit ${formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config)}. Adjusting to MIN_BET_USD equivalent.`);
-                await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet was below the absolute minimum value and has been adjusted to the minimum of *${defaultBetDisplay}*.`, { parse_mode: 'MarkdownV2' });
-                return minBetLamports;
-            }
-            if (betIsTooHigh) {
-                // console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} after conversion is ABOVE absolute lamport limit ${formatCurrency(MAX_BET_AMOUNT_LAMPORTS_config)}. Adjusting to MAX_BET_USD equivalent.`);
-                 await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet exceeded the absolute maximum value and has been adjusted to the maximum of *${maxBetDisplay}*.`, { parse_mode: 'MarkdownV2' });
-                return maxBetLamports;
-            }
+        if (betAmountLamports < effectiveMinLamportsSystem) {
+            const adjustedMinDisplaySystem = await formatBalanceForDisplay(effectiveMinLamportsSystem, 'USD', solPrice);
+            console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is BELOW absolute system lamport limit ${formatCurrency(effectiveMinLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMinDisplaySystem)}.`);
+            await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet was below the system's absolute minimum value and has been adjusted to *${escapeMarkdownV2(adjustedMinDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
+            return effectiveMinLamportsSystem;
+        }
+        if (betAmountLamports > effectiveMaxLamportsSystem) {
+            const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
+            console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is ABOVE absolute system lamport limit ${formatCurrency(effectiveMaxLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMaxDisplaySystem)}.`);
+            await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet exceeded the system's absolute maximum value and has been adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
+            return effectiveMaxLamportsSystem;
         }
         return betAmountLamports;
 
     } catch (priceError) { // Catch for getSolUsdPrice or other initial setup errors
         console.error(`${LOG_PREFIX_PBA} CRITICAL error during bet parsing (e.g. SOL price unavailable): ${priceError.message}`);
-        const minLamportsFallbackDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL')); // Default if price fails
+        const minLamportsFallbackDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL'));
         const message = `⚙️ Apologies, we couldn't determine current bet limits due to a price feed issue. Your bet has been set to the internal minimum of *${minLamportsFallbackDisplay}*.`;
         await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
 
-        // Fallback logic if price feed fails, attempt to parse as direct SOL/Lamports if possible or default to lamports min
-        try {
+        try { // Fallback parsing attempt if price feed fails
             if (!arg || String(arg).trim() === "") return MIN_BET_AMOUNT_LAMPORTS_config;
             let fallbackAmountLamports;
             const argStrFB = String(arg).trim().toLowerCase();
@@ -8899,7 +8885,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
             if (fallbackAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config) return MIN_BET_AMOUNT_LAMPORTS_config;
             if (fallbackAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) return MAX_BET_AMOUNT_LAMPORTS_config;
             return fallbackAmountLamports;
-        } catch { // Catch errors from fallback parsing
+        } catch {
             return MIN_BET_AMOUNT_LAMPORTS_config;
         }
     }
