@@ -653,7 +653,7 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ Initializing database schema (Triggers Temporarily Disabled for Diagnosis)...");
+    console.log("⚙️ V3 TEST: Initializing database schema (Triggers STILL Temporarily Disabled for Diagnosis)..."); // <-- MODIFIED THIS LINE
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -831,7 +831,7 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
 
         // Update function for 'updated_at' columns
-        /* START OF COMMENTED OUT TRIGGER SECTION FOR DIAGNOSIS
+        /* START OF COMMENTED OUT TRIGGER SECTION FOR DIAGNOSIS
         await client.query(`
             CREATE OR REPLACE FUNCTION trigger_set_timestamp()
             RETURNS TRIGGER AS $$
@@ -856,8 +856,8 @@ async function initializeDatabaseSchema() {
                 await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message} (Query: ${createTriggerQuery.substring(0, 100)}...)`));
             }
         }
-        END OF COMMENTED OUT TRIGGER SECTION FOR DIAGNOSIS */
-        console.log("INFO: Updated_at trigger creation loop is temporarily commented out for diagnosis.");
+        END OF COMMENTED OUT TRIGGER SECTION FOR DIAGNOSIS */
+        console.log("INFO: Updated_at trigger creation loop is still temporarily commented out for diagnosis.");
 
         await client.query('COMMIT');
         console.log("✅ Database schema initialization complete (with triggers potentially skipped).");
