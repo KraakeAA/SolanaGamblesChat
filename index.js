@@ -653,45 +653,31 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ V4 ULTRA-SIMPLIFIED TEST: Attempting to create ONLY 'users' table...");
+    console.log("⚙️ V5 EXTREMELY MINIMAL TEST: Only BEGIN and COMMIT will be attempted.");
     const client = await pool.connect();
     try {
+        console.log("DEBUG V5: About to execute BEGIN...");
         await client.query('BEGIN');
+        console.log("DEBUG V5: BEGIN executed.");
 
-        // Users Table ONLY
-        console.log("DEBUG: About to execute CREATE TABLE users...");
-        const usersTableQuery = `CREATE TABLE IF NOT EXISTS users (
-            telegram_id BIGINT PRIMARY KEY,
-            username VARCHAR(255),
-            first_name VARCHAR(255),
-            last_name VARCHAR(255),
-            balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
-            last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            is_banned BOOLEAN DEFAULT FALSE,
-            ban_reason TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            solana_wallet_address VARCHAR(44) UNIQUE,
-            referral_code VARCHAR(12) UNIQUE,
-            referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            can_generate_deposit_address BOOLEAN DEFAULT TRUE,
-            last_deposit_address VARCHAR(44),
-            last_deposit_address_generated_at TIMESTAMPTZ,
-            total_deposited_lamports BIGINT DEFAULT 0,
-            total_withdrawn_lamports BIGINT DEFAULT 0,
-            total_wagered_lamports BIGINT DEFAULT 0,
-            total_won_lamports BIGINT DEFAULT 0,
-            notes TEXT
-        );`;
-        await client.query(usersTableQuery);
-        console.log("DEBUG: CREATE TABLE users statement executed.");
+        // ALL TABLE CREATION AND OTHER DDL IS TEMPORARILY REMOVED
 
+        console.log("DEBUG V5: About to execute COMMIT...");
         await client.query('COMMIT');
-        console.log("✅ V4 ULTRA-SIMPLIFIED TEST: 'users' table creation attempt complete.");
+        console.log("✅ V5 EXTREMELY MINIMAL TEST: BEGIN and COMMIT successful. No tables were touched.");
+
     } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ V4 ULTRA-SIMPLIFIED TEST: Error during database schema initialization:', e); // This will show the error if it occurs here
-        throw e;
+        // If a rollback is attempted on a client that hasn't successfully started a transaction
+        // or is in an error state, it might also error. We'll try but catch potential rollback error.
+        try {
+            console.log("DEBUG V5: Error caught, attempting ROLLBACK...");
+            await client.query('ROLLBACK');
+            console.log("DEBUG V5: ROLLBACK executed.");
+        } catch (rbError) {
+            console.error("DEBUG V5: Error during ROLLBACK attempt:", rbError);
+        }
+        console.error('❌ V5 EXTREMELY MINIMAL TEST: Error during database schema initialization:', e);
+        throw e; // Re-throw the original error
     } finally {
         client.release();
     }
