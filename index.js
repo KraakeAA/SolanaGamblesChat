@@ -8761,7 +8761,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
         if (!arg || String(arg).trim() === "") {
             betAmountLamports = minBetLamports;
             // console.log(`${LOG_PREFIX_PBA} No bet arg provided, defaulting to min USD bet: ${formatCurrency(betAmountLamports)}`);
-            // No user message needed here, it just defaults. If it hits safety net later, that will message.
+            return betAmountLamports; // <<<< OPTION B IMPLEMENTED: Early return for default bet
         } else {
             const argStr = String(arg).trim().toLowerCase();
             let isExplicitSol = argStr.endsWith('sol');
@@ -8834,9 +8834,10 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
                     throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
                 }
             }
-        } // End of initial parsing and USD-range validation
+        } // End of parsing logic when 'arg' is provided
 
         // Final safety net based on absolute lamport configs
+        // This will now only be reached if 'arg' was provided, not for the default empty arg case.
         const effectiveMinLamportsSystem = MIN_BET_AMOUNT_LAMPORTS_config;
         const effectiveMaxLamportsSystem = MAX_BET_AMOUNT_LAMPORTS_config;
 
