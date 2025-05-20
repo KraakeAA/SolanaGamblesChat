@@ -8727,11 +8727,11 @@ function createStandardTitle(titleText, emoji = '✨') {
 
 // Dependencies from previous Parts (assumed to be globally available or correctly imported)
 // Part 1: isShuttingDown, userStateCache, COMMAND_COOLDOWN_MS, bot, getPlayerDisplayReference,
-//         safeSendMessage, escapeMarkdownV2, MIN_BET_USD_val, MAX_BET_USD_val, LAMPORTS_PER_SOL,
-//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, ADMIN_USER_ID, BOT_NAME,
-//         MIN_BET_AMOUNT_LAMPORTS_config, MAX_BET_AMOUNT_LAMPORTS_config, stringifyWithBigInt,
-//         RULES_CALLBACK_PREFIX, DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION,
-//         userCooldowns, pool, activeGames, groupGameSessions, GAME_IDS (with new DE IDs and MINES_OFFER)
+//         safeSendMessage, escapeMarkdownV2, MIN_BET_USD_val, MAX_BET_USD_val, LAMPORTS_PER_SOL,
+//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, ADMIN_USER_ID, BOT_NAME,
+//         MIN_BET_AMOUNT_LAMPORTS_config, MAX_BET_AMOUNT_LAMPORTS_config, stringifyWithBigInt,
+//         RULES_CALLBACK_PREFIX, DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION,
+//         userCooldowns, pool, activeGames, groupGameSessions, GAME_IDS (with new DE IDs and MINES_OFFER)
 // Part 2: getOrCreateUser, findRecipientUser
 // Part 3: createUserMention, formatCurrency
 // Part P3: clearUserState, routeStatefulInput, handleMenuAction, handleWithdrawalConfirmation
@@ -8742,122 +8742,147 @@ function createStandardTitle(titleText, emoji = '✨') {
 
 // --- Helper to parse bet amount for game commands (USD primary) ---
 const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationChatType, userIdForLog = 'N/A') => {
-    const LOG_PREFIX_PBA = `[ParseBet CH:${commandInitiationChatId} UID:${userIdForLog}]`;
-    let betAmountLamports;
-    let minBetLamports, maxBetLamports;
-    let minBetDisplay, maxBetDisplay;
-    let defaultBetDisplay;
+    const LOG_PREFIX_PBA = `[ParseBet CH:${commandInitiationChatId} UID:${userIdForLog}]`;
+    let betAmountLamports;
+    let minBetLamports, maxBetLamports;
+    let minBetDisplay, maxBetDisplay;
+    let defaultBetDisplay;
 
-    try {
-        const solPrice = await getSolUsdPrice();
+    try {
+        const solPrice = await getSolUsdPrice(); // Assumed from Part 1
 
-        minBetLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice);
-        maxBetLamports = convertUSDToLamports(MAX_BET_USD_val, solPrice);
+        minBetLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice); // Assumed from Part 1
+        maxBetLamports = convertUSDToLamports(MAX_BET_USD_val, solPrice); // Assumed from Part 1
 
-        minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(minBetLamports, solPrice));
-        maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(maxBetLamports, solPrice));
-        defaultBetDisplay = minBetDisplay;
+        minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(minBetLamports, solPrice)); // Assumed from Part 1
+        maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(maxBetLamports, solPrice)); // Assumed from Part 1
+        defaultBetDisplay = minBetDisplay;
 
-        if (!arg || String(arg).trim() === "") {
-            betAmountLamports = minBetLamports;
-            return betAmountLamports;
-        }
+        if (!arg || String(arg).trim() === "") {
+            betAmountLamports = minBetLamports;
+            // console.log(`${LOG_PREFIX_PBA} No bet arg provided, defaulting to min USD bet: ${formatCurrency(betAmountLamports)}`);
+            return betAmountLamports;
+        }
 
-        const argStr = String(arg).trim().toLowerCase();
-        let potentialUsdAmount = parseFloat(argStr.replace(/[^0-9.]/g, ''));
+        const argStr = String(arg).trim().toLowerCase();
+        let isExplicitSol = argStr.endsWith('sol');
+        let isExplicitLamports = argStr.endsWith('lamports');
+        let potentialNumberPart = argStr.replace('sol', '').replace('lamports', '').trim();
+        let parsedValueFloat = parseFloat(potentialNumberPart);
+        let parsedValueBigInt = null;
+        try { parsedValueBigInt = BigInt(potentialNumberPart); } catch {}
 
-        if (!isNaN(potentialUsdAmount) && potentialUsdAmount > 0 && !argStr.endsWith('sol') && !argStr.endsWith('lamports')) {
-            betAmountLamports = convertUSDToLamports(potentialUsdAmount, solPrice);
-            const betUsdDisplay = escapeMarkdownV2(potentialUsdAmount.toFixed(2));
+        if (isExplicitSol) {
+            if (isNaN(parsedValueFloat) || parsedValueFloat <= 0) throw new Error("Invalid amount for 'sol' suffix.");
+            betAmountLamports = BigInt(Math.floor(parsedValueFloat * Number(LAMPORTS_PER_SOL)));
+            const equivalentUsdValue = parsedValueFloat * solPrice;
+            if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
+                const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' }); // Assumed from Part 1
+                return minBetLamports;
+            }
+        } else if (isExplicitLamports) {
+            if (parsedValueBigInt === null || parsedValueBigInt <= 0n) throw new Error("Invalid amount for 'lamports' suffix.");
+            betAmountLamports = parsedValueBigInt;
+            const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+            if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                const betInLamportsDisplay = escapeMarkdownV2(formatCurrency(betAmountLamports, 'lamports', true));
+                const message = `⚠️ Your bet of *${betInLamportsDisplay}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                return minBetLamports;
+            }
+        } else { // No explicit suffix
+            if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
+                const usdThreshold = MAX_BET_USD_val * 1.5; // Heuristic threshold to differentiate USD from large lamport numbers
 
-            if (potentialUsdAmount < MIN_BET_USD_val || potentialUsdAmount > MAX_BET_USD_val) {
-                const message = `⚠️ Your bet of *${betUsdDisplay} USD* is outside the allowed limits: *${minBetDisplay}* - *${maxBetDisplay}*. Your bet has been adjusted to the minimum: *${defaultBetDisplay}*.`;
-                await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                return minBetLamports;
-            }
-            return betAmountLamports;
-        } else {
-            let parsedLamportsDirectly;
-            try {
-                if (argStr.endsWith('sol')) {
-                    const solVal = parseFloat(argStr.replace('sol', '').trim());
-                    if (!isNaN(solVal) && solVal > 0) {
-                        parsedLamportsDirectly = BigInt(Math.floor(solVal * Number(LAMPORTS_PER_SOL)));
-                    } else throw new Error("Invalid SOL format with 'sol' suffix.");
-                } else if (argStr.includes('.') && !isNaN(parseFloat(argStr))) {
-                    const solVal = parseFloat(argStr);
-                    if (!isNaN(solVal) && solVal > 0) {
-                        parsedLamportsDirectly = BigInt(Math.floor(solVal * Number(LAMPORTS_PER_SOL)));
-                    } else throw new Error("Invalid SOL float format.");
-                } else if (argStr.endsWith('lamports')) {
-                    const lampVal = BigInt(argStr.replace('lamports','').trim());
-                    if (lampVal > 0n) parsedLamportsDirectly = lampVal;
-                    else throw new Error("Invalid lamports amount.");
-                }
-                else {
-                    const intVal = BigInt(argStr);
-                    if (intVal > 0n && intVal < 10000n && !argStr.endsWith('000000')) { 
-                        parsedLamportsDirectly = BigInt(Math.floor(Number(intVal) * Number(LAMPORTS_PER_SOL)));
-                    } else if (intVal > 0n) { 
-                        parsedLamportsDirectly = intVal;
-                    } else {
-                        throw new Error("Bet amount (SOL/Lamports) must be positive.");
-                    }
-                }
+                if ( (argStr.includes('.')) || (!argStr.includes('.') && parsedValueFloat <= usdThreshold && parsedValueFloat >= MIN_BET_USD_val) ) {
+                    // Treat as USD input
+                    let usdAmountToConvert = parsedValueFloat;
+                    betAmountLamports = convertUSDToLamports(usdAmountToConvert, solPrice);
 
-                if (parsedLamportsDirectly <= 0n) throw new Error("Bet amount (SOL/Lamports) must be positive.");
+                    if (usdAmountToConvert < MIN_BET_USD_val || usdAmountToConvert > MAX_BET_USD_val) {
+                         const betUsdDisplay = escapeMarkdownV2(usdAmountToConvert.toFixed(2));
+                         const message = `⚠️ Your bet of *${betUsdDisplay} USD* is outside the allowed limits: *${minBetDisplay}* - *${maxBetDisplay}*. Your bet has been adjusted to the minimum: *${defaultBetDisplay}*.`;
+                         await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                         return minBetLamports;
+                    }
+                    // Valid USD-like input
+                } else {
+                    // Large integer without decimal or float not fitting USD heuristic -> assume direct lamports (e.g., from Play Again)
+                    if (parsedValueBigInt !== null && parsedValueBigInt > 0n) {
+                        betAmountLamports = parsedValueBigInt;
+                        const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+                        if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                            const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
+                            const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                            await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                            return minBetLamports;
+                        }
+                        // Valid lamport amount that fits within overall game limits
+                    } else {
+                         throw new Error("Invalid numeric bet value provided (large integer path).");
+                    }
+                }
+            } else { // Not a number even after stripping suffixes
+                throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
+            }
+        }
 
-                const equivalentUsdValue = Number(parsedLamportsDirectly) / Number(LAMPORTS_PER_SOL) * solPrice;
+        // Final safety net based on absolute lamport configs
+        if (betAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config || betAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) {
+            const betIsTooLow = betAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config;
+            const betIsTooHigh = betAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config;
 
-                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                    const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(parsedLamportsDirectly, 'SOL'));
-                    const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(parsedLamportsDirectly, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                    return minBetLamports;
-                }
-                return parsedLamportsDirectly;
-            } catch (directParseError) {
-                const message = `🤔 Hmmm, your bet amount \`${escapeMarkdownV2(String(arg))}\` seems a bit off. Please use USD (e.g., \`5\` or \`10.50\`), or SOL (e.g. \`0.1 sol\`, \`0.05\`). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                return minBetLamports;
-            }
-        }
-    } catch (priceError) {
-        console.error(`${LOG_PREFIX_PBA} CRITICAL error getting SOL price for bet parsing: ${priceError.message}`);
-        const minLamportsFallbackDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL'));
-        const message = `⚙️ Apologies, we couldn't determine current bet limits due to a price feed issue. Using internal default lamport limits for now. Your bet has been set to the internal minimum of *${minLamportsFallbackDisplay}*.`;
-        await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+            if (betIsTooLow) {
+                // console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} after conversion is BELOW absolute lamport limit ${formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config)}. Adjusting to MIN_BET_USD equivalent.`);
+                await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet was below the absolute minimum value and has been adjusted to the minimum of *${defaultBetDisplay}*.`, { parse_mode: 'MarkdownV2' });
+                return minBetLamports;
+            }
+            if (betIsTooHigh) {
+                // console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} after conversion is ABOVE absolute lamport limit ${formatCurrency(MAX_BET_AMOUNT_LAMPORTS_config)}. Adjusting to MAX_BET_USD equivalent.`);
+                 await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet exceeded the absolute maximum value and has been adjusted to the maximum of *${maxBetDisplay}*.`, { parse_mode: 'MarkdownV2' });
+                return maxBetLamports;
+            }
+        }
+        return betAmountLamports;
 
-        try {
-            if (!arg || String(arg).trim() === "") return MIN_BET_AMOUNT_LAMPORTS_config;
-            let fallbackAmountLamports;
-            const argStrFB = String(arg).trim().toLowerCase();
-            if (argStrFB.endsWith('sol') || argStrFB.includes('.')) {
-                const solValFB = parseFloat(argStrFB.replace('sol', '').replace('lamports','').trim());
-                if (isNaN(solValFB) || solValFB <=0) return MIN_BET_AMOUNT_LAMPORTS_config;
-                fallbackAmountLamports = BigInt(Math.floor(solValFB * Number(LAMPORTS_PER_SOL)));
-            } else if (argStrFB.endsWith('lamports')) {
-                const lampValFB = BigInt(argStrFB.replace('lamports','').trim());
-                if (lampValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
-                fallbackAmountLamports = lampValFB;
-            } else {
-                const intValFB = BigInt(argStrFB);
-                if (intValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
-                if (intValFB > 0n && intValFB < 10000n && !argStrFB.endsWith('000000')) {
-                    fallbackAmountLamports = BigInt(Math.floor(Number(intValFB) * Number(LAMPORTS_PER_SOL)));
-                } else {
-                    fallbackAmountLamports = intValFB;
-                }
-            }
+    } catch (priceError) { // Catch for getSolUsdPrice or other initial setup errors
+        console.error(`${LOG_PREFIX_PBA} CRITICAL error during bet parsing (e.g. SOL price unavailable): ${priceError.message}`);
+        const minLamportsFallbackDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL')); // Default if price fails
+        const message = `⚙️ Apologies, we couldn't determine current bet limits due to a price feed issue. Your bet has been set to the internal minimum of *${minLamportsFallbackDisplay}*.`;
+        await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
 
-            if (fallbackAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config || fallbackAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) {
-                return MIN_BET_AMOUNT_LAMPORTS_config;
-            }
-            return fallbackAmountLamports;
-        } catch {
-            return MIN_BET_AMOUNT_LAMPORTS_config;
-        }
-    }
+        // Fallback logic if price feed fails, attempt to parse as direct SOL/Lamports if possible or default to lamports min
+        try {
+            if (!arg || String(arg).trim() === "") return MIN_BET_AMOUNT_LAMPORTS_config;
+            let fallbackAmountLamports;
+            const argStrFB = String(arg).trim().toLowerCase();
+            if (argStrFB.endsWith('sol') || argStrFB.includes('.')) {
+                const solValFB = parseFloat(argStrFB.replace('sol', '').replace('lamports','').trim());
+                if (isNaN(solValFB) || solValFB <=0) return MIN_BET_AMOUNT_LAMPORTS_config;
+                fallbackAmountLamports = BigInt(Math.floor(solValFB * Number(LAMPORTS_PER_SOL)));
+            } else if (argStrFB.endsWith('lamports')) {
+                const lampValFB = BigInt(argStrFB.replace('lamports','').trim());
+                if (lampValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
+                fallbackAmountLamports = lampValFB;
+            } else {
+                const intValFB = BigInt(argStrFB);
+                if (intValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
+                if (intValFB > 0n && intValFB < 10000n && !argStrFB.includes('.') && !argStrFB.endsWith('000000')) {
+                    fallbackAmountLamports = BigInt(Math.floor(Number(intValFB) * Number(LAMPORTS_PER_SOL)));
+                } else {
+                    fallbackAmountLamports = intValFB;
+                }
+            }
+
+            if (fallbackAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config) return MIN_BET_AMOUNT_LAMPORTS_config;
+            if (fallbackAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) return MAX_BET_AMOUNT_LAMPORTS_config;
+            return fallbackAmountLamports;
+        } catch { // Catch errors from fallback parsing
+            return MIN_BET_AMOUNT_LAMPORTS_config;
+        }
+    }
 };
 
 
@@ -8883,7 +8908,7 @@ bot.on('message', async (msg) => {
                 console.log(`${LOG_PREFIX_MSG_HANDLER} Ignoring message from other bot: ${msg.from.username || msg.from.id}`);
                 return;
             }
-            if (!msg.dice) { 
+            if (!msg.dice) { 
                 console.log(`${LOG_PREFIX_MSG_HANDLER} Ignoring self-sent non-dice message.`);
                 return;
             }
@@ -8894,14 +8919,14 @@ bot.on('message', async (msg) => {
         }
     }
 
-    const userId = String(msg.from.id || msg.from.telegram_id); 
+    const userId = String(msg.from.id || msg.from.telegram_id); 
     const chatId = String(msg.chat.id);
     const text = msg.text || "";
     const chatType = msg.chat.type;
 
-    if (msg.dice && msg.from && !msg.from.is_bot) { 
+    if (msg.dice && msg.from && !msg.from.is_bot) { 
         const diceValue = msg.dice.value;
-        const rollerId = String(msg.from.id || msg.from.telegram_id); 
+        const rollerId = String(msg.from.id || msg.from.telegram_id); 
         console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] User ${rollerId} sent 🎲 (value: ${diceValue}) in chat ${chatId}. ActiveGames size: ${activeGames.size}`);
 
         let gameIdForDiceRoll = null;
@@ -8960,16 +8985,16 @@ bot.on('message', async (msg) => {
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDiceEscalatorPvBRollByEmoji_New`);
                 } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP) {
                     if (typeof processDiceEscalatorPvPRollByEmoji_New === 'function') {
-                        await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId); 
+                        await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId); 
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDiceEscalatorPvPRollByEmoji_New`);
                 }
             } else if (isDice21Emoji) {
                 console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Dice 21 processor.`);
-                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) { 
+                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) { 
                     if (typeof processDice21PvBRollByEmoji === 'function') await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue);
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvBRollByEmoji for PvB`);
-                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) { 
-                    if (typeof processDice21PvPRollByEmoji === 'function') await processDice21PvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); 
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) { 
+                    if (typeof processDice21PvPRollByEmoji === 'function') await processDice21PvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); 
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvPRollByEmoji for PvP`);
                 }
             } else if (isDuelGameEmoji) {
@@ -8978,7 +9003,7 @@ bot.on('message', async (msg) => {
                     if (typeof processDuelPvBRollByEmoji === 'function') await processDuelPvBRollByEmoji(gameDataForDiceRoll, diceValue);
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDuelPvBRollByEmoji`);
                 } else if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVP) {
-                    if (typeof processDuelPvPRollByEmoji === 'function') await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); 
+                    if (typeof processDuelPvPRollByEmoji === 'function') await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); 
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDuelPvPRollByEmoji`);
                 }
             }
@@ -9055,14 +9080,14 @@ bot.on('message', async (msg) => {
                 case 'history': if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleHistoryCommand`); break;
                 case 'setwallet': if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleSetWalletCommand`); break;
                 case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
-                case 'tip':
-                    if (typeof handleTipCommand === 'function') {
-                        await handleTipCommand(msg, commandArgs, userForCommandProcessing);
-                    } else {
-                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleTipCommand`);
-                        await safeSendMessage(chatId, "The tipping feature is currently under maintenance.", {});
-                    }
-                    break;
+                case 'tip':
+                    if (typeof handleTipCommand === 'function') {
+                        await handleTipCommand(msg, commandArgs, userForCommandProcessing);
+                    } else {
+                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleTipCommand`);
+                        await safeSendMessage(chatId, "The tipping feature is currently under maintenance.", {});
+                    }
+                    break;
                 case 'coinflip': case 'startcoinflip':
                     if (typeof handleStartGroupCoinFlipCommand === 'function') {
                         const betCF = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
@@ -9116,15 +9141,15 @@ bot.on('message', async (msg) => {
                         const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
                         if(betSlot) await handleStartSlotCommand(msg, betSlot);
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartSlotCommand`); break;
-                case 'mines': 
-                    if (typeof handleStartMinesCommand === 'function') {
-                        // handleStartMinesCommand from Part 5a, S2 handles its own args parsing
-                        await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
-                    } else {
-                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartMinesCommand`);
-                        await safeSendMessage(chatId, "The Mines game is currently under construction.", {});
-                    }
-                    break;
+                case 'mines': 
+                    if (typeof handleStartMinesCommand === 'function') {
+                        // handleStartMinesCommand from Part 5a, S2 handles its own args parsing
+                        await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
+                    } else {
+                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartMinesCommand`);
+                        await safeSendMessage(chatId, "The Mines game is currently under construction.", {});
+                    }
+                    break;
 
                 default:
                     const selfBotInfoDefault = await bot.getMe();
@@ -9165,7 +9190,7 @@ bot.on('callback_query', async (callbackQuery) => {
         return;
     }
 
-    const userId = String(userFromCb.id || userFromCb.telegram_id); 
+    const userId = String(userFromCb.id || userFromCb.telegram_id); 
     if (!userId || userId === "undefined") {
         console.error(`${LOG_PREFIX_CBQ} CRITICAL: User ID undefined for callback. Callback Data: ${data}`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "⚠️ An error occurred identifying your session. Please try the action again.", show_alert: true }).catch(() => {});
@@ -9226,7 +9251,7 @@ bot.on('callback_query', async (callbackQuery) => {
         }
     }
     const mockMsgObjectForHandler = {
-        from: userObjectForCallback, 
+        from: userObjectForCallback, 
         chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
         message_id: isCallbackRedirectedToDm ? null : originalMessageId,
         isCallbackRedirect: isCallbackRedirectedToDm,
@@ -9319,19 +9344,19 @@ bot.on('callback_query', async (callbackQuery) => {
                     } else console.warn(`${LOG_PREFIX_CBQ} forwardDuelCallback not defined for Duel action: ${action}`);
                     break;
 
-                case 'mines_difficulty_select': 
-                case 'mines_cancel_offer':      
-                case 'mines_tile':             // NEW: For clicking a game tile
-                case 'mines_cashout':          // NEW: For cashing out
-                case 'play_again_mines':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardMinesCallback for action: ${action}`);
-                    if (typeof forwardMinesCallback === 'function') { 
-                        await forwardMinesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} forwardMinesCallback not defined or direct handler missing for Mines action: ${action}`);
-                        await bot.answerCallbackQuery(callbackQueryId, { text: "Mines game action processing...", show_alert: false }).catch(() => {});
-                    }
-                    break;
+                case 'mines_difficulty_select': 
+                case 'mines_cancel_offer':      
+                case 'mines_tile':             
+                case 'mines_cashout':          
+                case 'play_again_mines':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardMinesCallback for action: ${action}`);
+                    if (typeof forwardMinesCallback === 'function') { 
+                        await forwardMinesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} forwardMinesCallback not defined or direct handler missing for Mines action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, { text: "Mines game action processing...", show_alert: false }).catch(() => {});
+                    }
+                    break;
 
                 case 'ou7_choice':     case 'play_again_ou7':
                 case 'ladder_roll':    case 'play_again_ladder': 
@@ -9432,13 +9457,13 @@ async function forwardDice21Callback(action, params, userObject, originalMessage
             if (typeof handleDice21CancelUnifiedOffer === 'function') await handleDice21CancelUnifiedOffer(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, callbackQueryId);
             else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21CancelUnifiedOffer`);
             break;
-        case 'd21_stand': 
+        case 'd21_stand': 
             if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_stand.`); return; }
             if (typeof handleDice21PvBStand === 'function') await handleDice21PvBStand(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
             else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBStand`);
             break;
-        case 'play_again_d21': 
-        case 'play_again_d21_pvp': 
+        case 'play_again_d21': 
+        case 'play_again_d21_pvp': 
             if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing bet amount for ${action}.`); return; }
             try {
                 const betAmountD21Replay = BigInt(gameIdOrBetAmountStr);
@@ -9449,12 +9474,12 @@ async function forwardDice21Callback(action, params, userObject, originalMessage
                 } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleStartDice21Command for ${action} replay`);
             } catch (e) { console.error(`${LOG_PREFIX_D21_CB_FWD} Invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
             break;
-        case 'd21_pvb_cancel': 
+        case 'd21_pvb_cancel': 
             if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvb_cancel.`); return; }
             if (typeof handleDice21PvBCancel === 'function') await handleDice21PvBCancel(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
             else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBCancel`);
             break;
-        case 'd21_pvp_stand': 
+        case 'd21_pvp_stand': 
             if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvp_stand.`); return; }
             if (typeof handleDice21PvPStand === 'function') await handleDice21PvPStand(gameIdOrBetAmountStr, userObject.id || userObject.telegram_id, originalMessageId, callbackQueryId, chatDataForHandler);
             else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvPStand (or handleDice21PvPStandAction)`);
@@ -9581,86 +9606,86 @@ async function forwardDiceEscalatorCallback_New(action, params, userObject, orig
 
 // --- UPDATED Helper function to forward Mines game callbacks ---
 async function forwardMinesCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_MINES_CB_FWD = `[MinesCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_MINES_CB_FWD} Processing action. Params: ${params.join(',')}`);
-    const gameIdOrOfferId = params[0]; // Can be offer ID or game ID
-    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+    const LOG_PREFIX_MINES_CB_FWD = `[MinesCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_MINES_CB_FWD} Processing action. Params: ${params.join(',')}`);
+    const gameIdOrOfferId = params[0]; // Can be offer ID or game ID
+    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
 
-    switch(action) {
-        case 'mines_difficulty_select': // params: [offerId, difficultyKey]
-            const difficultyKey = params[1];
-            if (!gameIdOrOfferId || !difficultyKey) {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId or difficultyKey for mines_difficulty_select.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Error selecting difficulty.", show_alert: true});
-                return;
-            }
-            if (typeof handleMinesDifficultySelectionCallback === 'function') { 
-                await handleMinesDifficultySelectionCallback(gameIdOrOfferId, userObject, difficultyKey, callbackQueryId, originalMessageId, originalChatId, originalChatType);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesDifficultySelectionCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines difficulty selection is under construction!", show_alert: false});
-            }
-            break;
-        case 'mines_cancel_offer': // params: [offerId]
-             if (!gameIdOrOfferId) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId for mines_cancel_offer.`); return; }
-             if (typeof handleMinesCancelOfferCallback === 'function') { 
-                await handleMinesCancelOfferCallback(gameIdOrOfferId, userObject, originalMessageId, originalChatId, callbackQueryId);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCancelOfferCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines offer cancellation is under construction!", show_alert: false});
-            }
-            break;
-        case 'mines_tile': // params: [gameId, row, col]
-            const row = params[1];
-            const col = params[2];
-            if (!gameIdOrOfferId || row === undefined || col === undefined) {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId, row, or col for mines_tile.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Error revealing tile.", show_alert: true});
-                return;
-            }
-            if (typeof handleMinesTileClickCallback === 'function') {
-                await handleMinesTileClickCallback(gameIdOrOfferId, userObject, parseInt(row), parseInt(col), callbackQueryId, originalMessageId, originalChatId);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesTileClickCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines tile clicking is under construction!", show_alert: false});
-            }
-            break;
-        case 'mines_cashout': // params: [gameId]
-            if (!gameIdOrOfferId) {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId for mines_cashout.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Error cashing out.", show_alert: true});
-                return;
-            }
-            if (typeof handleMinesCashOutCallback === 'function') {
-                await handleMinesCashOutCallback(gameIdOrOfferId, userObject, callbackQueryId, originalMessageId, originalChatId);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCashOutCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines cash out is under construction!", show_alert: false});
-            }
-            break;
-        case 'play_again_mines': // params: [betAmountLamports]
-            const betAmountStr = gameIdOrOfferId; // In this case, the first param is the bet amount
-            if (!betAmountStr) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing bet amount for play_again_mines.`); return; }
-            try {
-                const betAmountMinesReplay = BigInt(betAmountStr);
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-                if (typeof handleStartMinesCommand === 'function') { 
-                    await handleStartMinesCommand(mockMsgForReplay, [betAmountMinesReplay.toString()], userObject);
-                } else console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleStartMinesCommand for Mines replay`);
-            } catch (e) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Invalid bet amount for play_again_mines: '${betAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_MINES_CB_FWD} Unhandled Mines action in forwarder: ${action}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "That Mines action isn't ready yet!", show_alert: false }).catch(() => {});
-            break;
-    }
+    switch(action) {
+        case 'mines_difficulty_select': // params: [offerId, difficultyKey]
+            const difficultyKey = params[1];
+            if (!gameIdOrOfferId || !difficultyKey) {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId or difficultyKey for mines_difficulty_select.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error selecting difficulty.", show_alert: true});
+                return;
+            }
+            if (typeof handleMinesDifficultySelectionCallback === 'function') { 
+                await handleMinesDifficultySelectionCallback(gameIdOrOfferId, userObject, difficultyKey, callbackQueryId, originalMessageId, originalChatId, originalChatType);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesDifficultySelectionCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines difficulty selection is under construction!", show_alert: false});
+            }
+            break;
+        case 'mines_cancel_offer': // params: [offerId]
+             if (!gameIdOrOfferId) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId for mines_cancel_offer.`); return; }
+             if (typeof handleMinesCancelOfferCallback === 'function') { 
+                await handleMinesCancelOfferCallback(gameIdOrOfferId, userObject, originalMessageId, originalChatId, callbackQueryId);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCancelOfferCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines offer cancellation is under construction!", show_alert: false});
+            }
+            break;
+        case 'mines_tile': // params: [gameId, row, col]
+            const row = params[1];
+            const col = params[2];
+            if (!gameIdOrOfferId || row === undefined || col === undefined) {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId, row, or col for mines_tile.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error revealing tile.", show_alert: true});
+                return;
+            }
+            if (typeof handleMinesTileClickCallback === 'function') {
+                await handleMinesTileClickCallback(gameIdOrOfferId, userObject, parseInt(row), parseInt(col), callbackQueryId, originalMessageId, originalChatId);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesTileClickCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines tile clicking is under construction!", show_alert: false});
+            }
+            break;
+        case 'mines_cashout': // params: [gameId]
+            if (!gameIdOrOfferId) {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId for mines_cashout.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error cashing out.", show_alert: true});
+                return;
+            }
+            if (typeof handleMinesCashOutCallback === 'function') {
+                await handleMinesCashOutCallback(gameIdOrOfferId, userObject, callbackQueryId, originalMessageId, originalChatId);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCashOutCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines cash out is under construction!", show_alert: false});
+            }
+            break;
+        case 'play_again_mines': // params: [betAmountLamports]
+            const betAmountStr = gameIdOrOfferId; // In this case, the first param is the bet amount
+            if (!betAmountStr) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing bet amount for play_again_mines.`); return; }
+            try {
+                const betAmountMinesReplay = BigInt(betAmountStr);
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+                if (typeof handleStartMinesCommand === 'function') { 
+                    await handleStartMinesCommand(mockMsgForReplay, [betAmountMinesReplay.toString()], userObject);
+                } else console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleStartMinesCommand for Mines replay`);
+            } catch (e) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Invalid bet amount for play_again_mines: '${betAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
+            break;
+        default:
+            console.warn(`${LOG_PREFIX_MINES_CB_FWD} Unhandled Mines action in forwarder: ${action}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "That Mines action isn't ready yet!", show_alert: false }).catch(() => {});
+            break;
+    }
 }
 // --- END OF UPDATED forwardMinesCallback function ---
 
 
 // --- Helper function to forward other game callbacks ---
 async function forwardAdditionalGamesCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_ADD_GAME_CB = `[AddGameCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`; 
+    const LOG_PREFIX_ADD_GAME_CB = `[AddGameCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`; 
     console.log(`${LOG_PREFIX_ADD_GAME_CB} Processing action. Params: ${params.join(',')}`);
     const gameIdOrBetAmountStr = params[0];
     const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
@@ -9709,7 +9734,6 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
     }
 }
 // --- End of Part 5a, Section 1 (REVISED for New Dice Escalator & Full Routing for Jackpot Choice) ---
-// --- Start of Part 6 ---
 // index.js - Part 6: Main Application Logic (Initialization, Error Handling, Graceful Shutdown)
 //---------------------------------------------------------------------------
 // Assumed all necessary functions from previous parts are loaded and available.
