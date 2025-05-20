@@ -839,18 +839,19 @@ async function initializeDatabaseSchema() {
             END;
             $$ LANGUAGE plpgsql;
         `);
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals']; // `ledger` and `games` use default current_timestamp mainly
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
         for (const tableName of tablesWithUpdatedAt) {
-            const triggerExistsRes = await client.query(
-                `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = '${tableName}'::regclass;`
-            );
+            const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
+            const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
+
             if (triggerExistsRes.rowCount === 0) {
-                await client.query(`
+                const createTriggerQuery = `
                     CREATE TRIGGER set_timestamp
                     BEFORE UPDATE ON ${tableName}
                     FOR EACH ROW
                     EXECUTE FUNCTION trigger_set_timestamp();
-                `).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
+                `;
+                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message} (Query: ${createTriggerQuery.substring(0, 100)}...)`));
             }
         }
         await client.query('COMMIT');
