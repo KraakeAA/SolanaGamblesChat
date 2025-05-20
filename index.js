@@ -653,14 +653,14 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ V9 CLEAN WHITESPACE: Initializing FULL database schema...");
+    console.log("⚙️ V9 FINAL CLEAN WHITESPACE: Initializing FULL database schema (All Tables & Triggers)..."); // Changed log slightly for clarity
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        console.log("DEBUG V9: BEGIN executed.");
+        console.log("DEBUG V9 FINAL: BEGIN executed.");
 
         // Users Table
-        console.log("DEBUG V9: Creating Users table...");
+        console.log("DEBUG V9 FINAL: Creating Users table...");
         await client.query(`CREATE TABLE IF NOT EXISTS users (
     telegram_id BIGINT PRIMARY KEY,
     username VARCHAR(255),
@@ -684,10 +684,10 @@ async function initializeDatabaseSchema() {
     total_won_lamports BIGINT DEFAULT 0,
     notes TEXT
 );`);
-        console.log("DEBUG V9: Users table processed.");
+        console.log("DEBUG V9 FINAL: Users table processed.");
 
         // Jackpots Table
-        console.log("DEBUG V9: Creating Jackpots table...");
+        console.log("DEBUG V9 FINAL: Creating Jackpots table...");
         await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
     jackpot_id VARCHAR(255) PRIMARY KEY,
     current_amount BIGINT DEFAULT 0,
@@ -699,10 +699,10 @@ async function initializeDatabaseSchema() {
             `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
             [MAIN_JACKPOT_ID]
         );
-        console.log("DEBUG V9: Jackpots table processed.");
+        console.log("DEBUG V9 FINAL: Jackpots table processed.");
 
         // Games Table (Game Log)
-        console.log("DEBUG V9: Creating Games table...");
+        console.log("DEBUG V9 FINAL: Creating Games table...");
         await client.query(`CREATE TABLE IF NOT EXISTS games (
     game_log_id SERIAL PRIMARY KEY,
     game_type VARCHAR(50) NOT NULL,
@@ -714,10 +714,10 @@ async function initializeDatabaseSchema() {
     jackpot_contribution_lamports BIGINT,
     game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        console.log("DEBUG V9: Games table processed.");
+        console.log("DEBUG V9 FINAL: Games table processed.");
 
         // User Deposit Wallets Table
-        console.log("DEBUG V9: Creating User Deposit Wallets table...");
+        console.log("DEBUG V9 FINAL: Creating User Deposit Wallets table...");
         await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
     wallet_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -733,10 +733,10 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-        console.log("DEBUG V9: User Deposit Wallets table processed.");
+        console.log("DEBUG V9 FINAL: User Deposit Wallets table processed.");
 
         // Deposits Table
-        console.log("DEBUG V9: Creating Deposits table...");
+        console.log("DEBUG V9 FINAL: Creating Deposits table...");
         await client.query(`CREATE TABLE IF NOT EXISTS deposits (
     deposit_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -756,10 +756,10 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-        console.log("DEBUG V9: Deposits table processed.");
+        console.log("DEBUG V9 FINAL: Deposits table processed.");
 
         // Withdrawals Table
-        console.log("DEBUG V9: Creating Withdrawals table...");
+        console.log("DEBUG V9 FINAL: Creating Withdrawals table...");
         await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
     withdrawal_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -779,10 +779,10 @@ async function initializeDatabaseSchema() {
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
-        console.log("DEBUG V9: Withdrawals table processed.");
+        console.log("DEBUG V9 FINAL: Withdrawals table processed.");
 
         // Referrals Table
-        console.log("DEBUG V9: Creating Referrals table...");
+        console.log("DEBUG V9 FINAL: Creating Referrals table...");
         await client.query(`CREATE TABLE IF NOT EXISTS referrals (
     referral_id SERIAL PRIMARY KEY,
     referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -797,10 +797,10 @@ async function initializeDatabaseSchema() {
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
-        console.log("DEBUG V9: Referrals table processed.");
+        console.log("DEBUG V9 FINAL: Referrals table processed.");
 
         // Processed Sweeps Table
-        console.log("DEBUG V9: Creating Processed Sweeps table...");
+        console.log("DEBUG V9 FINAL: Creating Processed Sweeps table...");
         await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
     sweep_id SERIAL PRIMARY KEY,
     source_deposit_address VARCHAR(44) NOT NULL,
@@ -810,10 +810,10 @@ async function initializeDatabaseSchema() {
     swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-        console.log("DEBUG V9: Processed Sweeps table processed.");
+        console.log("DEBUG V9 FINAL: Processed Sweeps table processed.");
 
         // Ledger Table
-        console.log("DEBUG V9: Creating Ledger table...");
+        console.log("DEBUG V9 FINAL: Creating Ledger table...");
         await client.query(`CREATE TABLE IF NOT EXISTS ledger (
     ledger_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
@@ -832,27 +832,27 @@ async function initializeDatabaseSchema() {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
-        console.log("DEBUG V9: Ledger table processed.");
+        console.log("DEBUG V9 FINAL: Ledger table processed.");
 
         // Dice Roll Requests Table
-        console.log("DEBUG V9: Creating Dice Roll Requests table...");
+        console.log("DEBUG V9 FINAL: Creating Dice Roll Requests table...");
         await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
     request_id SERIAL PRIMARY KEY,
     game_id VARCHAR(255) NULL,
     chat_id BIGINT NOT NULL,
-    user_id BIGINT NULL, 
+    user_id BIGINT NULL,
     emoji_type VARCHAR(50) DEFAULT '🎲',
-    status VARCHAR(50) DEFAULT 'pending', 
+    status VARCHAR(50) DEFAULT 'pending',
     roll_value INTEGER NULL,
     requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     processed_at TIMESTAMPTZ NULL,
-    notes TEXT NULL 
+    notes TEXT NULL
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
-        console.log("DEBUG V9: Dice Roll Requests table processed.");
+        console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
 
         // Update function for 'updated_at' columns
-        console.log("DEBUG V9: Creating/Ensuring trigger function trigger_set_timestamp...");
+        console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
         await client.query(`
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
@@ -861,10 +861,10 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;`);
-        console.log("DEBUG V9: Trigger function processed. Applying triggers to tables...");
+        console.log("DEBUG V9 FINAL: Trigger function processed. Applying triggers to tables...");
         const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
         for (const tableName of tablesWithUpdatedAt) {
-            console.log(`DEBUG V9: Checking/Setting trigger for ${tableName}...`);
+            console.log(`DEBUG V9 FINAL: Checking/Setting trigger for ${tableName}...`);
             const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
             const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
 
@@ -877,21 +877,21 @@ EXECUTE FUNCTION trigger_set_timestamp();`;
                 await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
             }
         }
-        console.log("DEBUG V9: Triggers processed.");
+        console.log("DEBUG V9 FINAL: Triggers processed.");
 
         await client.query('COMMIT');
-        console.log("✅ V9 CLEAN WHITESPACE: Database schema initialization complete (ALL TABLES & TRIGGERS).");
+        console.log("✅ V9 FINAL CLEAN WHITESPACE: Database schema initialization complete (ALL TABLES & TRIGGERS).");
 
     } catch (e) {
         try {
-            console.log("DEBUG V9: Error caught, attempting ROLLBACK...");
+            console.log("DEBUG V9 FINAL: Error caught, attempting ROLLBACK...");
             await client.query('ROLLBACK');
-            console.log("DEBUG V9: ROLLBACK executed.");
+            console.log("DEBUG V9 FINAL: ROLLBACK executed.");
         } catch (rbError) {
-            console.error("DEBUG V9: Error during ROLLBACK attempt:", rbError);
+            console.error("DEBUG V9 FINAL: Error during ROLLBACK attempt:", rbError);
         }
-        console.error('❌ V9 CLEAN WHITESPACE: Error during database schema initialization:', e);
-        throw e;
+        console.error('❌ V9 FINAL CLEAN WHITESPACE: Error during database schema initialization:', e);
+        throw e; // Re-throw the original error to be caught by the main init error handler
     } finally {
         client.release();
     }
