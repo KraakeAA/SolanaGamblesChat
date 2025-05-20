@@ -662,28 +662,28 @@ async function initializeDatabaseSchema() {
         // Users Table ONLY, with hardcoded default balance
         console.log("DEBUG V7: About to execute CREATE TABLE users (hardcoded default)...");
         const usersTableQuery = `CREATE TABLE IF NOT EXISTS users (
-            telegram_id BIGINT PRIMARY KEY,
-            username VARCHAR(255),
-            first_name VARCHAR(255),
-            last_name VARCHAR(255),
-            balance BIGINT DEFAULT 10000000, /* MODIFIED THIS LINE - HARDCODED */
-            last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            is_banned BOOLEAN DEFAULT FALSE,
-            ban_reason TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            solana_wallet_address VARCHAR(44) UNIQUE,
-            referral_code VARCHAR(12) UNIQUE,
-            referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-            can_generate_deposit_address BOOLEAN DEFAULT TRUE,
-            last_deposit_address VARCHAR(44),
-            last_deposit_address_generated_at TIMESTAMPTZ,
-            total_deposited_lamports BIGINT DEFAULT 0,
-            total_withdrawn_lamports BIGINT DEFAULT 0,
-            total_wagered_lamports BIGINT DEFAULT 0,
-            total_won_lamports BIGINT DEFAULT 0,
-            notes TEXT
-        );`;
+    telegram_id BIGINT PRIMARY KEY,
+    username VARCHAR(255),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    balance BIGINT DEFAULT 10000000,
+    last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    is_banned BOOLEAN DEFAULT FALSE,
+    ban_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    solana_wallet_address VARCHAR(44) UNIQUE,
+    referral_code VARCHAR(12) UNIQUE,
+    referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    can_generate_deposit_address BOOLEAN DEFAULT TRUE,
+    last_deposit_address VARCHAR(44),
+    last_deposit_address_generated_at TIMESTAMPTZ,
+    total_deposited_lamports BIGINT DEFAULT 0,
+    total_withdrawn_lamports BIGINT DEFAULT 0,
+    total_wagered_lamports BIGINT DEFAULT 0,
+    total_won_lamports BIGINT DEFAULT 0,
+    notes TEXT
+);`; // Ensure this semicolon is the last character before the backtick
         await client.query(usersTableQuery);
         console.log("DEBUG V7: CREATE TABLE users statement (hardcoded default) executed.");
 
