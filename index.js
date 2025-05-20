@@ -692,7 +692,7 @@ async function initializeDatabaseSchema() {
         );`);
         await client.query(
             `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID]
+            [MAIN_JACKPOT_ID] // MAIN_JACKPOT_ID should be defined in Part 1
         );
 
         // Games Table (Game Log)
@@ -841,28 +841,33 @@ async function initializeDatabaseSchema() {
         `);
         const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
         for (const tableName of tablesWithUpdatedAt) {
+            // Using parameterized query for checking trigger existence
             const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
             const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
 
             if (triggerExistsRes.rowCount === 0) {
+                // Using template literal for CREATE TRIGGER as table name cannot be parameterized here
                 const createTriggerQuery = `
                     CREATE TRIGGER set_timestamp
                     BEFORE UPDATE ON ${tableName}
                     FOR EACH ROW
                     EXECUTE FUNCTION trigger_set_timestamp();
                 `;
-                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message} (Query: ${createTriggerQuery.substring(0, 100)}...)`));
+                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
             }
         }
         await client.query('COMMIT');
         console.log("✅ Database schema initialization complete.");
     } catch (e) {
         await client.query('ROLLBACK');
-        if (e.code === '42601' && e.message.includes('at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
+        // My specific check for errors near the start of DDL
+        if (e.code === '42601' && e.message.includes('syntax error at or near ""') && e.position && parseInt(String(e.position), 10) < 5) {
              console.error('❌ Error during DB schema initialization (Likely empty/malformed query or invisible chars at START of SQL DDL):', e);
              console.error(`Hint: Error at position ${e.position} of failing SQL. Check for invisible characters if copy-pasting DDL.`);
-        } else {
+        } else { // Generic catch for other errors, including the one the user is seeing
             console.error('❌ Error during database schema initialization:', e);
+            // If the specific error (position 40, length 91) occurs again, it means the issue isn't an obvious invisible char at the *start* of a DDL query.
+            // It's something more specific within one of the queries, or a subtle copy-paste issue within the long DDL strings.
         }
         throw e;
     } finally {
