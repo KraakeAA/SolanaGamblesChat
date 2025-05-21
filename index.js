@@ -4190,222 +4190,235 @@ async function handleDice21PvBStand(gameId, userObject, originalMessageId, callb
 
 // REVISED processDice21BotTurn (Bot message editing flow - confirmed by user as "perfect")
 async function processDice21BotTurn(gameData) {
-    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_SingleMsgEdit]`;
-    if (!gameData || isShuttingDown || gameData.status !== 'bot_turn_pending_rolls') {
-        if (gameData) console.warn(`${logPrefix} Bot turn aborted. Status: '${gameData.status}'. Shutdown: ${isShuttingDown}.`);
-        else console.warn(`${logPrefix} Bot turn aborted, no game data for GID ${gameData?.gameId}.`);
-        return;
-    }
-    console.log(`${logPrefix} Bot Dealer's turn. Player ${gameData.playerRef} stands with: ${gameData.playerScore}.`);
+    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_SingleMsgEdit]`;
+    if (!gameData || isShuttingDown || gameData.status !== 'bot_turn_pending_rolls') {
+        if (gameData) console.warn(`${logPrefix} Bot turn aborted. Status: '${gameData.status}'. Shutdown: ${isShuttingDown}.`);
+        else console.warn(`${logPrefix} Bot turn aborted, no game data for GID ${gameData?.gameId}.`);
+        return;
+    }
+    console.log(`${logPrefix} Bot Dealer's turn. Player ${gameData.playerRef} stands with: ${gameData.playerScore}.`);
 
-    gameData.status = 'bot_rolling';
-    gameData.botScore = 0;
-    gameData.botHandRolls = [];
-    activeGames.set(gameData.gameId, gameData);
+    gameData.status = 'bot_rolling';
+    gameData.botScore = 0;
+    gameData.botHandRolls = [];
+    activeGames.set(gameData.gameId, gameData);
 
-    if (gameData.gameMessageId) { // This was the "Player stands... Bot's turn..." message
-        gameData.intermediateMessageIds.push(gameData.gameMessageId);
-    }
+    if (gameData.gameMessageId) { // This was the "Player stands... Bot's turn..." message
+        gameData.intermediateMessageIds.push(gameData.gameMessageId);
+    }
 
-    const initialBotPlayMsgText = `🤖 Bot Dealer is playing its hand... (Player stood at *${escapeMarkdownV2(String(gameData.playerScore))}*)`;
-    const botTurnMsg = await safeSendMessage(gameData.chatId, initialBotPlayMsgText, { parse_mode: 'MarkdownV2' });
+    const initialBotPlayMsgText = `🤖 Bot Dealer is playing its hand... (Player stood at *${escapeMarkdownV2(String(gameData.playerScore))}*)`;
+    const botTurnMsg = await safeSendMessage(gameData.chatId, initialBotPlayMsgText, { parse_mode: 'MarkdownV2' });
 
-    if (!botTurnMsg?.message_id) {
-        console.error(`${logPrefix} CRITICAL: Failed to send initial bot turn message. Game cannot proceed visually for bot turn.`);
-        gameData.status = 'game_over_error_ui_update';
-        activeGames.set(gameData.gameId, gameData);
-        await finalizeDice21PvBGame(gameData);
-        return;
-    }
-    gameData.gameMessageId = botTurnMsg.message_id; // This is the message we will edit
+    if (!botTurnMsg?.message_id) {
+        console.error(`${logPrefix} CRITICAL: Failed to send initial bot turn message. Game cannot proceed visually for bot turn.`);
+        gameData.status = 'game_over_error_ui_update';
+        activeGames.set(gameData.gameId, gameData);
+        await finalizeDice21PvBGame(gameData);
+        return;
+    }
+    gameData.gameMessageId = botTurnMsg.message_id; // This is the message we will edit
 
-    await sleep(1500);
+    await sleep(1500);
 
-    let botFaultedInTurn = false;
-    for (let rollCount = 1; rollCount <= 5; rollCount++) {
-        if (isShuttingDown || botFaultedInTurn) break;
-        if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) break;
+    let botFaultedInTurn = false;
+    for (let rollCount = 1; rollCount <= 5; rollCount++) {
+        if (isShuttingDown || botFaultedInTurn) break;
+        if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) break;
 
-        const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollCount}`);
-        if (dieRollResult.error) {
-            console.error(`${logPrefix} Bot failed to get roll ${rollCount}: ${dieRollResult.message}.`);
-            botFaultedInTurn = true; break;
-        }
-        const rollVal = dieRollResult.roll;
-        gameData.botHandRolls.push(rollVal);
-        gameData.botScore += rollVal;
-        activeGames.set(gameData.gameId, gameData);
+        const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollCount}`);
+        if (dieRollResult.error) {
+            console.error(`${logPrefix} Bot failed to get roll ${rollCount}: ${dieRollResult.message}.`);
+            botFaultedInTurn = true; break;
+        }
+        const rollVal = dieRollResult.roll;
+        gameData.botHandRolls.push(rollVal);
+        gameData.botScore += rollVal;
+        activeGames.set(gameData.gameId, gameData);
 
-        let botActionText;
-        if (gameData.botScore > DICE_21_TARGET_SCORE) {
-            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. 💥 Bot busts!`;
-        } else if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. ✋ Bot stands.`;
-        } else {
-            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. Bot rolls again...`;
-        }
+        let botActionText;
+        if (gameData.botScore > DICE_21_TARGET_SCORE) {
+            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. 💥 Bot busts!`;
+        } else if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
+            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. ✋ Bot stands.`;
+        } else {
+            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. Bot rolls again...`;
+        }
 
-        try {
-            await bot.editMessageText(botActionText, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2' });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                console.warn(`${logPrefix} Failed to edit bot turn message (ID:${gameData.gameMessageId}). Error: ${e.message}. The message might have been deleted or an API error occurred.`);
-                // Don't try to send a new one here, as the gameMessageId might be invalid, stick to the error or let finalize handle it.
-                botFaultedInTurn = true; // Consider this a UI fault if we can't update the display
-                break;
-            }
-        }
+        // --- START OF CHANGE for processDice21BotTurn ---
+        // Selectively escape periods and exclamation marks for this specific message string
+        const safeBotActionText = botActionText.replace(/\./g, '\\.').replace(/!/g, '\\!');
+        // --- END OF CHANGE for processDice21BotTurn ---
 
-        if (gameData.botScore > DICE_21_TARGET_SCORE || gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            break;
-        }
-        await sleep(2000);
-    }
+        try {
+            // Use safeBotActionText instead of botActionText
+            await bot.editMessageText(safeBotActionText, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2' });
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`${logPrefix} Failed to edit bot turn message (ID:${gameData.gameMessageId}). Error: ${e.message}. The message might have been deleted or an API error occurred.`);
+                botFaultedInTurn = true; // Consider this a UI fault if we can't update the display
+                break;
+            }
+        }
 
-    if (botFaultedInTurn) {
-        gameData.status = 'game_over_bot_error'; // Could also be 'game_over_error_ui_update'
-    } else {
-        gameData.status = 'game_over_bot_played';
-    }
-    activeGames.set(gameData.gameId, gameData); // Save final bot status
+        if (gameData.botScore > DICE_21_TARGET_SCORE || gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
+            break;
+        }
+        await sleep(2000);
+    }
 
-    console.log(`${logPrefix} Bot Dealer's turn finished. Status: ${gameData.status}. Score: ${gameData.botScore}. Proceeding to finalize.`);
-    await sleep(1500);
-    await finalizeDice21PvBGame(gameData);
+    if (botFaultedInTurn) {
+        gameData.status = 'game_over_bot_error'; // Could also be 'game_over_error_ui_update'
+    } else {
+        gameData.status = 'game_over_bot_played';
+    }
+    activeGames.set(gameData.gameId, gameData); // Save final bot status
+
+    console.log(`${logPrefix} Bot Dealer's turn finished. Status: ${gameData.status}. Score: ${gameData.botScore}. Proceeding to finalize.`);
+    await sleep(1500);
+    await finalizeDice21PvBGame(gameData);
 }
 
 // REVISED finalizeDice21PvBGame (collects final gameMessageId, then deletes all in intermediateMessageIds)
 async function finalizeDice21PvBGame(gameData) {
-    const logPrefix = `[D21_PvB_Finalize GID:${gameData.gameId} V7]`;
+    const logPrefix = `[D21_PvB_Finalize GID:${gameData.gameId} V7]`;
 
-    if (!gameData) {
-        console.error(`${logPrefix} Finalize called but gameData is missing. Cannot proceed.`);
-        return;
+    if (!gameData) {
+        console.error(`${logPrefix} Finalize called but gameData is missing. Cannot proceed.`);
+        return;
+    }
+
+    const finalStatus = gameData.status;
+    console.log(`${logPrefix} Finalizing game. Player: ${gameData.playerRef}, PScore: ${gameData.playerScore}, BScore: ${gameData.botScore}, Status: ${finalStatus}`);
+
+    // Add the ID of the very last game state message (e.g., bot's edited turn message, player's bust prompt)
+    if (gameData.gameMessageId) {
+        gameData.intermediateMessageIds.push(gameData.gameMessageId);
+    }
+    const messagesToDelete = [...gameData.intermediateMessageIds]; // Copy before deleting gameData from activeGames
+    activeGames.delete(gameData.gameId);
+
+    if (gameData.chatType !== 'private') {
+        await updateGroupGameDetails(gameData.chatId, null, null, null);
+    }
+
+    let resultTitle = "🏁 Dice 21 Result 🏁";
+    let resultOutcomeText = "";
+    let payoutLamports = 0n;
+    let playerWins = false;
+    let playerBlackjack = (gameData.playerScore === DICE_21_TARGET_SCORE && gameData.playerHandRolls.length === 2);
+    const betAmount = gameData.betAmount;
+    const betDisplayUSDShort = await formatBalanceForDisplay(betAmount, 'USD', 2);
+
+    if (finalStatus === 'game_over_player_bust') {
+        resultTitle = "💥 Player Busts!";
+        resultOutcomeText = `Your score: *${escapeMarkdownV2(String(gameData.playerScore))}*. Bot wins *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
+    } else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') {
+        resultTitle = "⚙️ Game Error";
+        resultOutcomeText = `Technical issue. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* refunded.`;
+        payoutLamports = betAmount;
+    } else if (finalStatus === 'game_over_player_forfeit') {
+        resultTitle = "🚫 Game Forfeited";
+        resultOutcomeText = `You forfeited. Bot wins *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
+    } else if (finalStatus === 'game_over_bot_played' || finalStatus === 'player_blackjack') {
+        if (playerBlackjack && (gameData.botScore !== DICE_21_TARGET_SCORE || gameData.botHandRolls.length > 2)) {
+            resultTitle = "✨🎉 BLACKJACK!";
+            const profitBlackjack = betAmount * 15n / 10n; // Standard 3:2 payout for Blackjack (profit part)
+            resultOutcomeText = `Natural 21! You win *${escapeMarkdownV2(await formatBalanceForDisplay(profitBlackjack, 'USD', 2))}* profit!`;
+            playerWins = true;
+            payoutLamports = betAmount + profitBlackjack; // Total returned to player
+        } else if (gameData.botScore > DICE_21_TARGET_SCORE) {
+            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Bot BUSTED (*${escapeMarkdownV2(String(gameData.botScore))}*)! You win *${escapeMarkdownV2(betDisplayUSDShort)}* profit!`;
+            playerWins = true; payoutLamports = betAmount * 2n;
+        } else if (gameData.playerScore > gameData.botScore) {
+            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Your *${escapeMarkdownV2(String(gameData.playerScore))}* beats Bot's *${escapeMarkdownV2(String(gameData.botScore))}*. You win *${escapeMarkdownV2(betDisplayUSDShort)}* profit!`;
+            playerWins = true; payoutLamports = betAmount * 2n;
+        } else if (gameData.botScore > gameData.playerScore) {
+            resultTitle = "🤖 Bot Wins"; resultOutcomeText = `Bot's *${escapeMarkdownV2(String(gameData.botScore))}* beats your *${escapeMarkdownV2(String(gameData.playerScore))}*. You lost *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
+        } else { // Push
+            resultTitle = "⚖️ Push!"; resultOutcomeText = `Scores tied at *${escapeMarkdownV2(String(gameData.playerScore))}*. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* returned.`;
+            payoutLamports = betAmount;
+        }
+    } else { // Unknown status
+        resultTitle = "❓ Game Undetermined";
+        resultOutcomeText = `Unexpected status: \`${escapeMarkdownV2(String(finalStatus))}\`. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* refunded.`;
+        payoutLamports = betAmount;
+    }
+
+    let finalUserBalanceLamports = BigInt(gameData.userObj.balance);
+    let dbErrorDuringPayoutText = "";
+
+    if (payoutLamports >= 0n || finalStatus === 'game_over_player_bust' || finalStatus === 'game_over_player_forfeit' || (finalStatus === 'game_over_bot_played' && !playerWins && payoutLamports === 0n)) {
+        let client = null;
+        try {
+            client = await pool.connect(); await client.query('BEGIN');
+            let transactionType = 'loss_dice21_pvb'; // Default
+            if (finalStatus === 'game_over_player_bust') transactionType = 'loss_dice21_pvb_player_bust';
+            else if (finalStatus === 'game_over_player_forfeit') transactionType = 'loss_dice21_pvb_forfeit';
+            else if (playerWins) transactionType = playerBlackjack ? 'win_dice21_pvb_blackjack' : 'win_dice21_pvb';
+            else if (payoutLamports === betAmount) transactionType = 'refund_dice21_pvb'; // For push or error refund
+            else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') transactionType = 'refund_dice21_pvb_error';
+
+            const notes = `Dice 21 PvB Result: ${finalStatus}. Payout: ${payoutLamports}. Player Hand: ${gameData.playerHandRolls.join(',')}. Bot Hand: ${gameData.botHandRolls.join(',')}.`;
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, gameData.playerId, payoutLamports, transactionType, { game_id_custom_field: gameData.gameId }, notes);
+
+            if (balanceUpdateResult.success) {
+                await client.query('COMMIT');
+                finalUserBalanceLamports = balanceUpdateResult.newBalanceLamports;
+            } else {
+                await client.query('ROLLBACK');
+                dbErrorDuringPayoutText = `\n\n⚠️ Balance Update Error. Staff notified.`;
+                console.error(`${logPrefix} FAILED to update balance after game. Error: ${balanceUpdateResult.error}`);
+            }
+        } catch (e) {
+            if (client) await client.query('ROLLBACK').catch(()=>{});
+            dbErrorDuringPayoutText = `\n\n🚨 Critical DB Error. Staff notified.`;
+            console.error(`${logPrefix} CRITICAL DB error during finalization: ${e.message}`);
+            if (typeof notifyAdmin === 'function') {
+                notifyAdmin(`🚨 D21 PvB Finalize Payout DB Failure 🚨\nGame ID: \`${escapeMarkdownV2(String(gameData.gameId))}\`\nError: ${escapeMarkdownV2(e.message)}. MANUAL BALANCE CHECK/CREDIT REQUIRED for ${payoutLamports} for user ${gameData.playerId}.`, {parse_mode:'MarkdownV2'});
+            }
+        } finally {
+            if (client) client.release();
+        }
+    } else {
+      // This case means player lost and payoutLamports is 0n, no balance change needed beyond what's already debited (bet).
+      // However, we should still fetch the current balance to display it correctly.
+      const freshBalance = await getUserBalance(gameData.playerId);
+      if (freshBalance !== null) finalUserBalanceLamports = freshBalance;
     }
 
-    const finalStatus = gameData.status;
-    console.log(`${logPrefix} Finalizing game. Player: ${gameData.playerRef}, PScore: ${gameData.playerScore}, BScore: ${gameData.botScore}, Status: ${finalStatus}`);
+    const finalBalanceDisplay = `\nBal: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD', 2))}*`;
 
-    // Add the ID of the very last game state message (e.g., bot's edited turn message, player's bust prompt)
-    if (gameData.gameMessageId) {
-        gameData.intermediateMessageIds.push(gameData.gameMessageId);
-    }
-    const messagesToDelete = [...gameData.intermediateMessageIds]; // Copy before deleting gameData from activeGames
-    activeGames.delete(gameData.gameId);
+    let conciseFinalMessage = `*${escapeMarkdownV2(resultTitle)}*\n` +
+                              `You (${gameData.playerRef}): *${escapeMarkdownV2(String(gameData.playerScore))}* ${formatDiceRolls(gameData.playerHandRolls)}\n` +
+                              `Bot: *${escapeMarkdownV2(String(gameData.botScore))}* ${formatDiceRolls(gameData.botHandRolls)}\n` +
+                              `${resultOutcomeText}` +
+                              `${dbErrorDuringPayoutText}` +
+                              `${finalBalanceDisplay}`;
 
-    if (gameData.chatType !== 'private') {
-        await updateGroupGameDetails(gameData.chatId, null, null, null);
-    }
+    // --- START OF CHANGE for finalizeDice21PvBGame ---
+    // Selectively escape periods and exclamation marks for this specific final message string
+    const safeConciseFinalMessage = conciseFinalMessage.replace(/\./g, '\\.').replace(/!/g, '\\!');
+    // --- END OF CHANGE for finalizeDice21PvBGame ---
 
-    let resultTitle = "🏁 Dice 21 Result 🏁";
-    let resultOutcomeText = "";
-    let payoutLamports = 0n;
-    let playerWins = false;
-    let playerBlackjack = (gameData.playerScore === DICE_21_TARGET_SCORE && gameData.playerHandRolls.length === 2);
-    const betAmount = gameData.betAmount;
-    const betDisplayUSDShort = await formatBalanceForDisplay(betAmount, 'USD', 2);
+    const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_21, gameData.betAmount);
+    // Use safeConciseFinalMessage in safeSendMessage
+    await safeSendMessage(gameData.chatId, safeConciseFinalMessage, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
 
-    if (finalStatus === 'game_over_player_bust') {
-        resultTitle = "💥 Player Busts!";
-        resultOutcomeText = `Your score: *${escapeMarkdownV2(String(gameData.playerScore))}*. Bot wins *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
-    } else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') {
-        resultTitle = "⚙️ Game Error";
-        resultOutcomeText = `Technical issue. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* refunded.`;
-        payoutLamports = betAmount;
-    } else if (finalStatus === 'game_over_player_forfeit') {
-        resultTitle = "🚫 Game Forfeited";
-        resultOutcomeText = `You forfeited. Bot wins *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
-    } else if (finalStatus === 'game_over_bot_played' || finalStatus === 'player_blackjack') {
-        if (playerBlackjack && (gameData.botScore !== DICE_21_TARGET_SCORE || gameData.botHandRolls.length > 2)) {
-            resultTitle = "✨🎉 BLACKJACK!";
-            const profitBlackjack = betAmount * 15n / 10n;
-            resultOutcomeText = `Natural 21! You win *${escapeMarkdownV2(await formatBalanceForDisplay(profitBlackjack, 'USD', 2))}* profit!`;
-            playerWins = true;
-            payoutLamports = betAmount + profitBlackjack;
-        } else if (gameData.botScore > DICE_21_TARGET_SCORE) {
-            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Bot BUSTED (*${escapeMarkdownV2(String(gameData.botScore))}*)! You win *${escapeMarkdownV2(betDisplayUSDShort)}* profit!`;
-            playerWins = true; payoutLamports = betAmount * 2n;
-        } else if (gameData.playerScore > gameData.botScore) {
-            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Your *${escapeMarkdownV2(String(gameData.playerScore))}* beats Bot's *${escapeMarkdownV2(String(gameData.botScore))}*. You win *${escapeMarkdownV2(betDisplayUSDShort)}* profit!`;
-            playerWins = true; payoutLamports = betAmount * 2n;
-        } else if (gameData.botScore > gameData.playerScore) {
-            resultTitle = "🤖 Bot Wins"; resultOutcomeText = `Bot's *${escapeMarkdownV2(String(gameData.botScore))}* beats your *${escapeMarkdownV2(String(gameData.playerScore))}*. You lost *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
-        } else { // Push
-            resultTitle = "⚖️ Push!"; resultOutcomeText = `Scores tied at *${escapeMarkdownV2(String(gameData.playerScore))}*. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* returned.`;
-            payoutLamports = betAmount;
-        }
-    } else { // Unknown status
-        resultTitle = "❓ Game Undetermined";
-        resultOutcomeText = `Unexpected status: \`${escapeMarkdownV2(String(finalStatus))}\`. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* refunded.`;
-        payoutLamports = betAmount;
-    }
-
-    let finalUserBalanceLamports = BigInt(gameData.userObj.balance);
-    let dbErrorDuringPayoutText = "";
-
-    if (payoutLamports >= 0n || finalStatus === 'game_over_player_bust' || finalStatus === 'game_over_player_forfeit' || (finalStatus === 'game_over_bot_played' && !playerWins && payoutLamports === 0n)) {
-        let client = null;
-        try {
-            client = await pool.connect(); await client.query('BEGIN');
-            let transactionType = 'loss_dice21_pvb';
-            if (finalStatus === 'game_over_player_bust') transactionType = 'loss_dice21_pvb_player_bust';
-            else if (finalStatus === 'game_over_player_forfeit') transactionType = 'loss_dice21_pvb_forfeit';
-            else if (playerWins) transactionType = playerBlackjack ? 'win_dice21_pvb_blackjack' : 'win_dice21_pvb';
-            else if (payoutLamports === betAmount) transactionType = 'refund_dice21_pvb';
-            else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') transactionType = 'refund_dice21_pvb_error';
-
-            const notes = `Dice 21 PvB Result: ${finalStatus}. Payout: ${payoutLamports}. Player Hand: ${gameData.playerHandRolls.join(',')}. Bot Hand: ${gameData.botHandRolls.join(',')}.`;
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, gameData.playerId, payoutLamports, transactionType, { game_id_custom_field: gameData.gameId }, notes);
-
-            if (balanceUpdateResult.success) {
-                await client.query('COMMIT');
-                finalUserBalanceLamports = balanceUpdateResult.newBalanceLamports;
-            } else {
-                await client.query('ROLLBACK');
-                dbErrorDuringPayoutText = `\n\n⚠️ Balance Update Error. Staff notified.`;
-                console.error(`${logPrefix} FAILED to update balance after game. Error: ${balanceUpdateResult.error}`);
-            }
-        } catch (e) {
-            if (client) await client.query('ROLLBACK').catch(()=>{});
-            dbErrorDuringPayoutText = `\n\n🚨 Critical DB Error. Staff notified.`;
-            console.error(`${logPrefix} CRITICAL DB error during finalization: ${e.message}`);
-            if (typeof notifyAdmin === 'function') {
-                notifyAdmin(`🚨 D21 PvB Finalize Payout DB Failure 🚨\nGame ID: \`${escapeMarkdownV2(String(gameData.gameId))}\`\nError: ${escapeMarkdownV2(e.message)}. MANUAL BALANCE CHECK/CREDIT REQUIRED for ${payoutLamports} for user ${gameData.playerId}.`, {parse_mode:'MarkdownV2'});
-            }
-        } finally {
-            if (client) client.release();
-        }
-    } else {
-        const freshBalance = await getUserBalance(gameData.playerId);
-        if (freshBalance !== null) finalUserBalanceLamports = freshBalance;
-    }
-
-    const finalBalanceDisplay = `\nBal: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD', 2))}*`;
-
-    let conciseFinalMessage = `*${escapeMarkdownV2(resultTitle)}*\n` +
-                              `You (${gameData.playerRef}): *${escapeMarkdownV2(String(gameData.playerScore))}* ${formatDiceRolls(gameData.playerHandRolls)}\n` +
-                              `Bot: *${escapeMarkdownV2(String(gameData.botScore))}* ${formatDiceRolls(gameData.botHandRolls)}\n` +
-                              `${resultOutcomeText}` +
-                              `${dbErrorDuringPayoutText}` +
-                              `${finalBalanceDisplay}`;
-
-    const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_21, gameData.betAmount);
-    await safeSendMessage(gameData.chatId, conciseFinalMessage, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
-
-    // Delete all collected intermediate messages
-    if (messagesToDelete && messagesToDelete.length > 0) {
-        console.log(`${logPrefix} Deleting ${messagesToDelete.length} intermediate messages for game ${gameData.gameId}.`);
-        for (const msgId of messagesToDelete) {
-            if (bot && msgId) {
-                await bot.deleteMessage(gameData.chatId, Number(msgId)).catch(e => {
-                    if (e.message && !e.message.toLowerCase().includes("message to delete not found") && !e.message.toLowerCase().includes("message can't be deleted")) {
-                        console.warn(`${logPrefix} Failed to delete intermediate message ID ${msgId}: ${e.message}`);
-                    }
-                });
-            }
-        }
-    }
-    console.log(`${logPrefix} Finalization and message cleanup complete for game ${gameData.gameId}.`);
+    // Delete all collected intermediate messages
+    if (messagesToDelete && messagesToDelete.length > 0) {
+        console.log(`${logPrefix} Deleting ${messagesToDelete.length} intermediate messages for game ${gameData.gameId}.`);
+        for (const msgId of messagesToDelete) {
+            if (bot && msgId) {
+                await bot.deleteMessage(gameData.chatId, Number(msgId)).catch(e => {
+                    if (e.message && !e.message.toLowerCase().includes("message to delete not found") && !e.message.toLowerCase().includes("message can't be deleted")) {
+                        console.warn(`${logPrefix} Failed to delete intermediate message ID ${msgId}: ${e.message}`);
+                    }
+                });
+            }
+        }
+    }
+    console.log(`${logPrefix} Finalization and message cleanup complete for game ${gameData.gameId}.`);
 }
 
 
