@@ -4202,9 +4202,11 @@ async function handleDice21PvBStand(gameId, userObject, originalMessageId, callb
     }
 }
 
-// REVISED processDice21BotTurn for correct stand logic (hits on <17) & sequential messaging
+// --- From Part 5b, Section 2 (Dice 21 / Blackjack-style game logic) - SEGMENT 2 of 2 ---
+
+// REVISED processDice21BotTurn with fix for ReferenceError and correct stand logic
 async function processDice21BotTurn(gameData) {
-    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_CorrectStandLogic]`;
+    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_RefErrorFix]`; // Updated log prefix
     if (!gameData || isShuttingDown || gameData.status !== 'bot_turn_pending_rolls') {
         if (gameData) console.warn(`${logPrefix} Bot turn aborted. Status: '${gameData.status}'. Shutdown: ${isShuttingDown}.`);
         else console.warn(`${logPrefix} Bot turn aborted, no game data for GID ${gameData?.gameId}.`);
@@ -4214,7 +4216,7 @@ async function processDice21BotTurn(gameData) {
 
     gameData.status = 'bot_rolling';
     gameData.botScore = 0;
-    gameData.botHandRolls = []; // Reset bot hand for this turn
+    gameData.botHandRolls = [];
     activeGames.set(gameData.gameId, gameData);
 
     let initialAnnounceText = `✋ ${gameData.playerRef} stands with *${escapeMarkdownV2(String(gameData.playerScore))}*. Bot's turn.\n🤖 Bot Dealer will now roll...`;
@@ -4248,11 +4250,10 @@ async function processDice21BotTurn(gameData) {
 
     let botFaultedInTurn = false;
     let rollsThisTurn = 0;
-    const MAX_BOT_ROLLS_SAFETY = 10; // Safety break
+    const MAX_BOT_ROLLS_SAFETY = 10;
 
     while (gameData.botScore < DICE_21_BOT_STAND_SCORE && !botFaultedInTurn && rollsThisTurn < MAX_BOT_ROLLS_SAFETY) {
         if (isShuttingDown) break;
-
         rollsThisTurn++;
 
         const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollsThisTurn}`);
@@ -4277,7 +4278,7 @@ async function processDice21BotTurn(gameData) {
             rollMessage += " Bot busts.";
         } else if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
             rollMessage += " Bot stands.";
-        } else { // Score is < DICE_21_BOT_STAND_SCORE (and not bust)
+        } else {
             rollMessage += " Bot rolling again.";
         }
         rollMessage = rollMessage.replace(/\./g, '\\.');
@@ -4299,19 +4300,9 @@ async function processDice21BotTurn(gameData) {
         safetyStandMessage = safetyStandMessage.replace(/\./g, '\\.');
         const safetyStandMsg = await safeSendMessage(gameData.chatId, safetyStandMessage, { parse_mode: 'MarkdownV2' });
         if(safetyStandMsg?.message_id) gameData.intermediateMessageIds.push(safetyStandMsg.message_id);
-    } else if (!botFaultedInTurn && gameData.botScore >= DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE &&
-               ! (gameData.intermediateMessageIds.some(id => { // Check if "Bot stands" wasn't already the last message
-                    const lastMsgContent = rollMessage; // The content of the last rollMessage sent
-                    return lastMsgContent && lastMsgContent.includes("Bot stands.");
-               })) ) {
-        // This ensures a "Bot stands" message is sent if the loop terminated due to score condition
-        // but the last message within the loop didn't explicitly say "Bot stands." (e.g., if it hit 17 exactly and loop terminated before next iteration's stand check)
-        let botStandsTextFinal = `Bot stands. Final score ${escapeMarkdownV2(String(gameData.botScore))}.`;
-        botStandsTextFinal = botStandsTextFinal.replace(/\./g, '\\.');
-        const botStandsMsgFinal = await safeSendMessage(gameData.chatId, botStandsTextFinal, { parse_mode: 'MarkdownV2' });
-        if (botStandsMsgFinal?.message_id) gameData.intermediateMessageIds.push(botStandsMsgFinal.message_id);
     }
-
+    // The faulty 'else if' block that caused the ReferenceError has been removed.
+    // The logic inside the loop should correctly announce "Bot stands." when that condition is met and then break.
 
     if (botFaultedInTurn) {
         gameData.status = 'game_over_bot_error';
