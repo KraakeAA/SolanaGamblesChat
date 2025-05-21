@@ -4188,9 +4188,9 @@ async function handleDice21PvBStand(gameId, userObject, originalMessageId, callb
 }
 
 
-// REVISED processDice21BotTurn (Bot message editing flow - confirmed by user as "perfect")
+// REVISED processDice21BotTurn for sequential messaging
 async function processDice21BotTurn(gameData) {
-    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_SingleMsgEdit]`;
+    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_SequentialMsg]`; // Updated log prefix
     if (!gameData || isShuttingDown || gameData.status !== 'bot_turn_pending_rolls') {
         if (gameData) console.warn(`${logPrefix} Bot turn aborted. Status: '${gameData.status}'. Shutdown: ${isShuttingDown}.`);
         else console.warn(`${logPrefix} Bot turn aborted, no game data for GID ${gameData?.gameId}.`);
@@ -4198,85 +4198,101 @@ async function processDice21BotTurn(gameData) {
     }
     console.log(`${logPrefix} Bot Dealer's turn. Player ${gameData.playerRef} stands with: ${gameData.playerScore}.`);
 
-    gameData.status = 'bot_rolling';
-    gameData.botScore = 0;
+    gameData.status = 'bot_rolling'; // Mark that bot is actively rolling
+    gameData.botScore = 0; // Reset bot score and hand for this turn
     gameData.botHandRolls = [];
     activeGames.set(gameData.gameId, gameData);
 
-    if (gameData.gameMessageId) { // This was the "Player stands... Bot's turn..." message
-        gameData.intermediateMessageIds.push(gameData.gameMessageId);
-    }
+    // The message indicating player stood and bot's turn is next (gameData.gameMessageId)
+    // will be collected by finalizeDice21PvBGame as an intermediate message if it's still set.
+    // We will now send new messages for each bot action.
+    // If gameData.gameMessageId was the player's Hit/Stand prompt, it should have been deleted by handleDice21PvBStand.
+    // If it was the "Player stands..." message, let it be, finalize will clean it or send new message.
+    // For clarity, let's ensure gameMessageId is nulled if we're not editing it anymore.
+    if (gameData.gameMessageId) {
+        gameData.intermediateMessageIds.push(gameData.gameMessageId);
+        gameData.gameMessageId = null; // No single message to edit for bot's turn sequence
+    }
 
-    const initialBotPlayMsgText = `🤖 Bot Dealer is playing its hand... (Player stood at *${escapeMarkdownV2(String(gameData.playerScore))}*)`;
-    const botTurnMsg = await safeSendMessage(gameData.chatId, initialBotPlayMsgText, { parse_mode: 'MarkdownV2' });
+    const initialBotPlayMsgText = `🤖 Bot Dealer is now playing its hand... (Player stood at *${escapeMarkdownV2(String(gameData.playerScore))}*)`;
+    // This message announces the start of the bot's turn sequence.
+    const initialBotTurnAnnounceMsg = await safeSendMessage(gameData.chatId, initialBotPlayMsgText, { parse_mode: 'MarkdownV2' });
+    if (initialBotTurnAnnounceMsg?.message_id) {
+        gameData.intermediateMessageIds.push(initialBotTurnAnnounceMsg.message_id);
+    }
+    activeGames.set(gameData.gameId, gameData); // Save gameData with updated intermediateMessageIds
 
-    if (!botTurnMsg?.message_id) {
-        console.error(`${logPrefix} CRITICAL: Failed to send initial bot turn message. Game cannot proceed visually for bot turn.`);
-        gameData.status = 'game_over_error_ui_update';
-        activeGames.set(gameData.gameId, gameData);
-        await finalizeDice21PvBGame(gameData);
-        return;
-    }
-    gameData.gameMessageId = botTurnMsg.message_id; // This is the message we will edit
-
-    await sleep(1500);
+    await sleep(1500); // Pause for readability
 
     let botFaultedInTurn = false;
-    for (let rollCount = 1; rollCount <= 5; rollCount++) {
+    for (let rollCount = 1; rollCount <= 5; rollCount++) { // Bot rolls up to 5 times or until stands/busts
         if (isShuttingDown || botFaultedInTurn) break;
-        if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) break;
+        if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
+            const botStandsMsgText = `✋ Bot stands with a score of *${escapeMarkdownV2(String(gameData.botScore))}*. Hand: ${formatDiceRolls(gameData.botHandRolls)}`;
+            const botStandsMsg = await safeSendMessage(gameData.chatId, botStandsMsgText.replace(/\./g, '\\.').replace(/!/g, '\\!'), { parse_mode: 'MarkdownV2' });
+            if (botStandsMsg?.message_id) gameData.intermediateMessageIds.push(botStandsMsg.message_id);
+            break; // Bot stands, exit loop
+        }
+
+        const rollingPreambleText = `Bot is rolling die #${rollCount}...`;
+        const rollingPreambleMsg = await safeSendMessage(gameData.chatId, rollingPreambleText.replace(/\./g, '\\.').replace(/!/g, '\\!'), { parse_mode: 'MarkdownV2' });
+        if(rollingPreambleMsg?.message_id) gameData.intermediateMessageIds.push(rollingPreambleMsg.message_id);
+        await sleep(750); // Short pause
 
         const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollCount}`);
         if (dieRollResult.error) {
             console.error(`${logPrefix} Bot failed to get roll ${rollCount}: ${dieRollResult.message}.`);
-            botFaultedInTurn = true; break;
+            const botErrorText = `⚠️ Error during Bot's roll ${rollCount}: \`${escapeMarkdownV2(dieRollResult.message)}\`. Bot's turn ends.`;
+            const botErrorMsg = await safeSendMessage(gameData.chatId, botErrorText.replace(/\./g, '\\.').replace(/!/g, '\\!'), { parse_mode: 'MarkdownV2' });
+            if(botErrorMsg?.message_id) gameData.intermediateMessageIds.push(botErrorMsg.message_id);
+            botFaultedInTurn = true;
+            break; // Exit loop on error
         }
         const rollVal = dieRollResult.roll;
+
         gameData.botHandRolls.push(rollVal);
         gameData.botScore += rollVal;
-        activeGames.set(gameData.gameId, gameData);
+        activeGames.set(gameData.gameId, gameData); // Update score in activeGames
 
-        let botActionText;
+        // Announce the roll and current score
+        let botActionDisplayMessage = `🎲 Bot rolled a *${escapeMarkdownV2(String(rollVal))}*! Current score: *${escapeMarkdownV2(String(gameData.botScore))}*. Hand: ${formatDiceRolls(gameData.botHandRolls)}`;
+        
+        const botActionMsg = await safeSendMessage(gameData.chatId, botActionDisplayMessage.replace(/\./g, '\\.').replace(/!/g, '\\!'), { parse_mode: 'MarkdownV2' });
+        if(botActionMsg?.message_id) gameData.intermediateMessageIds.push(botActionMsg.message_id);
+        await sleep(2000); // Pause for readability
+
         if (gameData.botScore > DICE_21_TARGET_SCORE) {
-            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. 💥 Bot busts!`;
-        } else if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. ✋ Bot stands.`;
-        } else {
-            botActionText = `Bot rolled a *${escapeMarkdownV2(String(rollVal))}*. Bot's score: *${escapeMarkdownV2(String(gameData.botScore))}*. Bot rolls again...`;
+            const botBustText = `💥 Bot busts with *${escapeMarkdownV2(String(gameData.botScore))}*!`;
+            const botBustMsg = await safeSendMessage(gameData.chatId, botBustText.replace(/\./g, '\\.').replace(/!/g, '\\!'), { parse_mode: 'MarkdownV2' });
+            if(botBustMsg?.message_id) gameData.intermediateMessageIds.push(botBustMsg.message_id);
+            break; // Bot busts, exit loop
         }
-
-        // --- START OF CHANGE for processDice21BotTurn ---
-        // Selectively escape periods and exclamation marks for this specific message string
-        const safeBotActionText = botActionText.replace(/\./g, '\\.').replace(/!/g, '\\!');
-        // --- END OF CHANGE for processDice21BotTurn ---
-
-        try {
-            // Use safeBotActionText instead of botActionText
-            await bot.editMessageText(safeBotActionText, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2' });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                console.warn(`${logPrefix} Failed to edit bot turn message (ID:${gameData.gameMessageId}). Error: ${e.message}. The message might have been deleted or an API error occurred.`);
-                botFaultedInTurn = true; // Consider this a UI fault if we can't update the display
-                break;
-            }
-        }
-
-        if (gameData.botScore > DICE_21_TARGET_SCORE || gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            break;
-        }
-        await sleep(2000);
+        // If not bust and not yet at stand score, loop continues for next roll
     }
 
+    // After loop, check final state if not already handled by break
+    if (!botFaultedInTurn && gameData.botScore >= DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
+        // This case is for when the loop finishes because botScore >= DICE_21_BOT_STAND_SCORE
+        // The stand message would have been sent inside the loop right before breaking.
+        // No additional message needed here if already handled.
+    } else if (!botFaultedInTurn && gameData.botScore < DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
+        // This means bot completed all rolls (e.g. 5) but didn't reach stand score or bust.
+        // Bot effectively "stands" with its current score.
+        const botFinalStandText = `✋ Bot finishes rolling and stands with *${escapeMarkdownV2(String(gameData.botScore))}*. Hand: ${formatDiceRolls(gameData.botHandRolls)}`;
+        const botFinalStandMsg = await safeSendMessage(gameData.chatId, botFinalStandText.replace(/\./g, '\\.').replace(/!/g, '\\!'), { parse_mode: 'MarkdownV2' });
+        if(botFinalStandMsg?.message_id) gameData.intermediateMessageIds.push(botFinalStandMsg.message_id);
+    }
+
     if (botFaultedInTurn) {
-        gameData.status = 'game_over_bot_error'; // Could also be 'game_over_error_ui_update'
+        gameData.status = 'game_over_bot_error';
     } else {
         gameData.status = 'game_over_bot_played';
     }
-    activeGames.set(gameData.gameId, gameData); // Save final bot status
+    activeGames.set(gameData.gameId, gameData); // Save final bot status and all intermediate message IDs
 
-    console.log(`${logPrefix} Bot Dealer's turn finished. Status: ${gameData.status}. Score: ${gameData.botScore}. Proceeding to finalize.`);
-    await sleep(1500);
-    await finalizeDice21PvBGame(gameData);
+    console.log(`${logPrefix} Bot Dealer's turn finished with sequential messages. Status: ${gameData.status}. Score: ${gameData.botScore}. Proceeding to finalize.`);
+    await sleep(1500); // Final pause before results
+    await finalizeDice21PvBGame(gameData); // finalizeDice21PvBGame will send a new summary message and clean up intermediateMessageIds
 }
 
 // REVISED finalizeDice21PvBGame (collects final gameMessageId, then deletes all in intermediateMessageIds)
