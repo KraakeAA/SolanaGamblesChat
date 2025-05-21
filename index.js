@@ -4846,12 +4846,13 @@ async function handleDice21PvPStand(gameId, userIdWhoStood, originalMessageId, c
 }
 
 async function finalizeDice21PvPGame(gameData) {
-    const logPrefix = `[D21_PvP_Finalize GID:${gameData.gameId} HTML_Profit_NoBal_Timeout]`;
+    const logPrefix = `[D21_PvP_Finalize GID:${gameData.gameId} HTML_Profit_NoBal_Timeout_Debug]`;
     if (!gameData) {
         console.error(`${logPrefix} Finalize called but gameData is missing. Aborting.`);
         return;
     }
 
+    // Ensure any active turn timeout for this game is cleared definitively
     if (gameData.currentTurnTimeoutId) {
         clearTimeout(gameData.currentTurnTimeoutId);
         gameData.currentTurnTimeoutId = null; 
@@ -4877,6 +4878,7 @@ async function finalizeDice21PvPGame(gameData) {
     const profitDisplayHTML = escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'));
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
+    // Determine game outcome and text based on finalStatus
     if (finalStatus === 'game_over_error_deal_initiator' || finalStatus === 'game_over_error_deal_opponent' || finalStatus === 'game_over_error_ui_update' || finalStatus === 'game_over_error_helper_bot' || finalStatus === 'game_over_error_timeout_logic') {
         titleEmoji = "⚙️";
         resultTextHTML = `A technical error occurred. All bets (<b>${betDisplayHTML}</b> each) refunded.`;
@@ -4929,10 +4931,15 @@ async function finalizeDice21PvPGame(gameData) {
         }
     }
 
-    let dbErrorTextForUserHTML = ""; let criticalDbErrorForAdmin = false;
+    let dbErrorTextForUserHTML = ""; 
+    let criticalDbErrorForAdmin = false;
     let client = null;
     try {
-        client = await pool.connect(); await client.query('BEGIN');
+        client = await pool.connect(); 
+        console.log(`${logPrefix} DB Client connected. Beginning transaction for payout.`); // DEBUG
+        await client.query('BEGIN');
+        console.log(`${logPrefix} DB transaction BEGAN.`); // DEBUG
+
         const determineLedgerType = (payout, bet, isPushOrError, isBlackjackWin = false, isWinByForfeit = false) => {
             if (isWinByForfeit) return 'win_dice21_pvp_forfeit';
             if (isPushOrError) return 'refund_dice21_pvp';
@@ -4947,23 +4954,46 @@ async function finalizeDice21PvPGame(gameData) {
         const p1_won_by_forfeit = (finalStatus === 'game_over_opponent_timeout_forfeit');
         const p2_won_by_forfeit = (finalStatus === 'game_over_initiator_timeout_forfeit');
 
-        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1_payout, determineLedgerType(p1_payout, betAmount, p1_is_push_or_error, p1_is_bj_win, p1_won_by_forfeit), {game_id_custom_field: gameId, opponent_id: p2.userId, player_score: p1.score, opponent_score: p2.score}, `Dice 21 PvP result vs ${p2.mention}`);
-        if (!p1Update.success) throw new Error(`P1 (${p1MentionHTML}) balance update failed: ${p1Update.error}`);
+        console.log(`${logPrefix} Preparing p1Update. p1.userId: ${p1.userId}, p1_payout: ${p1_payout}, gameData.gameId: ${gameData.gameId}`); // DEBUG
+        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1_payout, determineLedgerType(p1_payout, betAmount, p1_is_push_or_error, p1_is_bj_win, p1_won_by_forfeit), {game_id_custom_field: gameData.gameId, opponent_id: p2.userId, player_score: p1.score, opponent_score: p2.score}, `Dice 21 PvP result vs ${p2.mention}`);
+        console.log(`${logPrefix} p1Update result: ${JSON.stringify(p1Update)}`); // DEBUG
+        if (!p1Update.success) {
+            console.error(`${logPrefix} p1Update FAILED. Error details from p1Update: ${p1Update.error}`); // DEBUG
+            throw new Error(`P1 (${p1MentionHTML}) balance update failed: ${p1Update.error}`);
+        }
 
-        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2_payout, determineLedgerType(p2_payout, betAmount, p2_is_push_or_error, p2_is_bj_win, p2_won_by_forfeit), {game_id_custom_field: gameId, opponent_id: p1.userId, player_score: p2.score, opponent_score: p1.score}, `Dice 21 PvP result vs ${p1.mention}`);
-        if (!p2Update.success) throw new Error(`P2 (${p2MentionHTML}) balance update failed: ${p2Update.error}`);
+        console.log(`${logPrefix} Preparing p2Update. p2.userId: ${p2.userId}, p2_payout: ${p2_payout}, gameData.gameId: ${gameData.gameId}`); // DEBUG
+        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2_payout, determineLedgerType(p2_payout, betAmount, p2_is_push_or_error, p2_is_bj_win, p2_won_by_forfeit), {game_id_custom_field: gameData.gameId, opponent_id: p1.userId, player_score: p2.score, opponent_score: p1.score}, `Dice 21 PvP result vs ${p1.mention}`);
+        console.log(`${logPrefix} p2Update result: ${JSON.stringify(p2Update)}`); // DEBUG
+        if (!p2Update.success) {
+            console.error(`${logPrefix} p2Update FAILED. Error details from p2Update: ${p2Update.error}`); // DEBUG
+            throw new Error(`P2 (${p2MentionHTML}) balance update failed: ${p2Update.error}`);
+        }
         
         await client.query('COMMIT');
-        console.log(`${logPrefix} PvP balances updated successfully. P1 payout: ${p1_payout}, P2 payout: ${p2_payout}.`);
+        console.log(`${logPrefix} DB transaction COMMITTED. PvP balances updated successfully. P1 payout: ${p1_payout}, P2 payout: ${p2_payout}.`);
     } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(()=>{});
+        if (client) await client.query('ROLLBACK').catch((rbErr) => { console.error(`${logPrefix} Rollback error: ${rbErr.message}`)});
         criticalDbErrorForAdmin = true;
-        dbErrorTextForUserHTML = `\n\n⚠️ <b>Critical Balance Update Error:</b> A server issue prevented balances from updating correctly (<code>${escapeHTML(e.message || "Unknown DB error")}</code>). Please contact support with Game ID: <code>${escapeHTML(String(gameData.gameId))}</code>`;
-        console.error(`${logPrefix} CRITICAL DB error finalizing PvP Dice 21 ${gameData.gameId}: ${e.message}`);
-    } finally { if (client) client.release(); }
+        // Log the full error object 'e' to see its structure and actual message
+        console.error(`${logPrefix} CAUGHT ERROR in finalizeDice21PvPGame's try block. Error object:`, e); 
+        console.error(`${logPrefix} Error Name: "${e.name}"`);
+        console.error(`${logPrefix} Error Message: "${e.message}"`);
+        console.error(`${logPrefix} Error Stack (if available): ${e.stack}`);
+
+        const genericErrorMessageDetail = "a database processing error"; // User-friendly generic part
+        dbErrorTextForUserHTML = `\n\n⚠️ <b>Critical Balance Update Error:</b> A server issue prevented balances from updating correctly (<code>${escapeHTML(genericErrorMessageDetail)}</code>). Please contact support with Game ID: <code>${escapeHTML(String(gameData.gameId))}</code>`;
+        console.error(`${logPrefix} CRITICAL DB error finalizing PvP Dice 21 ${gameData.gameId} (this is the original log, e.message is above): ${e.message}`);
+    } finally { 
+        if (client) {
+            client.release();
+            console.log(`${logPrefix} DB Client released.`); // DEBUG
+        }
+    }
 
     if (criticalDbErrorForAdmin && typeof notifyAdmin === 'function') {
-        notifyAdmin(`🚨 D21 PvP Finalize Payout DB Failure 🚨\nGame ID: <code>${escapeHTML(String(gameData.gameId))}</code>\nPlayers: ${p1MentionHTML} & ${p2MentionHTML}\nError: ${dbErrorTextForUserHTML}. MANUAL BALANCE CHECK/CREDIT REQUIRED for players based on payouts P1: ${p1_payout}, P2: ${p2_payout} lamports.`, {parse_mode:'HTML'});
+        // Send the actual e.message to admin for better debugging
+        notifyAdmin(`🚨 D21 PvP Finalize Payout DB Failure 🚨\nGame ID: <code>${escapeHTML(String(gameData.gameId))}</code>\nPlayers: ${p1MentionHTML} & ${p2MentionHTML}\nSpecific Error: <code>${escapeHTML(e ? e.message : "Unknown - 'e' was undefined")}</code>. MANUAL BALANCE CHECK/CREDIT REQUIRED for players based on payouts P1: ${p1_payout}, P2: ${p2_payout} lamports.`, {parse_mode:'HTML'});
     }
 
     const p1StatusIconDisplay = p1.status === 'bust' ? "💥 (Busted)" : (p1.status === 'blackjack' ? "✨ (Blackjack!)" : (p1.status === 'stood' ? `(Stood at ${escapeHTML(String(p1.score))})` : (p1.status === 'timeout_forfeit' ? '⏳ (Timed Out)' : `(Score: ${escapeHTML(String(p1.score))})`)));
@@ -4975,7 +5005,6 @@ async function finalizeDice21PvPGame(gameData) {
         `Player 2: ${p2MentionHTML} - Score: <b>${escapeHTML(String(p2.score))}</b> ${p2StatusIconDisplay}\n\n` +
         `------------------------------------\n${resultTextHTML}` + 
         `${dbErrorTextForUserHTML}`;
-        // Player balances are intentionally NOT displayed here.
 
     const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_21_PVP, gameData.betAmount);
     await updateDice21PvPGameMessage(gameData, true, fullResultMessageHTML); 
