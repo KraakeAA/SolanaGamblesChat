@@ -8553,7 +8553,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
         if (!arg || String(arg).trim() === "") {
             betAmountLamports = minBetLamports;
             // console.log(`${LOG_PREFIX_PBA} No bet arg provided, defaulting to min USD bet: ${formatCurrency(betAmountLamports)}`);
-            return betAmountLamports; // Early return for default bet ($0.50 equivalent)
+            return betAmountLamports; // <<<< OPTION B IMPLEMENTED: Early return for default bet
         } else {
             const argStr = String(arg).trim().toLowerCase();
             let isExplicitSol = argStr.endsWith('sol');
@@ -8571,7 +8571,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
                     const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
                     const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
                     await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                    betAmountLamports = minBetLamports;
+                    betAmountLamports = minBetLamports; 
                 }
             } else if (isExplicitLamports) {
                 if (parsedValueBigInt === null || parsedValueBigInt <= 0n) throw new Error("Invalid amount for 'lamports' suffix.");
@@ -8581,7 +8581,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
                     const betInLamportsDisplay = escapeMarkdownV2(formatCurrency(betAmountLamports, 'lamports', true));
                     const message = `⚠️ Your bet of *${betInLamportsDisplay}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
                     await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                    betAmountLamports = minBetLamports;
+                    betAmountLamports = minBetLamports; 
                 }
             } else { // No explicit suffix
                 if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
@@ -8626,25 +8626,22 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
                     throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
                 }
             }
-        } // End of parsing logic when 'arg' is provided
+        }
 
         // --- MODIFIED FINAL SAFETY NET ---
         const effectiveMinLamportsSystem = MIN_BET_AMOUNT_LAMPORTS_config;
         const effectiveMaxLamportsSystem = MAX_BET_AMOUNT_LAMPORTS_config;
 
-        // If the current betAmountLamports is the specific $0.50 equivalent (minBetLamports),
-        // we honor it, even if it's technically below MIN_BET_AMOUNT_LAMPORTS_config (unless it violates MAX absolute limit).
         if (betAmountLamports === minBetLamports) {
-            if (betAmountLamports > effectiveMaxLamportsSystem) { // Unlikely, but a safety check
+            if (betAmountLamports > effectiveMaxLamportsSystem) { 
                 const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
                 console.warn(`${LOG_PREFIX_PBA} minBetLamports (${formatCurrency(betAmountLamports)}) somehow exceeds effectiveMaxLamportsSystem (${formatCurrency(effectiveMaxLamportsSystem)}). Clamping to max.`);
                 await safeSendMessage(commandInitiationChatId, `ℹ️ Your $0.50 bet (converted to lamports) unusually exceeded the system's absolute maximum. Adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
                 return effectiveMaxLamportsSystem;
             }
-            return betAmountLamports; // Return the $0.50 equivalent lamports (bypasses further MIN check here)
+            return betAmountLamports; 
         }
 
-        // For any OTHER bet amount (not the default $0.50 equivalent), apply the full absolute lamport config checks.
         if (betAmountLamports < effectiveMinLamportsSystem) {
             const adjustedMinDisplaySystem = await formatBalanceForDisplay(effectiveMinLamportsSystem, 'USD', solPrice);
             console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is BELOW absolute system lamport limit ${formatCurrency(effectiveMinLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMinDisplaySystem)}.`);
@@ -8652,8 +8649,6 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
             return effectiveMinLamportsSystem;
         }
         if (betAmountLamports > effectiveMaxLamportsSystem) {
-            // Also check if this betAmountLamports is exactly maxBetLamports (from MAX_BET_USD_val)
-            // to avoid issues if float conversion made it slightly over effectiveMaxLamportsSystem.
             if (betAmountLamports === maxBetLamports) {
                  // This IS the exact maximum lamport value from MAX_BET_USD_val. Accept it.
             } else {
@@ -8768,9 +8763,16 @@ bot.on('message', async (msg) => {
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
                     }
                 }
-                if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && gData.status === 'player_turn_awaiting_emoji') {
+                // --- MODIFIED CONDITION FOR DICE 21 PvB TO INCLUDE INITIAL ROLL STATUSES ---
+                if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && 
+                    (gData.status === 'player_turn_awaiting_emoji' || 
+                     gData.status === 'player_initial_roll_1_pending_emoji' || 
+                     gData.status === 'player_initial_roll_2_pending_emoji'
+                    )
+                   ) {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
                 }
+                // --- END OF MODIFIED CONDITION ---
                 if (gData.type === GAME_IDS.DICE_21_PVP) {
                     const isInitiatorD21_PvP = (gData.initiator && gData.initiator.userId === rollerId && gData.initiator.isTurn && gData.status === 'initiator_turn' && gData.initiator.status === 'playing_turn');
                     const isOpponentD21_PvP = (gData.opponent && gData.opponent.userId === rollerId && gData.opponent.isTurn && gData.status === 'opponent_turn' && gData.opponent.status === 'playing_turn');
