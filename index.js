@@ -4202,24 +4202,21 @@ async function handleDice21PvBStand(gameId, userObject, originalMessageId, callb
     }
 }
 
-// REVISED processDice21BotTurn for simpler, sequential messaging and updated stand logic
+// REVISED processDice21BotTurn for correct stand logic (hits on <17) & sequential messaging
 async function processDice21BotTurn(gameData) {
-    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_SimpleSeq]`;
+    const logPrefix = `[D21_BotTurn GID:${gameData.gameId} V7_CorrectStandLogic]`;
     if (!gameData || isShuttingDown || gameData.status !== 'bot_turn_pending_rolls') {
         if (gameData) console.warn(`${logPrefix} Bot turn aborted. Status: '${gameData.status}'. Shutdown: ${isShuttingDown}.`);
         else console.warn(`${logPrefix} Bot turn aborted, no game data for GID ${gameData?.gameId}.`);
         return;
     }
-    console.log(`${logPrefix} Bot Dealer's turn. Player ${gameData.playerRef} stands with: ${gameData.playerScore}. Bot stand score: ${DICE_21_BOT_STAND_SCORE}`);
+    console.log(`${logPrefix} Bot Dealer's turn. Player ${gameData.playerRef} stands with: ${gameData.playerScore}. Bot must hit until score >= ${DICE_21_BOT_STAND_SCORE} or bust.`);
 
     gameData.status = 'bot_rolling';
     gameData.botScore = 0;
     gameData.botHandRolls = []; // Reset bot hand for this turn
     activeGames.set(gameData.gameId, gameData);
 
-    // The message from player's stand ("Player stands with X. Bot's turn is next... 🤖")
-    // is gameData.gameMessageId, set by handleDice21PvBStand.
-    // Edit this message once to fully announce the bot's turn initiation.
     let initialAnnounceText = `✋ ${gameData.playerRef} stands with *${escapeMarkdownV2(String(gameData.playerScore))}*. Bot's turn.\n🤖 Bot Dealer will now roll...`;
     initialAnnounceText = initialAnnounceText.replace(/\./g, '\\.').replace(/!/g, '\\!');
 
@@ -4230,17 +4227,17 @@ async function processDice21BotTurn(gameData) {
                 message_id: Number(gameData.gameMessageId),
                 parse_mode: 'MarkdownV2'
             });
-            gameData.intermediateMessageIds.push(gameData.gameMessageId); // This edited message is now intermediate
+            gameData.intermediateMessageIds.push(gameData.gameMessageId);
         } catch (e) {
             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
                 console.warn(`${logPrefix} Failed to edit initial bot turn announcement (ID:${gameData.gameMessageId}), sending new. Error: ${e.message}`);
                 const newAnnounceMsg = await safeSendMessage(gameData.chatId, initialAnnounceText, { parse_mode: 'MarkdownV2' });
                 if (newAnnounceMsg?.message_id) gameData.intermediateMessageIds.push(newAnnounceMsg.message_id);
             } else {
-                 gameData.intermediateMessageIds.push(gameData.gameMessageId); // Still add if "not modified"
+                 gameData.intermediateMessageIds.push(gameData.gameMessageId);
             }
         }
-        gameData.gameMessageId = null; // No single message to edit repeatedly for bot's rolls
+        gameData.gameMessageId = null;
     } else {
         const newAnnounceMsg = await safeSendMessage(gameData.chatId, initialAnnounceText, { parse_mode: 'MarkdownV2' });
         if (newAnnounceMsg?.message_id) gameData.intermediateMessageIds.push(newAnnounceMsg.message_id);
@@ -4250,26 +4247,23 @@ async function processDice21BotTurn(gameData) {
     await sleep(1500);
 
     let botFaultedInTurn = false;
-    for (let rollCount = 1; rollCount <= 5; rollCount++) {
-        if (isShuttingDown || botFaultedInTurn) break;
+    let rollsThisTurn = 0;
+    const MAX_BOT_ROLLS_SAFETY = 10; // Safety break
 
-        if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            let botStandsText = `Bot stands. Final score ${escapeMarkdownV2(String(gameData.botScore))}.`;
-            botStandsText = botStandsText.replace(/\./g, '\\.');
-            const botStandsMsg = await safeSendMessage(gameData.chatId, botStandsText, { parse_mode: 'MarkdownV2' });
-            if (botStandsMsg?.message_id) gameData.intermediateMessageIds.push(botStandsMsg.message_id);
-            break;
-        }
+    while (gameData.botScore < DICE_21_BOT_STAND_SCORE && !botFaultedInTurn && rollsThisTurn < MAX_BOT_ROLLS_SAFETY) {
+        if (isShuttingDown) break;
 
-        const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollCount}`);
+        rollsThisTurn++;
+
+        const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollsThisTurn}`);
         if (dieRollResult.error) {
-            console.error(`${logPrefix} Bot failed to get roll ${rollCount}: ${dieRollResult.message}.`);
+            console.error(`${logPrefix} Bot failed to get roll ${rollsThisTurn}: ${dieRollResult.message}.`);
             let botErrorText = `⚠️ Error during Bot's roll: ${escapeMarkdownV2(dieRollResult.message)}. Bot's turn ends.`;
             botErrorText = botErrorText.replace(/\./g, '\\.').replace(/!/g, '\\!');
             const botErrorMsg = await safeSendMessage(gameData.chatId, botErrorText, { parse_mode: 'MarkdownV2' });
             if (botErrorMsg?.message_id) gameData.intermediateMessageIds.push(botErrorMsg.message_id);
             botFaultedInTurn = true;
-            break;
+            break; 
         }
         const rollVal = dieRollResult.roll;
 
@@ -4283,27 +4277,41 @@ async function processDice21BotTurn(gameData) {
             rollMessage += " Bot busts.";
         } else if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
             rollMessage += " Bot stands.";
-        } else {
+        } else { // Score is < DICE_21_BOT_STAND_SCORE (and not bust)
             rollMessage += " Bot rolling again.";
         }
         rollMessage = rollMessage.replace(/\./g, '\\.');
 
         const sentRollMsg = await safeSendMessage(gameData.chatId, rollMessage, { parse_mode: 'MarkdownV2' });
         if (sentRollMsg?.message_id) gameData.intermediateMessageIds.push(sentRollMsg.message_id);
+        activeGames.set(gameData.gameId, gameData);
 
         await sleep(2000);
 
         if (gameData.botScore > DICE_21_TARGET_SCORE || gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            break;
+            break; 
         }
-    }
+    } // End of while loop
 
-    if (!botFaultedInTurn && gameData.botScore < DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
-        let botFinalActionText = `Bot finishes its turn. Final score: ${escapeMarkdownV2(String(gameData.botScore))}.`;
-        botFinalActionText = botFinalActionText.replace(/\./g, '\\.');
-        const botFinalActionMsg = await safeSendMessage(gameData.chatId, botFinalActionText, { parse_mode: 'MarkdownV2' });
-        if (botFinalActionMsg?.message_id) gameData.intermediateMessageIds.push(botFinalActionMsg.message_id);
-    }
+    if (!botFaultedInTurn && rollsThisTurn >= MAX_BOT_ROLLS_SAFETY && gameData.botScore < DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
+        console.warn(`${logPrefix} Bot hit max roll safety limit (${MAX_BOT_ROLLS_SAFETY}) but score is still ${gameData.botScore}. Standing with this score.`);
+        let safetyStandMessage = `Bot reached roll limit. Standing with score ${escapeMarkdownV2(String(gameData.botScore))}.`;
+        safetyStandMessage = safetyStandMessage.replace(/\./g, '\\.');
+        const safetyStandMsg = await safeSendMessage(gameData.chatId, safetyStandMessage, { parse_mode: 'MarkdownV2' });
+        if(safetyStandMsg?.message_id) gameData.intermediateMessageIds.push(safetyStandMsg.message_id);
+    } else if (!botFaultedInTurn && gameData.botScore >= DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE &&
+               ! (gameData.intermediateMessageIds.some(id => { // Check if "Bot stands" wasn't already the last message
+                    const lastMsgContent = rollMessage; // The content of the last rollMessage sent
+                    return lastMsgContent && lastMsgContent.includes("Bot stands.");
+               })) ) {
+        // This ensures a "Bot stands" message is sent if the loop terminated due to score condition
+        // but the last message within the loop didn't explicitly say "Bot stands." (e.g., if it hit 17 exactly and loop terminated before next iteration's stand check)
+        let botStandsTextFinal = `Bot stands. Final score ${escapeMarkdownV2(String(gameData.botScore))}.`;
+        botStandsTextFinal = botStandsTextFinal.replace(/\./g, '\\.');
+        const botStandsMsgFinal = await safeSendMessage(gameData.chatId, botStandsTextFinal, { parse_mode: 'MarkdownV2' });
+        if (botStandsMsgFinal?.message_id) gameData.intermediateMessageIds.push(botStandsMsgFinal.message_id);
+    }
+
 
     if (botFaultedInTurn) {
         gameData.status = 'game_over_bot_error';
@@ -4317,9 +4325,9 @@ async function processDice21BotTurn(gameData) {
     await finalizeDice21PvBGame(gameData);
 }
 
-// REVISED finalizeDice21PvBGame (to apply targeted period/exclamation escape for MarkdownV2)
+// REVISED finalizeDice21PvBGame (to use HTML parse_mode for the final message)
 async function finalizeDice21PvBGame(gameData) {
-    const logPrefix = `[D21_PvB_Finalize GID:${gameData.gameId} V7_TargetedEscape]`;
+    const logPrefix = `[D21_PvB_Finalize GID:${gameData.gameId} V7_HTML]`;
 
     if (!gameData) {
         console.error(`${logPrefix} Finalize called but gameData is missing. Cannot proceed.`);
@@ -4329,7 +4337,7 @@ async function finalizeDice21PvBGame(gameData) {
     const finalStatus = gameData.status;
     console.log(`${logPrefix} Finalizing game. Player: ${gameData.playerRef}, PScore: ${gameData.playerScore}, BScore: ${gameData.botScore}, Status: ${finalStatus}`);
 
-    if (gameData.gameMessageId) {
+    if (gameData.gameMessageId) { 
         gameData.intermediateMessageIds.push(gameData.gameMessageId);
     }
     const messagesToDelete = [...gameData.intermediateMessageIds];
@@ -4339,8 +4347,8 @@ async function finalizeDice21PvBGame(gameData) {
         await updateGroupGameDetails(gameData.chatId, null, null, null);
     }
 
-    let resultTitle = "🏁 Dice 21 Result 🏁";
-    let resultOutcomeText = "";
+    let resultTitle = "🏁 Dice 21 Result 🏁"; 
+    let resultOutcomeText = ""; 
     let payoutLamports = 0n;
     let playerWins = false;
     let playerBlackjack = (gameData.playerScore === DICE_21_TARGET_SCORE && gameData.playerHandRolls.length === 2);
@@ -4348,42 +4356,42 @@ async function finalizeDice21PvBGame(gameData) {
     const betDisplayUSDShort = await formatBalanceForDisplay(betAmount, 'USD', 2);
 
     if (finalStatus === 'game_over_player_bust') {
-        resultTitle = "💥 Player Busts!"; // Will be escaped later
-        resultOutcomeText = `Your score: *${escapeMarkdownV2(String(gameData.playerScore))}*. Bot wins *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
+        resultTitle = "💥 Player Busts!";
+        resultOutcomeText = `Your score: <b>${escapeHTML(String(gameData.playerScore))}</b>. Bot wins <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
     } else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') {
         resultTitle = "⚙️ Game Error";
-        resultOutcomeText = `Technical issue. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* refunded.`;
+        resultOutcomeText = `Technical issue. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> refunded.`;
         payoutLamports = betAmount;
     } else if (finalStatus === 'game_over_player_forfeit') {
         resultTitle = "🚫 Game Forfeited";
-        resultOutcomeText = `You forfeited. Bot wins *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
+        resultOutcomeText = `You forfeited. Bot wins <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
     } else if (finalStatus === 'game_over_bot_played' || finalStatus === 'player_blackjack') {
         if (playerBlackjack && (gameData.botScore !== DICE_21_TARGET_SCORE || gameData.botHandRolls.length > 2)) {
             resultTitle = "✨🎉 BLACKJACK!";
             const profitBlackjack = betAmount * 15n / 10n;
-            resultOutcomeText = `Natural 21! You win *${escapeMarkdownV2(await formatBalanceForDisplay(profitBlackjack, 'USD', 2))}* profit!`;
+            resultOutcomeText = `Natural 21! You win <b>${escapeHTML(await formatBalanceForDisplay(profitBlackjack, 'USD', 2))}</b> profit!`;
             playerWins = true;
             payoutLamports = betAmount + profitBlackjack;
         } else if (gameData.botScore > DICE_21_TARGET_SCORE) {
-            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Bot BUSTED (*${escapeMarkdownV2(String(gameData.botScore))}*)! You win *${escapeMarkdownV2(betDisplayUSDShort)}* profit!`;
+            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Bot BUSTED (<b>${escapeHTML(String(gameData.botScore))}</b>)! You win <b>${escapeHTML(betDisplayUSDShort)}</b> profit!`;
             playerWins = true; payoutLamports = betAmount * 2n;
         } else if (gameData.playerScore > gameData.botScore) {
-            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Your *${escapeMarkdownV2(String(gameData.playerScore))}* beats Bot's *${escapeMarkdownV2(String(gameData.botScore))}*. You win *${escapeMarkdownV2(betDisplayUSDShort)}* profit!`;
+            resultTitle = "🎉 Player Wins!"; resultOutcomeText = `Your <b>${escapeHTML(String(gameData.playerScore))}</b> beats Bot's <b>${escapeHTML(String(gameData.botScore))}</b>. You win <b>${escapeHTML(betDisplayUSDShort)}</b> profit!`;
             playerWins = true; payoutLamports = betAmount * 2n;
         } else if (gameData.botScore > gameData.playerScore) {
-            resultTitle = "🤖 Bot Wins"; resultOutcomeText = `Bot's *${escapeMarkdownV2(String(gameData.botScore))}* beats your *${escapeMarkdownV2(String(gameData.playerScore))}*. You lost *${escapeMarkdownV2(betDisplayUSDShort)}*.`;
+            resultTitle = "🤖 Bot Wins"; resultOutcomeText = `Bot's <b>${escapeHTML(String(gameData.botScore))}</b> beats your <b>${escapeHTML(String(gameData.playerScore))}</b>. You lost <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
         } else { // Push
-            resultTitle = "⚖️ Push!"; resultOutcomeText = `Scores tied at *${escapeMarkdownV2(String(gameData.playerScore))}*. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* returned.`;
+            resultTitle = "⚖️ Push!"; resultOutcomeText = `Scores tied at <b>${escapeHTML(String(gameData.playerScore))}</b>. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> returned.`;
             payoutLamports = betAmount;
         }
     } else { // Unknown status
         resultTitle = "❓ Game Undetermined";
-        resultOutcomeText = `Unexpected status: \`${escapeMarkdownV2(String(finalStatus))}\`. Bet *${escapeMarkdownV2(betDisplayUSDShort)}* refunded.`;
+        resultOutcomeText = `Unexpected status: <code>${escapeHTML(String(finalStatus))}</code>. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> refunded.`;
         payoutLamports = betAmount;
     }
 
     let finalUserBalanceLamports = BigInt(gameData.userObj.balance);
-    let dbErrorDuringPayoutText = "";
+    let dbErrorDuringPayoutText = ""; 
 
     if (payoutLamports >= 0n || finalStatus === 'game_over_player_bust' || finalStatus === 'game_over_player_forfeit' || (finalStatus === 'game_over_bot_played' && !playerWins && payoutLamports === 0n)) {
         let client = null;
@@ -4412,7 +4420,7 @@ async function finalizeDice21PvBGame(gameData) {
             dbErrorDuringPayoutText = `\n\n🚨 Critical DB Error. Staff notified.`;
             console.error(`${logPrefix} CRITICAL DB error during finalization: ${e.message}`);
             if (typeof notifyAdmin === 'function') {
-                notifyAdmin(`🚨 D21 PvB Finalize Payout DB Failure 🚨\nGame ID: \`${escapeMarkdownV2(String(gameData.gameId))}\`\nError: ${escapeMarkdownV2(e.message)}. MANUAL BALANCE CHECK/CREDIT REQUIRED for ${payoutLamports} for user ${gameData.playerId}.`, {parse_mode:'MarkdownV2'});
+                notifyAdmin(`🚨 D21 PvB Finalize Payout DB Failure 🚨\nGame ID: <code>${escapeHTML(String(gameData.gameId))}</code>\nError: ${escapeHTML(e.message)}. MANUAL BALANCE CHECK/CREDIT REQUIRED for ${payoutLamports} for user ${gameData.playerId}.`, {parse_mode:'HTML'});
             }
         } finally {
             if (client) client.release();
@@ -4422,20 +4430,18 @@ async function finalizeDice21PvBGame(gameData) {
         if (freshBalance !== null) finalUserBalanceLamports = freshBalance;
     }
 
-    const finalBalanceDisplay = `\nBal: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD', 2))}*`;
+    const finalBalanceDisplayHTML = `\nBal: <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD', 2))}</b>`;
+    const playerRefHTML = escapeHTML(gameData.playerRef);
 
-    let conciseFinalMessage = `*${escapeMarkdownV2(resultTitle)}*\n` +
-                              `You (${gameData.playerRef}): *${escapeMarkdownV2(String(gameData.playerScore))}* ${formatDiceRolls(gameData.playerHandRolls)}\n` +
-                              `Bot: *${escapeMarkdownV2(String(gameData.botScore))}* ${formatDiceRolls(gameData.botHandRolls)}\n` +
-                              `${resultOutcomeText}` + // This part already has its dynamic numbers escaped by escapeMarkdownV2
-                              `${dbErrorDuringPayoutText}` + // This is plain text, should be escaped if it can contain markdown characters
-                              `${finalBalanceDisplay}`; // This part also has its dynamic numbers escaped
-
-    // Apply the targeted fix for periods and exclamation marks to the fully assembled string
-    const safeConciseFinalMessage = conciseFinalMessage.replace(/\./g, '\\.').replace(/!/g, '\\!');
+    let conciseFinalMessageHTML = `<b>${escapeHTML(resultTitle)}</b>\n` +
+                              `You (${playerRefHTML}): <b>${escapeHTML(String(gameData.playerScore))}</b> ${formatDiceRolls(gameData.playerHandRolls)}\n` +
+                              `Bot: <b>${escapeHTML(String(gameData.botScore))}</b> ${formatDiceRolls(gameData.botHandRolls)}\n` +
+                              `${resultOutcomeText}\n` + // Already formatted with <b> and escapeHTML
+                              `${escapeHTML(dbErrorDuringPayoutText)}\n` +
+                              `${finalBalanceDisplayHTML}`;
 
     const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_21, gameData.betAmount);
-    await safeSendMessage(gameData.chatId, safeConciseFinalMessage, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
+    await safeSendMessage(gameData.chatId, conciseFinalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboard });
 
     if (messagesToDelete && messagesToDelete.length > 0) {
         console.log(`${logPrefix} Deleting ${messagesToDelete.length} intermediate messages for game ${gameData.gameId}.`);
