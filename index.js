@@ -479,8 +479,9 @@ const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map(); 
 
 const escapeMarkdownV2 = (text) => {
-  if (text === null || typeof text === 'undefined') return '';
-  return String(text).replace(/([_*\[\]~`>#+\-=|{}!'\\])/g, '\\$1');
+  if (text === null || typeof text === 'undefined') return '';
+  // Added '.', '(', and ')' to the regex character class
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!'\\])/g, '\\$1');
 };
 
 async function safeSendMessage(chatId, text, options = {}) {
