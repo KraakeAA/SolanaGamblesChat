@@ -1,4 +1,4 @@
-// --- Start of Part 1 (REVISED - For New Dice Escalator Game IDs and Constants) ---
+// --- Start of Part 1 (REVISED - For New Dice Escalator Game IDs and Constants & PVP_TURN_TIMEOUT_MS) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
@@ -7,16 +7,16 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Pool } from 'pg';
 import express from 'express';
 import {
-    Connection,
-    PublicKey,
-    LAMPORTS_PER_SOL,
-    Keypair,
-    Transaction,
-    SystemProgram,
-    sendAndConfirmTransaction,
-    ComputeBudgetProgram,
-    SendTransactionError,
-    TransactionExpiredBlockheightExceededError
+    Connection,
+    PublicKey,
+    LAMPORTS_PER_SOL,
+    Keypair,
+    Transaction,
+    SystemProgram,
+    sendAndConfirmTransaction,
+    ComputeBudgetProgram,
+    SendTransactionError,
+    TransactionExpiredBlockheightExceededError
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import * as crypto from 'crypto'; // For createHash and randomBytes
@@ -33,118 +33,119 @@ import RateLimitedConnection from './lib/solana-connection.js';
 
 // Helper function to stringify objects with BigInts and Functions for logging
 function stringifyWithBigInt(obj) {
-  return JSON.stringify(obj, (key, value) => {
-    if (typeof value === 'bigint') {
-      return value.toString() + 'n';
-    }
-    if (typeof value === 'function') {
-      return `[Function: ${value.name || 'anonymous'}]`;
-    }
-    if (value === undefined) {
-      return 'undefined_value'; // Represent undefined explicitly
-    }
-    return value;
-  }, 2);
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'bigint') {
+      return value.toString() + 'n';
+    }
+    if (typeof value === 'function') {
+      return `[Function: ${value.name || 'anonymous'}]`;
+    }
+    if (value === undefined) {
+      return 'undefined_value'; // Represent undefined explicitly
+    }
+    return value;
+  }, 2);
 }
 
 // --- Environment Variable Defaults ---
 const CASINO_ENV_DEFAULTS = {
-  'DB_POOL_MAX': '25',
-  'DB_POOL_MIN': '5',
-  'DB_IDLE_TIMEOUT': '30000',
-  'DB_CONN_TIMEOUT': '5000',
-  'DB_SSL': 'true',
-  'DB_REJECT_UNAUTHORIZED': 'true',
-  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01', // 1% (For Dice Escalator PvB)
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000',  // 0.005 SOL
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
-  'COMMAND_COOLDOWN_MS': '1500',
-  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes (for PvP offers and unified offers)
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
-  'TARGET_JACKPOT_SCORE': '100', // For Dice Escalator PvB Jackpot
-  'DICE_ESCALATOR_BUST_ON': '1', // For player rolls in Dice Escalator (PvB & PvP)
-  'DICE_21_TARGET_SCORE': '21',
-  'DICE_21_BOT_STAND_SCORE': '17',
-  'OU7_DICE_COUNT': '2',
-  'OU7_PAYOUT_NORMAL': '1',
-  'OU7_PAYOUT_SEVEN': '4',
-  'DUEL_DICE_COUNT': '2',
-  'LADDER_ROLL_COUNT': '5',
-  'LADDER_BUST_ON': '1',
-  'RULES_CALLBACK_PREFIX': 'rules_game_',
-  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
-  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
-  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
-  'MAX_RETRY_POLLING_DELAY': '60000',
-  'INITIAL_RETRY_POLLING_DELAY': '5000',
-  'BOT_NAME': 'Solana Casino Royale',
-  'DICE_ROLL_POLL_INTERVAL_MS': '2500',
-  'DICE_ROLL_POLL_ATTEMPTS': '24',
-  // --- MINES GAME DEFAULTS (NEW) ---
-  'MINES_DEFAULT_ROWS': '5',
-  'MINES_DEFAULT_COLS': '5',
-  'MINES_FALLBACK_DEFAULT_MINES': '3', // Used if difficulty custom mines is not chosen
-  'MINES_MIN_MINES': '1',         // Absolute minimum mines
-  'MINES_MAX_MINES_PERCENT': '0.6', // Max 60% of cells can be mines (for validation)
+  'DB_POOL_MAX': '25',
+  'DB_POOL_MIN': '5',
+  'DB_IDLE_TIMEOUT': '30000',
+  'DB_CONN_TIMEOUT': '5000',
+  'DB_SSL': 'true',
+  'DB_REJECT_UNAUTHORIZED': 'true',
+  'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01', // 1% (For Dice Escalator PvB)
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000',  // 0.005 SOL
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', // 1 SOL
+  'COMMAND_COOLDOWN_MS': '1500',
+  'JOIN_GAME_TIMEOUT_MS': '120000', // 2 minutes (for PvP offers and unified offers)
+  'PVP_TURN_TIMEOUT_MS': '60000', // 1 minute for a player's turn in PvP games
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', // 0.01 SOL
+  'TARGET_JACKPOT_SCORE': '100', // For Dice Escalator PvB Jackpot
+  'DICE_ESCALATOR_BUST_ON': '1', // For player rolls in Dice Escalator (PvB & PvP)
+  'DICE_21_TARGET_SCORE': '21',
+  'DICE_21_BOT_STAND_SCORE': '17',
+  'OU7_DICE_COUNT': '2',
+  'OU7_PAYOUT_NORMAL': '1',
+  'OU7_PAYOUT_SEVEN': '4',
+  'DUEL_DICE_COUNT': '2',
+  'LADDER_ROLL_COUNT': '5',
+  'LADDER_BUST_ON': '1',
+  'RULES_CALLBACK_PREFIX': 'rules_game_',
+  'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
+  'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
+  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
+  'MAX_RETRY_POLLING_DELAY': '60000',
+  'INITIAL_RETRY_POLLING_DELAY': '5000',
+  'BOT_NAME': 'Solana Casino Royale',
+  'DICE_ROLL_POLL_INTERVAL_MS': '2500',
+  'DICE_ROLL_POLL_ATTEMPTS': '24',
+  // --- MINES GAME DEFAULTS (NEW) ---
+  'MINES_DEFAULT_ROWS': '5',
+  'MINES_DEFAULT_COLS': '5',
+  'MINES_FALLBACK_DEFAULT_MINES': '3', // Used if difficulty custom mines is not chosen
+  'MINES_MIN_MINES': '1',
+  'MINES_MAX_MINES_PERCENT': '0.6', // Max 60% of cells can be mines (for validation)
 };
 
 const PAYMENT_ENV_DEFAULTS = {
-  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/',
-  'RPC_URLS': '',
-  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
-  'DEPOSIT_CONFIRMATIONS': 'confirmed',
-  'WITHDRAWAL_FEE_LAMPORTS': '10000',
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000',
-  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',
-  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
-  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',
-  'PAYOUT_JOB_RETRIES': '3',
-  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
-  'SWEEP_INTERVAL_MS': '300000',
-  'SWEEP_BATCH_SIZE': '15',
-  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',
-  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',
-  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',
-  'SWEEP_ADDRESS_DELAY_MS': '1500',
-  'SWEEP_RETRY_ATTEMPTS': '2',
-  'SWEEP_RETRY_DELAY_MS': '10000',
-  'RPC_MAX_CONCURRENT': '10',
-  'RPC_RETRY_BASE_DELAY': '750',
-  'RPC_MAX_RETRIES': '4',
-  'RPC_RATE_LIMIT_COOLOFF': '3000',
-  'RPC_RETRY_MAX_DELAY': '25000',
-  'RPC_RETRY_JITTER': '0.3',
-  'RPC_COMMITMENT': 'confirmed',
-  'PAYOUT_QUEUE_CONCURRENCY': '4',
-  'PAYOUT_QUEUE_TIMEOUT_MS': '90000',
-  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5',
-  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000',
-  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1',
-  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050',
-  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
-  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',
-  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75',
-  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15',
-  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(),
-  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(),
-  'MAX_PROCESSED_TX_CACHE': '10000',
-  'INIT_DELAY_MS': '7000',
-  'ENABLE_PAYMENT_WEBHOOKS': 'false',
-  'PAYMENT_WEBHOOK_PORT': '3000',
-  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
-  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
-  'MIN_BET_USD': '0.50',
-  'MAX_BET_USD': '100.00',
+  'SOLANA_RPC_URL': 'https://api.mainnet-beta.solana.com/',
+  'RPC_URLS': '',
+  'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
+  'DEPOSIT_CONFIRMATIONS': 'confirmed',
+  'WITHDRAWAL_FEE_LAMPORTS': '10000',
+  'MIN_WITHDRAWAL_LAMPORTS': '10000000',
+  'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',
+  'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
+  'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',
+  'PAYOUT_JOB_RETRIES': '3',
+  'PAYOUT_JOB_RETRY_DELAY_MS': '7000',
+  'SWEEP_INTERVAL_MS': '300000',
+  'SWEEP_BATCH_SIZE': '15',
+  'SWEEP_FEE_BUFFER_LAMPORTS': '50000',
+  'SWEEP_COMPUTE_UNIT_LIMIT': '30000',
+  'SWEEP_PRIORITY_FEE_MICROLAMPORTS': '5000',
+  'SWEEP_ADDRESS_DELAY_MS': '1500',
+  'SWEEP_RETRY_ATTEMPTS': '2',
+  'SWEEP_RETRY_DELAY_MS': '10000',
+  'RPC_MAX_CONCURRENT': '10',
+  'RPC_RETRY_BASE_DELAY': '750',
+  'RPC_MAX_RETRIES': '4',
+  'RPC_RATE_LIMIT_COOLOFF': '3000',
+  'RPC_RETRY_MAX_DELAY': '25000',
+  'RPC_RETRY_JITTER': '0.3',
+  'RPC_COMMITMENT': 'confirmed',
+  'PAYOUT_QUEUE_CONCURRENCY': '4',
+  'PAYOUT_QUEUE_TIMEOUT_MS': '90000',
+  'DEPOSIT_PROCESS_QUEUE_CONCURRENCY': '5',
+  'DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS': '45000',
+  'TELEGRAM_SEND_QUEUE_CONCURRENCY': '1',
+  'TELEGRAM_SEND_QUEUE_INTERVAL_MS': '1050',
+  'TELEGRAM_SEND_QUEUE_INTERVAL_CAP': '1',
+  'DEPOSIT_MONITOR_INTERVAL_MS': '15000',
+  'DEPOSIT_MONITOR_ADDRESS_BATCH_SIZE': '75',
+  'DEPOSIT_MONITOR_SIGNATURE_FETCH_LIMIT': '15',
+  'WALLET_CACHE_TTL_MS': (15 * 60 * 1000).toString(),
+  'DEPOSIT_ADDR_CACHE_TTL_MS': (parseInt(CASINO_ENV_DEFAULTS.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10) * 60 * 1000 + 5 * 60 * 1000).toString(),
+  'MAX_PROCESSED_TX_CACHE': '10000',
+  'INIT_DELAY_MS': '7000',
+  'ENABLE_PAYMENT_WEBHOOKS': 'false',
+  'PAYMENT_WEBHOOK_PORT': '3000',
+  'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
+  'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
+  'MIN_BET_USD': '0.50',
+  'MAX_BET_USD': '100.00',
 };
 
 const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
 
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
-  if (process.env[key] === undefined) {
-    process.env[key] = defaultValue;
-  }
+  if (process.env[key] === undefined) {
+    process.env[key] = defaultValue;
+  }
 });
 
 // --- Core Configuration Constants ---
@@ -160,23 +161,23 @@ const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY
 
 // --- GAME_IDS Constant ---
 const GAME_IDS = {
-    COINFLIP: 'coinflip',
-    RPS: 'rps',
-    DICE_ESCALATOR_UNIFIED_OFFER: 'dice_escalator_unified_offer',
-    DICE_ESCALATOR_PVB: 'dice_escalator_pvb',
-    DICE_ESCALATOR_PVP: 'dice_escalator_pvp',
-    DICE_21_UNIFIED_OFFER: 'dice21_unified_offer',
-    DICE_21: 'dice21', 
-    DICE_21_PVP: 'dice21_pvp',
-    OVER_UNDER_7: 'ou7',
-    DUEL_UNIFIED_OFFER: 'duel_unified_offer',
-    DUEL_PVB: 'duel_pvb',
-    DUEL_PVP: 'duel_pvp',
-    LADDER: 'ladder',
-    SEVEN_OUT: 'sevenout',
-    SLOT_FRENZY: 'slotfrenzy',
-    MINES: 'mines', 
-    MINES_OFFER: 'mines_offer', 
+    COINFLIP: 'coinflip',
+    RPS: 'rps',
+    DICE_ESCALATOR_UNIFIED_OFFER: 'dice_escalator_unified_offer',
+    DICE_ESCALATOR_PVB: 'dice_escalator_pvb',
+    DICE_ESCALATOR_PVP: 'dice_escalator_pvp',
+    DICE_21_UNIFIED_OFFER: 'dice21_unified_offer',
+    DICE_21: 'dice21', 
+    DICE_21_PVP: 'dice21_pvp',
+    OVER_UNDER_7: 'ou7',
+    DUEL_UNIFIED_OFFER: 'duel_unified_offer',
+    DUEL_PVB: 'duel_pvb',
+    DUEL_PVP: 'duel_pvp',
+    LADDER: 'ladder',
+    SEVEN_OUT: 'sevenout',
+    SLOT_FRENZY: 'slotfrenzy',
+    MINES: 'mines', 
+    MINES_OFFER: 'mines_offer', 
 };
 
 // Game Specific Constants
@@ -194,90 +195,86 @@ const LADDER_BUST_ON = parseInt(process.env.LADDER_BUST_ON, 10);
 const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10);
 
 const LADDER_PAYOUTS = [
-    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },
-    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },
-    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },
-    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" },
-    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" }
+    { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },
+    { min: 15, max: 19, multiplier: 2, label: "High Rungs!" },
+    { min: 20, max: 24, multiplier: 5, label: "Peak Performer!" },
+    { min: 25, max: 29, multiplier: 10, label: "Sky High Roller!" },
+    { min: 30, max: 30, multiplier: 25, label: "Ladder Legend!" }
 ];
 
 // --- MINES GAME CONSTANTS (REVISED FOR DIFFICULTY) ---
 const MINES_DEFAULT_ROWS = parseInt(process.env.MINES_DEFAULT_ROWS, 10);
 const MINES_DEFAULT_COLS = parseInt(process.env.MINES_DEFAULT_COLS, 10);
-const MINES_FALLBACK_DEFAULT_MINES = parseInt(process.env.MINES_FALLBACK_DEFAULT_MINES, 10); 
+const MINES_FALLBACK_DEFAULT_MINES = parseInt(process.env.MINES_FALLBACK_DEFAULT_MINES, 10); 
 const MINES_MIN_MINES = parseInt(process.env.MINES_MIN_MINES, 10);
 const MINES_MAX_MINES_PERCENT = parseFloat(process.env.MINES_MAX_MINES_PERCENT);
 
 const MINES_DIFFICULTY_CONFIG = {
-    easy: { 
-        rows: 5, cols: 5, mines: 3, label: "Easy (5x5, 3 Mines)",
-        // Total cells: 25, Safe cells: 22
-        // Multipliers are TOTAL PAYOUT (stake included). Index = gems found. multipliers[0] is unused.
-        multipliers: [ 0, 1.08, 1.18, 1.29, 1.42, 1.55, 1.70, 1.88, 2.08, 2.30, 2.55, 
-                       2.85, 3.20, 3.60, 4.05, 4.50, 5.00, 6.00, 7.50, 10.00, 15.00, 25.00, 50.00 ]
-    },
-    medium: { 
-        rows: 5, cols: 5, mines: 5, label: "Medium (5x5, 5 Mines)",
-        // Total cells: 25, Safe cells: 20
-        multipliers: [ 0, 1.12, 1.28, 1.47, 1.70, 1.98, 2.30, 2.70, 3.15, 3.70, 4.35,
-                       5.10, 6.00, 7.10, 8.50, 10.50, 13.00, 16.50, 22.00, 30.00, 75.00 ]
-    },
-    hard:   { 
-        rows: 5, cols: 5, mines: 7, label: "Hard (5x5, 7 Mines)",
-        // Total cells: 25, Safe cells: 18
-        multipliers: [ 0, 1.18, 1.40, 1.68, 2.00, 2.40, 2.90, 3.50, 4.20, 5.10, 6.20,
-                       7.50, 9.20, 11.50, 14.50, 18.00, 23.00, 30.00, 100.00 ]
-    },
+    easy: { 
+        rows: 5, cols: 5, mines: 3, label: "Easy (5x5, 3 Mines)",
+        multipliers: [ 0, 1.08, 1.18, 1.29, 1.42, 1.55, 1.70, 1.88, 2.08, 2.30, 2.55, 
+                       2.85, 3.20, 3.60, 4.05, 4.50, 5.00, 6.00, 7.50, 10.00, 15.00, 25.00, 50.00 ]
+    },
+    medium: { 
+        rows: 5, cols: 5, mines: 5, label: "Medium (5x5, 5 Mines)",
+        multipliers: [ 0, 1.12, 1.28, 1.47, 1.70, 1.98, 2.30, 2.70, 3.15, 3.70, 4.35,
+                       5.10, 6.00, 7.10, 8.50, 10.50, 13.00, 16.50, 22.00, 30.00, 75.00 ]
+    },
+    hard:   { 
+        rows: 5, cols: 5, mines: 7, label: "Hard (5x5, 7 Mines)",
+        multipliers: [ 0, 1.18, 1.40, 1.68, 2.00, 2.40, 2.90, 3.50, 4.20, 5.10, 6.20,
+                       7.50, 9.20, 11.50, 14.50, 18.00, 23.00, 30.00, 100.00 ]
+    },
 };
 // --- END OF MINES GAME CONSTANTS ---
 
 // Keypair Initializations
 let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
-    try {
-        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
-        process.exit(1);
-    }
+    try {
+        MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Main Bot Payout Wallet Initialized: ${MAIN_BOT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.error("🚨 FATAL ERROR: Invalid MAIN_BOT_PRIVATE_KEY. Withdrawals and critical operations will fail.", e.message);
+        process.exit(1);
+    }
 } else {
-    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
-    process.exit(1);
+    console.error("🚨 FATAL ERROR: MAIN_BOT_PRIVATE_KEY is not defined. Withdrawals and critical operations will fail.");
+    process.exit(1);
 }
 
 let REFERRAL_PAYOUT_KEYPAIR = null;
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
-    try {
-        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
-        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
-    } catch (e) {
-        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null;
-    }
+    try {
+        REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
+        console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
+    } catch (e) {
+        console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
+        REFERRAL_PAYOUT_KEYPAIR = null;
+    }
 } else {
-    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
+    console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
 if (!REFERRAL_PAYOUT_KEYPAIR) { // Fallback if not set or invalid
-    REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
+    REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
 }
 
 
 // RPC Endpoint Configuration
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
-    .split(',')
-    .map(u => u.trim())
-    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
+    .split(',')
+    .map(u => u.trim())
+    .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
 
 const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
 
 let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
-    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
+    combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
 if (combinedRpcEndpointsForConnection.length === 0) { // Absolute fallback if nothing is provided
-    console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). Using default public Solana RPC as a last resort.");
-    combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
+    console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). Using default public Solana RPC as a last resort.");
+    combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
 }
 
 
@@ -285,9 +282,9 @@ if (combinedRpcEndpointsForConnection.length === 0) { // Absolute fallback if no
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
-const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT); 
-const MAIN_JACKPOT_ID = 'dice_escalator_main_pvb'; 
-const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10); 
+const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT); 
+const MAIN_JACKPOT_ID = 'dice_escalator_main_pvb'; 
+const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10); 
 
 const MIN_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MIN_BET_AMOUNT_LAMPORTS);
 const MAX_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MAX_BET_AMOUNT_LAMPORTS);
@@ -295,13 +292,14 @@ const MIN_BET_USD_val = parseFloat(process.env.MIN_BET_USD);
 const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
+const PVP_TURN_TIMEOUT_MS = parseInt(process.env.PVP_TURN_TIMEOUT_MS, 10); // ADDED HERE
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
 const RULES_CALLBACK_PREFIX = process.env.RULES_CALLBACK_PREFIX;
 const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
 const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION;
 const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
 
-const SOL_DECIMALS = 9; 
+const SOL_DECIMALS = 9; 
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase() || 'confirmed';
@@ -314,38 +312,49 @@ if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
 
+// ADD PVP_TURN_TIMEOUT_MS to critical checks if necessary, e.g., if it must be positive
+// For now, if it's NaN from parseInt and used in setTimeout, it defaults to ~1ms, not a fatal startup error.
+// However, good practice to ensure it's a valid number if the feature is critical.
+if (isNaN(PVP_TURN_TIMEOUT_MS) || PVP_TURN_TIMEOUT_MS <= 0) {
+    console.warn(`⚠️ WARNING: PVP_TURN_TIMEOUT_MS ('${process.env.PVP_TURN_TIMEOUT_MS}') is not a valid positive number. PvP turn timeouts may not function as expected (will be very short or default).`);
+    // You might choose to make this a fatal error if a proper timeout is critical:
+    // console.error(`🚨 FATAL ERROR: PVP_TURN_TIMEOUT_MS ('${process.env.PVP_TURN_TIMEOUT_MS}') must be a positive number.`);
+    // process.exit(1);
+}
+
+
 const criticalGameScoresCheck = { TARGET_JACKPOT_SCORE, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
 for (const [key, value] of Object.entries(criticalGameScoresCheck)) {
-    if (isNaN(value) || value <=0) {
-        console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number.`);
-        process.exit(1);
-    }
+    if (isNaN(value) || value <=0) {
+        console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number.`);
+        process.exit(1);
+    }
 }
 if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
+    process.exit(1);
 }
 if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
+    process.exit(1);
 }
 if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
+    process.exit(1);
 }
 if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`);
+    process.exit(1);
 }
 if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) {
-    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive).`);
-    process.exit(1);
+    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive).`);
+    process.exit(1);
 }
 if (isNaN(OU7_PAYOUT_NORMAL) || OU7_PAYOUT_NORMAL < 0) {
-    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_NORMAL must be a non-negative number.`); process.exit(1);
+    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_NORMAL must be a non-negative number.`); process.exit(1);
 }
 if (isNaN(OU7_PAYOUT_SEVEN) || OU7_PAYOUT_SEVEN < 0) {
-    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);
+    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);
 }
 
 if (isNaN(MINES_DEFAULT_ROWS) || MINES_DEFAULT_ROWS < 3 || MINES_DEFAULT_ROWS > 8) { console.error("FATAL: MINES_DEFAULT_ROWS must be a number between 3-8 for reasonable button display."); process.exit(1); }
@@ -356,298 +365,306 @@ if (isNaN(MINES_MIN_MINES) || MINES_MIN_MINES < 1) { console.error("FATAL: MINES
 if (isNaN(MINES_MAX_MINES_PERCENT) || MINES_MAX_MINES_PERCENT <= 0 || MINES_MAX_MINES_PERCENT >= 0.8) { console.error("FATAL: MINES_MAX_MINES_PERCENT must be between 0 (exclusive) and 0.8 (exclusive for playability)."); process.exit(1); }
 
 for (const key in MINES_DIFFICULTY_CONFIG) {
-    const config = MINES_DIFFICULTY_CONFIG[key];
-    if (isNaN(config.rows) || config.rows < 2 || config.rows > 8) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.rows must be 2-8.`); process.exit(1); }
-    if (isNaN(config.cols) || config.cols < 2 || config.cols > 8) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.cols must be 2-8.`); process.exit(1); }
-    if (isNaN(config.mines) || config.mines < MINES_MIN_MINES) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.mines must be >= MINES_MIN_MINES.`); process.exit(1); }
-    if (config.mines >= config.rows * config.cols) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.mines must be less than total cells.`); process.exit(1); }
-    if (config.mines > Math.floor((config.rows * config.cols) * MINES_MAX_MINES_PERCENT)) {console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.mines exceeds MINES_MAX_MINES_PERCENT for its grid size.`); process.exit(1); }
-    if (!Array.isArray(config.multipliers) || config.multipliers.length !== (config.rows * config.cols - config.mines + 1)) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.multipliers array is missing or has incorrect length. Expected ${config.rows * config.cols - config.mines + 1} entries (0 gems + N gems).`); process.exit(1); }
+    const config = MINES_DIFFICULTY_CONFIG[key];
+    if (isNaN(config.rows) || config.rows < 2 || config.rows > 8) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.rows must be 2-8.`); process.exit(1); }
+    if (isNaN(config.cols) || config.cols < 2 || config.cols > 8) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.cols must be 2-8.`); process.exit(1); }
+    if (isNaN(config.mines) || config.mines < MINES_MIN_MINES) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.mines must be >= MINES_MIN_MINES.`); process.exit(1); }
+    if (config.mines >= config.rows * config.cols) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.mines must be less than total cells.`); process.exit(1); }
+    if (config.mines > Math.floor((config.rows * config.cols) * MINES_MAX_MINES_PERCENT)) {console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.mines exceeds MINES_MAX_MINES_PERCENT for its grid size.`); process.exit(1); }
+    if (!Array.isArray(config.multipliers) || config.multipliers.length !== (config.rows * config.cols - config.mines + 1)) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.multipliers array is missing or has incorrect length. Expected ${config.rows * config.cols - config.mines + 1} entries (0 gems + N gems).`); process.exit(1); }
 }
 
 
 if (ADMIN_USER_ID) console.log(`ℹ️ Admin User ID: ${ADMIN_USER_ID} loaded.`);
 
 function formatLamportsToSolStringForLog(lamports) {
-    if (typeof lamports !== 'bigint' && typeof lamports !== 'number') { 
-        try { lamports = BigInt(lamports); }
-        catch (e) { return 'Invalid_Lamports_Input'; }
-    } else if (typeof lamports === 'number') {
-        lamports = BigInt(lamports);
-    }
-    if (lamports === undefined || lamports === null) return 'N/A_Lamports';
-    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
+    if (typeof lamports !== 'bigint' && typeof lamports !== 'number') { 
+        try { lamports = BigInt(lamports); }
+        catch (e) { return 'Invalid_Lamports_Input'; }
+    } else if (typeof lamports === 'number') {
+        lamports = BigInt(lamports);
+    }
+    if (lamports === undefined || lamports === null) return 'N/A_Lamports';
+    return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
+// --- Log Key Configurations (PVP_TURN_TIMEOUT_MS added) ---
 console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
-  Dice Escalator (PvB): Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Player Bust On: ${DICE_ESCALATOR_BUST_ON}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
-  Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
-  Mines Config (Example 'easy'): Grid ${MINES_DIFFICULTY_CONFIG.easy.rows}x${MINES_DIFFICULTY_CONFIG.easy.cols}, Mines: ${MINES_DIFFICULTY_CONFIG.easy.mines}
-  Bet Limits (USD): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} (Lamports Ref: ${formatLamportsToSolStringForLog(MIN_BET_AMOUNT_LAMPORTS_config)} SOL - ${formatLamportsToSolStringForLog(MAX_BET_AMOUNT_LAMPORTS_config)} SOL)
-  Default Starting Credits: ${formatLamportsToSolStringForLog(DEFAULT_STARTING_BALANCE_LAMPORTS)} SOL
-  Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s, Game Join Timeout (Offers): ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min
-  Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LAMPORTS)} SOL, Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL
-  Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
-  SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
-  Dice Roll Polling (Helper Bot System): Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
-  Sweep Fee Buffer (for TX cost): ${formatLamportsToSolStringForLog(BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS))} SOL
+  Dice Escalator (PvB): Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Player Bust On: ${DICE_ESCALATOR_BUST_ON}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
+  Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
+  Mines Config (Example 'easy'): Grid ${MINES_DIFFICULTY_CONFIG.easy.rows}x${MINES_DIFFICULTY_CONFIG.easy.cols}, Mines: ${MINES_DIFFICULTY_CONFIG.easy.mines}
+  Bet Limits (USD): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} (Lamports Ref: ${formatLamportsToSolStringForLog(MIN_BET_AMOUNT_LAMPORTS_config)} SOL - ${formatLamportsToSolStringForLog(MAX_BET_AMOUNT_LAMPORTS_config)} SOL)
+  Default Starting Credits: ${formatLamportsToSolStringForLog(DEFAULT_STARTING_BALANCE_LAMPORTS)} SOL
+  Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s, Game Join Timeout (Offers): ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min
+  PvP Turn Timeout: ${PVP_TURN_TIMEOUT_MS / 1000}s 
+  Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LAMPORTS)} SOL, Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL
+  Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
+  SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
+  Dice Roll Polling (Helper Bot System): Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
+  Sweep Fee Buffer (for TX cost): ${formatLamportsToSolStringForLog(BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS))} SOL
 -------------------------------------------------`);
+
 
 const useSsl = process.env.DB_SSL === 'true';
 const rejectUnauthorizedSsl = process.env.DB_REJECT_UNAUTHORIZED === 'true';
 
 const pool = new Pool({
-  connectionString: DATABASE_URL,
-  max: parseInt(process.env.DB_POOL_MAX, 10),
-  min: parseInt(process.env.DB_POOL_MIN, 10),
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
-  connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
-  ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
+  connectionString: DATABASE_URL,
+  max: parseInt(process.env.DB_POOL_MAX, 10),
+  min: parseInt(process.env.DB_POOL_MIN, 10),
+  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10),
+  connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT, 10),
+  ssl: useSsl ? { rejectUnauthorized: rejectUnauthorizedSsl } : false,
 });
 
 pool.on('error', (err, client) => {
-  console.error('❌ Unexpected error on idle PostgreSQL client', err);
-  if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
-    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details.`;
-    safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
-      .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
-  } else {
-    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage, escapeMarkdownV2, or ADMIN_USER_ID unavailable)`);
-  }
+  console.error('❌ Unexpected error on idle PostgreSQL client', err);
+  if (ADMIN_USER_ID && typeof safeSendMessage === "function" && typeof escapeMarkdownV2 === "function") {
+    const adminMessage = `🚨 *DATABASE POOL ERROR* 🚨\nAn unexpected error occurred with an idle PostgreSQL client:\n\n*Error Message:*\n\`${escapeMarkdownV2(String(err.message || err))}\`\n\nPlease check the server logs for more details.`;
+    safeSendMessage(ADMIN_USER_ID, adminMessage, { parse_mode: 'MarkdownV2' })
+      .catch(notifyErr => console.error("Failed to notify admin about DB pool error:", notifyErr));
+  } else {
+    console.error(`[Admin Alert Failure] DB Pool Error (Idle Client): ${err.message || String(err)} (safeSendMessage, escapeMarkdownV2, or ADMIN_USER_ID unavailable)`);
+  }
 });
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query]';
-    try {
-        const result = await dbClient.query(sql, params);
-        return result;
-    } catch (error) {
-        const sqlPreviewOnError = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
-        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : p) );
+    const logPrefix = '[DB_Query]';
+    try {
+        const result = await dbClient.query(sql, params);
+        return result;
+    } catch (error) {
+        const sqlPreviewOnError = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
+        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : p) );
 
-        console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
-        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
-        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
-        if (error.stack) {
-            console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
-        }
-        throw error; 
-    }
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
+        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
+        if (error.stack) {
+            console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
+        }
+        throw error; 
+    }
 }
 
 const connectionOptions = {
-    commitment: process.env.RPC_COMMITMENT, 
-    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
-    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
-    maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
-    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
-    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
-    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
+    commitment: process.env.RPC_COMMITMENT, 
+    maxConcurrent: parseInt(process.env.RPC_MAX_CONCURRENT, 10),
+    retryBaseDelay: parseInt(process.env.RPC_RETRY_BASE_DELAY, 10),
+    maxRetries: parseInt(process.env.RPC_MAX_RETRIES, 10),
+    rateLimitCooloff: parseInt(process.env.RPC_RATE_LIMIT_COOLOFF, 10),
+    retryMaxDelay: parseInt(process.env.RPC_RETRY_MAX_DELAY, 10),
+    retryJitter: parseFloat(process.env.RPC_RETRY_JITTER),
 };
 
 const solanaConnection = new RateLimitedConnection(
-    combinedRpcEndpointsForConnection,
-    connectionOptions
+    combinedRpcEndpointsForConnection,
+    connectionOptions
 );
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-let app = null; 
+let app = null; 
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
-    app = express();
-    app.use(express.json({
-        verify: (req, res, buf) => {
-            req.rawBody = buf; 
-        }
-    }));
+    app = express();
+    app.use(express.json({
+        verify: (req, res, buf) => {
+            req.rawBody = buf; 
+        }
+    }));
 }
 
-const BOT_VERSION = process.env.BOT_VERSION || '3.4.0-de-rewrite'; 
+const BOT_VERSION = process.env.BOT_VERSION || '3.4.0-de-rewrite'; 
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 let isShuttingDown = false;
-let activeGames = new Map(); 
-let userCooldowns = new Map(); 
-let groupGameSessions = new Map(); 
-const walletCache = new Map(); 
-const activeDepositAddresses = new Map(); 
-const processedDepositTxSignatures = new Set(); 
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; 
-const pendingReferrals = new Map(); 
-const userStateCache = new Map(); 
+let activeGames = new Map(); 
+let userCooldowns = new Map(); 
+let groupGameSessions = new Map(); 
+const walletCache = new Map(); 
+const activeDepositAddresses = new Map(); 
+const processedDepositTxSignatures = new Set(); 
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; 
+const pendingReferrals = new Map(); 
+const userStateCache = new Map(); 
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map(); 
+const solPriceCache = new Map(); 
 
 const escapeMarkdownV2 = (text) => {
-  if (text === null || typeof text === 'undefined') return '';
-  // Characters we will still escape: _ * [ ] ( ) ~ ` > # + - = | { } \
-  // REMOVED: . ! ' from the original aggressive list.
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}\\])/g, '\\$1');
+  if (text === null || typeof text === 'undefined') return '';
+  // Characters we will still escape: _ * [ ] ( ) ~ ` > # + - = | { } \
+  // REMOVED: . ! ' from the original aggressive list.
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}\\])/g, '\\$1');
 };
 
 async function safeSendMessage(chatId, text, options = {}) {
-    const LOG_PREFIX_SSM = `[SafeSend CH:${chatId}]`;
-    if (!chatId || typeof text !== 'string') {
-        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID ${chatId}, Text type ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
-        return undefined;
-    }
+    const LOG_PREFIX_SSM = `[SafeSend CH:${chatId}]`;
+    if (!chatId || typeof text !== 'string') {
+        console.error(`${LOG_PREFIX_SSM} Invalid input: ChatID ${chatId}, Text type ${typeof text}. Preview: ${String(text).substring(0, 100)}`);
+        return undefined;
+    }
 
-    let messageToSend = text;
-    let finalOptions = { ...options }; 
+    let messageToSend = text;
+    let finalOptions = { ...options }; 
 
-    if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-        const ellipsisBase = ` \\.\\.\\. (_message truncated by ${escapeMarkdownV2(BOT_NAME)}_)`; 
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
+    if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
+        const ellipsisBase = ` \\.\\.\\. (_message truncated by ${escapeMarkdownV2(BOT_NAME)}_)`; 
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
+        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
+    } else if (finalOptions.parse_mode !== 'HTML' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Adjusted for HTML length check
+        const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length); // HTML messages can be longer, but this is a general fallback
+        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
+    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) { // HTML also has a 4096 char limit
+        const ellipsisBase = ` ... (<i>message truncated by ${escapeHTML(BOT_NAME)}</i>)`;
+        const truncateAt = Math.max(0, 4096 - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-    } else if (messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
-        const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
-        messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
     }
 
-    if (!bot || typeof bot.sendMessage !== 'function') {
-        console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance or sendMessage function not available.`);
-        return undefined;
-    }
 
-    try {
-        const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
-        return sentMessage;
-    } catch (error) {
-        console.error(`${LOG_PREFIX_SSM} ❌ Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
-        if (error.response && error.response.body && error.response.body.description) {
-            const errorDescription = error.response.body.description.toLowerCase();
-            if (finalOptions.parse_mode === 'MarkdownV2' && (errorDescription.includes("can't parse entities") || errorDescription.includes("bad request"))) {
-                console.warn(`${LOG_PREFIX_SSM} MarkdownV2 parse error detected by API: "${error.response.body.description}". Attempting plain text fallback for original text.`);
-                try {
-                    let plainTextFallbackOptions = { ...options }; 
-                    delete plainTextFallbackOptions.parse_mode;
+    if (!bot || typeof bot.sendMessage !== 'function') {
+        console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance or sendMessage function not available.`);
+        return undefined;
+    }
 
-                    let plainTextForFallback = text; 
-                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
-                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME}, original was Markdown error)`;
-                        const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
-                        plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
-                    }
-                    return await bot.sendMessage(chatId, plainTextForFallback, plainTextFallbackOptions);
-                } catch (fallbackError) {
-                    console.error(`${LOG_PREFIX_SSM} ❌ Plain text fallback also failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
-                    return undefined;
-                }
-            }
-        }
-        return undefined; 
-    }
+    try {
+        const sentMessage = await bot.sendMessage(chatId, messageToSend, finalOptions);
+        return sentMessage;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_SSM} ❌ Failed to send. Code: ${error.code || 'N/A'}, Msg: ${error.message}`);
+        if (error.response && error.response.body && error.response.body.description) {
+            const errorDescription = error.response.body.description.toLowerCase();
+            if ((finalOptions.parse_mode === 'MarkdownV2' || finalOptions.parse_mode === 'HTML') && (errorDescription.includes("can't parse entities") || errorDescription.includes("bad request"))) {
+                console.warn(`${LOG_PREFIX_SSM} ${finalOptions.parse_mode} parse error detected by API: "${error.response.body.description}". Attempting plain text fallback for original text.`);
+                try {
+                    let plainTextFallbackOptions = { ...options }; 
+                    delete plainTextFallbackOptions.parse_mode;
+
+                    let plainTextForFallback = text; 
+                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Max length for plain text fallback
+                        const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME}, original was parse error)`;
+                        const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
+                        plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
+                    }
+                    return await bot.sendMessage(chatId, plainTextForFallback, plainTextFallbackOptions);
+                } catch (fallbackError) {
+                    console.error(`${LOG_PREFIX_SSM} ❌ Plain text fallback also failed. Code: ${fallbackError.code || 'N/A'}, Msg: ${fallbackError.message}`);
+                    return undefined;
+                }
+            }
+        }
+        return undefined; 
+    }
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function notifyAdmin(message, options = {}) {
-    if (ADMIN_USER_ID) {
-        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`; 
-        return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
-    } else {
-        return null;
-    }
+    if (ADMIN_USER_ID) {
+        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`; 
+        return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
+    } else {
+        return null;
+    }
 }
 
 async function fetchSolUsdPriceFromAPI() {
-    const apiUrl = process.env.SOL_PRICE_API_URL;
-    const logPrefix = '[PriceFeed API]';
-    try {
-        const response = await axios.get(apiUrl, { timeout: 8000 }); 
-        if (response.data && response.data.solana && typeof response.data.solana.usd === 'number') {
-            const price = parseFloat(response.data.solana.usd);
-            if (isNaN(price) || price <= 0) {
-                throw new Error('Invalid or non-positive price data from API.');
-            }
-            return price;
-        } else {
-            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data).substring(0,300));
-            throw new Error('SOL price not found or invalid structure in API response.');
-        }
-    } catch (error) {
-        const errMsg = error.isAxiosError ? error.message : String(error);
-        console.error(`${logPrefix} ❌ Error fetching SOL/USD price: ${errMsg}`);
-        if (error.response) {
-            console.error(`${logPrefix} API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(error.response.data).substring(0,300));
-        }
-        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`); 
-    }
+    const apiUrl = process.env.SOL_PRICE_API_URL;
+    const logPrefix = '[PriceFeed API]';
+    try {
+        const response = await axios.get(apiUrl, { timeout: 8000 }); 
+        if (response.data && response.data.solana && typeof response.data.solana.usd === 'number') {
+            const price = parseFloat(response.data.solana.usd);
+            if (isNaN(price) || price <= 0) {
+                throw new Error('Invalid or non-positive price data from API.');
+            }
+            return price;
+        } else {
+            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data).substring(0,300));
+            throw new Error('SOL price not found or invalid structure in API response.');
+        }
+    } catch (error) {
+        const errMsg = error.isAxiosError ? error.message : String(error);
+        console.error(`${logPrefix} ❌ Error fetching SOL/USD price: ${errMsg}`);
+        if (error.response) {
+            console.error(`${logPrefix} API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(error.response.data).substring(0,300));
+        }
+        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`); 
+    }
 }
 
 async function getSolUsdPrice() {
-    const logPrefix = '[GetSolUsdPrice]';
-    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
-    const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
+    const logPrefix = '[GetSolUsdPrice]';
+    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
+    const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
-    if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
-        return cachedEntry.price;
-    }
-    try {
-        const price = await fetchSolUsdPriceFromAPI();
-        solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
-        return price;
-    } catch (error) {
-        if (cachedEntry) { 
-            console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
-            return cachedEntry.price;
-        }
-        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available. USD conversions will be severely impacted.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
-        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`); 
-        if (typeof notifyAdmin === 'function') { 
-            await notifyAdmin(criticalErrorMessage); 
-        }
-        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`); 
-    }
+    if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
+        return cachedEntry.price;
+    }
+    try {
+        const price = await fetchSolUsdPriceFromAPI();
+        solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
+        return price;
+    } catch (error) {
+        if (cachedEntry) { 
+            console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
+            return cachedEntry.price;
+        }
+        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available. USD conversions will be severely impacted.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
+        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`); 
+        if (typeof notifyAdmin === 'function') { 
+            await notifyAdmin(criticalErrorMessage); 
+        }
+        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`); 
+    }
 }
 
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
-    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
-        return '⚠️ Price N/A';
-    }
-    let lamportsBigInt;
-    try {
-        lamportsBigInt = BigInt(lamports);
-    } catch (e) {
-        return '⚠️ Amount Error';
-    }
+    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
+        return '⚠️ Price N/A';
+    }
+    let lamportsBigInt;
+    try {
+        lamportsBigInt = BigInt(lamports);
+    } catch (e) {
+        return '⚠️ Amount Error';
+    }
 
-    const solAmount = Number(lamportsBigInt) / Number(LAMPORTS_PER_SOL);
-    const usdValue = solAmount * solUsdPrice;
-    return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: displayDecimals, maximumFractionDigits: displayDecimals })}`;
+    const solAmount = Number(lamportsBigInt) / Number(LAMPORTS_PER_SOL);
+    const usdValue = solAmount * solUsdPrice;
+    return `$${usdValue.toLocaleString('en-US', { minimumFractionDigits: displayDecimals, maximumFractionDigits: displayDecimals })}`;
 }
 
 function convertUSDToLamports(usdAmount, solUsdPrice) {
-    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
-        throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
-    }
-    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,""));
-    if (isNaN(parsedUsdAmount)) {
-        throw new Error("Invalid USD amount for conversion.");
-    }
-    const solAmount = parsedUsdAmount / solUsdPrice;
-    return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL))); 
+    if (typeof solUsdPrice !== 'number' || solUsdPrice <= 0) {
+        throw new Error("SOL/USD price must be a positive number for USD to Lamports conversion.");
+    }
+    const parsedUsdAmount = parseFloat(String(usdAmount).replace(/[^0-9.-]+/g,""));
+    if (isNaN(parsedUsdAmount)) {
+        throw new Error("Invalid USD amount for conversion.");
+    }
+    const solAmount = parsedUsdAmount / solUsdPrice;
+    return BigInt(Math.floor(solAmount * Number(LAMPORTS_PER_SOL))); 
 }
 
 const payoutProcessorQueue = new PQueue({
-    concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
+    concurrency: parseInt(process.env.PAYOUT_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.PAYOUT_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
 });
 const depositProcessorQueue = new PQueue({
-    concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10),
-    timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
-    throwOnTimeout: true
+    concurrency: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_CONCURRENCY, 10),
+    timeout: parseInt(process.env.DEPOSIT_PROCESS_QUEUE_TIMEOUT_MS, 10),
+    throwOnTimeout: true
 });
 
 const SLOT_PAYOUTS = {
-    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, 
-    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },  
-    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" }, 
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },  
+    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" }, 
+    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },  
+    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" }, 
+    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },  
 };
-const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; 
+const SLOT_DEFAULT_LOSS_MULTIPLIER = -1; 
 // --- End of Part 1 ---
 // --- Start of Part 2 (Modified for dice_roll_requests table) ---
 // index.js - Part 2: Database Schema Initialization & Core User Management
