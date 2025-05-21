@@ -1265,11 +1265,7 @@ async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
     const stringUserId = String(userId);
     const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`;
     try {
-        const query = `
-            SELECT derivation_path
-            FROM user_deposit_wallets
-            WHERE user_telegram_id = $1
-            ORDER BY created_at DESC; 
+        const query = `SELECT derivation_path FROM user_deposit_wallets WHERE user_telegram_id = $1 ORDER BY created_at DESC;`; 
         `;
         // queryDatabase is from Part 1, assuming it's available and correct.
         // If queryDatabase is the one you provided earlier, it handles its own errors.
