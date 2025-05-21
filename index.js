@@ -5079,325 +5079,281 @@ async function handleDice21PvPTurnTimeout(gameId, timedOutPlayerId) {
     await sleep(1000); 
     await finalizeDice21PvPGame(gameData); 
 }
-// --- Start of Part 5c, Section 1 (FULLY UPDATED FOR HELPER BOT DICE ROLLS) ---
+// --- Start of Part 5c, Section 1 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING) ---
 // index.js - Part 5c, Section 1: Over/Under 7 Game Logic & Handlers
 // (This entire block is placed after Original Part 5b, Section 2 in the new order)
 //-------------------------------------------------------------------------------------------------
-// Assumed dependencies from previous Parts
+// Assumed dependencies from previous Parts (ensure escapeHTML is defined elsewhere)
 
 // --- Over/Under 7 Game Logic ---
 
 async function handleStartOverUnder7Command(msg, betAmountLamports) {
-    // ***** CORRECTED LINE FOR USER ID EXTRACTION *****
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    // ***** END OF CORRECTION *****
-    const chatId = String(msg.chat.id);
-    const LOG_PREFIX_OU7_START = `[OU7_Start UID:${userId} CH:${chatId}]`; // Now uses corrected userId
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const LOG_PREFIX_OU7_START = `[OU7_Start UID:${userId} CH:${chatId}_HTML]`;
 
-    if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
-        console.error(`${LOG_PREFIX_OU7_START} Invalid betAmountLamports: ${betAmountLamports}.`);
-        await safeSendMessage(chatId, "🎲 Oops! There was an issue with the bet amount for Over/Under 7\\. Please try starting the game again with a valid bet\\.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
+        console.error(`${LOG_PREFIX_OU7_START} Invalid betAmountLamports: ${betAmountLamports}.`);
+        await safeSendMessage(chatId, "🎲 Oops! There was an issue with the bet amount for Over/Under 7. Please try starting the game again with a valid bet.", { parse_mode: 'HTML' });
+        return;
+    }
 
-    let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObj) {
-        await safeSendMessage(chatId, "😕 Apologies! We couldn't fetch your player profile to start Over/Under 7\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    console.log(`${LOG_PREFIX_OU7_START} Initiating Over/Under 7. Bet: ${betAmountLamports}`);
+    let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObj) {
+        await safeSendMessage(chatId, "😕 Apologies! We couldn't fetch your player profile to start Over/Under 7. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    console.log(`${LOG_PREFIX_OU7_START} Initiating Over/Under 7. Bet: ${betAmountLamports}`);
 
-    const playerRef = getPlayerDisplayReference(userObj);
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    if (BigInt(userObj.balance) < betAmountLamports) {
-        const needed = betAmountLamports - BigInt(userObj.balance);
-        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(needed, 'USD'));
-        await safeSendMessage(chatId, `${playerRef}, your casino funds are a bit shy for an Over/Under 7 game at *${betDisplayUSD}*\\. You'd need approximately *${neededDisplay}* more\\. Care to top up?`, {
-            parse_mode: 'MarkdownV2',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
-        });
-        return;
-    }
+    if (BigInt(userObj.balance) < betAmountLamports) {
+        const needed = betAmountLamports - BigInt(userObj.balance);
+        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD'));
+        await safeSendMessage(chatId, `${playerRefHTML}, your casino funds are a bit shy for an Over/Under 7 game at <b>${betDisplayUSD_HTML}</b>. You'd need approximately <b>${neededDisplayHTML}</b> more. Care to top up?`, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
+        });
+        return;
+    }
 
-    const gameId = generateGameId(GAME_IDS.OVER_UNDER_7);
-    let client = null;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const balanceUpdateResult = await updateUserBalanceAndLedger(
-            client, userId, BigInt(-betAmountLamports),
-            'bet_placed_ou7', { game_id_custom_field: gameId },
-            `Bet for Over/Under 7 game ${gameId}` 
-        );
+    const gameId = generateGameId(GAME_IDS.OVER_UNDER_7);
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const balanceUpdateResult = await updateUserBalanceAndLedger(
+            client, userId, BigInt(-betAmountLamports),
+            'bet_placed_ou7', { game_id_custom_field: gameId },
+            `Bet for Over/Under 7 game ${gameId}` 
+        );
 
-        if (!balanceUpdateResult || !balanceUpdateResult.success) {
-            await client.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_OU7_START} Wager placement failed: ${balanceUpdateResult.error}`);
-            await safeSendMessage(chatId, `${playerRef}, your Over/Under 7 wager of *${betDisplayUSD}* couldn't be placed due to a hiccup: \`${escapeMarkdownV2(balanceUpdateResult.error || "Wallet error")}\`\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
-            return;
-        }
-        await client.query('COMMIT');
-        userObj.balance = balanceUpdateResult.newBalanceLamports; 
-    } catch (dbError) {
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_OU7_START} DB Rollback Error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_OU7_START} Database error during Over/Under 7 bet placement: ${dbError.message}`, dbError.stack?.substring(0,500));
-        await safeSendMessage(chatId, "⚙️ A database disturbance prevented the start of your Over/Under 7 game\\. Please try again in a moment\\.", { parse_mode: 'MarkdownV2' });
-        return;
-    } finally {
-        if (client) client.release();
-    }
+        if (!balanceUpdateResult || !balanceUpdateResult.success) {
+            await client.query('ROLLBACK');
+            console.error(`${LOG_PREFIX_OU7_START} Wager placement failed: ${balanceUpdateResult.error}`);
+            await safeSendMessage(chatId, `${playerRefHTML}, your Over/Under 7 wager of <b>${betDisplayUSD_HTML}</b> couldn't be placed due to a hiccup: <code>${escapeHTML(balanceUpdateResult.error || "Wallet error")}</code>. Please try again.`, { parse_mode: 'HTML' });
+            return;
+        }
+        await client.query('COMMIT');
+        userObj.balance = balanceUpdateResult.newBalanceLamports; 
+    } catch (dbError) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_OU7_START} DB Rollback Error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_OU7_START} Database error during Over/Under 7 bet placement: ${dbError.message}`, dbError.stack?.substring(0,500));
+        await safeSendMessage(chatId, "⚙️ A database disturbance prevented the start of your Over/Under 7 game. Please try again in a moment.", { parse_mode: 'HTML' });
+        return;
+    } finally {
+        if (client) client.release();
+    }
 
-    const gameData = {
-        type: GAME_IDS.OVER_UNDER_7, gameId, chatId, userId, playerRef, userObj,
-        betAmount: betAmountLamports, playerChoice: null, diceRolls: [], diceSum: null,
-        status: 'waiting_player_choice', gameMessageId: null, lastInteractionTime: Date.now()
-    };
-    activeGames.set(gameId, gameData);
+    const gameData = {
+        type: GAME_IDS.OVER_UNDER_7, gameId, chatId, userId, 
+        playerRef: playerRefHTML, // Store the HTML safe version for consistency if used later by other HTML messages
+        userObj,
+        betAmount: betAmountLamports, playerChoice: null, diceRolls: [], diceSum: null,
+        status: 'waiting_player_choice', gameMessageId: null, lastInteractionTime: Date.now()
+    };
+    activeGames.set(gameId, gameData);
 
-    const title = createStandardTitle("Over/Under 7 Showdown", "🎲");
-    const initialMessageText = `${title}\n\n${playerRef}, you've courageously wagered *${betDisplayUSD}*\\. The dice are polished and ready for action!\n\nPredict the total sum of *${escapeMarkdownV2(String(OU7_DICE_COUNT))} dice*: Will it be Under 7, Exactly 7, or Over 7? Make your fateful choice below! 👇`;
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "📉 Under 7 (Sum 2-6)", callback_data: `ou7_choice:${gameId}:under` }],
-            [{ text: "🎯 Exactly 7 (BIG PAYOUT!)", callback_data: `ou7_choice:${gameId}:seven` }],
-            [{ text: "📈 Over 7 (Sum 8-12)", callback_data: `ou7_choice:${gameId}:over` }],
-            [{ text: `📖 Game Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.OVER_UNDER_7}` }, { text: '💳 Wallet', callback_data: 'menu:wallet' }]
-        ]
-    };
-    const sentMessage = await safeSendMessage(chatId, initialMessageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
+    const titleHTML = `🎲 <b>Over/Under 7 Showdown</b> 🎲`;
+    const initialMessageTextHTML = `${titleHTML}\n\n${playerRefHTML}, you've courageously wagered <b>${betDisplayUSD_HTML}</b>. The dice are polished and ready for action!\n\nPredict the total sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b>: Will it be Under 7, Exactly 7, or Over 7? Make your fateful choice below! 👇`;
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "📉 Under 7 (Sum 2-6)", callback_data: `ou7_choice:${gameId}:under` }],
+            [{ text: "🎯 Exactly 7 (BIG PAYOUT!)", callback_data: `ou7_choice:${gameId}:seven` }],
+            [{ text: "📈 Over 7 (Sum 8-12)", callback_data: `ou7_choice:${gameId}:over` }],
+            [{ text: `📖 Game Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.OVER_UNDER_7}` }, { text: '💳 Wallet', callback_data: 'menu:wallet' }]
+        ]
+    };
+    const sentMessage = await safeSendMessage(chatId, initialMessageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
 
-    if (sentMessage?.message_id) {
-        gameData.gameMessageId = sentMessage.message_id;
-        activeGames.set(gameId, gameData); 
-    } else {
-        console.error(`${LOG_PREFIX_OU7_START} Failed to send Over/Under 7 game message for ${gameId}. Refunding wager.`);
-        let refundClient = null;
-        try {
-            refundClient = await pool.connect();
-            await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_ou7_setup_fail', {}, `Refund OU7 game ${gameId} (message send fail)`);
-            await refundClient.query('COMMIT');
-        } catch (err) {
-            if (refundClient) await refundClient.query('ROLLBACK').catch(rbErr => console.error("Rollback error on OU7 setup refund:", rbErr));
-            console.error(`${LOG_PREFIX_OU7_START} CRITICAL: Failed to refund user for OU7 setup fail ${gameId}: ${err.message}`);
-            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\` User: ${playerRef} (\`${escapeMarkdownV2(userId)}\`)\nReason: Failed to send game message AND failed to refund\\. Manual intervention required\\.`, {parse_mode:'MarkdownV2'});
-        } finally {
-            if (refundClient) refundClient.release();
-        }
-        activeGames.delete(gameId);
-    }
+    if (sentMessage?.message_id) {
+        gameData.gameMessageId = sentMessage.message_id;
+        activeGames.set(gameId, gameData); 
+    } else {
+        console.error(`${LOG_PREFIX_OU7_START} Failed to send Over/Under 7 game message for ${gameId}. Refunding wager.`);
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_ou7_setup_fail', {}, `Refund OU7 game ${gameId} (message send fail)`);
+            await refundClient.query('COMMIT');
+        } catch (err) {
+            if (refundClient) await refundClient.query('ROLLBACK').catch(rbErr => console.error("Rollback error on OU7 setup refund:", rbErr));
+            console.error(`${LOG_PREFIX_OU7_START} CRITICAL: Failed to refund user for OU7 setup fail ${gameId}: ${err.message}`);
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRefHTML} (<code>${escapeHTML(userId)}</code>)\nReason: Failed to send game message AND failed to refund. Manual intervention required.`, {parse_mode:'HTML'});
+        } finally {
+            if (refundClient) refundClient.release();
+        }
+        activeGames.delete(gameId);
+    }
 }
 
 async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageIdFromCallback, callbackQueryId, msgContext) {
-    const userId = String(userObj.telegram_id);
-    const LOG_PREFIX_OU7_CHOICE = `[OU7_Choice GID:${gameId} UID:${userId} Choice:${choice}]`;
-    const gameData = activeGames.get(gameId);
+    const userId = String(userObj.telegram_id);
+    const LOG_PREFIX_OU7_CHOICE = `[OU7_Choice GID:${gameId} UID:${userId} Choice:${choice}_HTML]`;
+    const gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.userId !== userId || gameData.status !== 'waiting_player_choice' || Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true }); 
-        if (originalMessageIdFromCallback && bot && gameData && gameData.chatId && Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
-            bot.editMessageReplyMarkup({}, { chat_id: String(gameData.chatId), message_id: Number(originalMessageIdFromCallback) }).catch(() => {});
+    if (!gameData || gameData.userId !== userId || gameData.status !== 'waiting_player_choice' || Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true }); 
+        if (originalMessageIdFromCallback && bot && gameData && gameData.chatId && Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
+            bot.editMessageReplyMarkup({}, { chat_id: String(gameData.chatId), message_id: Number(originalMessageIdFromCallback) }).catch(() => {});
+        }
+        return;
+    }
+    
+    const choiceTextDisplay = choice.charAt(0).toUpperCase() + choice.slice(1);
+    await bot.answerCallbackQuery(callbackQueryId, { text: `🎯 Locked In: ${choiceTextDisplay} 7! Requesting dice from Helper Bot...` }).catch(() => {});
+
+    gameData.playerChoice = choice;
+    gameData.status = 'rolling_dice_waiting_helper';
+    activeGames.set(gameId, gameData); 
+
+    const { chatId, playerRef, betAmount } = gameData; 
+    const playerRefHTML = escapeHTML(playerRef); 
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+    
+    const titleRollingHTML = `🎲 <b>Over/Under 7 - Dice Rolling via Helper!</b> 🎲`;
+    let rollingMessageTextHTML = `${titleRollingHTML}\n\n${playerRefHTML} bets <b>${betDisplayUSD_HTML}</b> on the sum being <b>${escapeHTML(choiceTextDisplay)} 7</b>.\nThe Helper Bot is now rolling the dice on the casino network... This may take a moment! 🤞`;
+
+    let currentMessageId = gameData.gameMessageId; 
+    if (currentMessageId && bot) {
+        try {
+            await bot.editMessageText(rollingMessageTextHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: {} }); 
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                const newMsg = await safeSendMessage(String(chatId), rollingMessageTextHTML, { parse_mode: 'HTML' });
+                if (newMsg?.message_id && activeGames.has(gameId)) { 
+                    activeGames.get(gameId).gameMessageId = newMsg.message_id;
+                    currentMessageId = newMsg.message_id; 
+                }
+            }
+        }
+    } else { 
+        const newMsg = await safeSendMessage(String(chatId), rollingMessageTextHTML, { parse_mode: 'HTML' });
+        if (newMsg?.message_id && activeGames.has(gameId)) {
+            activeGames.get(gameId).gameMessageId = newMsg.message_id;
+            currentMessageId = newMsg.message_id; 
+        }
+    }
+
+    let diceRolls = [];
+    let diceSum = 0;
+    let helperBotError = null;
+
+    for (let i = 0; i < OU7_DICE_COUNT; i++) {
+        if (isShuttingDown) { helperBotError = "Shutdown during OU7 dice requests."; break; }
+        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `OU7 Roll ${i+1}`); 
+        if (rollResult.error) {
+            helperBotError = rollResult.message || `Failed to get OU7 Roll ${i+1}`;
+            break;
+        }
+        if (typeof rollResult.roll !== 'number' || rollResult.roll < 1 || rollResult.roll > 6) {
+            helperBotError = `Invalid roll value from helper for OU7 roll ${i+1}: ${rollResult.roll}`;
+            break;
         }
-        return;
-    }
-    
-    const choiceTextDisplay = choice.charAt(0).toUpperCase() + choice.slice(1);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `🎯 Locked In: ${escapeMarkdownV2(choiceTextDisplay)} 7! Requesting dice from Helper Bot...` }).catch(() => {});
+        diceRolls.push(rollResult.roll);
+        diceSum += rollResult.roll;
+    }
 
-    gameData.playerChoice = choice;
-    gameData.status = 'rolling_dice_waiting_helper';
-    activeGames.set(gameId, gameData); 
+    if (helperBotError || diceRolls.length !== OU7_DICE_COUNT) {
+        const errorMsgToUserHTML = `⚠️ ${playerRefHTML}, there was an issue rolling the dice via the Helper Bot for your Over/Under 7 game: <code>${escapeHTML(String(helperBotError || "Incomplete rolls from helper").substring(0,150))}</code>\nYour bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`;
+        const errorKeyboard = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
+        if (currentMessageId && bot) {
+            await bot.editMessageText(errorMsgToUserHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: errorKeyboard }).catch(async () => {
+                 await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
+            });
+        } else {
+            await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
+        }
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmount, 'refund_ou7_helper_fail', {game_id_custom_field: gameId}, `Refund OU7 game ${gameId} - Helper Bot error: ${String(helperBotError).substring(0,100)}`);
+            await refundClient.query('COMMIT');
+        } catch (dbErr) {
+            if (refundClient) await refundClient.query('ROLLBACK');
+            console.error(`${LOG_PREFIX_OU7_CHOICE} CRITICAL: Failed to refund after OU7 helper error for game ${gameId}: ${dbErr.message}`);
+            notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE (Helper Error) 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>, User: ${userId}\nError: ${escapeHTML(helperBotError || "")}\nDB Refund Error: ${escapeHTML(dbErr.message)}. MANUAL REFUND REQUIRED.`, {parse_mode: 'HTML'});
+        } finally {
+            if (refundClient) refundClient.release();
+        }
+        activeGames.delete(gameId); 
+        return;
+    }
+    
+    gameData.diceRolls = diceRolls;
+    gameData.diceSum = BigInt(diceSum);
+    gameData.status = 'game_over';
+    activeGames.set(gameId, gameData); 
 
-    const { chatId, playerRef, betAmount } = gameData;
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'));
-    
-    const titleRolling = createStandardTitle("Over/Under 7 - Dice Rolling via Helper!", "🎲");
-    let rollingMessageText = `${titleRolling}\n\n${playerRef} bets *${betDisplayUSD}* on the sum being *${escapeMarkdownV2(choiceTextDisplay)} 7*\\.\nThe Helper Bot is now rolling the dice on the casino network\\.\\.\\. This may take a moment! 🤞`;
+    let win = false;
+    let profitMultiplier = 0; 
+    if (choice === 'under' && diceSum < 7) { win = true; profitMultiplier = OU7_PAYOUT_NORMAL; }
+    else if (choice === 'over' && diceSum > 7) { win = true; profitMultiplier = OU7_PAYOUT_NORMAL; }
+    else if (choice === 'seven' && diceSum === 7) { win = true; profitMultiplier = OU7_PAYOUT_SEVEN; }
 
-    let currentMessageId = gameData.gameMessageId; 
-    if (currentMessageId && bot) {
-        try {
-            await bot.editMessageText(rollingMessageText, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: {} }); 
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                const newMsg = await safeSendMessage(String(chatId), rollingMessageText, { parse_mode: 'MarkdownV2' });
-                if (newMsg?.message_id && activeGames.has(gameId)) { 
-                    activeGames.get(gameId).gameMessageId = newMsg.message_id;
-                    currentMessageId = newMsg.message_id;
-                }
-            }
-        }
-    } else { 
-        const newMsg = await safeSendMessage(String(chatId), rollingMessageText, { parse_mode: 'MarkdownV2' });
-        if (newMsg?.message_id && activeGames.has(gameId)) {
-            activeGames.get(gameId).gameMessageId = newMsg.message_id;
-            currentMessageId = newMsg.message_id;
-        }
-    }
+    let payoutAmountLamports = 0n; 
+    let outcomeReasonLog = `loss_ou7_${choice}_sum${diceSum}`;
+    let resultTextPartHTML = "";
+    const profitAmountLamports = win ? betAmount * BigInt(Math.floor(profitMultiplier)) : 0n; 
 
-    let diceRolls = [];
-    let diceSum = 0;
-    let helperBotError = null;
+    if (win) {
+        payoutAmountLamports = betAmount + profitAmountLamports; 
+        outcomeReasonLog = `win_ou7_${choice}_sum${diceSum}`; 
+        const winEmoji = choice === 'seven' ? "🎯 JACKPOT!" : "🎉 WINNER!";
+        resultTextPartHTML = `${winEmoji} Your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b> was spot on! You've won a handsome <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit!`;
+    } else {
+        payoutAmountLamports = 0n; 
+        resultTextPartHTML = `💔 So Close! The dice didn't favor your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b> this round. Better luck next time!`;
+    }
 
-    for (let i = 0; i < OU7_DICE_COUNT; i++) {
-        if (isShuttingDown) { helperBotError = "Shutdown during OU7 dice requests."; break; }
-        let client = null;
-        let requestId = null;
-        let currentRollValue = null;
+    let finalUserBalanceLamports = BigInt(userObj.balance); 
+    let clientOutcome = null;
+    try {
+        clientOutcome = await pool.connect();
+        await clientOutcome.query('BEGIN');
+        const balanceUpdate = await updateUserBalanceAndLedger(
+            clientOutcome, userId, payoutAmountLamports, outcomeReasonLog, 
+            { game_id_custom_field: gameId, dice_rolls_info: diceRolls.join(','), player_choice_info: choice }, 
+            `Outcome of OU7 game ${gameId}. Player chose ${choice}, sum was ${diceSum}. Rolls: ${diceRolls.join(',')}.`
+        );
+        
+        if (balanceUpdate.success) {
+            finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
+            await clientOutcome.query('COMMIT');
+        } else {
+            await clientOutcome.query('ROLLBACK');
+            resultTextPartHTML += `\n\n⚠️ A critical error occurred settling your bet: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Casino staff alerted.`;
+            console.error(`${LOG_PREFIX_OU7_CHOICE} Failed to update balance for OU7 game ${gameId}. Error: ${balanceUpdate.error}`);
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 Payout/Refund Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRefHTML} (<code>${escapeHTML(userId)}</code>)\nAmount Due: <code>${escapeHTML(formatCurrency(payoutAmountLamports))}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check required.`, {parse_mode:'HTML'});
+        }
+    } catch (dbError) {
+        if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
+        console.error(`${LOG_PREFIX_OU7_CHOICE} DB error during OU7 outcome processing for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
+        resultTextPartHTML += `\n\n⚠️ A severe database error occurred. Casino staff notified.`;
+    } finally {
+        if (clientOutcome) clientOutcome.release();
+    }
 
-        try {
-            client = await pool.connect();
-            const requestResult = await insertDiceRollRequest(client, gameId, chatId, userId, '🎲', `OU7 Roll ${i+1}`);
-            if (!requestResult.success || !requestResult.requestId) {
-                throw new Error(requestResult.error || `Failed to create OU7 roll request ${i+1}.`);
-            }
-            requestId = requestResult.requestId;
-            client.release(); client = null;
+    const titleResultHTML = `🏁 <b>Over/Under 7 - Result!</b> 🏁`;
+    let finalMessageTextHTML = `${titleResultHTML}\n\nYour Bet: <b>${betDisplayUSD_HTML}</b> on <b>${escapeHTML(choiceTextDisplay)} 7</b>.\n\n`;
+    finalMessageTextHTML += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of <b>${escapeHTML(String(diceSum))}</b>!\n\n${resultTextPartHTML}`; 
+    finalMessageTextHTML += `\n\nYour new casino balance: <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}</b>.`; 
 
-            let attempts = 0;
-            while (attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
-                await sleep(DICE_ROLL_POLLING_INTERVAL_MS);
-                if (isShuttingDown) { helperBotError = "Shutdown during OU7 roll poll."; break; }
-                client = await pool.connect();
-                const statusResult = await getDiceRollRequestResult(client, requestId);
-                client.release(); client = null;
+    const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
 
-                if (statusResult.success && statusResult.status === 'completed') {
-                    currentRollValue = statusResult.roll_value; break;
-                } else if (statusResult.success && statusResult.status === 'error') {
-                    helperBotError = statusResult.notes || `Helper Bot error on OU7 roll ${i+1}.`; break;
-                }
-                attempts++;
-            }
-            if (currentRollValue === null && !helperBotError) {
-                helperBotError = `Timeout for OU7 roll ${i+1}.`;
-                client = await pool.connect();
-                await client.query("UPDATE dice_roll_requests SET status='timeout', notes=$1 WHERE request_id=$2", [helperBotError.substring(0,250), requestId]).catch(e => console.error("Failed to mark OU7 request as timeout:", e));
-                client.release(); client = null;
-            }
-            if (helperBotError) throw new Error(helperBotError);
-            if (typeof currentRollValue !== 'number') throw new Error(`Invalid roll value from helper for OU7 roll ${i+1}.`);
-
-            diceRolls.push(currentRollValue);
-            diceSum += currentRollValue;
-
-        } catch (e) {
-            if (client) client.release();
-            console.error(`${LOG_PREFIX_OU7_CHOICE} Error getting OU7 roll ${i+1}: ${e.message}`);
-            helperBotError = e.message; 
-            break; 
-        }
-        if (helperBotError) break;
-    }
-
-    if (helperBotError) {
-        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue rolling the dice via the Helper Bot for your Over/Under 7 game: \`${escapeMarkdownV2(String(helperBotError).substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded\\.`;
-        const errorKeyboard = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
-        if (currentMessageId && bot) {
-            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: errorKeyboard }).catch(async () => {
-                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
-            });
-        } else {
-            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
-        }
-        let refundClient = null;
-        try {
-            refundClient = await pool.connect();
-            await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmount, 'refund_ou7_helper_fail', {game_id_custom_field: gameId}, `Refund OU7 game ${gameId} - Helper Bot error: ${String(helperBotError).substring(0,100)}`);
-            await refundClient.query('COMMIT');
-        } catch (dbErr) {
-            if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_OU7_CHOICE} CRITICAL: Failed to refund after OU7 helper error for game ${gameId}: ${dbErr.message}`);
-            notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE (Helper Error) 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\`, User: ${userId}\nError: ${escapeMarkdownV2(helperBotError)}\nDB Refund Error: ${escapeMarkdownV2(dbErr.message)}. MANUAL REFUND REQUIRED.`);
-        } finally {
-            if (refundClient) refundClient.release();
-        }
-        activeGames.delete(gameId);
-        return;
-    }
-    
-    gameData.diceRolls = diceRolls;
-    gameData.diceSum = BigInt(diceSum);
-    gameData.status = 'game_over';
-    activeGames.set(gameId, gameData); 
-
-    let win = false;
-    let profitMultiplier = 0; 
-    if (choice === 'under' && diceSum < 7) { win = true; profitMultiplier = OU7_PAYOUT_NORMAL; }
-    else if (choice === 'over' && diceSum > 7) { win = true; profitMultiplier = OU7_PAYOUT_NORMAL; }
-    else if (choice === 'seven' && diceSum === 7) { win = true; profitMultiplier = OU7_PAYOUT_SEVEN; }
-
-    let payoutAmountLamports = 0n; 
-    let outcomeReasonLog = `loss_ou7_${choice}_sum${diceSum}`; // Default to loss
-    let resultTextPart = "";
-    const profitAmountLamports = win ? betAmount * BigInt(Math.floor(profitMultiplier)) : 0n; 
-
-    if (win) {
-        payoutAmountLamports = betAmount + profitAmountLamports; 
-        outcomeReasonLog = `win_ou7_${choice}_sum${diceSum}`; 
-        const winEmoji = choice === 'seven' ? "🎯 JACKPOT!" : "🎉 WINNER!";
-        resultTextPart = `${winEmoji} Your prediction of *${escapeMarkdownV2(choiceTextDisplay)} 7* was spot on! You've won a handsome *${escapeMarkdownV2(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}* in profit!`;
-    } else {
-        payoutAmountLamports = 0n; 
-        resultTextPart = `💔 *So Close!* The dice didn't favor your prediction of *${escapeMarkdownV2(choiceTextDisplay)} 7* this round\\. Better luck next time!`;
-    }
-
-    let finalUserBalanceLamports = BigInt(userObj.balance); 
-    let clientOutcome = null;
-    try {
-        clientOutcome = await pool.connect();
-        await clientOutcome.query('BEGIN');
-        const balanceUpdate = await updateUserBalanceAndLedger(
-            clientOutcome, 
-            userId, 
-            payoutAmountLamports, 
-            outcomeReasonLog, 
-            { 
-                game_id_custom_field: gameId, 
-                dice_rolls_info: diceRolls.join(','), 
-                player_choice_info: choice 
-            }, 
-            `Outcome of OU7 game ${gameId}. Player chose ${choice}, sum was ${diceSum}. Rolls: ${diceRolls.join(',')}.`
-        );
-        
-        if (balanceUpdate.success) {
-            finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
-            await clientOutcome.query('COMMIT');
-        } else {
-            await clientOutcome.query('ROLLBACK');
-            resultTextPart += `\n\n⚠️ A critical error occurred settling your bet: \`${escapeMarkdownV2(balanceUpdate.error || "DB Error")}\`\\. Our casino staff has been alerted\\.`;
-            console.error(`${LOG_PREFIX_OU7_CHOICE} Failed to update balance for OU7 game ${gameId}. Error: ${balanceUpdate.error}`);
-            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 Payout/Refund Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\`\nUser: ${playerRef} (\`${escapeMarkdownV2(userId)}\`)\nAmount Due: \`${escapeMarkdownV2(formatCurrency(payoutAmountLamports))}\`\nDB Error: \`${escapeMarkdownV2(balanceUpdate.error || "N/A")}\`\\. Manual check required\\.`, {parse_mode:'MarkdownV2'});
-        }
-    } catch (dbError) {
-        if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
-        console.error(`${LOG_PREFIX_OU7_CHOICE} DB error during OU7 outcome processing for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
-        resultTextPart += `\n\n⚠️ A severe database error occurred\\. Our casino staff has been notified\\.`;
-    } finally {
-        if (clientOutcome) clientOutcome.release();
-    }
-
-    const titleResult = createStandardTitle("Over/Under 7 - Result!", "🏁");
-    let finalMessageText = `${titleResult}\n\nYour Bet: *${betDisplayUSD}* on *${escapeMarkdownV2(choiceTextDisplay)} 7*\\.\n\n`;
-    finalMessageText += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of *${escapeMarkdownV2(String(diceSum))}*!${'\\!'}\n\n${resultTextPart}`; 
-    finalMessageText += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`; 
-
-    const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
-
-    if (currentMessageId && bot) { 
-        try {
-            await bot.editMessageText(finalMessageText, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardOU7 });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(String(chatId), finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardOU7 });
-            }
-        }
-    } else { 
-        await safeSendMessage(String(chatId), finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardOU7 });
-    }
-    activeGames.delete(gameId); 
+    if (currentMessageId && bot) { 
+        try {
+            await bot.editMessageText(finalMessageTextHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
+            }
+        }
+    } else { 
+        await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
+    }
+    activeGames.delete(gameId); 
 }
 
 // --- End of Part 5c, Section 1 (NEW) ---
