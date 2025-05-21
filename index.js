@@ -479,9 +479,13 @@ const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map(); 
 
 const escapeMarkdownV2 = (text) => {
-  if (text === null || typeof text === 'undefined') return '';
-  // Escapes: _ * [ ] ( ) ~ ` > # + - = | { } . ! ' \
-  // The apostrophe (') is explicitly included.
+  if (text === null || typeof text === 'undefined') {
+    return '';
+  }
+  // Escapes the following characters with a preceding backslash:
+  // _ * [ ] ( ) ~ ` > # + - = | { } . ! ' \
+  // The apostrophe (') is included as per your error logs.
+  // Periods and exclamation marks are included as per general MarkdownV2 spec.
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!'\\])/g, '\\$1');
 };
 
