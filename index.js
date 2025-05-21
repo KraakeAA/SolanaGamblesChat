@@ -478,10 +478,13 @@ const userStateCache = new Map();
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map(); 
 
-const escapeMarkdownV2 = (text) => {
-  if (text === null || typeof text === 'undefined') return '';
-  // Added '.', '(', and ')' to the regex character class
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!'\\])/g, '\\$1');
+const escapeMarkdownV2_cleaner = (text) => {
+  if (text === null || typeof text === 'undefined') return '';
+  // Characters we will still escape: _ * [ ] ( ) ~ ` > # + - = | { } \
+  // We have REMOVED . ! ' from this list for a cleaner look.
+  // If you find other characters causing issues (like '$'), they might need to be added here.
+  // For now, '$' is NOT escaped by this function, assuming currency formatting handles it or it's not problematic.
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}\\])/g, '\\$1');
 };
 
 async function safeSendMessage(chatId, text, options = {}) {
