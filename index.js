@@ -1261,39 +1261,41 @@ async function findRecipientUser(identifier, dbClient = pool) {
 }
 // --- End of new findRecipientUser function ---
 
-async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
-    const stringUserId = String(userId);
-    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`;
-    try {
-        const query = `SELECT derivation_path FROM user_deposit_wallets WHERE user_telegram_id = $1 ORDER BY created_at DESC;`; 
-        `;
-        // queryDatabase is from Part 1, assuming it's available and correct.
-        // If queryDatabase is the one you provided earlier, it handles its own errors.
-        const res = await queryDatabase(query, [stringUserId], dbClient);
-        let maxIndex = -1;
+// From Part 2: Database Schema Initialization & Core User Management
 
-        if (res.rows.length > 0) {
-            for (const row of res.rows) {
-                const path = row.derivation_path;
-                const parts = path.split('/');
-                if (parts.length >= 6) { 
-                    const lastPart = parts[parts.length - 1];
-                    if (lastPart.endsWith("'")) {
-                        const indexStr = lastPart.substring(0, lastPart.length - 1);
-                        const currentIndex = parseInt(indexStr, 10);
-                        if (!isNaN(currentIndex) && currentIndex > maxIndex) {
-                            maxIndex = currentIndex;
-                        }
-                    }
-                }
-            }
-        }
-        const nextIndex = maxIndex + 1;
-        return nextIndex;
-    } catch (error) {
-        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack?.substring(0,300));
-        throw error; 
-    }
+async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
+    const stringUserId = String(userId);
+    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`;
+    try {
+        // SQL query (ensure this is also clean from previous fix)
+        const query = `SELECT derivation_path FROM user_deposit_wallets WHERE user_telegram_id = $1 ORDER BY created_at DESC;`;
+
+        const res = await queryDatabase(query, [stringUserId], dbClient);
+        let maxIndex = -1;
+
+        if (res.rows.length > 0) {
+            for (const row of res.rows) {
+                const path = row.derivation_path;
+                const parts = path.split('/');
+                if (parts.length >= 6) { 
+                    const lastPart = parts[parts.length - 1];
+                    if (lastPart.endsWith("'")) {
+                        const indexStr = lastPart.substring(0, lastPart.length - 1);
+                        const currentIndex = parseInt(indexStr, 10);
+                        if (!isNaN(currentIndex) && currentIndex > maxIndex) {
+                            maxIndex = currentIndex;
+                        }
+                    }
+                }
+            }
+        }
+        const nextIndex = maxIndex + 1;
+        return nextIndex;
+    } catch (error) {
+        // CORRECTED LINE: Ensure this uses backticks (`) for the template literal
+        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack?.substring(0,300));
+        throw error; 
+    }
 }
 
 async function deleteUserAccount(telegramId) {
