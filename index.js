@@ -4350,7 +4350,7 @@ async function processDice21BotTurn(gameData) {
 
 // REVISED finalizeDice21PvBGame (to use HTML parse_mode for the final message)
 async function finalizeDice21PvBGame(gameData) {
-    const logPrefix = `[D21_PvB_Finalize GID:${gameData.gameId} V7_HTML_Winnings]`; // Updated log prefix for clarity
+    const logPrefix = `[D21_PvB_Finalize GID:${gameData.gameId} V7_HTML_Winnings_Fix]`; 
 
     if (!gameData) {
         console.error(`${logPrefix} Finalize called but gameData is missing. Cannot proceed.`);
@@ -4358,7 +4358,7 @@ async function finalizeDice21PvBGame(gameData) {
     }
 
     const finalStatus = gameData.status;
-    // console.log(`${logPrefix} Finalizing game. Player: ${gameData.playerRef}, PScore: ${gameData.playerScore}, BScore: ${gameData.botScore}, Status: ${finalStatus}`); // Log removed
+    // console.log(`${logPrefix} Finalizing game. Player: ${gameData.playerRef}, PScore: ${gameData.playerScore}, BScore: ${gameData.botScore}, Status: ${finalStatus}`);
 
     if (gameData.gameMessageId) {
         gameData.intermediateMessageIds.push(gameData.gameMessageId);
@@ -4372,92 +4372,104 @@ async function finalizeDice21PvBGame(gameData) {
 
     let resultTitle = "🏁 Dice 21 Result 🏁";
     let resultOutcomeText = "";
-    let payoutLamports = 0n;
+    let payoutLamports = 0n; // Correctly declared and initialized
     let playerWins = false;
     let playerBlackjack = (gameData.playerScore === DICE_21_TARGET_SCORE && gameData.playerHandRolls.length === 2);
-    const betAmount = gameData.betAmount;
-    const betDisplayUSDShort = await formatBalanceForDisplay(betAmount, 'USD', 2); // Used for loss/push messages
+    const betAmount = gameData.betAmount; // This is a BigInt
+    const betDisplayUSDShort = await formatBalanceForDisplay(betAmount, 'USD', 2);
 
     if (finalStatus === 'game_over_player_bust') {
         resultTitle = "💥 Player Busts!";
         resultOutcomeText = `Your score: <b>${escapeHTML(String(gameData.playerScore))}</b>. Bot wins <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
+        // payoutLamports remains 0n for loss
     } else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') {
         resultTitle = "⚙️ Game Error";
         resultOutcomeText = `Technical issue. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> refunded.`;
-        payoutLamports = betAmount;
+        payoutLamports = betAmount; // Refund original bet
     } else if (finalStatus === 'game_over_player_forfeit') {
         resultTitle = "🚫 Game Forfeited";
         resultOutcomeText = `You forfeited. Bot wins <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
+        // payoutLamports remains 0n for loss
     } else if (finalStatus === 'game_over_bot_played' || finalStatus === 'player_blackjack') {
         if (playerBlackjack && (gameData.botScore !== DICE_21_TARGET_SCORE || gameData.botHandRolls.length > 2)) {
             resultTitle = "✨🎉 BLACKJACK!";
-            const profitBlackjack = betAmount * 15n / 10n; // 1.5x profit
+            const profitBlackjack = betAmount * 15n / 10n; 
             playerWins = true;
             payoutLamports = betAmount + profitBlackjack; // Total payout is 2.5x bet
-            resultOutcomeText = `Natural 21! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`; // Shows total won
+            resultOutcomeText = `Natural 21! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
         } else if (gameData.botScore > DICE_21_TARGET_SCORE) {
             resultTitle = "🎉 Player Wins!";
             playerWins = true; payoutLamports = betAmount * 2n;
-            resultOutcomeText = `Bot BUSTED (<b>${escapeHTML(String(gameData.botScore))}</b>)! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`; // Shows total won (2x bet)
+            resultOutcomeText = `Bot BUSTED (<b>${escapeHTML(String(gameData.botScore))}</b>)! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
         } else if (gameData.playerScore > gameData.botScore) {
             resultTitle = "🎉 Player Wins!";
             playerWins = true; payoutLamports = betAmount * 2n;
-            resultOutcomeText = `Your <b>${escapeHTML(String(gameData.playerScore))}</b> beats Bot's <b>${escapeHTML(String(gameData.botScore))}</b>. You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`; // Shows total won (2x bet)
+            resultOutcomeText = `Your <b>${escapeHTML(String(gameData.playerScore))}</b> beats Bot's <b>${escapeHTML(String(gameData.botScore))}</b>. You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
         } else if (gameData.botScore > gameData.playerScore) {
             resultTitle = "🤖 Bot Wins";
             resultOutcomeText = `Bot's <b>${escapeHTML(String(gameData.botScore))}</b> beats your <b>${escapeHTML(String(gameData.playerScore))}</b>. You lost <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
+            // payoutLamports remains 0n for loss
         } else { // Push
             resultTitle = "⚖️ Push!";
             resultOutcomeText = `Scores tied at <b>${escapeHTML(String(gameData.playerScore))}</b>. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> returned.`;
-            payoutLamports = betAmount;
+            payoutLamports = betAmount; // Refund original bet
         }
     } else { // Unknown status
         resultTitle = "❓ Game Undetermined";
         resultOutcomeText = `Unexpected status: <code>${escapeHTML(String(finalStatus))}</code>. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> refunded.`;
-        payoutLamports = betAmount;
+        payoutLamports = betAmount; // Refund original bet
     }
 
-    let dbErrorDuringPayoutText = "";
+    let dbErrorDuringPayoutText = ""; 
 
-    if (payoutLamports >= 0n || finalStatus === 'game_over_player_bust' || finalStatus === 'game_over_player_forfeit' || (finalStatus === 'game_over_bot_played' && !playerWins && payoutLamports === 0n)) {
+    // This condition ensures we attempt DB update for wins, losses (0 payout), pushes, and refunds.
+    if (payoutLamports >= 0n || finalStatus === 'game_over_player_bust' || finalStatus === 'game_over_player_forfeit') {
         let client = null;
         try {
             client = await pool.connect(); await client.query('BEGIN');
-            let transactionType = 'loss_dice21_pvb';
+            let transactionType = 'loss_dice21_pvb'; // Default
             if (finalStatus === 'game_over_player_bust') transactionType = 'loss_dice21_pvb_player_bust';
             else if (finalStatus === 'game_over_player_forfeit') transactionType = 'loss_dice21_pvb_forfeit';
             else if (playerWins) transactionType = playerBlackjack ? 'win_dice21_pvb_blackjack' : 'win_dice21_pvb';
-            else if (payoutLamports === betAmount) transactionType = 'refund_dice21_pvb'; // Covers push and error refunds
+            else if (payoutLamports === betAmount) transactionType = 'refund_dice21_pvb'; 
             else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') transactionType = 'refund_dice21_pvb_error';
 
             const notes = `Dice 21 PvB Result: ${finalStatus}. Payout: ${payoutLamports}. Player Hand: ${gameData.playerHandRolls.join(',')}. Bot Hand: ${gameData.botHandRolls.join(',')}.`;
-            const balanceUpdateResult = await updateUserBalanceAndLedger(client, gameData.playerId, payoutAmountLamports, transactionType, { game_id_custom_field: gameData.gameId }, notes);
+            
+            // Ensure payoutLamports (with 's') is used here
+            const balanceUpdateResult = await updateUserBalanceAndLedger(client, gameData.playerId, payoutLamports, transactionType, { game_id_custom_field: gameData.gameId }, notes);
 
             if (balanceUpdateResult.success) {
                 await client.query('COMMIT');
-                // finalUserBalanceLamports = balanceUpdateResult.newBalanceLamports; // Stored but not displayed
             } else {
                 await client.query('ROLLBACK');
-                dbErrorDuringPayoutText = `\n\n⚠️ Balance Update Error. Staff notified.`;
+                dbErrorDuringPayoutText = `\n\n⚠️ Balance Update Error. Staff notified.`; 
                 console.error(`${logPrefix} FAILED to update balance after game. Error: ${balanceUpdateResult.error}`);
+                // This is where the original error 'e' for the catch block below would be balanceUpdateResult.error
             }
-        } catch (e) {
+        } catch (e) { // This 'e' is for DB connection or other errors within the try block
             if (client) await client.query('ROLLBACK').catch(()=>{});
             dbErrorDuringPayoutText = `\n\n🚨 Critical DB Error. Staff notified.`;
             console.error(`${logPrefix} CRITICAL DB error during finalization: ${e.message}`);
             if (typeof notifyAdmin === 'function') {
+                // Here, e.message is the actual DB error.
+                // payoutLamports (with 's') is from the outer scope and should be defined.
                 notifyAdmin(`🚨 D21 PvB Finalize Payout DB Failure 🚨\nGame ID: <code>${escapeHTML(String(gameData.gameId))}</code>\nError: ${escapeHTML(e.message)}. MANUAL BALANCE CHECK/CREDIT REQUIRED for ${payoutLamports} for user ${gameData.playerId}.`, {parse_mode:'HTML'});
             }
         } finally {
             if (client) client.release();
         }
+    } else {
+      // This else block should ideally not be reached if payoutLamports is always initialized.
+      // Added for safety if payoutLamports somehow ended up < 0 without being a loss.
+       console.warn(`${logPrefix} payoutLamports was unexpectedly negative and not a loss: ${payoutLamports}. No DB update performed.`);
     }
 
     const playerRefHTML = escapeHTML(gameData.playerRef);
     let conciseFinalMessageHTML = `<b>${escapeHTML(resultTitle)}</b>\n` +
                                   `You (${playerRefHTML}): <b>${escapeHTML(String(gameData.playerScore))}</b> ${formatDiceRolls(gameData.playerHandRolls)}\n` +
                                   `Bot: <b>${escapeHTML(String(gameData.botScore))}</b> ${formatDiceRolls(gameData.botHandRolls)}\n` +
-                                  `${resultOutcomeText}` + // resultOutcomeText now contains the total amount won
+                                  `${resultOutcomeText}` + 
                                   `${escapeHTML(dbErrorDuringPayoutText)}`;
                                   // Balance display removed
 
@@ -4469,15 +4481,13 @@ async function finalizeDice21PvBGame(gameData) {
             if (bot && msgId) {
                 await bot.deleteMessage(gameData.chatId, Number(msgId)).catch(e => {
                     if (e.message && !e.message.toLowerCase().includes("message to delete not found") && !e.message.toLowerCase().includes("message can't be deleted")) {
-                        // console.warn(`${logPrefix} Failed to delete intermediate message ID ${msgId}: ${e.message}`); // Log removed
+                        // console.warn(...); // Log removed for brevity
                     }
                 });
             }
         }
     }
-    // console.log(`${logPrefix} Finalization and message cleanup complete for game ${gameData.gameId}.`); // Log removed
 }
-
 
 // index.js - Part 5b, Section 2 (Dice 21 / Blackjack-style game logic)
 // SEGMENT 2 of 2 (PvP Functions MODIFIED FOR HTML DISPLAY, TIMEOUTS, & NO BALANCE IN FINAL MSG)
