@@ -4249,157 +4249,161 @@ async function handleDice21PvBStand(gameId, userObject, originalMessageId, callb
 
 // REVISED processDice21BotTurn with fix for ReferenceError and correct stand logic
 async function processDice21BotTurn(gameData) {
-    const logPrefix = `[D21_BotTurn_HTML_V8_Full GID:${gameData.gameId}]`; // New log prefix for this version
+    const logPrefix = `[D21_BotTurn_HTML_V10_SendDice GID:${gameData.gameId}]`;
     if (!gameData || isShuttingDown || gameData.status !== 'bot_turn_pending_rolls') {
-        if (gameData) {
-            console.warn(`${logPrefix} Bot turn aborted. Current Status: '${gameData.status}'. Is Shutting Down: ${isShuttingDown}.`);
-        } else {
-            console.warn(`${logPrefix} Bot turn aborted, no game data available for GID ${gameData?.gameId}.`);
-        }
         return;
     }
-    // console.log(`${logPrefix} Bot Dealer's turn. Player ${gameData.playerRef} stands with: ${gameData.playerScore}. Bot target stand score: ${DICE_21_BOT_STAND_SCORE}.`); // Log removed for brevity
 
-    gameData.status = 'bot_rolling'; // Update status to indicate bot is actively rolling
-    gameData.botScore = 0;           // Reset bot score for this turn
-    gameData.botHandRolls = [];      // Reset bot hand for this turn
-    activeGames.set(gameData.gameId, gameData); // Save initial bot turn state
+    gameData.status = 'bot_rolling';
+    gameData.botScore = 0;
+    gameData.botHandRolls = [];
+    activeGames.set(gameData.gameId, gameData);
 
-    const playerRefHTML = gameData.playerRef; // Assumed to be HTML escaped from when gameData was created
+    const playerRefHTML = gameData.playerRef;
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
     const titleHTML = `🎲 <b>Dice 21 vs. Bot Dealer</b> 🎲`;
     
-    // Initial message for bot's turn. This will edit the message left by handleDice21PvBStand
-    // which should be gameData.gameMessageId.
-    let botTurnMessageHTML = `${titleHTML}\n\n` +
-                             `Player: ${playerRefHTML}\n` +
-                             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                             `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n\n` +
-                             `🤖 <b>Bot Dealer is now rolling...</b>`;
+    let botTurnInProgressMessageHTML = `${titleHTML}\n\n` +
+                                     `Player: ${playerRefHTML}\n` +
+                                     `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+                                     `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n\n` +
+                                     `🤖 <b>Bot Dealer is now rolling...</b>`;
 
-    if (gameData.gameMessageId && bot) {
-        try {
-            await bot.editMessageText(botTurnMessageHTML, {
+    // Ensure gameData.gameMessageId is the ID of the message we are editing (the "Player stands..." message)
+    if (!gameData.gameMessageId) {
+        console.warn(`${logPrefix} gameMessageId is missing. Sending new message for bot's turn.`);
+        const newMsg = await safeSendMessage(gameData.chatId, botTurnInProgressMessageHTML, { parse_mode: 'HTML' });
+        if (newMsg?.message_id) gameData.gameMessageId = newMsg.message_id;
+        else {
+            console.error(`${logPrefix} CRITICAL: Failed to send or get ID for initial bot turn message. Aborting bot turn.`);
+            gameData.status = 'game_over_error_ui_update'; // Mark game as errored
+            activeGames.set(gameData.gameId, gameData);
+            await finalizeDice21PvBGame(gameData); // Attempt to finalize with error
+            return;
+        }
+    } else {
+         try {
+            await bot.editMessageText(botTurnInProgressMessageHTML, {
                 chat_id: gameData.chatId,
                 message_id: Number(gameData.gameMessageId),
-                parse_mode: 'HTML' // Ensure HTML parse mode
+                parse_mode: 'HTML'
             });
         } catch (e) { 
              if (!e.message || !e.message.toLowerCase().includes("message is not modified")){
                 console.warn(`${logPrefix} Failed to edit initial bot turn message (ID:${gameData.gameMessageId}), sending new. Error: ${e.message}`);
-                const newAnnounceMsg = await safeSendMessage(gameData.chatId, botTurnMessageHTML, { parse_mode: 'HTML' });
-                if (newAnnounceMsg?.message_id) gameData.gameMessageId = newAnnounceMsg.message_id; // Update gameMessageId
+                const newAnnounceMsg = await safeSendMessage(gameData.chatId, botTurnInProgressMessageHTML, { parse_mode: 'HTML' });
+                if (newAnnounceMsg?.message_id) gameData.gameMessageId = newAnnounceMsg.message_id;
              }
         }
-    } else { // No message to edit, send new (should ideally not happen if handleDice21PvBStand set it)
-        const newAnnounceMsg = await safeSendMessage(gameData.chatId, botTurnMessageHTML, { parse_mode: 'HTML' });
-        if (newAnnounceMsg?.message_id) gameData.gameMessageId = newAnnounceMsg.message_id;
     }
-    activeGames.set(gameData.gameId, gameData); // Persist updated gameMessageId if it changed
+    activeGames.set(gameData.gameId, gameData);
 
-    await sleep(1500); // Pause for player to read "Bot is now rolling..."
+    await sleep(1000); // Short pause after "Bot is now rolling..."
 
     let botFaultedInTurn = false;
     let rollsThisTurn = 0;
-    const MAX_BOT_ROLLS_SAFETY = 10; // Prevent infinite loops if logic error
+    const MAX_BOT_ROLLS_SAFETY = 10;
 
     while (gameData.botScore < DICE_21_BOT_STAND_SCORE && !botFaultedInTurn && rollsThisTurn < MAX_BOT_ROLLS_SAFETY) {
-        if (isShuttingDown) {
-            console.log(`${logPrefix} Shutdown signal received during bot's rolling loop.`);
-            break;
-        }
+        if (isShuttingDown) break;
         rollsThisTurn++;
+        let rollVal;
+        let sentDiceAnimationMsgId = null;
 
-        const dieRollResult = await getSingleDiceRollViaHelper(gameData.gameId, gameData.chatId, null, `Bot D21 PvB Roll ${rollsThisTurn}`);
-        if (dieRollResult.error) {
-            console.error(`${logPrefix} Bot failed to get roll ${rollsThisTurn} from Helper Bot: ${dieRollResult.message}.`);
-            botTurnMessageHTML = `${titleHTML}\n\n` + // Reconstruct message with error
-                                 `Player: ${playerRefHTML}\n` +
-                                 `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                                 `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n` +
-                                 `🤖 Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.botScore))}</b>\n\n` +
-                                 `⚠️ Error during Bot's roll: ${escapeHTML(dieRollResult.message)}. Bot's turn ends.`;
-            botFaultedInTurn = true; // Mark that bot's turn ended due to an error
-            break; 
+        try {
+            const diceMsg = await bot.sendDice(gameData.chatId, { emoji: '🎲' });
+            rollVal = diceMsg.dice.value;
+            sentDiceAnimationMsgId = diceMsg.message_id;
+            // No sleep here, delete immediately after getting value
+            if (sentDiceAnimationMsgId) {
+                await bot.deleteMessage(gameData.chatId, sentDiceAnimationMsgId).catch(()=>{/* ignore delete error */});
+            }
+        } catch (sendDiceError) {
+            console.error(`${logPrefix} Failed to send/delete animated dice for bot roll ${rollsThisTurn}: ${sendDiceError.message}. Using internal fallback.`);
+            rollVal = Math.floor(Math.random() * 6) + 1; // Internal fallback roll
+            const fallbackRollMsg = await safeSendMessage(gameData.chatId, `⚙️ Bot (internal roll ${rollsThisTurn}): <b>${rollVal}</b>`, {parse_mode: 'HTML'});
+            if(fallbackRollMsg?.message_id) { // Clean up this fallback announcement quickly
+                await sleep(1500);
+                await bot.deleteMessage(gameData.chatId, fallbackRollMsg.message_id).catch(()=>{});
+            }
         }
-        const rollVal = dieRollResult.roll;
 
         gameData.botHandRolls.push(rollVal);
         gameData.botScore += rollVal;
-        activeGames.set(gameData.gameId, gameData); // Update state after each bot roll
-
-        // Reconstruct the message for each roll update
-        botTurnMessageHTML = `${titleHTML}\n\n` +
-                             `Player: ${playerRefHTML}\n` +
-                             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                             `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n` +
-                             `🤖 Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.botScore))}</b>\n\n`;
+        
+        // Construct the updated message content
+        botTurnInProgressMessageHTML = `${titleHTML}\n\n` +
+                                     `Player: ${playerRefHTML}\n` +
+                                     `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+                                     `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n` +
+                                     `🤖 Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.botScore))}</b>\n\n`;
 
         if (gameData.botScore > DICE_21_TARGET_SCORE) {
-            botTurnMessageHTML += `💥 Bot BUSTS with <b>${escapeHTML(String(gameData.botScore))}</b>!`;
+            botTurnInProgressMessageHTML += `💥 Bot BUSTS with <b>${escapeHTML(String(gameData.botScore))}</b>!`;
         } else if (gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            botTurnMessageHTML += `✋ Bot STANDS with <b>${escapeHTML(String(gameData.botScore))}</b>.`;
+            botTurnInProgressMessageHTML += `✋ Bot STANDS with <b>${escapeHTML(String(gameData.botScore))}</b>.`;
         } else {
-            botTurnMessageHTML += `<i>Bot rolling again...</i>`;
+            botTurnInProgressMessageHTML += `<i>Bot rolling again...</i>`;
         }
 
+        // Edit the main game message
         if (gameData.gameMessageId && bot) {
             try {
-                await bot.editMessageText(botTurnMessageHTML, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML'});
+                await bot.editMessageText(botTurnInProgressMessageHTML, { 
+                    chat_id: gameData.chatId, 
+                    message_id: Number(gameData.gameMessageId), 
+                    parse_mode: 'HTML'
+                });
             } catch (e) {
                  if (!e.message || !e.message.toLowerCase().includes("message is not modified")){
-                    console.warn(`${logPrefix} Failed to edit bot turn update message (ID:${gameData.gameMessageId}), sending new. Error: ${e.message}`);
-                    const newUpdateMsg = await safeSendMessage(gameData.chatId, botTurnMessageHTML, { parse_mode: 'HTML' });
-                    if (newUpdateMsg?.message_id) gameData.gameMessageId = newUpdateMsg.message_id; // Update to new message ID
+                    console.warn(`${logPrefix} Failed to edit bot turn update message (ID:${gameData.gameMessageId}) after roll ${rollsThisTurn}, sending new. Error: ${e.message}`);
+                    const newUpdateMsg = await safeSendMessage(gameData.chatId, botTurnInProgressMessageHTML, { parse_mode: 'HTML' });
+                    if (newUpdateMsg?.message_id) gameData.gameMessageId = newUpdateMsg.message_id;
                  }
             }
-        } else { // Should ideally not happen if gameMessageId was set
-            const newUpdateMsg = await safeSendMessage(gameData.chatId, botTurnMessageHTML, { parse_mode: 'HTML' });
+        } else { // Should not happen if gameMessageId was properly set initially
+            const newUpdateMsg = await safeSendMessage(gameData.chatId, botTurnInProgressMessageHTML, { parse_mode: 'HTML' });
             if (newUpdateMsg?.message_id) gameData.gameMessageId = newUpdateMsg.message_id;
         }
-        activeGames.set(gameData.gameId, gameData); // Persist gameMessageId if it changed
-
-        await sleep(2000); // Pause between bot rolls for readability
+        activeGames.set(gameData.gameId, gameData); // Save state including potentially new gameMessageId
 
         if (gameData.botScore > DICE_21_TARGET_SCORE || gameData.botScore >= DICE_21_BOT_STAND_SCORE) {
-            break; // Exit loop if bot busts or stands
+            break; 
         }
-    } // End of while loop
+        await sleep(750); // Very short pause between logical bot rolls if it's hitting again
+    }
 
     if (!botFaultedInTurn && rollsThisTurn >= MAX_BOT_ROLLS_SAFETY && gameData.botScore < DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
-        // Bot hit max rolls but didn't bust or reach stand score, stands with current score
-        botTurnMessageHTML = `${titleHTML}\n\n` + // Reconstruct final message for this specific case
-                             `Player: ${playerRefHTML}\n` +
-                             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                             `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n` +
-                             `🤖 Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.botScore))}</b>\n\n` +
-                             `✋ Bot reached roll limit. Standing with <b>${escapeHTML(String(gameData.botScore))}</b>.`;
+        botTurnInProgressMessageHTML = `${titleHTML}\n\n` +
+                                     `Player: ${playerRefHTML}\n` +
+                                     `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+                                     `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b> (Stood)\n` +
+                                     `🤖 Bot Dealer's Hand: ${formatDiceRolls(gameData.botHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.botScore))}</b>\n\n` +
+                                     `✋ Bot reached roll limit. Standing with <b>${escapeHTML(String(gameData.botScore))}</b>.`;
         if (gameData.gameMessageId && bot) {
-            try { 
-                await bot.editMessageText(botTurnMessageHTML, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML'}); 
-            } catch (e) { /* Fallback to send new if edit fails, or just proceed if not modified */ 
+            try { await bot.editMessageText(botTurnInProgressMessageHTML, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML'}); } 
+            catch (e) { 
                 if (!e.message || !e.message.toLowerCase().includes("message is not modified")){
-                    const newSafetyMsg = await safeSendMessage(gameData.chatId, botTurnMessageHTML, { parse_mode: 'HTML' });
+                    const newSafetyMsg = await safeSendMessage(gameData.chatId, botTurnInProgressMessageHTML, { parse_mode: 'HTML' });
                     if (newSafetyMsg?.message_id) gameData.gameMessageId = newSafetyMsg.message_id;
                 }
             }
         } else {
-            const newSafetyMsg = await safeSendMessage(gameData.chatId, botTurnMessageHTML, { parse_mode: 'HTML' });
+            const newSafetyMsg = await safeSendMessage(gameData.chatId, botTurnInProgressMessageHTML, { parse_mode: 'HTML' });
             if (newSafetyMsg?.message_id) gameData.gameMessageId = newSafetyMsg.message_id;
         }
         activeGames.set(gameData.gameId, gameData);
     }
     
     if (botFaultedInTurn) {
-        gameData.status = 'game_over_bot_error'; // Custom status if bot failed to get roll
+        gameData.status = 'game_over_bot_error';
     } else {
-        gameData.status = 'game_over_bot_played'; // Normal completion of bot's turn
+        gameData.status = 'game_over_bot_played';
     }
-    activeGames.set(gameData.gameId, gameData); // Final status before finalization
+    activeGames.set(gameData.gameId, gameData);
 
-    // console.log(`${logPrefix} Bot Dealer's turn finished. Status: ${gameData.status}. Score: ${gameData.botScore}. Proceeding to finalize.`);
-    await sleep(1500); // Pause before showing final result
-    await finalizeDice21PvBGame(gameData); // This will send the final HTML result message
+    await sleep(1500); 
+    await finalizeDice21PvBGame(gameData); // This will delete gameData.gameMessageId and send the final result
 }
 
 // REVISED finalizeDice21PvBGame (to use HTML parse_mode for the final message)
