@@ -2819,54 +2819,86 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
 }
 
 async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked, originalMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
-    const LOG_PREFIX_DE_ACCEPT_PVP = `[DE_AcceptPvP_HTML_V3 UID:${userWhoClicked.telegram_id} Offer:${offerId}]`;
-    const offerData = activeGames.get(offerId);
-    const callbackQueryId = callbackQueryIdPassed;
+    const LOG_PREFIX_DE_ACCEPT_PVP_DEBUG = `[DE_AcceptPvP_Debug UID:${userWhoClicked.telegram_id} Offer:${offerId}]`;
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Entered function. CBQ ID: ${callbackQueryIdPassed}`);
 
-    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Offer invalid/expired.", show_alert: true }).catch(()=>{});
+    const offerData = activeGames.get(offerId);
+    const callbackQueryId = callbackQueryIdPassed; // Use the passed ID consistently
+
+    if (!offerData) {
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} No offerData found for offerId: ${offerId}.`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer seems to have vanished!", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (no offerData): ${e.message}`));
+        return;
+    }
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} OfferData found. Type: ${offerData.type}, Status: ${offerData.status}`);
+
+    if (offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Offer type is not DICE_ESCALATOR_UNIFIED_OFFER. Type: ${offerData.type}`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Offer type mismatch. Please try again.", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (type mismatch): ${e.message}`));
+        return;
+    }
+    if (offerData.status !== 'pending_offer') {
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Offer status is not 'pending_offer'. Status: ${offerData.status}`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer is no longer available or has expired.", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (status not pending): ${e.message}`));
         return;
     }
     if (offerData.initiator.userId === userWhoClicked.telegram_id) {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "You can't battle yourself!", show_alert: true }).catch(()=>{});
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initiator tried to accept their own PvP challenge.`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "You can't accept your own challenge!", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (self-accept): ${e.message}`));
         return;
     }
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initial offer validations passed. Fetching opponent details.`);
 
     const opponentUserObjFull = await getOrCreateUser(userWhoClicked.telegram_id, userWhoClicked.username, userWhoClicked.first_name);
     if(!opponentUserObjFull){
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Error fetching your profile. Try /start.", show_alert:true}).catch(()=>{});
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Failed to get/create opponentUserObjFull for ID: ${userWhoClicked.telegram_id}`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Error fetching your player profile. Try /start.", show_alert:true}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (no opponent obj): ${e.message}`));
         return;
     }
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Opponent details fetched. Balance: ${opponentUserObjFull.balance}`);
     
     const opponentBalance = BigInt(opponentUserObjFull.balance);
     if (opponentBalance < offerData.betAmount) {
-        const neededDisplay = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: `Your treasury is light! Need ~${neededDisplay} more.`, show_alert: true }).catch(()=>{});
+        const neededDisplay = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD')); // Corrected: show offerData.betAmount
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Opponent has insufficient funds. Needs: ${offerData.betAmount}, Has: ${opponentBalance}`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: `Your funds are too low! Need ${neededDisplay} more.`, show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (opponent low funds): ${e.message}`));
         await safeSendMessage(originalChatId, `💰 <b>Funds Check for ${escapeHTML(getPlayerDisplayReference(opponentUserObjFull))}</b>!<br>To accept this Dice Escalator PvP for <b>${neededDisplay}</b>, your balance is short. Top up?`, 
             { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] } });
         return;
     }
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Opponent has sufficient funds. Fetching initiator details.`);
 
     const initiatorUserObjFull = offerData.initiatorUserObj || await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
     if(!initiatorUserObjFull){
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Failed to get/create initiatorUserObjFull for ID: ${offerData.initiator.userId}`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Error with initiator's profile. Offer cancelled.", show_alert:true}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (no initiator obj): ${e.message}`));
         await safeSendMessage(originalChatId, "⚙️ <b>Initiator Profile Issue</b><br>Couldn't fetch initiator's details. Game cancelled.", {parse_mode:'HTML'});
         activeGames.delete(offerId);
         if (offerData.offerMessageId && bot) bot.editMessageText("⚙️ Offer Cancelled: Initiator profile issue.", { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
         return;
     }
-    if (BigInt(initiatorUserObjFull.balance) < offerData.betAmount) {
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initiator details fetched. Balance: ${initiatorUserObjFull.balance}`);
+
+    if (BigInt(initiatorUserObjFull.balance) < offerData.betAmount) { // Re-check initiator balance
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initiator has insufficient funds. Needs: ${offerData.betAmount}, Has: ${initiatorUserObjFull.balance}. Cancelling offer.`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Initiator can't cover bet. Offer auto-cancelled.", show_alert:true}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (initiator low funds): ${e.message}`));
         if (offerData.offerMessageId && bot) {
-            await bot.editMessageText(`⚠️ <b>Offer Auto-Cancelled</b><br>The offer by ${escapeHTML(offerData.initiator.displayName)} was cancelled as their balance is no longer sufficient.`, {
+            await bot.editMessageText(`⚠️ <b>Offer Auto-Cancelled</b><br>The offer by ${escapeHTML(offerData.initiator.displayName)} for <b>${escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'))}</b> was cancelled as their balance is no longer sufficient.`, {
                 chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {inline_keyboard:[]}
             }).catch(()=>{});
         }
         activeGames.delete(offerId);
+        await updateGroupGameDetails(originalChatId, null, null, null);
         return;
     }
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} All checks passed. Answering callback and proceeding to start PvP game.`);
 
-    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Challenge Accepted! Preparing PvP..."}).catch(()=>{});
-    activeGames.delete(offerId);
-    await startDiceEscalatorPvPGame_New(offerData, opponentUserObjFull, offerData.offerMessageId);
+    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Challenge Accepted! Preparing PvP..."}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (final accept): ${e.message}`));
+    
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} User ${userWhoClicked.telegram_id} accepted PvP challenge for offer ${offerId}. Deleting offer and calling startDiceEscalatorPvPGame_New.`);
+    
+    activeGames.delete(offerId); // Delete the offer
+    await startDiceEscalatorPvPGame_New(offerData, opponentUserObjFull, offerData.offerMessageId); // Start the actual PvP game
 }
 
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalMessageId, originalChatId, callbackQueryIdPassed = null) {
