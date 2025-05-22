@@ -5888,39 +5888,47 @@ async function processDuelBotTurnPvB(gameData) {
 async function finalizeDuelPvBGame(gameData) {
     const { gameId, chatId, playerId, playerRef, playerScore, botScore, betAmount, userObj, gameMessageId, playerRolls, botRolls } = gameData;
 
-    let resultTextPart = "";
+    let outcomeDescription = ""; // e.g., Your score of <b>9</b> triumphs over the Bot Dealer's <i>6</i>.
     let titleEmoji = "⚔️";
+    let resultTitleText = "Duel Result"; // Base title text
     let payoutAmountLamports = 0n;
     let ledgerOutcomeCode = "";
-    const totalPotForDisplay = betAmount * 2n; 
+    const totalPotForDisplay = betAmount * 2n;
+
+    const playerRefHTML = escapeHTML(playerRef); // Use HTML escaped player reference
 
     if (playerScore > botScore) {
         titleEmoji = "🏆";
-        resultTextPart = `*VICTORY!* Your score of **${playerScore}** triumphs over the Bot Dealer's *${botScore}*.`;
+        resultTitleText = `VICTORY, ${playerRefHTML}!`;
+        outcomeDescription = `Your score of <b>${playerScore}</b> triumphs over the Bot Dealer's <i>${botScore}</i>.`;
         payoutAmountLamports = betAmount * 2n;
         ledgerOutcomeCode = 'win_duel_pvb';
-        resultTextPart += `\n\nYou win the pot of *${escapeMarkdownV2(await formatBalanceForDisplay(totalPotForDisplay, 'USD'))}*!`;
+        outcomeDescription += `\n\n🎉 You win the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotForDisplay, 'USD'))}</b>!`;
     } else if (botScore > playerScore) {
         titleEmoji = "🤖";
-        resultTextPart = `*The Bot Prevails.* The Bot Dealer's **${botScore}** bests your *${playerScore}*. Better luck next time!`;
+        resultTitleText = `Bot Prevails, ${playerRefHTML}`;
+        outcomeDescription = `The Bot Dealer's score of <b>${botScore}</b> edges out your <i>${playerScore}</i>.`;
         payoutAmountLamports = 0n;
         ledgerOutcomeCode = 'loss_duel_pvb';
+        outcomeDescription += `\n\nBetter luck next time!`;
     } else {
         titleEmoji = "⚖️";
-        resultTextPart = `*A DRAW!* Both you and the Bot Dealer scored **${playerScore}**!`;
+        resultTitleText = `A DRAW, ${playerRefHTML}!`;
+        outcomeDescription = `Both you and the Bot Dealer scored <b>${playerScore}</b>!`;
         payoutAmountLamports = betAmount;
         ledgerOutcomeCode = 'push_duel_pvb';
-        resultTextPart += `\n\nYour wager of *${escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'))}* is returned.`;
+        outcomeDescription += `\n\n💰 Your wager of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> is returned.`;
     }
 
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'));
-    let finalMessageText =
-        `${titleEmoji} *Duel vs. Bot Dealer - Result!* ${titleEmoji}\n\n` +
-        `Player: ${playerRef}\n` +
-        `Wager: *${betDisplayUSD}*\n\n` +
-        `👤 You Rolled: ${formatDiceRolls(playerRolls)} (Total: *${escapeMarkdownV2(String(playerScore))}*)\n` +
-        `🤖 Bot Dealer Rolled: ${formatDiceRolls(botRolls)} (Total: *${escapeMarkdownV2(String(botScore))}*)\n\n` +
-        `------------------------------------\n${resultTextPart}`;
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+
+    let finalMessageTextHTML =
+        `${titleEmoji} <b>${escapeHTML(resultTitleText)}</b> ${titleEmoji}\n\n` +
+        `Player: ${playerRefHTML}\n` +
+        `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+        `👤 <b>You</b>: ${formatDiceRolls(playerRolls)} ➠ Total: <b>${playerScore}</b>\n` + // formatDiceRolls should be HTML safe or adjusted
+        `🤖 <b>Bot Dealer</b>: ${formatDiceRolls(botRolls)} ➠ Total: <b>${botScore}</b>\n\n` +
+        `------------------------------------\n${outcomeDescription}`;
 
     let client;
     try {
@@ -5936,18 +5944,19 @@ async function finalizeDuelPvBGame(gameData) {
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(()=>{});
-        console.error(`[Duel_PvB_Finalize_Reverted] CRITICAL DB error: ${e.message}`);
-        finalMessageText += `\n\n⚠️ Critical error settling wager: \`${escapeMarkdownV2(e.message)}\`. Admin notified.`;
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvB Payout Failure 🚨\nGame ID: \`${gameId}\` User: ${playerRef} \nAmount: ${payoutAmountLamports}\nDB Error: ${e.message}. MANUAL CHECK REQUIRED.`);
+        console.error(`[Duel_PvB_Finalize_HTML_V7] CRITICAL DB error: ${e.message}`);
+        finalMessageTextHTML += `\n\n⚠️ <i>Critical error settling wager: ${escapeHTML(e.message)}. Admin notified.</i>`;
+        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvB Payout Failure 🚨\nGame ID: <code>${gameId}</code> User: ${playerRefHTML}\nAmount: ${payoutAmountLamports}\nDB Error: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, {parse_mode: 'HTML'});
     } finally {
         if (client) client.release();
     }
 
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.DUEL_PVB, betAmount);
+    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.DUEL_PVB, betAmount); // Assuming this generates TG keyboard format
+
     if (gameMessageId && bot) {
         await bot.deleteMessage(chatId, Number(gameMessageId)).catch(()=>{});
     }
-    await safeSendMessage(chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboard });
+    await safeSendMessage(chatId, finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
     activeGames.delete(gameId);
     await updateGroupGameDetails(chatId, null, null, null);
 }
@@ -6128,75 +6137,90 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
         gameId_internal = gameData?.gameId;
     }
 
-    if (!gameData) { console.error(`[Duel_PvP_Resolve_Reverted] CRITICAL: No game data for ID: ${gameId_internal || 'N/A'}.`); if (gameId_internal) activeGames.delete(gameId_internal); return; }
-    if (typeof gameData.betAmount === 'undefined' || gameData.betAmount === null) { console.error(`[Duel_PvP_Resolve_Reverted] FATAL: gameData.betAmount undefined for GID ${gameData.gameId}.`); activeGames.delete(gameData.gameId); /* ... error handling ... */ return; }
+    if (!gameData) { console.error(`[Duel_PvP_Resolve_HTML_V7] CRITICAL: No game data for ID: ${gameId_internal || 'N/A'}.`); if (gameId_internal) activeGames.delete(gameId_internal); return; }
+    if (typeof gameData.betAmount === 'undefined' || gameData.betAmount === null) { console.error(`[Duel_PvP_Resolve_HTML_V7] FATAL: gameData.betAmount undefined for GID ${gameData.gameId}.`); activeGames.delete(gameData.gameId); /* ... error handling ... */ return; }
 
     activeGames.delete(gameData.gameId);
     const p1 = gameData.initiator;
     const p2 = gameData.opponent;
     const currentBetAmountBigInt = BigInt(gameData.betAmount);
 
-    let winner = null, isPush = false, resultOutcomeText = "", titleEmoji = "⚔️";
+    const p1MentionHTML = escapeHTML(p1.mention);
+    const p2MentionHTML = escapeHTML(p2.mention);
+
+    let winner = null;
+    let isPush = false;
+    let outcomeTextLine1 = ""; 
+    let outcomeTextLine2 = ""; 
+    let winningsText = "";    
+    let titleEmoji = "⚔️";
     let totalPotLamports = currentBetAmountBigInt * 2n;
     let p1Payout = 0n; let p2Payout = 0n;
     let p1LedgerCode = 'loss_duel_pvp'; let p2LedgerCode = 'loss_duel_pvp';
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(currentBetAmountBigInt, 'USD'));
-    const wagerLine = `Wager: *${betDisplayUSD}* each`;
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBetAmountBigInt, 'USD'));
 
     if (playerWhoBustedId === p1.userId || (p1.status === 'bust' || p1.busted) ) {
         titleEmoji = "💥"; winner = p2; p1.busted = true;
         p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_opponent_bust';
-        resultOutcomeText = `${p1.mention} hit a snag and *BUSTED*!\n${winner.mention} seizes victory!`;
+        outcomeTextLine1 = `💣 <b>${p1MentionHTML} BUSTED!</b>`;
+        outcomeTextLine2 = `${winner.mention} seizes victory!`;
+        winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
     } else if (playerWhoBustedId === p2.userId || (p2.status === 'bust' || p2.busted) ) {
         titleEmoji = "💥"; winner = p1; p2.busted = true;
         p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_opponent_bust';
-        resultOutcomeText = `${p2.mention} took a risk and *BUSTED*!\n${winner.mention} masterfully claims the win!`;
+        outcomeTextLine1 = `💣 <b>${p2MentionHTML} BUSTED!</b>`;
+        outcomeTextLine2 = `${winner.mention} masterfully claims the win!`;
+        winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
     } else if (p1.status === 'rolls_complete' && p2.status === 'rolls_complete') {
         if (p1.score > p2.score) {
             titleEmoji = "🏆"; winner = p1; p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_score';
-            resultOutcomeText = `Victorious! ${winner.mention} triumphs with *${p1.score}* over ${p2.mention}'s *${p2.score}*!`;
+            outcomeTextLine1 = `🏆 <b>${escapeHTML(winner.mention)} WINS!</b>`;
+            outcomeTextLine2 = `Score <b>${p1.score}</b> beats ${p2MentionHTML}'s <i>${p2.score}</i>.`;
+            winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
         } else if (p2.score > p1.score) {
             titleEmoji = "🏆"; winner = p2; p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_score';
-            resultOutcomeText = `Well fought! ${winner.mention} secures the win with *${p2.score}* against ${p1.mention}'s *${p1.score}*!`;
+            outcomeTextLine1 = `🏆 <b>${escapeHTML(winner.mention)} WINS!</b>`;
+            outcomeTextLine2 = `Score <b>${p2.score}</b> beats ${p1MentionHTML}'s <i>${p1.score}</i>.`;
+            winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
         } else { 
             titleEmoji = "⚖️"; isPush = true;
-            resultOutcomeText = `*An Even Match!* ⚖️\nBoth ${p1.mention} and ${p2.mention} scored *${p1.score}*! All bets are returned.`;
+            outcomeTextLine1 = `⚖️ <b>A DRAW!</b>`;
+            outcomeTextLine2 = `Both players scored <i>${p1.score}</i>!`;
             p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
             p1LedgerCode = 'push_duel_pvp'; p2LedgerCode = 'push_duel_pvp';
+            winningsText = `💰 Wagers of <b>${betDisplayUSD_HTML}</b> each are returned.`;
         }
     } else { 
         titleEmoji = "⚙️"; isPush = true;
-        resultOutcomeText = `*Unexpected Duel Finish!* ⚙️\nThe game concluded unusually. Bets refunded.`;
+        outcomeTextLine1 = `⚙️ <b>Unexpected Duel Finish!</b>`;
+        outcomeTextLine2 = `The game concluded unusually. Bets refunded.`;
         p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
         p1LedgerCode = 'refund_duel_pvp_error'; p2LedgerCode = 'refund_duel_pvp_error';
-        console.error(`[Duel_PvP_Resolve_Reverted] Undetermined Duel PvP outcome for game ${gameData.gameId}. Refunding.`);
+        console.error(`[Duel_PvP_Resolve_HTML_V7] Undetermined Duel PvP outcome for GID ${gameData.gameId}. Refunding.`);
     }
 
-    let finalMessageText = `${titleEmoji} *Duel PvP - Result!* ${titleEmoji}\n\n${wagerLine}\n\n` +
-                           `--- *Final Rolls & Scores* ---\n` +
-                           `👤 **${p1.mention}** (P1): ${formatDiceRolls(p1.rolls)} (Total: *${p1.score}*)${p1.busted ? " 💥 BUSTED" : ""}\n` +
-                           `👤 **${p2.mention}** (P2): ${formatDiceRolls(p2.rolls)} (Total: *${p2.score}*)${p2.busted ? " 💥 BUSTED" : ""}\n\n` +
-                           `------------------------------------\n${resultOutcomeText}`;
+    // Using HTML for the final message
+    let finalMessageTextHTML =
+        `${titleEmoji} <b>Duel PvP - Result!</b> ${titleEmoji}\n\n` +
+        `Wager: <b>${betDisplayUSD_HTML}</b> each\n\n` +
+        `🔹 ${p1MentionHTML} (P1): ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b>${p1.busted ? " 💥 BUSTED" : ""}\n` +
+        `🔸 ${p2MentionHTML} (P2): ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b>${p2.busted ? " 💥 BUSTED" : ""}\n\n` +
+        `------------------------------------\n` +
+        `${outcomeTextLine1}\n${outcomeTextLine2}\n\n${winningsText}`;
 
     let client;
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p2.userId, player_score: p1.score, opponent_score: p2.score }, `Duel PvP Result vs ${p2.mention}`);
-        if (!p1Update.success) throw new Error(`P1 (${p1.mention}) update fail: ${p1Update.error}`);
+        if (!p1Update.success) throw new Error(`P1 (${p1MentionHTML}) update fail: ${p1Update.error}`);
         const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p1.userId, player_score: p2.score, opponent_score: p1.score }, `Duel PvP Result vs ${p1.mention}`);
-        if (!p2Update.success) throw new Error(`P2 (${p2.mention}) update fail: ${p2Update.error}`);
+        if (!p2Update.success) throw new Error(`P2 (${p2MentionHTML}) update fail: ${p2Update.error}`);
         await client.query('COMMIT');
-
-        if (winner) {
-            finalMessageText += `\n\n🎉 **${winner.mention}** wins the pot of ***${escapeMarkdownV2(await formatBalanceForDisplay(totalPotLamports, 'USD'))}***!`;
-        } else if (isPush) {
-            finalMessageText += `\n\n💰 Wagers of *${betDisplayUSD}* each are returned.`;
-        }
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error(`[Duel_PvP_Resolve_Reverted] CRITICAL DB Error: ${e.message}`);
-        finalMessageText += `\n\n⚠️ **CRITICAL SYSTEM ERROR**: Failed to update balances. Admins notified. Contact support with Game ID: \`${escapeMarkdownV2(gameData.gameId)}\``;
-        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameData.gameId)}\`\nError: ${e.message}. MANUAL CHECK REQUIRED.`);
+        console.error(`[Duel_PvP_Resolve_HTML_V7] CRITICAL DB Error Finalizing Duel PvP ${gameData.gameId}: ${e.message}`);
+        finalMessageTextHTML += `\n\n⚠️ <i>Critical error settling wagers: ${escapeHTML(e.message)}. Support notified.</i>`;
+        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameData.gameId)}</code>\nError: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, {parse_mode: 'HTML'});
     } finally {
         if (client) client.release();
     }
@@ -6205,43 +6229,8 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
     if (gameData.currentMessageId && bot) {
         await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(()=>{});
     }
-    await safeSendMessage(gameData.chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
+    await safeSendMessage(gameData.chatId, finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: finalKeyboard });
     await updateGroupGameDetails(gameData.chatId, null, null, null);
-}
-
-async function refundDuelPvPBets(gameId, reason) { // This is a helper, usually not directly involved in primary display
-    const gameData = activeGames.get(gameId);
-    if (!gameData || (gameData.type !== GAME_IDS.DUEL_PVP && gameData.type !== GAME_IDS.DUEL_UNIFIED_OFFER)) {
-        console.error(`[Duel_RefundPvP GID:${gameId}] Invalid game data or type for refund. Type: ${gameData?.type}`);
-        return;
-    }
-    const logPrefix = `[Duel_RefundPvP GID:${gameId}]`;
-    let client;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const betAmount = BigInt(gameData.betAmount); // Ensure it's BigInt
-
-        if (gameData.initiator && gameData.initiator.userId && betAmount > 0n) {
-            await updateUserBalanceAndLedger(client, gameData.initiator.userId, betAmount,
-                'refund_duel_pvp_error', { game_id_custom_field: gameId, error_reason: reason },
-                `Refund PvP Duel ${gameId} for initiator. Reason: ${reason}`);
-        }
-        if (gameData.opponent && gameData.opponent.userId && betAmount > 0n) { // opponent might not exist for unified offer
-            await updateUserBalanceAndLedger(client, gameData.opponent.userId, betAmount,
-                'refund_duel_pvp_error', { game_id_custom_field: gameId, error_reason: reason },
-                `Refund PvP Duel ${gameId} for opponent. Reason: ${reason}`);
-        }
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error(`${logPrefix} CRITICAL error during PvP Duel refund for game ${gameId}: ${e.message}`);
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP REFUND Failure 🚨\nGame ID: \`${gameId}\`\nReason: ${reason}\nDB Error: ${e.message}. MANUAL REFUNDS REQUIRED.`);
-    } finally {
-        if (client) client.release();
-        activeGames.delete(gameId);
-        if (gameData.chatId) await updateGroupGameDetails(gameData.chatId, null, null, null);
-    }
 }
 
 async function getTwoDiceRollsViaHelperDuel(gameId, chatIdForLog, userIdForRoll, rollPurposeNotePrefix) {
