@@ -6043,194 +6043,103 @@ async function processDuelPlayerRollsCompletePvP(gameData, firstRoll, secondRoll
 // MODIFIED updateDuelPvPMessage (Restored Instructions & Reverted Visuals)
 async function updateDuelPvPMessage(gameId, isInitialTurnMessage = false) {
     const gameData = activeGames.get(gameId);
-    if (!gameData || gameData.type !== GAME_IDS.DUEL_PVP) { return; }
+    if (!gameData || gameData.type !== GAME_IDS.DUEL_PVP) {
+        // console.warn(`[UpdateDuelPvPMsg_HTML_V8] Attempted to update non-existent or incorrect type PvP Duel game: ${gameId}`);
+        return;
+    }
 
     const p1 = gameData.initiator;
     const p2 = gameData.opponent;
-    const betDisplay = escapeMarkdownV2(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
+    // Ensure player mentions are HTML-safe
+    const p1MentionHTML = escapeHTML(p1.mention);
+    const p2MentionHTML = escapeHTML(p2.mention);
+    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
 
-    // Reverted simpler title and player status lines
-    let titleText = `⚔️ *Duel: ${p1.mention} vs ${p2.mention}* ⚔️`;
-    let messageText = `${titleText}\n\n` +
-                      `Wager: *${betDisplay}* each\n\n` +
-                      `**${p1.mention}** (P1): `;
+    let titleTextHTML = `⚔️ <b>High Stakes Duel</b> ⚔️`;
+    let messageTextHTML = `${titleTextHTML}\n`;
+    messageTextHTML += `<i>${p1MentionHTML} vs ${p2MentionHTML}</i>\n`;
+    messageTextHTML += `<b>Wager</b>: ${betDisplayHTML} each\n\n`;
 
+    // Player 1 status display
+    messageTextHTML += `👤 <b>${p1MentionHTML}</b> (P1):\n   `; // Player name bolded
     if (p1.status === 'rolls_complete') {
-        messageText += `${formatDiceRolls(p1.rolls)} (Total: *${p1.score}*) ✅`;
+        messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b> ✅`;
     } else if (p1.status === 'awaiting_roll_emoji') {
-        messageText += (p1.rolls.length === 0) ? `*Awaiting 2 dice...*` : `*Awaiting 2nd die...* (Rolled: ${formatDiceRolls(p1.rolls)})`;
+        if (p1.rolls.length === 0) {
+            messageTextHTML += `<i>Awaiting 2 dice...</i>`;
+        } else {
+            messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} 🎲\n   <i>Awaiting 2nd die...</i>`;
+        }
     } else if (p1.status === 'waiting_turn') {
-        messageText += `*Waiting for turn...*`;
-    } else { // Default or other statuses like 'bust' if applicable
-        messageText += `*${escapeMarkdownV2(String(p1.status).replace(/_/g, ' '))}*`;
+        messageTextHTML += `<i>Waiting for turn...</i>`;
+    } else if (p1.status === 'bust') { // Though Duel doesn't typically have a bust condition from rolls
+        messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b> 💥 BUSTED`;
+    } else { // Fallback for any other unforeseen status
+         messageTextHTML += `<i>${escapeHTML(String(p1.status).replace(/_/g, ' '))}</i>`;
     }
-    messageText += `\n`;
+    messageTextHTML += `\n`;
 
-    messageText += `**${p2.mention}** (P2): `;
+    // Player 2 status display
+    messageTextHTML += `👤 <b>${p2MentionHTML}</b> (P2):\n   `; // Player name bolded
     if (p2.status === 'rolls_complete') {
-        messageText += `${formatDiceRolls(p2.rolls)} (Total: *${p2.score}*) ✅`;
+        messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b> ✅`;
     } else if (p2.status === 'awaiting_roll_emoji') {
-        messageText += (p2.rolls.length === 0) ? `*Awaiting 2 dice...*` : `*Awaiting 2nd die...* (Rolled: ${formatDiceRolls(p2.rolls)})`;
+        if (p2.rolls.length === 0) {
+            messageTextHTML += `<i>Awaiting 2 dice...</i>`;
+        } else {
+            messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} 🎲\n   <i>Awaiting 2nd die...</i>`;
+        }
     } else if (p2.status === 'waiting_turn') {
-        messageText += `*Waiting for turn...*`;
+        messageTextHTML += `<i>Waiting for turn...</i>`;
+    } else if (p2.status === 'bust') {
+        messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b> 💥 BUSTED`;
     } else {
-        messageText += `*${escapeMarkdownV2(String(p2.status).replace(/_/g, ' '))}*`;
+        messageTextHTML += `<i>${escapeHTML(String(p2.status).replace(/_/g, ' '))}</i>`;
     }
-    messageText += `\n\n`;
+    messageTextHTML += `\n\n`;
 
-    // Turn prompt logic
+    // Turn prompt logic - made more prominent
+    let actionPromptHTML = "";
     if (p1.isTurn && p1.status === 'awaiting_roll_emoji') {
         const diceNeeded = DUEL_DICE_COUNT - p1.rolls.length;
-        messageText += `⏳ **${p1.mention}**, it's your turn\\! Please send **${diceNeeded === 1 ? 'your second' : `${diceNeeded} separate`}** 🎲 dice emoji${diceNeeded > 1 ? 's' : ''}\\.`;
+        actionPromptHTML = `👉 <b>${p1MentionHTML}</b>, it's your turn!\nPlease send <b>${diceNeeded === 1 ? 'your second' : `${diceNeeded} separate`}</b> 🎲 dice emoji${diceNeeded > 1 ? 's' : ''}.`;
     } else if (p2.isTurn && p2.status === 'awaiting_roll_emoji') {
         const diceNeeded = DUEL_DICE_COUNT - p2.rolls.length;
-        messageText += `⏳ **${p2.mention}**, it's your turn\\! Please send **${diceNeeded === 1 ? 'your second' : `${diceNeeded} separate`}** 🎲 dice emoji${diceNeeded > 1 ? 's' : ''}\\.`;
+        actionPromptHTML = `👉 <b>${p2MentionHTML}</b>, it's your turn!\nPlease send <b>${diceNeeded === 1 ? 'your second' : `${diceNeeded} separate`}</b> 🎲 dice emoji${diceNeeded > 1 ? 's' : ''}.`;
     } else if (gameData.status.startsWith('game_over_')) {
-        messageText += `🏁 Game concluding...`;
-    } else if (!p1.isTurn && !p2.isTurn && p1.status === 'rolls_complete' && p2.status === 'waiting_turn') {
-        messageText += `Waiting for ${p2.mention} to begin their turn...`;
-    } else if (!p1.isTurn && !p2.isTurn && p2.status === 'rolls_complete' && p1.status === 'waiting_turn') {
-        messageText += `Waiting for ${p1.mention} to begin their turn...`;
+        actionPromptHTML = `<i>🏁 Game concluding... Final results incoming!</i>`;
+    } else if (!p1.isTurn && !p2.isTurn) { // Generic waiting if no specific turn but game not over
+        if (p1.status === 'rolls_complete' && p2.status === 'waiting_turn') {
+             actionPromptHTML = `<i>Waiting for ${p2MentionHTML} to begin their turn...</i>`;
+        } else if (p2.status === 'rolls_complete' && p1.status === 'waiting_turn') {
+             actionPromptHTML = `<i>Waiting for ${p1MentionHTML} to begin their turn...</i>`;
+        } else {
+            actionPromptHTML = `<i>Processing next step...</i>`;
+        }
+    }
+    if (actionPromptHTML) {
+        messageTextHTML += `${actionPromptHTML}`;
     }
 
+    const options = {
+        chat_id: gameData.chatId,
+        parse_mode: 'HTML', // Switched to HTML
+        reply_markup: { inline_keyboard: [] } // Duel PvP uses emoji input during turns
+    };
 
-    const options = { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] }};
     let sentMessage;
-    if (gameData.currentMessageId && !isInitialTurnMessage) {
-        try {
-            sentMessage = await bot.editMessageText(messageText, { ...options, chat_id: gameData.chatId, message_id: Number(gameData.currentMessageId) });
-        } catch (e) {
-             if (gameData.currentMessageId && (!e.message || !e.message.includes("message is not modified"))) {
-                 await bot.deleteMessage(gameData.chatId, Number(gameData.currentMessageId)).catch(()=>{});
-                 gameData.currentMessageId = null;
-            }
-            if (!e.message || !e.message.includes("message is not modified")){ // Avoid sending new if only "not modified"
-                sentMessage = await safeSendMessage(gameData.chatId, messageText, options);
-            } else {
-                sentMessage = { message_id: gameData.currentMessageId }; // Assume it's the same if not modified
-            }
-        }
-    } else {
-        if (gameData.currentMessageId && isInitialTurnMessage) {
-            await bot.deleteMessage(gameData.chatId, Number(gameData.currentMessageId)).catch(()=>{});
-            gameData.currentMessageId = null;
-        }
-        sentMessage = await safeSendMessage(gameData.chatId, messageText, options);
+    // Delete old message and send new one strategy for updates
+    if (gameData.currentMessageId) {
+        await bot.deleteMessage(gameData.chatId, Number(gameData.currentMessageId)).catch(()=>{}); // Attempt to delete, ignore if fails
+        gameData.currentMessageId = null; // Nullify so a new message is sent
     }
+    
+    sentMessage = await safeSendMessage(gameData.chatId, messageTextHTML, options);
 
     if (sentMessage?.message_id) {
         gameData.currentMessageId = String(sentMessage.message_id);
-        if(activeGames.has(gameId)) activeGames.set(gameId, gameData);
+        if(activeGames.has(gameId)) activeGames.set(gameId, gameData); // Persist new message ID
     }
-}
-
-// REVERTED resolveDuelPvPGame (Simpler style, "wins pot" wording, handles gameDataOrId)
-async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
-    let gameData;
-    let gameId_internal;
-
-    if (typeof gameDataOrId === 'string') {
-        gameId_internal = gameDataOrId;
-        gameData = activeGames.get(gameId_internal);
-    } else {
-        gameData = gameDataOrId;
-        gameId_internal = gameData?.gameId;
-    }
-
-    if (!gameData) { console.error(`[Duel_PvP_Resolve_HTML_V7] CRITICAL: No game data for ID: ${gameId_internal || 'N/A'}.`); if (gameId_internal) activeGames.delete(gameId_internal); return; }
-    if (typeof gameData.betAmount === 'undefined' || gameData.betAmount === null) { console.error(`[Duel_PvP_Resolve_HTML_V7] FATAL: gameData.betAmount undefined for GID ${gameData.gameId}.`); activeGames.delete(gameData.gameId); /* ... error handling ... */ return; }
-
-    activeGames.delete(gameData.gameId);
-    const p1 = gameData.initiator;
-    const p2 = gameData.opponent;
-    const currentBetAmountBigInt = BigInt(gameData.betAmount);
-
-    const p1MentionHTML = escapeHTML(p1.mention);
-    const p2MentionHTML = escapeHTML(p2.mention);
-
-    let winner = null;
-    let isPush = false;
-    let outcomeTextLine1 = ""; 
-    let outcomeTextLine2 = ""; 
-    let winningsText = "";    
-    let titleEmoji = "⚔️";
-    let totalPotLamports = currentBetAmountBigInt * 2n;
-    let p1Payout = 0n; let p2Payout = 0n;
-    let p1LedgerCode = 'loss_duel_pvp'; let p2LedgerCode = 'loss_duel_pvp';
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBetAmountBigInt, 'USD'));
-
-    if (playerWhoBustedId === p1.userId || (p1.status === 'bust' || p1.busted) ) {
-        titleEmoji = "💥"; winner = p2; p1.busted = true;
-        p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_opponent_bust';
-        outcomeTextLine1 = `💣 <b>${p1MentionHTML} BUSTED!</b>`;
-        outcomeTextLine2 = `${winner.mention} seizes victory!`;
-        winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
-    } else if (playerWhoBustedId === p2.userId || (p2.status === 'bust' || p2.busted) ) {
-        titleEmoji = "💥"; winner = p1; p2.busted = true;
-        p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_opponent_bust';
-        outcomeTextLine1 = `💣 <b>${p2MentionHTML} BUSTED!</b>`;
-        outcomeTextLine2 = `${winner.mention} masterfully claims the win!`;
-        winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
-    } else if (p1.status === 'rolls_complete' && p2.status === 'rolls_complete') {
-        if (p1.score > p2.score) {
-            titleEmoji = "🏆"; winner = p1; p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_score';
-            outcomeTextLine1 = `🏆 <b>${escapeHTML(winner.mention)} WINS!</b>`;
-            outcomeTextLine2 = `Score <b>${p1.score}</b> beats ${p2MentionHTML}'s <i>${p2.score}</i>.`;
-            winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
-        } else if (p2.score > p1.score) {
-            titleEmoji = "🏆"; winner = p2; p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_score';
-            outcomeTextLine1 = `🏆 <b>${escapeHTML(winner.mention)} WINS!</b>`;
-            outcomeTextLine2 = `Score <b>${p2.score}</b> beats ${p1MentionHTML}'s <i>${p1.score}</i>.`;
-            winningsText = `🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
-        } else { 
-            titleEmoji = "⚖️"; isPush = true;
-            outcomeTextLine1 = `⚖️ <b>A DRAW!</b>`;
-            outcomeTextLine2 = `Both players scored <i>${p1.score}</i>!`;
-            p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
-            p1LedgerCode = 'push_duel_pvp'; p2LedgerCode = 'push_duel_pvp';
-            winningsText = `💰 Wagers of <b>${betDisplayUSD_HTML}</b> each are returned.`;
-        }
-    } else { 
-        titleEmoji = "⚙️"; isPush = true;
-        outcomeTextLine1 = `⚙️ <b>Unexpected Duel Finish!</b>`;
-        outcomeTextLine2 = `The game concluded unusually. Bets refunded.`;
-        p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
-        p1LedgerCode = 'refund_duel_pvp_error'; p2LedgerCode = 'refund_duel_pvp_error';
-        console.error(`[Duel_PvP_Resolve_HTML_V7] Undetermined Duel PvP outcome for GID ${gameData.gameId}. Refunding.`);
-    }
-
-    // Using HTML for the final message
-    let finalMessageTextHTML =
-        `${titleEmoji} <b>Duel PvP - Result!</b> ${titleEmoji}\n\n` +
-        `Wager: <b>${betDisplayUSD_HTML}</b> each\n\n` +
-        `🔹 ${p1MentionHTML} (P1): ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b>${p1.busted ? " 💥 BUSTED" : ""}\n` +
-        `🔸 ${p2MentionHTML} (P2): ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b>${p2.busted ? " 💥 BUSTED" : ""}\n\n` +
-        `------------------------------------\n` +
-        `${outcomeTextLine1}\n${outcomeTextLine2}\n\n${winningsText}`;
-
-    let client;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p2.userId, player_score: p1.score, opponent_score: p2.score }, `Duel PvP Result vs ${p2.mention}`);
-        if (!p1Update.success) throw new Error(`P1 (${p1MentionHTML}) update fail: ${p1Update.error}`);
-        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p1.userId, player_score: p2.score, opponent_score: p1.score }, `Duel PvP Result vs ${p1.mention}`);
-        if (!p2Update.success) throw new Error(`P2 (${p2MentionHTML}) update fail: ${p2Update.error}`);
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error(`[Duel_PvP_Resolve_HTML_V7] CRITICAL DB Error Finalizing Duel PvP ${gameData.gameId}: ${e.message}`);
-        finalMessageTextHTML += `\n\n⚠️ <i>Critical error settling wagers: ${escapeHTML(e.message)}. Support notified.</i>`;
-        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameData.gameId)}</code>\nError: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, {parse_mode: 'HTML'});
-    } finally {
-        if (client) client.release();
-    }
-
-    const finalKeyboard = createPostGameKeyboard(GAME_IDS.DUEL_PVP, currentBetAmountBigInt);
-    if (gameData.currentMessageId && bot) {
-        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(()=>{});
-    }
-    await safeSendMessage(gameData.chatId, finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: finalKeyboard });
-    await updateGroupGameDetails(gameData.chatId, null, null, null);
 }
 
 async function getTwoDiceRollsViaHelperDuel(gameId, chatIdForLog, userIdForRoll, rollPurposeNotePrefix) {
