@@ -5986,58 +5986,197 @@ async function refundDuelPvBBetsGeneric(gameId, userId, betAmount, reason, logPr
 async function startDuelPvPGameSequence(pvpGameId) {
     const gameData = activeGames.get(pvpGameId);
     if (!gameData || gameData.type !== GAME_IDS.DUEL_PVP) {
-        console.error(`[Duel_PvP_StartSeq GID:${pvpGameId}] Invalid game data or type.`);
+        console.error(`[Duel_PvP_StartSeq_Debug GID:${pvpGameId}] Invalid game data or type. Cannot start sequence.`);
         return;
     }
-    const logPrefix = `[Duel_PvP_StartSeq GID:${pvpGameId}]`;
+    const logPrefix = `[Duel_PvP_StartSeq_Debug GID:${pvpGameId}]`;
     console.log(`${logPrefix} Starting turn sequence. P1 (${gameData.initiator.mention}) to roll first.`);
 
     gameData.initiator.isTurn = true;
-    gameData.initiator.status = 'awaiting_roll_emoji'; // Player is awaiting emoji for first or subsequent rolls
+    gameData.initiator.status = 'awaiting_roll_emoji'; // Player is awaiting emoji
+    gameData.initiator.rolls = []; // Ensure rolls are reset
+    gameData.initiator.score = 0;  // Ensure score is reset
+
     gameData.opponent.isTurn = false;
     gameData.opponent.status = 'waiting_turn';
-    gameData.status = 'p1_awaiting_roll1_emoji'; // Game state indicates P1 needs first die
+    gameData.opponent.rolls = []; // Ensure rolls are reset
+    gameData.opponent.score = 0;  // Ensure score is reset
+
+    gameData.status = 'p1_awaiting_roll1_emoji'; // Game state indicates P1 needs first die of DUEL_DICE_COUNT
     activeGames.set(pvpGameId, gameData);
+    console.log(`${logPrefix} Initial statuses set. P1 turn. Game status: ${gameData.status}. P1 status: ${gameData.initiator.status}. Calling updateDuelPvPMessage.`);
     await updateDuelPvPMessage(pvpGameId, true); // Pass true for isInitialTurnMessage
 }
 
-async function processDuelPlayerRollsCompletePvP(gameData, firstRoll, secondRoll, actingPlayerId) { // This is for PvP
-    const { gameId, chatId, initiator, opponent, betAmount } = gameData;
-    const logPrefix = `[Duel_PvP_PlayerDone GID:${gameId} Actor:${actingPlayerId}]`;
+async function processDuelPlayerRollsCompletePvP(gameData, firstRoll, secondRoll, actingPlayerId) {
+    const { gameId, chatId, initiator, opponent, betAmount } = gameData; // Destructuring gameData
+    const LOG_PREFIX_PVP_PLAYERDONE_DEBUG = `[Duel_PvP_PlayerDone_Debug GID:${gameId} Actor:${actingPlayerId}]`;
+
+    console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Entered. Rolls: [${firstRoll}, ${secondRoll}].`);
 
     let currentPlayer = (initiator.userId === actingPlayerId) ? initiator : opponent;
     let otherPlayer = (initiator.userId === actingPlayerId) ? opponent : initiator;
 
-    currentPlayer.rolls = [firstRoll, secondRoll];
-    currentPlayer.score = firstRoll + secondRoll;
+    currentPlayer.rolls = [firstRoll, secondRoll]; // Set the final two rolls
+    currentPlayer.score = firstRoll + secondRoll;  // Calculate score from these two rolls
     currentPlayer.isTurn = false;
-    currentPlayer.status = 'rolls_complete'; // Mark current player as done with their rolls
+    currentPlayer.status = 'rolls_complete'; // Mark current player as done with their rolls for the turn
     gameData.lastInteractionTime = Date.now();
 
-    console.log(`${logPrefix} ${currentPlayer.mention} completed rolls: [${currentPlayer.rolls.join(',')}] Total: ${currentPlayer.score}`);
+    console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} ${currentPlayer.mention} completed rolls. Score: ${currentPlayer.score}. Status: ${currentPlayer.status}.`);
 
-    if (otherPlayer.status === 'waiting_turn') { // If other player hasn't rolled yet
+    // Determine the game's next state
+    if (otherPlayer.status === 'waiting_turn') {
+        // This means the other player hasn't rolled at all yet. It's now their turn.
         otherPlayer.isTurn = true;
-        otherPlayer.status = 'awaiting_roll_emoji'; // Set next player to await rolls
-        // Set game status to indicate which player and which roll (1st or 2nd)
-        gameData.status = (otherPlayer === initiator) ? 'p1_awaiting_roll1_emoji' : 'p2_awaiting_roll1_emoji';
-        console.log(`${logPrefix} Switching turn to ${otherPlayer.mention}. New game status: ${gameData.status}`);
-    } else if (otherPlayer.status === 'rolls_complete') { // If other player has also completed their rolls
+        otherPlayer.status = 'awaiting_roll_emoji'; // Set them to expect rolls
+        gameData.status = (otherPlayer === initiator) ? 'p1_awaiting_roll1_emoji' : 'p2_awaiting_roll1_emoji'; // Other player needs their first die
+        console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Switching turn to ${otherPlayer.mention}. New game status: ${gameData.status}. Other player status: ${otherPlayer.status}.`);
+    } else if (otherPlayer.status === 'rolls_complete') {
+        // This means the other player had ALREADY completed their rolls. So now both are done.
         gameData.status = 'game_over_pvp_resolved';
-        console.log(`${logPrefix} Both players completed rolls. Game over, proceeding to resolve.`);
+        console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Both players have completed rolls. Game status set to: ${gameData.status}.`);
     } else {
-        // This case might indicate an unexpected state, potentially resolve or error
-        console.warn(`${logPrefix} Unexpected other player status: ${otherPlayer.status} for GID: ${gameData.gameId}. Forcing resolution.`);
+        // Fallback for any other unexpected status of the otherPlayer
+        console.warn(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Unexpected 'otherPlayer' status: ${otherPlayer.status}. Forcing resolution.`);
         gameData.status = 'game_over_pvp_resolved';
     }
 
-    activeGames.set(gameId, gameData);
-    await updateDuelPvPMessage(gameId); // Update message to reflect current scores and next turn
+    activeGames.set(gameId, gameData); // Save updated gameData
+    console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Calling updateDuelPvPMessage for game status: ${gameData.status}.`);
+    await updateDuelPvPMessage(gameId); // Update message to reflect current scores and next turn prompt
 
     if (gameData.status === 'game_over_pvp_resolved') {
-        await sleep(1500);
-        await resolveDuelPvPGame(gameData); // Pass the full gameData object
+        console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Status is 'game_over_pvp_resolved'. Will call resolveDuelPvPGame.`);
+        await sleep(1500); // Give a moment for players to see the "concluding" message
+        try {
+            await resolveDuelPvPGame(gameData); // Ensure this is awaited and gameData object is passed
+            console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} resolveDuelPvPGame completed successfully.`);
+        } catch (error) {
+            console.error(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} CRITICAL ERROR calling or during resolveDuelPvPGame: ${error.message}`, error.stack);
+            await safeSendMessage(gameData.chatId, `⚙️ A critical error occurred while finalizing the Duel game results. Admin has been notified. Game ID: ${gameId}`, { parse_mode: 'HTML' });
+            if (typeof notifyAdmin === 'function') {
+                notifyAdmin(`🚨 CRITICAL ERROR in Duel PvP GID: ${gameData.gameId}\nFunction resolveDuelPvPGame failed or error within it.\nError: ${escapeHTML(error.message)}`, {parse_mode: 'HTML'});
+            }
+            activeGames.delete(gameData.gameId); // Clean up game state
+            await updateGroupGameDetails(gameData.chatId, null, null, null);
+        }
+    } else {
+        console.log(`${LOG_PREFIX_PVP_PLAYERDONE_DEBUG} Status is '${gameData.status}', not 'game_over_pvp_resolved'. Not calling resolveDuelPvPGame yet.`);
     }
+}
+
+async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
+    let gameData;
+    let gameId_internal;
+
+    if (typeof gameDataOrId === 'string') {
+        gameId_internal = gameDataOrId;
+        gameData = activeGames.get(gameId_internal);
+    } else {
+        gameData = gameDataOrId;
+        gameId_internal = gameData?.gameId;
+    }
+    
+    const LOG_PREFIX_RESOLVE_DEBUG = `[resolveDuelPvPGame_Debug GID:${gameId_internal || 'N/A'}]`;
+    console.log(`${LOG_PREFIX_RESOLVE_DEBUG} Entered function. gameData valid: ${!!gameData}, betAmount defined: ${gameData ? (typeof gameData.betAmount !== 'undefined' && gameData.betAmount !== null) : 'N/A'}`);
+
+    if (!gameData) { 
+        console.error(`${LOG_PREFIX_RESOLVE_DEBUG} CRITICAL: No game data found for ID: ${gameId_internal || 'N/A'}. Cannot resolve.`); 
+        if (gameId_internal) activeGames.delete(gameId_internal); 
+        return; 
+    }
+    if (typeof gameData.betAmount === 'undefined' || gameData.betAmount === null) { 
+        console.error(`${LOG_PREFIX_RESOLVE_DEBUG} FATAL: gameData.betAmount undefined for GID ${gameData.gameId}.`); 
+        activeGames.delete(gameData.gameId); 
+        const refundErrorMessage = `⚙️ A critical internal error occurred (Bet amount missing). Game cannot be resolved. Please contact support with Game ID: ${gameData.gameId}`;
+        await safeSendMessage(gameData.chatId, refundErrorMessage, { parse_mode: 'HTML' }); // Using HTML as messages are moving that way
+        await updateGroupGameDetails(gameData.chatId, null, null, null);
+        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: gameData.betAmount is UNDEFINED in resolveDuelPvPGame for GID ${gameData.gameId}.`, { parse_mode: 'HTML' });
+        return; 
+    }
+
+    // This delete should ideally be at the very end, but for now, matches previous structure
+    activeGames.delete(gameData.gameId); 
+    const p1 = gameData.initiator;
+    const p2 = gameData.opponent;
+    const currentBetAmountBigInt = BigInt(gameData.betAmount); 
+
+    let winner = null, loser = null, isPush = false, resultOutcomeText = "", titleEmoji = "⚔️";
+    let totalPotLamports = currentBetAmountBigInt * 2n;
+    let p1Payout = 0n; let p2Payout = 0n;
+    let p1LedgerCode = 'loss_duel_pvp'; let p2LedgerCode = 'loss_duel_pvp';
+    const betDisplayUSD = escapeHTML(await formatBalanceForDisplay(currentBetAmountBigInt, 'USD')); // Switched to escapeHTML for HTML context
+    const wagerLine = `Wager: <b>${betDisplayUSD}</b> each`; // Using HTML bold
+
+    // Determine game outcome and text (using HTML for results)
+    const p1MentionHTML = escapeHTML(p1.mention);
+    const p2MentionHTML = escapeHTML(p2.mention);
+
+    if (playerWhoBustedId === p1.userId || (p1.status === 'bust' || p1.busted) ) {
+        titleEmoji = "💥"; winner = p2; loser = p1; p1.busted = true;
+        p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_opponent_bust';
+        resultOutcomeText = `<b>${p1MentionHTML}</b> hit a snag and <i>BUSTED</i>! 💥<br>${winner.mention} seizes victory!`;
+    } else if (playerWhoBustedId === p2.userId || (p2.status === 'bust' || p2.busted) ) {
+        titleEmoji = "💥"; winner = p1; loser = p2; p2.busted = true;
+        p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_opponent_bust';
+        resultOutcomeText = `<b>${p2MentionHTML}</b> took a risk and <i>BUSTED</i>! 💥<br>${winner.mention} masterfully claims the win!`;
+    } else if (p1.status === 'rolls_complete' && p2.status === 'rolls_complete') {
+        if (p1.score > p2.score) {
+            titleEmoji = "🏆"; winner = p1; loser = p2; p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_score';
+            resultOutcomeText = `Victorious! <b>${escapeHTML(winner.mention)}</b> triumphs with <b>${p1.score}</b> over ${p2MentionHTML}'s <i>${p2.score}</i>!`;
+        } else if (p2.score > p1.score) {
+            titleEmoji = "🏆"; winner = p2; loser = p1; p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_score';
+            resultOutcomeText = `Well fought! <b>${escapeHTML(winner.mention)}</b> secures the win with <b>${p2.score}</b> against ${p1MentionHTML}'s <i>${p1.score}</i>!`;
+        } else { 
+            titleEmoji = "⚖️"; isPush = true;
+            resultOutcomeText = `<i>An Even Match!</i> ⚖️<br>Both <b>${p1MentionHTML}</b> and <b>${p2MentionHTML}</b> scored <i>${p1.score}</i>! All bets are returned.`;
+            p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
+            p1LedgerCode = 'push_duel_pvp'; p2LedgerCode = 'push_duel_pvp';
+        }
+    } else { 
+        titleEmoji = "⚙️"; isPush = true;
+        resultOutcomeText = `<i>Unexpected Duel Finish!</i> ⚙️<br>The game concluded unusually. Bets refunded.`;
+        p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
+        p1LedgerCode = 'refund_duel_pvp_error'; p2LedgerCode = 'refund_duel_pvp_error';
+        console.error(`[Duel_PvP_Resolve_HTML_V7] Undetermined Duel PvP outcome for game ${gameData.gameId}. Refunding.`);
+    }
+
+    let finalMessageTextHTML = `${titleEmoji} <b>Duel PvP - Result!</b> ${titleEmoji}\n\n${wagerLine}\n\n` +
+                           `--- <i>Final Rolls & Scores</i> ---\n` +
+                           `👤 <b>${p1MentionHTML}</b> (P1): ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b>${p1.busted ? " 💥 BUSTED" : ""}\n` +
+                           `👤 <b>${p2MentionHTML}</b> (P2): ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b>${p2.busted ? " 💥 BUSTED" : ""}\n\n` +
+                           `------------------------------------\n${resultOutcomeText}`;
+
+    let client;
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p2.userId, player_score: p1.score, opponent_score: p2.score }, `Duel PvP Result vs ${p2.mention}`);
+        if (!p1Update.success) throw new Error(`P1 (${p1MentionHTML}) update fail: ${p1Update.error}`);
+        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p1.userId, player_score: p2.score, opponent_score: p1.score }, `Duel PvP Result vs ${p1.mention}`);
+        if (!p2Update.success) throw new Error(`P2 (${p2MentionHTML}) update fail: ${p2Update.error}`);
+        await client.query('COMMIT');
+
+        if (winner) {
+            finalMessageTextHTML += `\n\n🎉 <b>${escapeHTML(winner.mention)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
+        } else if (isPush) {
+            finalMessageTextHTML += `\n\n💰 Wagers of <b>${betDisplayUSD}</b> each are returned.`;
+        }
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`[Duel_PvP_Resolve_HTML_V7] CRITICAL DB Error: ${e.message}`);
+        finalMessageTextHTML += `\n\n⚠️ <i>Critical error settling wagers: ${escapeHTML(e.message)}. Support notified.</i>`;
+        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameData.gameId)}</code>\nError: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, {parse_mode: 'HTML'});
+    } finally {
+        if (client) client.release();
+    }
+
+    const finalKeyboard = createPostGameKeyboard(GAME_IDS.DUEL_PVP, currentBetAmountBigInt);
+    if (gameData.currentMessageId && bot) {
+        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(()=>{});
+    }
+    await safeSendMessage(gameData.chatId, finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: finalKeyboard });
+    await updateGroupGameDetails(gameData.chatId, null, null, null);
 }
 
 // MODIFIED updateDuelPvPMessage (Restored Instructions & Reverted Visuals)
