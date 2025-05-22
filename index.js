@@ -5209,7 +5209,7 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
 
 async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageIdFromCallback, callbackQueryId, msgContext) {
     const userId = String(userObj.telegram_id);
-    // Removed LOG_PREFIX_OU7_CHOICE and most console.logs for production
+    // Most console.logs removed for production clarity
 
     const gameData = activeGames.get(gameId);
 
@@ -5234,7 +5234,7 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     activeGames.set(gameId, gameData);
 
     const { chatId, playerRef, betAmount } = gameData;
-    const playerRefHTML = escapeHTML(playerRef);
+    const playerRefHTML = escapeHTML(playerRef); // playerRefHTML is the display name
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
     const titleRollingHTML = `🎲 <b>Over/Under 7 - Dice Rolling via Helper!</b> 🎲`;
@@ -5332,7 +5332,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         resultTextPartHTML = `💔 So Close! The dice didn't favor your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b> this round. Better luck next time!`;
     }
 
-    // let finalUserBalanceLamports = BigInt(userObj.balance); // Not needed if not displaying balance
     let clientOutcome = null;
     try {
         clientOutcome = await pool.connect();
@@ -5344,7 +5343,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         );
 
         if (balanceUpdate.success) {
-            // finalUserBalanceLamports = balanceUpdate.newBalanceLamports; // Store if needed for other purposes, but not for display
             await clientOutcome.query('COMMIT');
         } else {
             await clientOutcome.query('ROLLBACK');
@@ -5361,9 +5359,10 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     }
 
     const titleResultHTML = `🏁 <b>Over/Under 7 - Result!</b> 🏁`;
-    let finalMessageTextHTML = `${titleResultHTML}\n\nYour Bet: <b>${betDisplayUSD_HTML}</b> on <b>${escapeHTML(choiceTextDisplay)} 7</b>.\n\n`;
+    // MODIFIED: Added playerRefHTML to the beginning of the player-specific line
+    let finalMessageTextHTML = `${titleResultHTML}\n\nPlayer: ${playerRefHTML}\nBet: <b>${betDisplayUSD_HTML}</b> on <b>${escapeHTML(choiceTextDisplay)} 7</b>.\n\n`;
     finalMessageTextHTML += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of <b>${escapeHTML(String(diceSum))}</b>!\n\n${resultTextPartHTML}`;
-    // REMOVED: finalMessageTextHTML += `\n\nYour new casino balance: <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}</b>.`;
+    // Balance display already removed as per previous request
 
     const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
 
