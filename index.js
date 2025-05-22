@@ -5209,40 +5209,29 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
 
 async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageIdFromCallback, callbackQueryId, msgContext) {
     const userId = String(userObj.telegram_id);
-    const LOG_PREFIX_OU7_CHOICE = `[OU7_Choice_DEBUG_V2 UID:${userId} GID:${gameId} Choice:${choice}_HTML]`; // Added V2 to log prefix
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Entered function. originalMessageIdFromCallback: ${originalMessageIdFromCallback}`);
+    // Removed LOG_PREFIX_OU7_CHOICE and most console.logs for production
 
     const gameData = activeGames.get(gameId);
 
     if (!gameData) {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} No game data found for GID ${gameId}. Answering callback and returning.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true });
         return;
     }
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Game data found. Current status: ${gameData.status}, GameMsgID: ${gameData.gameMessageId}`);
 
-    // Ensure the callback is for the current game message if gameMessageId is set
     if (gameData.userId !== userId || gameData.status !== 'waiting_player_choice' || (gameData.gameMessageId && Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback))) {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} Validation failed. UserID match: ${gameData.userId === userId}, Status match: ${gameData.status === 'waiting_player_choice'}, MsgID match for current game message: ${(gameData.gameMessageId && Number(gameData.gameMessageId) === Number(originalMessageIdFromCallback))}. OrigMsgID: ${originalMessageIdFromCallback}, GameMsgID: ${gameData.gameMessageId}. Answering callback with error.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true });
         if (originalMessageIdFromCallback && bot && gameData && gameData.chatId && (!gameData.gameMessageId || Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback))) {
-            console.log(`${LOG_PREFIX_OU7_CHOICE} Clearing buttons from outdated message ID ${originalMessageIdFromCallback}.`);
             bot.editMessageReplyMarkup({}, { chat_id: String(gameData.chatId), message_id: Number(originalMessageIdFromCallback) }).catch(() => {});
         }
         return;
     }
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Validations passed.`);
 
     const choiceTextDisplay = choice.charAt(0).toUpperCase() + choice.slice(1);
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Answering callback query with text: "Locked In: ${choiceTextDisplay} 7! Requesting dice..."`);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `🎯 Locked In: ${choiceTextDisplay} 7! Requesting dice from Helper Bot...` }).catch((e) => {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to answer callback query: ${e.message}`);
-    });
+    await bot.answerCallbackQuery(callbackQueryId, { text: `🎯 Locked In: ${choiceTextDisplay} 7! Requesting dice...` }).catch(() => {});
 
     gameData.playerChoice = choice;
     gameData.status = 'rolling_dice_waiting_helper';
     activeGames.set(gameId, gameData);
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Game status updated to 'rolling_dice_waiting_helper'.`);
 
     const { chatId, playerRef, betAmount } = gameData;
     const playerRefHTML = escapeHTML(playerRef);
@@ -5251,34 +5240,24 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     const titleRollingHTML = `🎲 <b>Over/Under 7 - Dice Rolling via Helper!</b> 🎲`;
     let rollingMessageTextHTML = `${titleRollingHTML}\n\n${playerRefHTML} bets <b>${betDisplayUSD_HTML}</b> on the sum being <b>${escapeHTML(choiceTextDisplay)} 7</b>.\nThe Helper Bot is now rolling the dice on the casino network... This may take a moment! 🤞`;
 
-    let currentMessageId = gameData.gameMessageId; // This is the ID of the message with the choice buttons
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Attempting to edit message ID ${currentMessageId} to show rolling state.`);
+    let currentMessageId = gameData.gameMessageId;
     if (currentMessageId && bot) {
         try {
             await bot.editMessageText(rollingMessageTextHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: {} });
-            console.log(`${LOG_PREFIX_OU7_CHOICE} Message ${currentMessageId} edited successfully to rolling state.`);
         } catch (e) {
-            console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to edit message ${currentMessageId} to rolling state. Error: ${e.message}. Attempting to send new message.`);
             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
                 const newMsg = await safeSendMessage(String(chatId), rollingMessageTextHTML, { parse_mode: 'HTML' });
                 if (newMsg?.message_id && activeGames.has(gameId)) {
-                    activeGames.get(gameId).gameMessageId = newMsg.message_id; // Update currentMessageId to the new one
+                    activeGames.get(gameId).gameMessageId = newMsg.message_id;
                     currentMessageId = newMsg.message_id;
-                    console.log(`${LOG_PREFIX_OU7_CHOICE} New rolling message sent. ID: ${currentMessageId}`);
-                } else {
-                     console.error(`${LOG_PREFIX_OU7_CHOICE} Failed to send new rolling message after edit failed.`);
                 }
             }
         }
     } else {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} No currentMessageId to edit for rolling state. Sending new rolling message.`);
         const newMsg = await safeSendMessage(String(chatId), rollingMessageTextHTML, { parse_mode: 'HTML' });
         if (newMsg?.message_id && activeGames.has(gameId)) {
             activeGames.get(gameId).gameMessageId = newMsg.message_id;
-            currentMessageId = newMsg.message_id; // Update currentMessageId to the new one
-            console.log(`${LOG_PREFIX_OU7_CHOICE} New rolling message sent. ID: ${currentMessageId}`);
-        } else {
-            console.error(`${LOG_PREFIX_OU7_CHOICE} Failed to send new rolling message.`);
+            currentMessageId = newMsg.message_id;
         }
     }
 
@@ -5286,37 +5265,29 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     let diceSum = 0;
     let helperBotError = null;
 
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Starting loop to get ${OU7_DICE_COUNT} dice rolls from helper.`);
     for (let i = 0; i < OU7_DICE_COUNT; i++) {
-        console.log(`${LOG_PREFIX_OU7_CHOICE} Requesting roll ${i + 1} from helper.`);
         if (isShuttingDown) { helperBotError = "Shutdown during OU7 dice requests."; break; }
         const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `OU7 Roll ${i + 1}`);
-        console.log(`${LOG_PREFIX_OU7_CHOICE} Helper result for roll ${i + 1}: ${stringifyWithBigInt(rollResult)}`);
         if (rollResult.error) {
             helperBotError = rollResult.message || `Failed to get OU7 Roll ${i + 1}`;
-            console.error(`${LOG_PREFIX_OU7_CHOICE} Helper bot error on roll ${i + 1}: ${helperBotError}`);
             break;
         }
         if (typeof rollResult.roll !== 'number' || rollResult.roll < 1 || rollResult.roll > 6) {
             helperBotError = `Invalid roll value from helper for OU7 roll ${i + 1}: ${rollResult.roll}`;
-            console.error(`${LOG_PREFIX_OU7_CHOICE} Invalid roll value on roll ${i + 1}: ${rollResult.roll}`);
             break;
         }
         diceRolls.push(rollResult.roll);
         diceSum += rollResult.roll;
-        console.log(`${LOG_PREFIX_OU7_CHOICE} Roll ${i + 1} received: ${rollResult.roll}. Current sum: ${diceSum}`);
     }
 
-    // This currentMessageId now refers to the "rolling dice..." message
     const messageIdToDeleteBeforeFinalResult = currentMessageId;
 
     if (helperBotError || diceRolls.length !== OU7_DICE_COUNT) {
-        console.error(`${LOG_PREFIX_OU7_CHOICE} Error with dice rolls or incomplete rolls. Error: ${helperBotError}. Rolls count: ${diceRolls.length}. Refunding.`);
         const errorMsgToUserHTML = `⚠️ ${playerRefHTML}, there was an issue rolling the dice via the Helper Bot for your Over/Under 7 game: <code>${escapeHTML(String(helperBotError || "Incomplete rolls from helper").substring(0, 150))}</code>\nYour bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`;
         const errorKeyboard = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
 
         if (messageIdToDeleteBeforeFinalResult && bot) {
-            await bot.deleteMessage(String(chatId), Number(messageIdToDeleteBeforeFinalResult)).catch(e => console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to delete message ${messageIdToDeleteBeforeFinalResult} before sending error result: ${e.message}`));
+            await bot.deleteMessage(String(chatId), Number(messageIdToDeleteBeforeFinalResult)).catch(e => console.warn(`[OU7_Choice_Cleanup] Failed to delete message ${messageIdToDeleteBeforeFinalResult} before sending error result: ${e.message}`));
         }
         await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
 
@@ -5325,31 +5296,26 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmount, 'refund_ou7_helper_fail', { game_id_custom_field: gameId }, `Refund OU7 game ${gameId} - Helper Bot error: ${String(helperBotError).substring(0, 100)}`);
             await refundClient.query('COMMIT');
-            console.log(`${LOG_PREFIX_OU7_CHOICE} Refund processed due to helper bot error.`);
         } catch (dbErr) {
             if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_OU7_CHOICE} CRITICAL: Failed to refund after OU7 helper error for game ${gameId}: ${dbErr.message}`);
+            console.error(`[OU7_Choice_Cleanup] CRITICAL: Failed to refund after OU7 helper error for game ${gameId}: ${dbErr.message}`);
             notifyAdmin(`🚨 CRITICAL OU7 REFUND FAILURE (Helper Error) 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>, User: ${userId}\nError: ${escapeHTML(helperBotError || "")}\nDB Refund Error: ${escapeHTML(dbErr.message)}. MANUAL REFUND REQUIRED.`, { parse_mode: 'HTML' });
         } finally {
             if (refundClient) refundClient.release();
         }
         activeGames.delete(gameId);
-        console.log(`${LOG_PREFIX_OU7_CHOICE} Exiting due to helper bot error after refund attempt.`);
         return;
     }
-    console.log(`${LOG_PREFIX_OU7_CHOICE} All dice rolls successful. Rolls: [${diceRolls.join(', ')}], Sum: ${diceSum}`);
 
     gameData.diceRolls = diceRolls;
     gameData.diceSum = BigInt(diceSum);
-    gameData.status = 'game_over'; // Mark status as game_over
-    // No need to set activeGames here again if we are finalizing and deleting immediately.
+    gameData.status = 'game_over';
 
     let win = false;
     let profitMultiplier = 0;
     if (choice === 'under' && diceSum < 7) { win = true; profitMultiplier = OU7_PAYOUT_NORMAL; }
     else if (choice === 'over' && diceSum > 7) { win = true; profitMultiplier = OU7_PAYOUT_NORMAL; }
     else if (choice === 'seven' && diceSum === 7) { win = true; profitMultiplier = OU7_PAYOUT_SEVEN; }
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Win status: ${win}, Profit Multiplier: ${profitMultiplier}`);
 
     let payoutAmountLamports = 0n;
     let outcomeReasonLog = `loss_ou7_${choice}_sum${diceSum}`;
@@ -5365,64 +5331,51 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         payoutAmountLamports = 0n;
         resultTextPartHTML = `💔 So Close! The dice didn't favor your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b> this round. Better luck next time!`;
     }
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Payout amount: ${payoutAmountLamports}, Outcome log: ${outcomeReasonLog}`);
 
-    let finalUserBalanceLamports = BigInt(userObj.balance); // Fallback to pre-transaction balance if DB fails
+    // let finalUserBalanceLamports = BigInt(userObj.balance); // Not needed if not displaying balance
     let clientOutcome = null;
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Attempting to update balance and ledger.`);
     try {
         clientOutcome = await pool.connect();
-        console.log(`${LOG_PREFIX_OU7_CHOICE} DB client connected for outcome. Beginning transaction.`);
         await clientOutcome.query('BEGIN');
         const balanceUpdate = await updateUserBalanceAndLedger(
             clientOutcome, userId, payoutAmountLamports, outcomeReasonLog,
             { game_id_custom_field: gameId, dice_rolls_info: diceRolls.join(','), player_choice_info: choice },
             `Outcome of OU7 game ${gameId}. Player chose ${choice}, sum was ${diceSum}. Rolls: ${diceRolls.join(',')}.`
         );
-        console.log(`${LOG_PREFIX_OU7_CHOICE} updateUserBalanceAndLedger result for outcome: ${stringifyWithBigInt(balanceUpdate)}`);
 
         if (balanceUpdate.success) {
-            finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
+            // finalUserBalanceLamports = balanceUpdate.newBalanceLamports; // Store if needed for other purposes, but not for display
             await clientOutcome.query('COMMIT');
-            console.log(`${LOG_PREFIX_OU7_CHOICE} Outcome transaction committed. New balance: ${finalUserBalanceLamports}`);
         } else {
             await clientOutcome.query('ROLLBACK');
             resultTextPartHTML += `\n\n⚠️ A critical error occurred settling your bet: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Casino staff alerted.`;
-            console.error(`${LOG_PREFIX_OU7_CHOICE} Failed to update balance for OU7 game ${gameId}. Error: ${balanceUpdate.error}. Transaction rolled back.`);
+            console.error(`[OU7_Choice_Cleanup] Failed to update balance for OU7 game ${gameId}. Error: ${balanceUpdate.error}.`);
             if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 Payout/Refund Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRefHTML} (<code>${escapeHTML(userId)}</code>)\nAmount Due: <code>${escapeHTML(formatCurrency(payoutAmountLamports))}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check required.`, { parse_mode: 'HTML' });
         }
     } catch (dbError) {
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_OU7_CHOICE} DB error during OU7 outcome processing for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0, 500));
+        console.error(`[OU7_Choice_Cleanup] DB error during OU7 outcome processing for ${gameId}: ${dbError.message}`);
         resultTextPartHTML += `\n\n⚠️ A severe database error occurred. Casino staff notified.`;
     } finally {
-        if (clientOutcome) {
-             clientOutcome.release();
-             console.log(`${LOG_PREFIX_OU7_CHOICE} DB client for outcome released.`);
-        }
+        if (clientOutcome) clientOutcome.release();
     }
 
     const titleResultHTML = `🏁 <b>Over/Under 7 - Result!</b> 🏁`;
     let finalMessageTextHTML = `${titleResultHTML}\n\nYour Bet: <b>${betDisplayUSD_HTML}</b> on <b>${escapeHTML(choiceTextDisplay)} 7</b>.\n\n`;
     finalMessageTextHTML += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of <b>${escapeHTML(String(diceSum))}</b>!\n\n${resultTextPartHTML}`;
-    finalMessageTextHTML += `\n\nYour new casino balance: <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}</b>.`;
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Final result message text constructed.`);
+    // REMOVED: finalMessageTextHTML += `\n\nYour new casino balance: <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}</b>.`;
 
     const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
 
-    // MODIFICATION: Delete old message, then send new final result message
     if (messageIdToDeleteBeforeFinalResult && bot) {
-        console.log(`${LOG_PREFIX_OU7_CHOICE} Deleting previous game message ID ${messageIdToDeleteBeforeFinalResult} before sending final result.`);
         await bot.deleteMessage(String(chatId), Number(messageIdToDeleteBeforeFinalResult)).catch(e => {
-            console.warn(`${LOG_PREFIX_OU7_CHOICE} Non-critical: Failed to delete message ${messageIdToDeleteBeforeFinalResult}. Error: ${e.message}`);
+            console.warn(`[OU7_Choice_Cleanup] Non-critical: Failed to delete message ${messageIdToDeleteBeforeFinalResult}. Error: ${e.message}`);
         });
     }
 
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Sending new final result message.`);
     await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
 
     activeGames.delete(gameId);
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Game ${gameId} removed from activeGames. Exiting function after finalization.`);
 }
 
 // --- End of Part 5c, Section 1 (NEW + DEBUG LOGS) ---
