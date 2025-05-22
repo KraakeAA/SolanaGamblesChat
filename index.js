@@ -4075,40 +4075,35 @@ async function handleDice21PvBCancel(gameId, userObj, originalMessageId, callbac
 
 // REVISED processDice21PvBRollByEmoji (V7 - HTML for player prompts)
 async function processDice21PvBRollByEmoji(gameDataInput, diceValueRolledByPlayer, msgContext) {
-    let gameData = activeGames.get(gameDataInput.gameId); // Get fresh gameData
+    let gameData = activeGames.get(gameDataInput.gameId); 
     if (!gameData) {
-        if (bot && msgContext && msgContext.message_id && msgContext.from && !msgContext.from.is_bot) {
-            bot.deleteMessage(String(msgContext.chat.id), msgContext.message_id).catch(()=>{});
-        }
+        // User's dice emoji (msgContext.message_id) is already deleted by the main message handler
         return;
     }
 
-    const logPrefix = `[D21_PvB_Roll_HTML_V8 GID:${gameData.gameId} UID:${gameData.playerId} Val:${diceValueRolledByPlayer}]`;
+    const logPrefix = `[D21_PvB_Roll_HTML_V9_Consolidated GID:${gameData.gameId} UID:${gameData.playerId} Val:${diceValueRolledByPlayer}]`;
 
     if (gameData.status !== 'player_initial_roll_1_prompted' &&
         gameData.status !== 'player_initial_roll_2_prompted' &&
         gameData.status !== 'player_turn_hit_stand_prompt') {
-        if (bot && msgContext && msgContext.message_id && msgContext.from && !msgContext.from.is_bot && gameData.chatId === String(msgContext.chat.id)) {
-            bot.deleteMessage(gameData.chatId, msgContext.message_id).catch(()=>{});
-        }
+        // User's dice emoji already deleted by main message handler. Game not in correct state.
         return;
     }
 
     gameData.lastInteractionTime = Date.now();
-    const playerRefHTML = gameData.playerRef; // Already HTML escaped from startDice21PvBGame
+    const playerRefHTML = gameData.playerRef; // Assumed HTML escaped from startDice21PvBGame
     const chatId = gameData.chatId;
     const originalStatusBeforeRoll = gameData.status;
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
 
-
-    // Always delete the previous main game message
+    // Delete the previous main game prompt message
     if (gameData.gameMessageId && bot) {
         await bot.deleteMessage(chatId, Number(gameData.gameMessageId))
-            .catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete previous game message ${gameData.gameMessageId}: ${e.message}`));
+            .catch(e => console.warn(`${logPrefix} Non-critical: Failed to delete previous game prompt ${gameData.gameMessageId}: ${e.message}`));
         gameData.gameMessageId = null;
     }
-    // Clear intermediate messages (like previous "you rolled X" if any were kept)
-    for (const mid of gameData.intermediateMessageIds) {
+    // Clear any other intermediate messages (should be empty with this flow)
+    for (const mid of gameData.intermediateMessageIds || []) {
         if (bot) await bot.deleteMessage(chatId, mid).catch(() => {});
     }
     gameData.intermediateMessageIds = [];
@@ -4117,59 +4112,59 @@ async function processDice21PvBRollByEmoji(gameDataInput, diceValueRolledByPlaye
     gameData.playerHandRolls.push(diceValueRolledByPlayer);
     gameData.playerScore += diceValueRolledByPlayer;
 
-    // Send roll announcement as a temporary message
-    const rollAnnouncementHTML = `🎲 ${playerRefHTML}, you rolled a <b>${escapeHTML(String(diceValueRolledByPlayer))}</b>!`;
-    const rollAnnounceMsg = await safeSendMessage(chatId, rollAnnouncementHTML, { parse_mode: 'HTML' });
-    if (rollAnnounceMsg?.message_id) {
-        gameData.intermediateMessageIds.push(rollAnnounceMsg.message_id); // Store to delete later
-    }
-    await sleep(1200); // Slightly longer for player to read their roll
-
-    // --- Construct the new main game message ---
+    // --- Construct the new single, consolidated main game message ---
     const titleHTML = `🎲 <b>Dice 21 vs. Bot Dealer</b> 🎲`;
+    let rollConfirmationText = `You rolled a <b>${escapeHTML(String(diceValueRolledByPlayer))}</b>.`;
     let currentHandDisplay = `Your Hand: ${formatDiceRolls(gameData.playerHandRolls)} ➠ Score: <b>${escapeHTML(String(gameData.playerScore))}</b>`;
-    let nextPromptTextHTML = `${titleHTML}\n\n` +
-                             `Player: ${playerRefHTML}\n` +
-                             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                             `${currentHandDisplay}\n\n`;
+    
+    let nextActionPrompt = "";
     let nextKeyboard = null;
 
     if (originalStatusBeforeRoll === 'player_initial_roll_1_prompted') {
         gameData.status = 'player_initial_roll_2_prompted';
-        nextPromptTextHTML += `Please send your <b>second</b> 🎲 dice emoji.`;
+        nextActionPrompt = `Please send your <b>second</b> 🎲 dice emoji.`;
     } else if (originalStatusBeforeRoll === 'player_initial_roll_2_prompted' || originalStatusBeforeRoll === 'player_turn_hit_stand_prompt') {
         if (gameData.playerScore > DICE_21_TARGET_SCORE) {
             gameData.status = 'game_over_player_bust';
-            nextPromptTextHTML += `💥 <b>BUST!</b> Your score is over ${DICE_21_TARGET_SCORE}.\n<i>Game result incoming...</i>`;
+            rollConfirmationText = `You rolled a <b>${escapeHTML(String(diceValueRolledByPlayer))}</b>!`; // Update confirmation for bust
+            nextActionPrompt = `💥 <b>BUST!</b> Your score is over ${DICE_21_TARGET_SCORE}.\n<i>Game result incoming...</i>`;
         } else if (gameData.playerScore === DICE_21_TARGET_SCORE) {
-            gameData.status = 'player_blackjack'; // Or player_target_reached
+            gameData.status = 'player_blackjack'; 
             const blackjackBonus = (gameData.playerHandRolls.length === 2);
-            nextPromptTextHTML += `${blackjackBonus ? '✨ <b>BLACKJACK!</b>' : '🎯 <b>Perfect 21!</b>'}\nYou automatically stand. <i>Bot's turn...</i> 🤖`;
+            rollConfirmationText = `You rolled a <b>${escapeHTML(String(diceValueRolledByPlayer))}</b>!`; // Update confirmation
+            nextActionPrompt = `${blackjackBonus ? '✨ <b>BLACKJACK!</b>' : '🎯 <b>Perfect 21!</b>'}\nYou automatically stand. <i>Bot's turn...</i> 🤖`;
         } else { // Score is < 21
             gameData.status = 'player_turn_hit_stand_prompt';
-            nextPromptTextHTML += `Send another 🎲 to <b>Hit</b>, or click <b>Stand</b>.`;
+            nextActionPrompt = `Send another 🎲 to <b>Hit</b>, or click <b>Stand</b>.`;
             nextKeyboard = { inline_keyboard: [[{ text: `✅ Stand (${gameData.playerScore})`, callback_data: `d21_stand:${gameData.gameId}` }, { text: `🚫 Forfeit Game`, callback_data: `d21_pvb_cancel:${gameData.gameId}` }]] };
         }
     }
 
-    const newMainGameMsg = await safeSendMessage(chatId, nextPromptTextHTML, { parse_mode: 'HTML', reply_markup: nextKeyboard });
+    let newMainMessageHTML = `${titleHTML}\n\n` +
+                             `Player: ${playerRefHTML}\n` +
+                             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+                             `${rollConfirmationText}\n${currentHandDisplay}\n\n` + // Combined roll info and hand display
+                             `${nextActionPrompt}`;
+
+    const newMainGameMsg = await safeSendMessage(chatId, newMainMessageHTML, { parse_mode: 'HTML', reply_markup: nextKeyboard });
     if (newMainGameMsg?.message_id) {
         gameData.gameMessageId = newMainGameMsg.message_id;
     } else if (gameData.status !== 'game_over_player_bust' && gameData.status !== 'player_blackjack') {
-        console.error(`${logPrefix} Failed to send next prompt message. Game might be stuck for GID ${gameData.gameId}.`);
-        gameData.status = 'game_over_error_ui_update'; // Trigger game end with error
+        // If sending the prompt failed and it's not game over, this is a problem
+        console.error(`${logPrefix} Failed to send next prompt message for GID ${gameData.gameId}. Setting game to error state.`);
+        gameData.status = 'game_over_error_ui_update'; 
     }
-    activeGames.set(gameData.gameId, gameData); // Save updated gameData
+    activeGames.set(gameData.gameId, gameData); 
 
-    // Handle game end conditions
+    // Handle game end conditions triggered by player's roll
     if (gameData.status === 'game_over_player_bust' || gameData.status === 'game_over_error_ui_update') {
-        await sleep(1000);
+        await sleep(1000); 
         await finalizeDice21PvBGame(gameData);
     } else if (gameData.status === 'player_blackjack') {
-        await sleep(1500);
-        const freshDataForBot = activeGames.get(gameData.gameId); // Re-fetch
+        await sleep(1500); 
+        const freshDataForBot = activeGames.get(gameData.gameId); 
         if (freshDataForBot && freshDataForBot.status === 'player_blackjack') {
-            freshDataForBot.status = 'bot_turn_pending_rolls'; // Set status for bot's turn
+            freshDataForBot.status = 'bot_turn_pending_rolls'; 
             activeGames.set(gameData.gameId, freshDataForBot);
             await processDice21BotTurn(freshDataForBot);
         }
