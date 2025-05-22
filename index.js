@@ -3116,31 +3116,38 @@ async function processDiceEscalatorBotTurnPvB_New(gameData) {
 
 async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
     const { gameId, chatId, player, betAmount } = gameData;
-    activeGames.delete(gameId);
-    await updateGroupGameDetails(chatId, null, null, null);
+    activeGames.delete(gameId); // Clean up active game state
+    await updateGroupGameDetails(chatId, null, null, null); // Clear group state
 
-    let resultTextHTML = "";
+    let resultTextOutcomeHTML = ""; // This will be the main description of what happened
     let titleEmoji = "🏁";
     let payoutLamports = 0n;
     let ledgerOutcomeCode = 'loss_de_pvb'; // Default
     let jackpotWon = false;
     let jackpotAmountClaimed = 0n;
-    const playerRefHTML = escapeHTML(player.displayName);
-    const wagerDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
-    let finalTitle = `Dice Escalator - Result!`;
+    const playerRefHTML = escapeHTML(player.displayName); // Player name, HTML escaped
+    const wagerDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD')); // Wager, HTML escaped string
+    let finalTitle = `Dice Escalator - Result!`; // Base title
     const botFinalScore = gameData.botScore || botScoreArgument || 0;
 
+    // Construct the outcome description using HTML
     if (player.busted) {
-        titleEmoji = "💥"; finalTitle = `BUSTED, ${playerRefHTML}!`;
-        resultTextHTML = `Your roll of <code>${escapeHTML(String(gameData.lastPlayerRoll))}</code> ended your climb.<br>The Bot Dealer wins <b>${wagerDisplayHTML}</b>.`;
+        titleEmoji = "💥"; 
+        finalTitle = `BUSTED, ${playerRefHTML}!`;
+        const lastRollDisplay = escapeHTML(String(gameData.lastPlayerRoll));
+        const bustOnDisplay = escapeHTML(String(DICE_ESCALATOR_BUST_ON));
+        resultTextOutcomeHTML = `Your roll of <b>${lastRollDisplay}</b> (bust on <b>${bustOnDisplay}</b>) ended your climb.\nThe Bot Dealer wins <b>${wagerDisplayHTML}</b>.`;
         ledgerOutcomeCode = 'loss_de_pvb_bust';
     } else if (player.score > botFinalScore) {
-        titleEmoji = "🎉"; finalTitle = `VICTORY, ${playerRefHTML}!`;
+        titleEmoji = "🎉"; 
+        finalTitle = `VICTORY, ${playerRefHTML}!`;
         payoutLamports = betAmount * 2n;
         ledgerOutcomeCode = 'win_de_pvb';
-        resultTextHTML = `Your score of <b>${player.score}</b> conquers the Bot Dealer's <i>${botFinalScore}</i>!<br>You win the pot of <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'))}</b>!`;
+        const potWonHTML = escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'));
+        resultTextOutcomeHTML = `Your score of <b>${player.score}</b> conquers the Bot Dealer's <i>${botFinalScore}</i>!\nYou win the pot of <b>${potWonHTML}</b>!`;
         
         if (player.score >= TARGET_JACKPOT_SCORE) {
+            // Jackpot Logic (ensure messages here are also HTML)
             const client = await pool.connect();
             try {
                 await client.query('BEGIN');
@@ -3154,66 +3161,85 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
                     const jackpotAmountUSD_HTML = escapeHTML(await formatBalanceForDisplay(jackpotAmountClaimed, 'USD'));
                     const totalPayoutUSD_HTML = escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'));
                     
-                    resultTextHTML = `<pre>💎💎💎💎💎💎💎💎💎💎💎💎💎\n`+
-                                     `  ✨  MEGA JACKPOT HIT!  ✨\n`+
-                                     `💎💎💎💎💎💎💎💎💎💎💎💎💎</pre>\n` +
+                    resultTextOutcomeHTML = `<pre>🎇✨✨✨✨✨✨✨✨✨✨✨✨🎇\n`+
+                                     `  💎💎   MEGA JACKPOT HIT!  💎💎\n`+
+                                     `🎇✨✨✨✨✨✨✨✨✨✨✨✨🎇</pre>\n` +
                                    `<b>INCREDIBLE, ${playerRefHTML}!</b>\nYour score of <b>${player.score}</b> beat the Bot's <i>${botFinalScore}</i>, AND you've smashed the Super Jackpot, claiming an additional astounding:\n\n`+
                                    `💰💰💰🔥 <b>${jackpotAmountUSD_HTML}</b> 🔥💰💰💰\n\n` +
                                    `Total Payout: An unbelievable <b>${totalPayoutUSD_HTML}</b>!\n` +
                                    `Truly a legendary performance! 🥳🎉`;
                     ledgerOutcomeCode = 'win_de_pvb_jackpot';
                 } else {
-                     resultTextHTML += `\n\n<i>(The Super Jackpot was already claimed or empty for this win.)</i>`;
+                     resultTextOutcomeHTML += `\n\n<i>(The Super Jackpot was already claimed or empty for this win.)</i>`;
                 }
                 await client.query('COMMIT');
             } catch (e) { 
                 if (client) await client.query('ROLLBACK');
-                console.error(`[FinalizeDE_PvB_HTML_V3] Error processing jackpot: ${e.message}`);
-                resultTextHTML += `\n\n⚠️ <i>A small issue occurred with jackpot confirmation. Your base winnings are secure.</i>`;
+                console.error(`[FinalizeDE_PvB_HTML_V11] Error processing jackpot: ${e.message}`);
+                resultTextOutcomeHTML += `\n\n⚠️ <i>A small issue occurred with jackpot confirmation. Your base winnings are secure.</i>`;
             } 
             finally { if (client) client.release(); }
         }
     } else if (player.score === botFinalScore) {
-        titleEmoji = "⚖️"; finalTitle = `A Close Call - It's a Push!`;
-        payoutLamports = betAmount; ledgerOutcomeCode = 'push_de_pvb';
-        resultTextHTML = `You and the Bot Dealer both scored <b>${player.score}</b>. Your wager of <b>${wagerDisplayHTML}</b> is returned.`;
-    } else { 
-        titleEmoji = "🤖"; finalTitle = `The Bot Dealer Wins This Round!`;
-        resultTextHTML = `The Bot Dealer's score of <b>${botFinalScore}</b> narrowly beat your <i>${player.score}</i>. Better luck next time!`;
-        ledgerOutcomeCode = 'loss_de_pvb_score';
+        titleEmoji = "⚖️"; 
+        finalTitle = `A Close Call - It's a Push!`;
+        payoutLamports = betAmount; 
+        ledgerOutcomeCode = 'push_de_pvb';
+        resultTextOutcomeHTML = `You and the Bot Dealer both scored <b>${player.score}</b>.\nYour wager of <b>${wagerDisplayHTML}</b> is returned.`;
+    } else { // Bot wins
+        titleEmoji = "🤖"; 
+        finalTitle = `The Bot Dealer Wins This Round!`;
+        resultTextOutcomeHTML = `The Bot Dealer's score of <b>${botFinalScore}</b> narrowly beat your <i>${player.score}</i>. Better luck next time!`;
+        ledgerOutcomeCode = 'loss_de_pvb_score'; // payoutLamports remains 0n
     }
     
     let clientPayout = null;
+    let dbErrorText = ""; // To store potential DB error messages for display
     try {
         clientPayout = await pool.connect(); await clientPayout.query('BEGIN');
         const notes = `DE PvB Result. Player: ${player.score}, Bot: ${botFinalScore}. Jackpot: ${jackpotAmountClaimed > 0n ? formatCurrency(jackpotAmountClaimed) : '0'}. GameID: ${gameId}`;
         const balanceUpdate = await updateUserBalanceAndLedger(clientPayout, player.userId, payoutLamports, ledgerOutcomeCode, { game_id_custom_field: gameId, jackpot_amount_custom_field: jackpotAmountClaimed.toString() }, notes);
         if (!balanceUpdate.success) {
-            await clientPayout.query('ROLLBACK'); throw new Error(balanceUpdate.error || "DB Error during DE PvB payout/ledger update.");
+            await clientPayout.query('ROLLBACK'); 
+            throw new Error(balanceUpdate.error || "DB Error during DE PvB payout/ledger update.");
         }
         await clientPayout.query('COMMIT');
     } catch (e) {
         if (clientPayout) await clientPayout.query('ROLLBACK').catch(()=>{});
-        console.error(`[FinalizeDE_PvB_HTML_V3] CRITICAL DB error during payout: ${e.message}`);
-        resultTextHTML += `\n\n⚠️ <i>Critical error settling wager: ${escapeHTML(e.message)}. Admin has been notified.</i>`;
+        console.error(`[FinalizeDE_PvB_HTML_V11] CRITICAL DB error during payout: ${e.message}`);
+        dbErrorText = `\n\n⚠️ <i>Critical error settling wager: ${escapeHTML(e.message)}. Admin has been notified.</i>`;
         if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL DE PvB Payout Failure 🚨\nGame ID: <code>${gameId}</code> User: ${playerRefHTML}\nAmount due: ${payoutLamports}\nDB Error: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, {parse_mode: 'HTML'});
     } finally {
         if (clientPayout) clientPayout.release();
     }
 
-    const fullResultMessageHTML = `${titleEmoji} <b>${escapeHTML(finalTitle)}</b> ${titleEmoji}\n\n` +
-                                  `Player: ${playerRefHTML}\n` +
-                                  `Wager: <b>${wagerDisplayHTML}</b>\n\n` +
-                                  `Your Rolls: ${formatDiceRolls(player.rolls)} ➠ Score: <b>${player.score}</b> ${player.busted ? "💥 BUSTED!" : ""}\n` +
-                                  `Bot's Rolls: ${formatDiceRolls(gameData.botRolls)} ➠ Score: <b>${botFinalScore}</b>\n\n` +
-                                  `------------------------------------\n${resultTextHTML}\n\n` +
-                                  `<i>Thanks for playing Dice Escalator!</i>`;
+    // Assuming formatDiceRolls returns HTML-safe text (e.g., "🎲 6  🎲 2" or "🎲 <code>6</code> 🎲 <code>2</code>")
+    const playerRollsDisplay = formatDiceRolls(player.rolls); 
+    const botRollsDisplay = formatDiceRolls(gameData.botRolls);
+
+    // Construct the final message string using HTML entities where needed, and \n for line breaks.
+    // escapeHTML is used for all dynamic content that will be part of the text.
+    let fullResultMessageHTML = 
+        `${titleEmoji} <b>${escapeHTML(finalTitle)}</b> ${titleEmoji}\n\n` +
+        `Player: ${playerRefHTML}\n` + // playerRefHTML is already escaped
+        `Wager: <b>${wagerDisplayHTML}</b>\n\n` + // wagerDisplayHTML is already escaped
+        `Your Rolls: ${playerRollsDisplay} ➠ Score: <b>${player.score}</b> ${player.busted ? "💥 BUSTED!" : ""}\n` +
+        `Bot's Rolls: ${botRollsDisplay} ➠ Score: <b>${botFinalScore}</b>\n\n` +
+        `------------------------------------\n` +
+        `${resultTextOutcomeHTML}` + // This part already contains HTML and escaped dynamic content
+        `${dbErrorText}\n\n` + // dbErrorText will be empty if no error, or contain an escaped error message
+        `<i>Thanks for playing Dice Escalator!</i>`;
     
-    if (gameData.gameMessageId && bot) {
+    // Delete the last game state message before sending the final result
+    if (gameData.gameMessageId && bot) { 
         await bot.deleteMessage(chatId, Number(gameData.gameMessageId)).catch(() => {});
     }
+
     const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_ESCALATOR_PVB, betAmount);
-    await safeSendMessage(chatId, fullResultMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboard });
+    await safeSendMessage(chatId, fullResultMessageHTML, { 
+        parse_mode: 'HTML', // Crucial: Set parse_mode to HTML
+        reply_markup: finalKeyboard 
+    });
 }
 
 
