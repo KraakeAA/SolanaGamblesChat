@@ -5209,7 +5209,7 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
 
 async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageIdFromCallback, callbackQueryId, msgContext) {
     const userId = String(userObj.telegram_id);
-    const LOG_PREFIX_OU7_CHOICE = `[OU7_Choice_DEBUG GID:${gameId} UID:${userId} Choice:${choice}_HTML]`;
+    const LOG_PREFIX_OU7_CHOICE = `[OU7_Choice_DEBUG_V2 UID:${userId} GID:${gameId} Choice:${choice}_HTML]`; // Added V2 to log prefix
     console.log(`${LOG_PREFIX_OU7_CHOICE} Entered function. originalMessageIdFromCallback: ${originalMessageIdFromCallback}`);
 
     const gameData = activeGames.get(gameId);
@@ -5221,10 +5221,11 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     }
     console.log(`${LOG_PREFIX_OU7_CHOICE} Game data found. Current status: ${gameData.status}, GameMsgID: ${gameData.gameMessageId}`);
 
-    if (gameData.userId !== userId || gameData.status !== 'waiting_player_choice' || Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} Validation failed. UserID match: ${gameData.userId === userId}, Status match: ${gameData.status === 'waiting_player_choice'}, MsgID match: ${Number(gameData.gameMessageId) === Number(originalMessageIdFromCallback)}. Answering callback with error.`);
+    // Ensure the callback is for the current game message if gameMessageId is set
+    if (gameData.userId !== userId || gameData.status !== 'waiting_player_choice' || (gameData.gameMessageId && Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback))) {
+        console.warn(`${LOG_PREFIX_OU7_CHOICE} Validation failed. UserID match: ${gameData.userId === userId}, Status match: ${gameData.status === 'waiting_player_choice'}, MsgID match for current game message: ${(gameData.gameMessageId && Number(gameData.gameMessageId) === Number(originalMessageIdFromCallback))}. OrigMsgID: ${originalMessageIdFromCallback}, GameMsgID: ${gameData.gameMessageId}. Answering callback with error.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Over/Under 7 game action is outdated or not yours.", show_alert: true });
-        if (originalMessageIdFromCallback && bot && gameData && gameData.chatId && Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback)) {
+        if (originalMessageIdFromCallback && bot && gameData && gameData.chatId && (!gameData.gameMessageId || Number(gameData.gameMessageId) !== Number(originalMessageIdFromCallback))) {
             console.log(`${LOG_PREFIX_OU7_CHOICE} Clearing buttons from outdated message ID ${originalMessageIdFromCallback}.`);
             bot.editMessageReplyMarkup({}, { chat_id: String(gameData.chatId), message_id: Number(originalMessageIdFromCallback) }).catch(() => {});
         }
@@ -5250,18 +5251,18 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     const titleRollingHTML = `🎲 <b>Over/Under 7 - Dice Rolling via Helper!</b> 🎲`;
     let rollingMessageTextHTML = `${titleRollingHTML}\n\n${playerRefHTML} bets <b>${betDisplayUSD_HTML}</b> on the sum being <b>${escapeHTML(choiceTextDisplay)} 7</b>.\nThe Helper Bot is now rolling the dice on the casino network... This may take a moment! 🤞`;
 
-    let currentMessageId = gameData.gameMessageId;
+    let currentMessageId = gameData.gameMessageId; // This is the ID of the message with the choice buttons
     console.log(`${LOG_PREFIX_OU7_CHOICE} Attempting to edit message ID ${currentMessageId} to show rolling state.`);
     if (currentMessageId && bot) {
         try {
             await bot.editMessageText(rollingMessageTextHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: {} });
-            console.log(`${LOG_PREFIX_OU7_CHOICE} Message ${currentMessageId} edited successfully.`);
+            console.log(`${LOG_PREFIX_OU7_CHOICE} Message ${currentMessageId} edited successfully to rolling state.`);
         } catch (e) {
-            console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to edit message ${currentMessageId}. Error: ${e.message}. Attempting to send new message.`);
+            console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to edit message ${currentMessageId} to rolling state. Error: ${e.message}. Attempting to send new message.`);
             if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
                 const newMsg = await safeSendMessage(String(chatId), rollingMessageTextHTML, { parse_mode: 'HTML' });
                 if (newMsg?.message_id && activeGames.has(gameId)) {
-                    activeGames.get(gameId).gameMessageId = newMsg.message_id;
+                    activeGames.get(gameId).gameMessageId = newMsg.message_id; // Update currentMessageId to the new one
                     currentMessageId = newMsg.message_id;
                     console.log(`${LOG_PREFIX_OU7_CHOICE} New rolling message sent. ID: ${currentMessageId}`);
                 } else {
@@ -5270,11 +5271,11 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
             }
         }
     } else {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} No currentMessageId to edit. Sending new rolling message.`);
+        console.warn(`${LOG_PREFIX_OU7_CHOICE} No currentMessageId to edit for rolling state. Sending new rolling message.`);
         const newMsg = await safeSendMessage(String(chatId), rollingMessageTextHTML, { parse_mode: 'HTML' });
         if (newMsg?.message_id && activeGames.has(gameId)) {
             activeGames.get(gameId).gameMessageId = newMsg.message_id;
-            currentMessageId = newMsg.message_id;
+            currentMessageId = newMsg.message_id; // Update currentMessageId to the new one
             console.log(`${LOG_PREFIX_OU7_CHOICE} New rolling message sent. ID: ${currentMessageId}`);
         } else {
             console.error(`${LOG_PREFIX_OU7_CHOICE} Failed to send new rolling message.`);
@@ -5306,17 +5307,19 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         console.log(`${LOG_PREFIX_OU7_CHOICE} Roll ${i + 1} received: ${rollResult.roll}. Current sum: ${diceSum}`);
     }
 
+    // This currentMessageId now refers to the "rolling dice..." message
+    const messageIdToDeleteBeforeFinalResult = currentMessageId;
+
     if (helperBotError || diceRolls.length !== OU7_DICE_COUNT) {
         console.error(`${LOG_PREFIX_OU7_CHOICE} Error with dice rolls or incomplete rolls. Error: ${helperBotError}. Rolls count: ${diceRolls.length}. Refunding.`);
         const errorMsgToUserHTML = `⚠️ ${playerRefHTML}, there was an issue rolling the dice via the Helper Bot for your Over/Under 7 game: <code>${escapeHTML(String(helperBotError || "Incomplete rolls from helper").substring(0, 150))}</code>\nYour bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`;
         const errorKeyboard = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
-        if (currentMessageId && bot) {
-            await bot.editMessageText(errorMsgToUserHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: errorKeyboard }).catch(async () => {
-                await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
-            });
-        } else {
-            await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
+
+        if (messageIdToDeleteBeforeFinalResult && bot) {
+            await bot.deleteMessage(String(chatId), Number(messageIdToDeleteBeforeFinalResult)).catch(e => console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to delete message ${messageIdToDeleteBeforeFinalResult} before sending error result: ${e.message}`));
         }
+        await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
+
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -5338,9 +5341,8 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
 
     gameData.diceRolls = diceRolls;
     gameData.diceSum = BigInt(diceSum);
-    gameData.status = 'game_over';
-    activeGames.set(gameId, gameData);
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Game status updated to 'game_over'.`);
+    gameData.status = 'game_over'; // Mark status as game_over
+    // No need to set activeGames here again if we are finalizing and deleting immediately.
 
     let win = false;
     let profitMultiplier = 0;
@@ -5404,27 +5406,23 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     let finalMessageTextHTML = `${titleResultHTML}\n\nYour Bet: <b>${betDisplayUSD_HTML}</b> on <b>${escapeHTML(choiceTextDisplay)} 7</b>.\n\n`;
     finalMessageTextHTML += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a grand total of <b>${escapeHTML(String(diceSum))}</b>!\n\n${resultTextPartHTML}`;
     finalMessageTextHTML += `\n\nYour new casino balance: <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}</b>.`;
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Final message text constructed.`);
+    console.log(`${LOG_PREFIX_OU7_CHOICE} Final result message text constructed.`);
 
     const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Attempting to send/edit final game message. Message ID: ${currentMessageId}`);
 
-    if (currentMessageId && bot) {
-        try {
-            await bot.editMessageText(finalMessageTextHTML, { chat_id: String(chatId), message_id: Number(currentMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
-            console.log(`${LOG_PREFIX_OU7_CHOICE} Final message edited successfully.`);
-        } catch (e) {
-            console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to edit final message ${currentMessageId}. Error: ${e.message}. Sending new message.`);
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
-            }
-        }
-    } else {
-        console.warn(`${LOG_PREFIX_OU7_CHOICE} No currentMessageId to edit. Sending new final message.`);
-        await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
+    // MODIFICATION: Delete old message, then send new final result message
+    if (messageIdToDeleteBeforeFinalResult && bot) {
+        console.log(`${LOG_PREFIX_OU7_CHOICE} Deleting previous game message ID ${messageIdToDeleteBeforeFinalResult} before sending final result.`);
+        await bot.deleteMessage(String(chatId), Number(messageIdToDeleteBeforeFinalResult)).catch(e => {
+            console.warn(`${LOG_PREFIX_OU7_CHOICE} Non-critical: Failed to delete message ${messageIdToDeleteBeforeFinalResult}. Error: ${e.message}`);
+        });
     }
+
+    console.log(`${LOG_PREFIX_OU7_CHOICE} Sending new final result message.`);
+    await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
+
     activeGames.delete(gameId);
-    console.log(`${LOG_PREFIX_OU7_CHOICE} Game ${gameId} removed from activeGames. Exiting function.`);
+    console.log(`${LOG_PREFIX_OU7_CHOICE} Game ${gameId} removed from activeGames. Exiting function after finalization.`);
 }
 
 // --- End of Part 5c, Section 1 (NEW + DEBUG LOGS) ---
