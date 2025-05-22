@@ -6044,14 +6044,13 @@ async function processDuelPlayerRollsCompletePvP(gameData, firstRoll, secondRoll
 async function updateDuelPvPMessage(gameId, isInitialTurnMessage = false) {
     const gameData = activeGames.get(gameId);
     if (!gameData || gameData.type !== GAME_IDS.DUEL_PVP) {
-        // console.warn(`[UpdateDuelPvPMsg_HTML_V8] Attempted to update non-existent or incorrect type PvP Duel game: ${gameId}`);
+        console.warn(`[UpdateDuelPvPMsg_HTML_V9] Update for invalid/missing game ${gameId}`);
         return;
     }
 
     const p1 = gameData.initiator;
     const p2 = gameData.opponent;
-    // Ensure player mentions are HTML-safe
-    const p1MentionHTML = escapeHTML(p1.mention);
+    const p1MentionHTML = escapeHTML(p1.mention); // Ensure player mentions are HTML-safe
     const p2MentionHTML = escapeHTML(p2.mention);
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
 
@@ -6060,85 +6059,104 @@ async function updateDuelPvPMessage(gameId, isInitialTurnMessage = false) {
     messageTextHTML += `<i>${p1MentionHTML} vs ${p2MentionHTML}</i>\n`;
     messageTextHTML += `<b>Wager</b>: ${betDisplayHTML} each\n\n`;
 
-    // Player 1 status display
-    messageTextHTML += `👤 <b>${p1MentionHTML}</b> (P1):\n   `; // Player name bolded
+    // Player 1 Status Display
+    messageTextHTML += `👤 <b>${p1MentionHTML}</b> (P1):\n   `;
     if (p1.status === 'rolls_complete') {
         messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b> ✅`;
-    } else if (p1.status === 'awaiting_roll_emoji') {
+    } else if (p1.status === 'awaiting_roll_emoji') { // This status is set on the player object
         if (p1.rolls.length === 0) {
-            messageTextHTML += `<i>Awaiting 2 dice...</i>`;
-        } else {
-            messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} 🎲\n   <i>Awaiting 2nd die...</i>`;
+            messageTextHTML += `<i>Awaiting ${DUEL_DICE_COUNT} dice...</i>`;
+        } else if (p1.rolls.length < DUEL_DICE_COUNT) {
+            messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} 🎲\n   <i>Awaiting ${DUEL_DICE_COUNT - p1.rolls.length} more ${DUEL_DICE_COUNT - p1.rolls.length === 1 ? "die" : "dice"}...</i>`;
+        } else { // Should not happen if rolls_complete is set correctly
+            messageTextHTML += `<i>Processing rolls...</i>`;
         }
     } else if (p1.status === 'waiting_turn') {
         messageTextHTML += `<i>Waiting for turn...</i>`;
-    } else if (p1.status === 'bust') { // Though Duel doesn't typically have a bust condition from rolls
+    } else if (p1.busted) { // If Duel had a bust concept
         messageTextHTML += `Rolled: ${formatDiceRolls(p1.rolls)} ➠ Total: <b>${p1.score}</b> 💥 BUSTED`;
-    } else { // Fallback for any other unforeseen status
-         messageTextHTML += `<i>${escapeHTML(String(p1.status).replace(/_/g, ' '))}</i>`;
+    } else {
+         messageTextHTML += `<i>${escapeHTML(String(p1.status || 'Thinking...').replace(/_/g, ' '))}</i>`;
     }
     messageTextHTML += `\n`;
 
-    // Player 2 status display
-    messageTextHTML += `👤 <b>${p2MentionHTML}</b> (P2):\n   `; // Player name bolded
+    // Player 2 Status Display
+    messageTextHTML += `👤 <b>${p2MentionHTML}</b> (P2):\n   `;
     if (p2.status === 'rolls_complete') {
         messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b> ✅`;
     } else if (p2.status === 'awaiting_roll_emoji') {
         if (p2.rolls.length === 0) {
-            messageTextHTML += `<i>Awaiting 2 dice...</i>`;
+            messageTextHTML += `<i>Awaiting ${DUEL_DICE_COUNT} dice...</i>`;
+        } else if (p2.rolls.length < DUEL_DICE_COUNT) {
+            messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} 🎲\n   <i>Awaiting ${DUEL_DICE_COUNT - p2.rolls.length} more ${DUEL_DICE_COUNT - p2.rolls.length === 1 ? "die" : "dice"}...</i>`;
         } else {
-            messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} 🎲\n   <i>Awaiting 2nd die...</i>`;
+            messageTextHTML += `<i>Processing rolls...</i>`;
         }
     } else if (p2.status === 'waiting_turn') {
         messageTextHTML += `<i>Waiting for turn...</i>`;
-    } else if (p2.status === 'bust') {
+    } else if (p2.busted) {
         messageTextHTML += `Rolled: ${formatDiceRolls(p2.rolls)} ➠ Total: <b>${p2.score}</b> 💥 BUSTED`;
     } else {
-        messageTextHTML += `<i>${escapeHTML(String(p2.status).replace(/_/g, ' '))}</i>`;
+        messageTextHTML += `<i>${escapeHTML(String(p2.status || 'Thinking...').replace(/_/g, ' '))}</i>`;
     }
     messageTextHTML += `\n\n`;
 
-    // Turn prompt logic - made more prominent
+    // Turn Prompt Logic - Relies on gameData.status and player.isTurn being correctly set
     let actionPromptHTML = "";
-    if (p1.isTurn && p1.status === 'awaiting_roll_emoji') {
-        const diceNeeded = DUEL_DICE_COUNT - p1.rolls.length;
-        actionPromptHTML = `👉 <b>${p1MentionHTML}</b>, it's your turn!\nPlease send <b>${diceNeeded === 1 ? 'your second' : `${diceNeeded} separate`}</b> 🎲 dice emoji${diceNeeded > 1 ? 's' : ''}.`;
-    } else if (p2.isTurn && p2.status === 'awaiting_roll_emoji') {
-        const diceNeeded = DUEL_DICE_COUNT - p2.rolls.length;
-        actionPromptHTML = `👉 <b>${p2MentionHTML}</b>, it's your turn!\nPlease send <b>${diceNeeded === 1 ? 'your second' : `${diceNeeded} separate`}</b> 🎲 dice emoji${diceNeeded > 1 ? 's' : ''}.`;
+    const activePlayer = p1.isTurn ? p1 : (p2.isTurn ? p2 : null);
+    const activePlayerMentionHTML = activePlayer ? escapeHTML(activePlayer.mention) : "";
+
+    if (activePlayer && activePlayer.status === 'awaiting_roll_emoji') {
+        const diceRolledCount = activePlayer.rolls.length;
+        const diceRemaining = DUEL_DICE_COUNT - diceRolledCount;
+
+        if (gameData.status === 'p1_awaiting_roll1_emoji' && p1.isTurn && diceRolledCount === 0) {
+            actionPromptHTML = `👉 <b>${p1MentionHTML}</b>, it's your turn! Please send your <b>first</b> of ${DUEL_DICE_COUNT} 🎲 dice emojis.`;
+        } else if (gameData.status === 'p1_awaiting_roll2_emoji' && p1.isTurn && diceRolledCount === 1) {
+            actionPromptHTML = `👉 <b>${p1MentionHTML}</b>, please send your <b>second</b> 🎲 dice emoji.`;
+        } else if (gameData.status === 'p2_awaiting_roll1_emoji' && p2.isTurn && diceRolledCount === 0) {
+            actionPromptHTML = `👉 <b>${p2MentionHTML}</b>, it's your turn! Please send your <b>first</b> of ${DUEL_DICE_COUNT} 🎲 dice emojis.`;
+        } else if (gameData.status === 'p2_awaiting_roll2_emoji' && p2.isTurn && diceRolledCount === 1) {
+            actionPromptHTML = `👉 <b>${p2MentionHTML}</b>, please send your <b>second</b> 🎲 dice emoji.`;
+        } else if (diceRemaining > 0) { // Generic fallback prompt if main game status isn't perfectly aligned
+            actionPromptHTML = `👉 <b>${activePlayerMentionHTML}</b>, please send <b>${diceRemaining} more</b> 🎲 dice emoji${diceRemaining > 1 ? 's' : ''}.`;
+        }
     } else if (gameData.status.startsWith('game_over_')) {
         actionPromptHTML = `<i>🏁 Game concluding... Final results incoming!</i>`;
-    } else if (!p1.isTurn && !p2.isTurn) { // Generic waiting if no specific turn but game not over
-        if (p1.status === 'rolls_complete' && p2.status === 'waiting_turn') {
-             actionPromptHTML = `<i>Waiting for ${p2MentionHTML} to begin their turn...</i>`;
-        } else if (p2.status === 'rolls_complete' && p1.status === 'waiting_turn') {
-             actionPromptHTML = `<i>Waiting for ${p1MentionHTML} to begin their turn...</i>`;
-        } else {
-            actionPromptHTML = `<i>Processing next step...</i>`;
-        }
+    } else if (!p1.isTurn && !p2.isTurn && p1.status === 'rolls_complete' && p2.status === 'waiting_turn') {
+         actionPromptHTML = `<i>Waiting for ${p2MentionHTML} to begin their turn...</i>`;
+    } else if (!p1.isTurn && !p2.isTurn && p2.status === 'rolls_complete' && p1.status === 'waiting_turn') {
+         actionPromptHTML = `<i>Waiting for ${p1MentionHTML} to begin their turn...</i>`;
+    } else if (!p1.isTurn && !p2.isTurn && p1.status !== 'rolls_complete' && p2.status !== 'rolls_complete') {
+        // This case could happen if something went wrong with turn setting
+        actionPromptHTML = `<i>Waiting for players to roll...</i>`;
     }
+
+
     if (actionPromptHTML) {
         messageTextHTML += `${actionPromptHTML}`;
     }
 
     const options = {
         chat_id: gameData.chatId,
-        parse_mode: 'HTML', // Switched to HTML
-        reply_markup: { inline_keyboard: [] } // Duel PvP uses emoji input during turns
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [] } // No buttons during emoji input phase for Duel PvP
     };
 
     let sentMessage;
-    // Delete old message and send new one strategy for updates
+    // Always delete old and send new for simplicity and to ensure it's at the bottom
     if (gameData.currentMessageId) {
-        await bot.deleteMessage(gameData.chatId, Number(gameData.currentMessageId)).catch(()=>{}); // Attempt to delete, ignore if fails
-        gameData.currentMessageId = null; // Nullify so a new message is sent
+        await bot.deleteMessage(gameData.chatId, Number(gameData.currentMessageId)).catch(()=>{});
+        gameData.currentMessageId = null;
     }
     
     sentMessage = await safeSendMessage(gameData.chatId, messageTextHTML, options);
 
     if (sentMessage?.message_id) {
         gameData.currentMessageId = String(sentMessage.message_id);
-        if(activeGames.has(gameId)) activeGames.set(gameId, gameData); // Persist new message ID
+        if(activeGames.has(gameId)) activeGames.set(gameId, gameData);
+    } else {
+        console.error(`[UpdateDuelPvPMsg_HTML_V9] Failed to send/update Duel PvP message for GID ${gameId}.`);
     }
 }
 
