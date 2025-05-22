@@ -2982,13 +2982,28 @@ async function handleDEGoForJackpot(gameId, userWhoClicked, originalMessageId, c
 }
 
 async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
+    const logPrefix = `[DE_PvB_Roll_HTML_V3_Fix UID:${gameData.player.userId} Game:${gameData.gameId}]`; // Added Fix to log prefix
+    // Basic validation (already done in main message handler usually)
+    if (gameData.status !== 'player_turn_awaiting_emoji' && gameData.status !== 'player_score_18_plus_awaiting_choice') {
+        console.warn(`${logPrefix} Roll received but game status is '${gameData.status}'. Ignoring.`);
+        return;
+    }
+    if (gameData.status === 'player_score_18_plus_awaiting_choice' && !gameData.player.isGoingForJackpot) {
+        // If they had the 18+ choice and just sent a dice, it means they chose to roll again without pressing "Go for Jackpot"
+    }
+    gameData.status = 'player_turn_awaiting_emoji'; // Ensure correct status for processing
+
     const player = gameData.player;
     const playerRefHTML = escapeHTML(player.displayName);
 
-    const tempRollMsg = await safeSendMessage(gameData.chatId, `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>!`, { parse_mode: 'HTML' });
-    await sleep(BUST_MESSAGE_DELAY_MS > 1000 ? 1200 : BUST_MESSAGE_DELAY_MS / 1.5);
-    if (tempMsg?.message_id && bot) {
-        await bot.deleteMessage(gameData.chatId, tempMsg.message_id).catch(()=>{});
+    // Send temporary roll announcement (HTML)
+    const rollAnnounceTextHTML = `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>!`;
+    const tempRollMsg = await safeSendMessage(gameData.chatId, rollAnnounceTextHTML, { parse_mode: 'HTML' }); // Corrected variable name here
+    
+    await sleep(BUST_MESSAGE_DELAY_MS > 1000 ? 1200 : BUST_MESSAGE_DELAY_MS / 1.5); 
+    // CORRECTED TYPO: tempMsg to tempRollMsg
+    if (tempRollMsg?.message_id && bot) { 
+        await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
     }
 
     player.rolls.push(diceValue);
@@ -2998,9 +3013,9 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
         player.busted = true;
         gameData.status = 'player_busted';
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData);
-        await sleep(BUST_MESSAGE_DELAY_MS);
-        await finalizeDiceEscalatorPvBGame_New(gameData, 0);
+        await updateDiceEscalatorPvBMessage_New(gameData); // Show bust state
+        await sleep(BUST_MESSAGE_DELAY_MS); // Pause for bust message
+        await finalizeDiceEscalatorPvBGame_New(gameData, 0); // Bot wins by default
         return;
     }
 
@@ -3008,7 +3023,7 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
 
     if (player.score >= TARGET_JACKPOT_SCORE) {
         player.stood = true; 
-        gameData.status = 'player_stood';
+        gameData.status = 'player_stood'; // Will trigger bot turn next
         activeGames.set(gameData.gameId, gameData);
         await updateDiceEscalatorPvBMessage_New(gameData);
         await sleep(1000);
@@ -3019,10 +3034,10 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
     if (player.score >= 18 && !player.isGoingForJackpot && gameData.status !== 'player_score_18_plus_awaiting_choice') {
         gameData.status = 'player_score_18_plus_awaiting_choice';
     } else {
-        gameData.status = 'player_turn_awaiting_emoji';
+        gameData.status = 'player_turn_awaiting_emoji'; // Continue player's turn
     }
     activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvBMessage_New(gameData);
+    await updateDiceEscalatorPvBMessage_New(gameData); // Update with new score/status
 }
 
 async function updateDiceEscalatorPvBMessage_New(gameData, isStanding = false) {
@@ -3252,63 +3267,88 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
     await updateDiceEscalatorPvPMessage_New(gameData); 
 }
 
-async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
-    const logPrefix = `[DE_PvB_Roll_HTML_V3_Fix UID:${gameData.player.userId} Game:${gameData.gameId}]`; // Added Fix to log prefix
-    // Basic validation (already done in main message handler usually)
-    if (gameData.status !== 'player_turn_awaiting_emoji' && gameData.status !== 'player_score_18_plus_awaiting_choice') {
-        console.warn(`${logPrefix} Roll received but game status is '${gameData.status}'. Ignoring.`);
+async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userIdWhoRolled) {
+    const logPrefix = `[DE_PvP_Roll_HTML_V3 UID:${userIdWhoRolled} Game:${gameData.gameId}]`; // V3 for clarity
+    let currentPlayer, otherPlayer, playerIdentifier;
+
+    if (gameData.initiator.userId === userIdWhoRolled && gameData.initiator.isTurn) {
+        currentPlayer = gameData.initiator;
+        otherPlayer = gameData.opponent;
+        playerIdentifier = "P1";
+    } else if (gameData.opponent.userId === userIdWhoRolled && gameData.opponent.isTurn) {
+        currentPlayer = gameData.opponent;
+        otherPlayer = gameData.initiator;
+        playerIdentifier = "P2";
+    } else {
+        console.warn(`${logPrefix} Roll received from non-active player or out of turn. User: ${userIdWhoRolled}. P1 turn: ${gameData.initiator.isTurn}, P2 turn: ${gameData.opponent.isTurn}`);
+        return; 
+    }
+    
+    // Check if player is in a state to roll (e.g., awaiting_roll_emoji)
+    if (currentPlayer.status !== 'awaiting_roll_emoji' && gameData.status !== `${playerIdentifier.toLowerCase()}_awaiting_roll_emoji` && gameData.status !== `${playerIdentifier.toLowerCase()}_awaiting_roll1_emoji` && gameData.status !== `${playerIdentifier.toLowerCase()}_awaiting_roll2_emoji`) {
+        console.warn(`${logPrefix} Player ${currentPlayer.displayName} status is '${currentPlayer.status}' and game status is '${gameData.status}'. Not expecting a roll now.`);
         return;
     }
-    if (gameData.status === 'player_score_18_plus_awaiting_choice' && !gameData.player.isGoingForJackpot) {
-        // If they had the 18+ choice and just sent a dice, it means they chose to roll again without pressing "Go for Jackpot"
-    }
-    gameData.status = 'player_turn_awaiting_emoji'; // Ensure correct status for processing
 
-    const player = gameData.player;
-    const playerRefHTML = escapeHTML(player.displayName);
-
-    // Send temporary roll announcement (HTML)
-    const rollAnnounceTextHTML = `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>!`;
-    const tempRollMsg = await safeSendMessage(gameData.chatId, rollAnnounceTextHTML, { parse_mode: 'HTML' }); // Corrected variable name here
+    const playerRefHTML = escapeHTML(currentPlayer.displayName);
+    // Send temporary roll announcement using HTML
+    const rollAnnounceTextHTML = `🎲 ${playerRefHTML} (${playerIdentifier}) rolled a <b>${escapeHTML(String(diceValue))}</b>!`;
+    const tempMsg = await safeSendMessage(gameData.chatId, rollAnnounceTextHTML, { parse_mode: 'HTML' });
     
-    await sleep(BUST_MESSAGE_DELAY_MS > 1000 ? 1200 : BUST_MESSAGE_DELAY_MS / 1.5); 
-    // CORRECTED TYPO: tempMsg to tempRollMsg
-    if (tempRollMsg?.message_id && bot) { 
-        await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
+    await sleep(1500); // Let player see the roll announcement
+    if (tempMsg?.message_id && bot) { // Delete temporary announcement
+        await bot.deleteMessage(gameData.chatId, tempMsg.message_id).catch(()=>{});
     }
 
-    player.rolls.push(diceValue);
-    gameData.lastPlayerRoll = diceValue;
+    currentPlayer.rolls.push(diceValue);
+    gameData.lastRollValue = diceValue; // Store last roll for context if needed
 
     if (diceValue === DICE_ESCALATOR_BUST_ON) {
-        player.busted = true;
-        gameData.status = 'player_busted';
-        activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData); // Show bust state
-        await sleep(BUST_MESSAGE_DELAY_MS); // Pause for bust message
-        await finalizeDiceEscalatorPvBGame_New(gameData, 0); // Bot wins by default
-        return;
-    }
-
-    player.score += diceValue;
-
-    if (player.score >= TARGET_JACKPOT_SCORE) {
-        player.stood = true; 
-        gameData.status = 'player_stood'; // Will trigger bot turn next
-        activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData);
-        await sleep(1000);
-        await processDiceEscalatorBotTurnPvB_New(gameData);
-        return;
-    }
-
-    if (player.score >= 18 && !player.isGoingForJackpot && gameData.status !== 'player_score_18_plus_awaiting_choice') {
-        gameData.status = 'player_score_18_plus_awaiting_choice';
+        currentPlayer.busted = true;
+        currentPlayer.score += 0; // Bust roll adds 0 to score
+        currentPlayer.status = 'bust'; 
+        console.log(`${logPrefix} Player ${playerRefHTML} BUSTED with a roll of ${diceValue}.`);
     } else {
-        gameData.status = 'player_turn_awaiting_emoji'; // Continue player's turn
+        currentPlayer.score += diceValue;
+        // Player continues to be in 'awaiting_roll_emoji' status if they can roll more or stand
+        // Standing will change this status via handleDiceEscalatorPvPStand_New
     }
-    activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvBMessage_New(gameData); // Update with new score/status
+    
+    currentPlayer.isTurn = true; // Keep turn until they stand or bust this roll action
+    activeGames.set(gameData.gameId, gameData); // Save intermediate roll
+
+    // Determine next overall game status after this roll
+    if (currentPlayer.busted) {
+        currentPlayer.isTurn = false; // Turn ends on bust
+        otherPlayer.isTurn = !otherPlayer.stood && !otherPlayer.busted; // Other player gets a turn if they haven't finished
+        if (otherPlayer.isTurn) {
+            otherPlayer.status = 'awaiting_roll_emoji';
+            gameData.status = (otherPlayer === gameData.initiator) ? 'p1_awaiting_roll_emoji' : 'p2_awaiting_roll_emoji';
+        } else { // Both players have acted (one busted, other already stood/busted)
+            gameData.status = 'game_over_pvp_resolved';
+        }
+    } else if (currentPlayer === gameData.opponent && otherPlayer.stood && currentPlayer.score > otherPlayer.score) {
+        // If P2 (opponent) is rolling, P1 (otherPlayer) has stood, and P2 now beats P1's score
+        currentPlayer.stood = true; // P2 effectively stands by winning
+        currentPlayer.isTurn = false;
+        currentPlayer.status = 'stood';
+        gameData.status = 'game_over_p2_wins_by_crossing_score';
+    } else {
+        // Player didn't bust, game continues with their turn or waits for stand.
+        // The main message will offer stand button. Player status remains 'awaiting_roll_emoji'.
+        // Game status reflects current player's turn.
+        gameData.status = (currentPlayer === gameData.initiator) ? 'p1_awaiting_roll_emoji' : 'p2_awaiting_roll_emoji';
+    }
+    
+    activeGames.set(gameData.gameId, gameData); // Save final status for this action
+
+    if (gameData.status.startsWith('game_over')) {
+        await updateDiceEscalatorPvPMessage_New(gameData); // Show final state before resolving
+        await sleep(1000);
+        await resolveDiceEscalatorPvPGame_New(gameData, currentPlayer.busted ? currentPlayer.userId : null);
+    } else {
+        await updateDiceEscalatorPvPMessage_New(gameData); // Update to next turn/prompt
+    }
 }
 
 async function updateDiceEscalatorPvPMessage_New(gameData) {
