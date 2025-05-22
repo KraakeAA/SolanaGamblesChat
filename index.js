@@ -9413,13 +9413,19 @@ async function forwardDice21Callback(action, params, userObject, originalMessage
             if (typeof handleDice21PvBCancel === 'function') await handleDice21PvBCancel(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
             else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBCancel`);
             break;
-        case 'd21_pvp_stand':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvp_stand.`); return; }
-            if (typeof handleDice21PvPStand === 'function') await handleDice21PvPStand(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler); // userObject (full) passed
-            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvPStand (or handleDice21PvPStandAction)`);
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_D21_CB_FWD} Unhandled Dice 21 action in forwarder: ${action}`);
+        case 'd21_pvp_stand': 
+            if (!gameIdOrBetAmountStr) { 
+                console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvp_stand.`); 
+                // It's good practice to answer the callback even on error if not already done
+                if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Missing game ID for stand action.", show_alert: true }).catch(() => {});
+                return; 
+            }
+            const userIdStringForStand = String(userObject.id || userObject.telegram_id); // Get the string ID
+            if (typeof handleDice21PvPStand === 'function') {
+                await handleDice21PvPStand(gameIdOrBetAmountStr, userIdStringForStand, originalMessageId, callbackQueryId, chatDataForHandler);
+            } else {
+                console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvPStand`);
+            }
             break;
     }
 }
