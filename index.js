@@ -6141,44 +6141,49 @@ async function updateDuelPvPMessage(gameId, isInitialTurnMessage = false) {
     }
 }
 
-async function resolveDuelPvPGame(gameData, playerWhoBustedId = null) {
-    const LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG = `[Duel_PvP_Resolve_DEBUG GID:${gameData?.gameId || 'UNKNOWN_GID'}]`;
+async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
+    let gameData;
+    let gameId_internal;
 
-    console.log(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} Entered function.`);
-    if (!gameData) {
-        console.error(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} CRITICAL: gameData parameter is null or undefined!`);
-        // Attempt to notify admin or handle this critical failure gracefully
-        if (typeof notifyAdmin === 'function') {
-            notifyAdmin(`🚨 CRITICAL: resolveDuelPvPGame called with null gameData.`, { parse_mode: 'MarkdownV2' });
-        }
-        return; // Cannot proceed
+    if (typeof gameDataOrId === 'string') {
+        // console.log(`[Duel_PvP_Resolve_Robust] Received gameId string: ${gameDataOrId}. Fetching from activeGames.`);
+        gameId_internal = gameDataOrId;
+        gameData = activeGames.get(gameId_internal);
+    } else {
+        gameData = gameDataOrId;
+        gameId_internal = gameData?.gameId;
     }
 
-    console.log(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} gameData.betAmount: ${gameData.betAmount}, Type: ${typeof gameData.betAmount}`);
-    // For more extensive debugging of the gameData object:
-    // console.log(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} Full gameData at entry: ${stringifyWithBigInt(gameData)}`);
-
-    activeGames.delete(gameData.gameId);
-    const p1 = gameData.initiator;
-    const p2 = gameData.opponent;
-
-    // Defensive check for betAmount, though the error occurs earlier if it's undefined
-    if (typeof gameData.betAmount === 'undefined') {
-        console.error(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} FATAL: gameData.betAmount is undefined. Cannot proceed with BigInt conversion.`);
-        // Notify admin about this critical state
-        if (typeof notifyAdmin === 'function') {
-            notifyAdmin(`🚨 CRITICAL: gameData.betAmount is UNDEFINED in resolveDuelPvPGame for GID ${gameData.gameId}. P1: ${p1?.mention}, P2: ${p2?.mention}. Full gameData logged to console.`, { parse_mode: 'MarkdownV2' });
-            console.error(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} Problematic gameData: ${stringifyWithBigInt(gameData)}`);
+    if (!gameData) {
+        console.error(`[Duel_PvP_Resolve_Robust] CRITICAL: No game data found for ID: ${gameId_internal || 'N/A'}. Cannot resolve.`);
+        if (typeof notifyAdmin === 'function' && gameId_internal) {
+            notifyAdmin(`🚨 CRITICAL: resolveDuelPvPGame called with invalid game data or ID: ${escapeMarkdownV2(String(gameId_internal))}.`, { parse_mode: 'MarkdownV2' });
         }
-        // Send a generic error to users and attempt to refund if possible, though betAmount is needed for refund logic
-        const refundErrorMessage = `⚙️ A critical internal error occurred (Bet amount missing). Game cannot be resolved. Please contact support with details of this game.`;
+        // If gameData was initially an ID and not found, activeGames.delete below won't do anything.
+        // If it was an object but somehow faulty, deleting its ID is fine.
+        if (gameId_internal) activeGames.delete(gameId_internal);
+        return;
+    }
+    
+    // Ensure betAmount is present before proceeding
+    if (typeof gameData.betAmount === 'undefined' || gameData.betAmount === null) {
+        console.error(`[Duel_PvP_Resolve_Robust] FATAL: gameData.betAmount is undefined/null for GID ${gameData.gameId}. P1: ${gameData.initiator?.mention}, P2: ${gameData.opponent?.mention}.`);
+        if (typeof notifyAdmin === 'function') {
+            notifyAdmin(`🚨 CRITICAL: gameData.betAmount is UNDEFINED/NULL in resolveDuelPvPGame for GID ${gameData.gameId}. Full gameData logged to console.`, { parse_mode: 'MarkdownV2' });
+            console.error(`[Duel_PvP_Resolve_Robust] Problematic gameData (missing betAmount): ${stringifyWithBigInt(gameData)}`);
+        }
+        const refundErrorMessage = `⚙️ A critical internal error occurred (Bet amount missing from game data). Game cannot be resolved. Please contact support.`;
         await safeSendMessage(gameData.chatId, refundErrorMessage, { parse_mode: 'MarkdownV2' });
+        activeGames.delete(gameData.gameId);
         await updateGroupGameDetails(gameData.chatId, null, null, null);
-        // A refund here is tricky as betAmount is undefined. This indicates a severe state corruption.
         return;
     }
 
-    const currentBetAmountBigInt = BigInt(gameData.betAmount); // This is where the error occurs if gameData.betAmount is undefined
+
+    activeGames.delete(gameData.gameId); // Delete now that we have a valid gameData object
+    const p1 = gameData.initiator;
+    const p2 = gameData.opponent;
+    const currentBetAmountBigInt = BigInt(gameData.betAmount); // Now this should be safe
 
     let winner = null, loser = null, isPush = false, resultOutcomeText = "", titleEmoji = "⚔️";
     let totalPotLamports = currentBetAmountBigInt * 2n;
@@ -6214,7 +6219,7 @@ async function resolveDuelPvPGame(gameData, playerWhoBustedId = null) {
         resultOutcomeText = `*Unexpected Duel Finish!* ⚙️\nThe game concluded unusually. To ensure fairness, all bets are being refunded.`;
         p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
         p1LedgerCode = 'refund_duel_pvp_error'; p2LedgerCode = 'refund_duel_pvp_error';
-        console.error(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} Undetermined Duel PvP outcome for game ${gameData.gameId}. P1: ${p1.score} (Status:${p1.status}), P2: ${p2.score} (Status:${p2.status}). Refunding both.`);
+        console.error(`[Duel_PvP_Resolve_Robust] Undetermined Duel PvP outcome for game ${gameData.gameId}. P1: ${p1.score} (Status:${p1.status}), P2: ${p2.score} (Status:${p2.status}). Refunding both.`);
     }
 
     let finalMessageText = `${titleEmoji} *Duel PvP - The Dust Settles!* ${titleEmoji}\n\n${wagerLine}\n\n` +
@@ -6244,7 +6249,7 @@ async function resolveDuelPvPGame(gameData, playerWhoBustedId = null) {
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} CRITICAL DB Error Finalizing Duel PvP ${gameData.gameId}: ${e.message}`);
+        console.error(`[Duel_PvP_Resolve_Robust] CRITICAL DB Error Finalizing Duel PvP ${gameData.gameId}: ${e.message}`);
         finalMessageText += `\n\n⚠️ **CRITICAL SYSTEM ERROR**: Failed to update player balances correctly. Administrators have been notified. Please contact support with Game ID: \`${escapeMarkdownV2(gameData.gameId)}\``;
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameData.gameId)}\`\nError: ${e.message}. MANUAL CHECK OF BALANCES FOR ${p1.mention} & ${p2.mention} IS URGENTLY REQUIRED.`);
     } finally {
@@ -6253,7 +6258,7 @@ async function resolveDuelPvPGame(gameData, playerWhoBustedId = null) {
 
     const finalKeyboard = createPostGameKeyboard(GAME_IDS.DUEL_PVP, currentBetAmountBigInt);
     if (gameData.currentMessageId && bot) {
-        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(e => console.warn(`${LOG_PREFIX_DUEL_PVP_RESOLVE_DEBUG} Non-critical: fail to delete old msg ${gameData.currentMessageId}: ${e.message}`));
+        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(e => console.warn(`[Duel_PvP_Resolve_Robust] Non-critical: fail to delete old msg ${gameData.currentMessageId}: ${e.message}`));
     }
     await safeSendMessage(gameData.chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
 
