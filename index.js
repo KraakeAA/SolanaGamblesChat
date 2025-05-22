@@ -6146,7 +6146,6 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
     let gameId_internal;
 
     if (typeof gameDataOrId === 'string') {
-        // console.log(`[Duel_PvP_Resolve_Robust] Received gameId string: ${gameDataOrId}. Fetching from activeGames.`);
         gameId_internal = gameDataOrId;
         gameData = activeGames.get(gameId_internal);
     } else {
@@ -6155,22 +6154,19 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
     }
 
     if (!gameData) {
-        console.error(`[Duel_PvP_Resolve_Robust] CRITICAL: No game data found for ID: ${gameId_internal || 'N/A'}. Cannot resolve.`);
+        console.error(`[Duel_PvP_Resolve_V3] CRITICAL: No game data found for ID: ${gameId_internal || 'N/A'}. Cannot resolve.`);
         if (typeof notifyAdmin === 'function' && gameId_internal) {
             notifyAdmin(`🚨 CRITICAL: resolveDuelPvPGame called with invalid game data or ID: ${escapeMarkdownV2(String(gameId_internal))}.`, { parse_mode: 'MarkdownV2' });
         }
-        // If gameData was initially an ID and not found, activeGames.delete below won't do anything.
-        // If it was an object but somehow faulty, deleting its ID is fine.
         if (gameId_internal) activeGames.delete(gameId_internal);
         return;
     }
-    
-    // Ensure betAmount is present before proceeding
+
     if (typeof gameData.betAmount === 'undefined' || gameData.betAmount === null) {
-        console.error(`[Duel_PvP_Resolve_Robust] FATAL: gameData.betAmount is undefined/null for GID ${gameData.gameId}. P1: ${gameData.initiator?.mention}, P2: ${gameData.opponent?.mention}.`);
+        console.error(`[Duel_PvP_Resolve_V3] FATAL: gameData.betAmount is undefined/null for GID ${gameData.gameId}. P1: ${gameData.initiator?.mention}, P2: ${gameData.opponent?.mention}.`);
         if (typeof notifyAdmin === 'function') {
             notifyAdmin(`🚨 CRITICAL: gameData.betAmount is UNDEFINED/NULL in resolveDuelPvPGame for GID ${gameData.gameId}. Full gameData logged to console.`, { parse_mode: 'MarkdownV2' });
-            console.error(`[Duel_PvP_Resolve_Robust] Problematic gameData (missing betAmount): ${stringifyWithBigInt(gameData)}`);
+            console.error(`[Duel_PvP_Resolve_V3] Problematic gameData (missing betAmount): ${stringifyWithBigInt(gameData)}`);
         }
         const refundErrorMessage = `⚙️ A critical internal error occurred (Bet amount missing from game data). Game cannot be resolved. Please contact support.`;
         await safeSendMessage(gameData.chatId, refundErrorMessage, { parse_mode: 'MarkdownV2' });
@@ -6179,11 +6175,10 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
         return;
     }
 
-
-    activeGames.delete(gameData.gameId); // Delete now that we have a valid gameData object
+    activeGames.delete(gameData.gameId);
     const p1 = gameData.initiator;
     const p2 = gameData.opponent;
-    const currentBetAmountBigInt = BigInt(gameData.betAmount); // Now this should be safe
+    const currentBetAmountBigInt = BigInt(gameData.betAmount);
 
     let winner = null, loser = null, isPush = false, resultOutcomeText = "", titleEmoji = "⚔️";
     let totalPotLamports = currentBetAmountBigInt * 2n;
@@ -6196,11 +6191,11 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
     if (playerWhoBustedId === p1.userId || (p1.status === 'bust' || p1.busted) ) {
         titleEmoji = "💥"; winner = p2; loser = p1; p1.busted = true;
         p2Payout = totalPotLamports; p2LedgerCode = 'win_duel_pvp_opponent_bust';
-        resultOutcomeText = `${p1.mention} hit a snag and *BUSTED*! 💥\n🎉 ${winner.mention} seizes victory and the pot!`;
+        resultOutcomeText = `${p1.mention} hit a snag and *BUSTED*!\n${winner.mention} seizes victory!`;
     } else if (playerWhoBustedId === p2.userId || (p2.status === 'bust' || p2.busted) ) {
         titleEmoji = "💥"; winner = p1; loser = p2; p2.busted = true;
         p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_opponent_bust';
-        resultOutcomeText = `${p2.mention} took a risk and *BUSTED*! 💥\n🎉 ${winner.mention} masterfully claims the win!`;
+        resultOutcomeText = `${p2.mention} took a risk and *BUSTED*!\n${winner.mention} masterfully claims the win!`;
     } else if (p1.status === 'rolls_complete' && p2.status === 'rolls_complete') {
         if (p1.score > p2.score) {
             titleEmoji = "🏆"; winner = p1; loser = p2; p1Payout = totalPotLamports; p1LedgerCode = 'win_duel_pvp_score';
@@ -6219,7 +6214,7 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
         resultOutcomeText = `*Unexpected Duel Finish!* ⚙️\nThe game concluded unusually. To ensure fairness, all bets are being refunded.`;
         p1Payout = currentBetAmountBigInt; p2Payout = currentBetAmountBigInt;
         p1LedgerCode = 'refund_duel_pvp_error'; p2LedgerCode = 'refund_duel_pvp_error';
-        console.error(`[Duel_PvP_Resolve_Robust] Undetermined Duel PvP outcome for game ${gameData.gameId}. P1: ${p1.score} (Status:${p1.status}), P2: ${p2.score} (Status:${p2.status}). Refunding both.`);
+        console.error(`[Duel_PvP_Resolve_V3] Undetermined Duel PvP outcome for game ${gameData.gameId}. P1: ${p1.score} (Status:${p1.status}), P2: ${p2.score} (Status:${p2.status}). Refunding both.`);
     }
 
     let finalMessageText = `${titleEmoji} *Duel PvP - The Dust Settles!* ${titleEmoji}\n\n${wagerLine}\n\n` +
@@ -6240,16 +6235,17 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
 
         await client.query('COMMIT');
 
+        // Updated winnings message
         if (winner) {
-            const profitAmount = totalPotLamports - currentBetAmountBigInt;
-             finalMessageText += `\n\n💰 ${winner.mention} wins *${escapeMarkdownV2(await formatBalanceForDisplay(profitAmount, 'USD'))}* profit!`;
+            // totalPotLamports is the amount the winner receives (their stake + opponent's stake)
+            finalMessageText += `\n\n🎉 ${winner.mention} wins the pot of *${escapeMarkdownV2(await formatBalanceForDisplay(totalPotLamports, 'USD'))}*!`;
         } else if (isPush) {
             finalMessageText += `\n\n💰 Wagers of *${betDisplayUSD}* each are returned.`;
         }
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error(`[Duel_PvP_Resolve_Robust] CRITICAL DB Error Finalizing Duel PvP ${gameData.gameId}: ${e.message}`);
+        console.error(`[Duel_PvP_Resolve_V3] CRITICAL DB Error Finalizing Duel PvP ${gameData.gameId}: ${e.message}`);
         finalMessageText += `\n\n⚠️ **CRITICAL SYSTEM ERROR**: Failed to update player balances correctly. Administrators have been notified. Please contact support with Game ID: \`${escapeMarkdownV2(gameData.gameId)}\``;
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameData.gameId)}\`\nError: ${e.message}. MANUAL CHECK OF BALANCES FOR ${p1.mention} & ${p2.mention} IS URGENTLY REQUIRED.`);
     } finally {
@@ -6258,7 +6254,7 @@ async function resolveDuelPvPGame(gameDataOrId, playerWhoBustedId = null) {
 
     const finalKeyboard = createPostGameKeyboard(GAME_IDS.DUEL_PVP, currentBetAmountBigInt);
     if (gameData.currentMessageId && bot) {
-        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(e => console.warn(`[Duel_PvP_Resolve_Robust] Non-critical: fail to delete old msg ${gameData.currentMessageId}: ${e.message}`));
+        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(e => console.warn(`[Duel_PvP_Resolve_V3] Non-critical: fail to delete old msg ${gameData.currentMessageId}: ${e.message}`));
     }
     await safeSendMessage(gameData.chatId, finalMessageText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
 
