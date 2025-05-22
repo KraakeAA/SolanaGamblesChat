@@ -2842,30 +2842,51 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked
 }
 
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalMessageId, originalChatId, callbackQueryIdPassed = null) {
-    const LOG_PREFIX_DE_CANCEL_OFFER = `[DE_CancelOffer UID:${userWhoClicked.telegram_id} OfferID:${offerId}]`;
-    const offerData = activeGames.get(offerId);
-    const callbackQueryId = callbackQueryIdPassed;
-    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already concluded or vanished into the ether!", show_alert: false }).catch(()=>{});
-        return;
-    }
-    if (offerData.initiator.userId !== userWhoClicked.telegram_id && String(userWhoClicked.telegram_id) !== ADMIN_USER_ID) {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Patience, warrior! Only the one who made the offer can retract it.", show_alert: true }).catch(()=>{});
-        return;
-    }
-    if (offerData.status !== 'pending_offer') {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already been decided or expired. It cannot be cancelled now.", show_alert: false }).catch(()=>{});
-        return;
-    }
-    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Retracting the challenge..."}).catch(()=>{});
-    activeGames.delete(offerId);
-    console.log(`${LOG_PREFIX_DE_CANCEL_OFFER} Dice Escalator offer ${offerId} has been cancelled by ${userWhoClicked.telegram_id}.`);
-    if (originalMessageId && bot) {
-        const betDisplay = escapeMarkdownV2(formatCurrency(offerData.betAmount, 'SOL'));
-        await bot.editMessageText(`❌ *Offer Retracted by Initiator\\!* ❌\nThe Dice Escalator challenge from ${offerData.initiator.displayName} \\(wager: *${betDisplay}*\\) has been cancelled\\. Perhaps another time the dice will roll\\!`, {
-            chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [] }
-        }).catch(e => console.warn(`${LOG_PREFIX_DE_CANCEL_OFFER} Failed to edit the cancelled Dice Escalator offer message: ${e.message}`));
-    }
+    const LOG_PREFIX_DE_CANCEL_OFFER = `[DE_CancelOffer_V3 UID:${userWhoClicked.telegram_id} OfferID:${offerId}]`; // V3 for new logic
+    const offerData = activeGames.get(offerId);
+    const callbackQueryId = callbackQueryIdPassed;
+
+    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already concluded or vanished!", show_alert: false }).catch(()=>{});
+        // Attempt to clean up buttons on the original message if it still exists and ID is known
+        if (originalMessageId && bot) {
+            bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+        }
+        return;
+    }
+
+    if (offerData.initiator.userId !== userWhoClicked.telegram_id && String(userWhoClicked.telegram_id) !== ADMIN_USER_ID) {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Patience, warrior! Only the one who made the offer can retract it.", show_alert: true }).catch(()=>{});
+        return;
+    }
+
+    if (offerData.status !== 'pending_offer') { // Unified DE offer status should be 'pending_offer' to be cancellable
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already been decided or expired. It cannot be cancelled now.", show_alert: false }).catch(()=>{});
+        return;
+    }
+
+    // Answer callback query to acknowledge the button press
+    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Retracting the Dice Escalator challenge..."}).catch(()=>{});
+
+    // Since Dice Escalator Unified Offer does not deduct bet at offer creation, no refund logic here.
+
+    activeGames.delete(offerId);
+    await updateGroupGameDetails(originalChatId, null, null, null); // Clear from group session if it was set
+    console.log(`${LOG_PREFIX_DE_CANCEL_OFFER} Dice Escalator offer ${offerId} (Status: ${offerData.status}) has been cancelled by ${userWhoClicked.telegram_id}.`);
+
+    // Delete the original offer message
+    const messageIdToDelete = Number(originalMessageId || offerData.offerMessageId); // Prioritize originalMessageId from callback
+    if (messageIdToDelete && bot) {
+        await bot.deleteMessage(String(originalChatId), messageIdToDelete)
+            .catch(e => console.warn(`${LOG_PREFIX_DE_CANCEL_OFFER} Failed to delete the cancelled Dice Escalator offer message ${messageIdToDelete}: ${e.message}`));
+    }
+
+    // Send a new confirmation message
+    // Ensure formatCurrency and escapeMarkdownV2 are accessible in this scope
+    const betDisplaySol = typeof formatCurrency === 'function' ? escapeMarkdownV2(formatCurrency(offerData.betAmount, 'SOL')) : `Bet: ${offerData.betAmount} lamports`;
+    const confirmationMessage = `❌ Offer Retracted!\nThe Dice Escalator challenge from ${offerData.initiator.displayName} (wager: *${betDisplaySol}*) has been cancelled by the initiator.`;
+    
+    await safeSendMessage(originalChatId, confirmationMessage, { parse_mode: 'MarkdownV2' });
 }
 
 // --- Dice Escalator Player vs. Bot (PvB) Game Logic ---
@@ -3843,53 +3864,51 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
 
 async function handleDice21CancelUnifiedOffer(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, callbackQueryId = null) {
     const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
-    const logPrefix = `[D21_CancelOfferCallback GID:${offerId} UID:${initiatorId}]`;
+    const LOG_PREFIX_D21_CANCEL_OFFER = `[D21_CancelOffer_V2 GID:${offerId} UID:${initiatorId}]`; // Added V2
     const offerData = activeGames.get(offerId);
-    const initiatorRef = getPlayerDisplayReference(initiatorUserObjFromCb);
-
-    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
+    const initiatorRef = getPlayerDisplayReference(initiatorUserObjFromCb); // Ensure getPlayerDisplayReference is available
 
     if (!offerData || offerData.type !== GAME_IDS.DICE_21_UNIFIED_OFFER) {
-        console.warn(`${logPrefix} ${initiatorRef} attempted to cancel an invalid or non-existent offer (ID: ${offerId}). Current offer data:`, stringifyWithBigInt(offerData).substring(0,200));
-        const msgToClear = offerData?.gameSetupMessageId || originalOfferMessageId;
-        if (msgToClear && bot) {
-            await bot.editMessageReplyMarkup({}, {chat_id: originalChatId, message_id: Number(msgToClear)})
-                .catch(e => console.warn(`${logPrefix} Failed to remove buttons from old/invalid offer message ID ${msgToClear} on cancel attempt: ${e.message}`));
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already concluded or vanished!", show_alert: false }).catch(() => {});
+        if (originalOfferMessageId && bot) { // Try to remove buttons from the stale message
+            bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalOfferMessageId) }).catch(() => {});
         }
         return;
     }
+
     if (offerData.initiatorId !== initiatorId) {
-        console.warn(`${logPrefix} User ${initiatorRef} (ID: ${initiatorId}) wrongfully tried to cancel an offer made by ${offerData.initiatorMention} (ID: ${offerData.initiatorId}). Action denied.`);
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Only the one who made the offer can retract it.", show_alert: true }).catch(() => {});
         return;
     }
+
+    // Unified Dice 21 offer status should be 'waiting_for_choice' to be cancellable
     if (offerData.status !== 'waiting_for_choice') {
-        console.warn(`${logPrefix} Offer ${offerId} by ${offerData.initiatorMention} is no longer 'waiting_for_choice' (current: ${offerData.status}). It cannot be cancelled by the initiator now.`);
-        if (offerData.gameSetupMessageId && bot) {
-            await bot.editMessageText(`This Dice 21 offer by ${offerData.initiatorMention} is no longer pending cancellation as it has likely been actioned or has timed out.`, {
-                chat_id: originalChatId, message_id: Number(offerData.gameSetupMessageId),
-                parse_mode: 'MarkdownV2', reply_markup: {}
-            }).catch(e => console.warn(`${logPrefix} Minor error editing (status not waiting) offer message ${offerData.gameSetupMessageId} during cancel attempt: ${e.message}`));
-        }
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already been actioned or expired.", show_alert: false }).catch(() => {});
         return;
     }
 
-    console.log(`${logPrefix} Initiator ${offerData.initiatorMention} is successfully cancelling their Dice 21 offer (ID: ${offerId}).`);
-    activeGames.delete(offerId);
-    await updateGroupGameDetails(originalChatId, null, null, null);
+    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Cancelling Dice 21 offer..." }).catch(() => {});
 
-    const msgIdToEdit = offerData.gameSetupMessageId || originalOfferMessageId;
-    if (msgIdToEdit && bot) {
-        const cancelMessageText = `🚫 The Dice 21 game offer initiated by ${offerData.initiatorMention} has been cancelled by the initiator. No game will be played from this offer.`;
-        console.log(`${logPrefix} Editing offer message (ID: ${msgIdToEdit}) to show cancellation text.`);
-        await bot.editMessageText(cancelMessageText, {
-            chat_id: String(originalChatId),
-            message_id: Number(msgIdToEdit),
-            parse_mode: 'MarkdownV2',
-            reply_markup: {}
-        }).catch(e => console.error(`${logPrefix} Error editing message for cancelled D21 unified offer (ID: ${msgIdToEdit}): ${e.message}. Message was: "${cancelMessageText}"`));
-    } else {
-        console.warn(`${logPrefix} No valid message ID found to edit for cancelled offer ${offerId}. Initiator: ${offerData.initiatorMention}. A new message was not sent to avoid potential chat clutter.`);
+    // No refund logic needed here if bet is only taken when game starts (PvB or PvP chosen)
+
+    activeGames.delete(offerId);
+    await updateGroupGameDetails(originalChatId, null, null, null); // Clear from group session
+
+    console.log(`${LOG_PREFIX_D21_CANCEL_OFFER} Dice 21 offer ${offerId} has been cancelled by ${initiatorRef}.`);
+
+    // Delete the original offer message
+    const messageIdToDelete = Number(originalOfferMessageId || offerData.gameSetupMessageId);
+    if (messageIdToDelete && bot) {
+        await bot.deleteMessage(String(originalChatId), messageIdToDelete)
+            .catch(e => console.warn(`${LOG_PREFIX_D21_CANCEL_OFFER} Failed to delete cancelled Dice 21 offer message ${messageIdToDelete}: ${e.message}`));
     }
+
+    // Send a new confirmation message
+    // Ensure formatBalanceForDisplay and escapeMarkdownV2 are available
+    const betDisplayUSD = typeof formatBalanceForDisplay === 'function' ? escapeMarkdownV2(await formatBalanceForDisplay(offerData.betAmount, 'USD')) : `${offerData.betAmount / LAMPORTS_PER_SOL} SOL`;
+    const confirmationMessage = `🚫 Offer Cancelled!\nThe Dice 21 challenge by ${offerData.initiatorMention} for *${betDisplayUSD}* has been withdrawn.`;
+    
+    await safeSendMessage(originalChatId, confirmationMessage, { parse_mode: 'MarkdownV2' });
 }
 
 // --- REVISED Player vs. Bot (PvB) Dice 21 Game Logic (V7: Refined Player Hit & Bot Turn Messaging) ---
@@ -5722,48 +5741,53 @@ async function handleDuelAcceptPvPChallengeCallback(offerId, joinerUserObjFromCb
     }
 }
 
-async function handleDuelCancelUnifiedOfferCallback(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, callbackQueryIdPassed = null) { // Added callbackQueryIdPassed
-    const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
-    const logPrefix = `[Duel_CancelOfferCB GID:${offerId} UID:${initiatorId}]`;
-    const offerData = activeGames.get(offerId);
-    const callbackQueryId = callbackQueryIdPassed; // Use the passed ID
+async function handleDuelCancelUnifiedOfferCallback(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, callbackQueryIdPassed = null) {
+    const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
+    const LOG_PREFIX_DUEL_CANCEL_OFFER = `[Duel_CancelOffer_V2 GID:${offerId} UID:${initiatorId}]`; // Added V2
+    const offerData = activeGames.get(offerId);
+    const callbackQueryId = callbackQueryIdPassed;
 
-    if (!offerData || offerData.type !== GAME_IDS.DUEL_UNIFIED_OFFER) {
-        console.warn(`${logPrefix} Attempt to cancel invalid/non-existent Duel offer (ID: ${offerId}).`);
+    if (!offerData || offerData.type !== GAME_IDS.DUEL_UNIFIED_OFFER) {
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer is no longer valid.", show_alert: false }).catch(()=>{});
-        else if (offerData?.gameSetupMessageId && bot) await bot.editMessageReplyMarkup({}, {chat_id:originalChatId, message_id:Number(offerData.gameSetupMessageId)}).catch(()=>{});
-        return;
-    }
-    if (offerData.initiatorId !== initiatorId) {
-        console.warn(`${logPrefix} User ${initiatorId} tried to cancel offer by ${offerData.initiatorId}. Denied.`);
+        if (originalOfferMessageId && bot) { // Try to remove buttons from the stale message
+            bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalOfferMessageId) }).catch(() => {});
+        }
+        return;
+    }
+
+    if (offerData.initiatorId !== initiatorId) {
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Only the challenger can withdraw this offer.", show_alert: true }).catch(()=>{});
-        return;
-    }
-    if (offerData.status !== 'waiting_for_choice') {
-        console.warn(`${logPrefix} Duel offer ${offerId} not 'waiting_for_choice' (is ${offerData.status}). Cannot cancel now.`);
+        return;
+    }
+
+    // Unified Duel offer status should be 'waiting_for_choice' to be cancellable
+    if (offerData.status !== 'waiting_for_choice') {
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer has already been actioned or expired.", show_alert: false }).catch(()=>{});
-        if (bot && offerData.gameSetupMessageId) {
-            await bot.editMessageText(`This Duel offer by ${offerData.initiatorMention} is no longer pending cancellation.`, {
-                chat_id: originalChatId, message_id: Number(offerData.gameSetupMessageId),
-                parse_mode: 'MarkdownV2', reply_markup: {}
-            }).catch(()=>{});
-        }
-        return;
-    }
-    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Duel offer cancelled."}).catch(()=>{});
+        return;
+    }
 
-    console.log(`${logPrefix} Initiator ${offerData.initiatorMention} cancelling Duel offer (ID: ${offerId}).`);
-    activeGames.delete(offerId);
-    await updateGroupGameDetails(originalChatId, null, null, null); 
+    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Duel offer cancelled."}).catch(()=>{});
 
-    const msgIdToEdit = offerData.gameSetupMessageId || originalOfferMessageId; 
-    if (msgIdToEdit && bot) {
-        const cancelMessageText = `🚫 The Duel challenge by ${offerData.initiatorMention} has been withdrawn by the initiator.`;
-        await bot.editMessageText(cancelMessageText, {
-            chat_id: String(originalChatId), message_id: Number(msgIdToEdit), 
-            parse_mode: 'MarkdownV2', reply_markup: {} 
-        }).catch(e => console.error(`${logPrefix} Error editing message for cancelled Duel offer (ID: ${msgIdToEdit}): ${e.message}`));
-    }
+    // No refund logic needed here if bet is only taken when game starts (PvB or PvP chosen)
+
+    activeGames.delete(offerId);
+    await updateGroupGameDetails(originalChatId, null, null, null); // Clear from group session
+
+    console.log(`${LOG_PREFIX_DUEL_CANCEL_OFFER} Duel offer ${offerId} has been cancelled by ${offerData.initiatorMention}.`);
+
+    // Delete the original offer message
+    const messageIdToDelete = Number(originalOfferMessageId || offerData.gameSetupMessageId);
+    if (messageIdToDelete && bot) {
+        await bot.deleteMessage(String(originalChatId), messageIdToDelete)
+            .catch(e => console.warn(`${LOG_PREFIX_DUEL_CANCEL_OFFER} Failed to delete cancelled Duel offer message ${messageIdToDelete}: ${e.message}`));
+    }
+    
+    // Send a new confirmation message
+    // Ensure formatBalanceForDisplay and escapeMarkdownV2 are available
+    const betDisplayUSD = typeof formatBalanceForDisplay === 'function' ? escapeMarkdownV2(await formatBalanceForDisplay(offerData.betAmount, 'USD')) : `${offerData.betAmount / LAMPORTS_PER_SOL} SOL`;
+    const confirmationMessage = `🚫 Offer Cancelled!\nThe Duel challenge by ${offerData.initiatorMention} for *${betDisplayUSD}* has been withdrawn.`;
+    
+    await safeSendMessage(originalChatId, confirmationMessage, { parse_mode: 'MarkdownV2' });
 }
 
 // --- Player vs. Bot (PvB) Duel Game Logic ---
@@ -7467,15 +7491,14 @@ async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, o
 // --- Handle Cancel Mines Offer ---
 async function handleMinesCancelOfferCallback(offerId, userObject, originalMessageId, originalChatId, callbackQueryId) {
     const userId = String(userObject.telegram_id);
-    const logPrefix = `[MinesCancelOffer OfferID:${offerId} UID:${userId}]`;
-    console.log(`${logPrefix} Processing offer cancellation.`);
+    const LOG_PREFIX_MINES_CANCEL_OFFER = `[MinesCancelOffer_V2 OfferID:${offerId} UID:${userId}]`; // Added V2
 
     const offerData = activeGames.get(offerId);
 
-    if (!offerData || offerData.type !== GAME_IDS.MINES_OFFER || offerData.status !== 'awaiting_difficulty') {
+    if (!offerData || offerData.type !== GAME_IDS.MINES_OFFER) {
         await bot.answerCallbackQuery(callbackQueryId, { text: "This Mines offer is no longer valid or has expired.", show_alert: false }).catch(()=>{});
-        if (originalMessageId && bot) {
-            bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(originalMessageId) }).catch(() => {});
+        if (originalMessageId && bot) { // Try to remove buttons from the stale message
+            bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
         }
         return;
     }
@@ -7485,20 +7508,34 @@ async function handleMinesCancelOfferCallback(offerId, userObject, originalMessa
         return;
     }
 
-    await bot.answerCallbackQuery(callbackQueryId, { text: "Mines game offer cancelled." }).catch(()=>{});
-    activeGames.delete(offerId);
-    await updateGroupGameDetails(originalChatId, null, null, null); 
-
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-    const cancelText = `🚫 The Mines game offer by ${offerData.initiatorMention} for *${betDisplayUSD}* has been cancelled.`;
-    if (originalMessageId && bot) {
-        await bot.editMessageText(cancelText, {
-            chat_id: originalChatId,
-            message_id: Number(originalMessageId),
-            parse_mode: 'MarkdownV2',
-            reply_markup: {} 
-        }).catch(e => console.warn(`${logPrefix} Error editing cancelled mines offer message: ${e.message}`));
+    // Mines offer status should be 'awaiting_difficulty' to be cancellable by initiator
+    if (offerData.status !== 'awaiting_difficulty') {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This Mines offer has already been actioned or has expired.", show_alert: false }).catch(()=>{});
+        return;
     }
+
+    await bot.answerCallbackQuery(callbackQueryId, { text: "Mines game offer cancelled." }).catch(()=>{});
+
+    // No refund logic needed here as bet is taken AFTER difficulty selection for Mines.
+
+    activeGames.delete(offerId);
+    await updateGroupGameDetails(originalChatId, null, null, null); // Clear from group session
+
+    console.log(`${LOG_PREFIX_MINES_CANCEL_OFFER} Mines offer ${offerId} has been cancelled by ${offerData.initiatorMention}.`);
+
+    // Delete the original offer message
+    const messageIdToDelete = Number(originalMessageId || offerData.offerMessageId);
+    if (messageIdToDelete && bot) {
+        await bot.deleteMessage(String(originalChatId), messageIdToDelete)
+            .catch(e => console.warn(`${LOG_PREFIX_MINES_CANCEL_OFFER} Failed to delete cancelled Mines offer message ${messageIdToDelete}: ${e.message}`));
+    }
+
+    // Send a new confirmation message
+    // Ensure formatBalanceForDisplay and escapeMarkdownV2 are available
+    const betDisplayUSD = typeof formatBalanceForDisplay === 'function' ? escapeMarkdownV2(await formatBalanceForDisplay(offerData.betAmount, 'USD')) : `${offerData.betAmount / LAMPORTS_PER_SOL} SOL`;
+    const confirmationMessage = `🚫 Offer Cancelled!\nThe Mines game offer by ${offerData.initiatorMention} for *${betDisplayUSD}* has been withdrawn.`;
+    
+    await safeSendMessage(originalChatId, confirmationMessage, { parse_mode: 'MarkdownV2' });
 }
 // --- End of Part 5d (NEW - Full Mines Implementation) ---
 // --- Start of Part 5a, Section 2 (REVISED for DM-only Help/Rules Menus & New Dice Escalator Rules): General Command Handler Implementations ---
