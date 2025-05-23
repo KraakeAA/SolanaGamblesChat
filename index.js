@@ -1391,10 +1391,11 @@ async function deleteUserAccount(telegramId) {
 
 // --- End of Part 2 ---
 // --- Start of Part 3 ---
-// index.js - Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities
+// index.js - Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities (with Group Session Management)
 //---------------------------------------------------------------------------
 // Assumed escapeMarkdownV2, LAMPORTS_PER_SOL, SOL_DECIMALS, getSolUsdPrice,
 // convertLamportsToUSDString, crypto (module), BOT_NAME are available from Part 1.
+// Assumed groupGameSessions and activeGames (Maps) are defined globally (e.g., in Part 1).
 
 // --- Telegram Specific Helper Functions ---
 
@@ -1406,19 +1407,19 @@ async function deleteUserAccount(telegramId) {
 function getEscapedUserDisplayName(userObject) {
     if (!userObject) return escapeMarkdownV2("Valued Player");
 
-    const firstName = userObject.first_name || userObject.firstName; 
+    const firstName = userObject.first_name || userObject.firstName;
     const username = userObject.username;
-    const id = userObject.id || userObject.telegram_id; 
+    const id = userObject.id || userObject.telegram_id;
 
     let name = "Player";
     if (firstName) {
         name = firstName;
     } else if (username) {
-        name = `@${username}`; 
+        name = `@${username}`;
     } else if (id) {
-        name = `Player ${String(id).slice(-4)}`; 
+        name = `Player ${String(id).slice(-4)}`;
     } else {
-        name = "Valued Player"; 
+        name = "Valued Player";
     }
     return escapeMarkdownV2(name);
 }
@@ -1432,7 +1433,7 @@ function createUserMention(userObject) {
     if (!userObject) return escapeMarkdownV2("Esteemed Guest");
 
     const id = userObject.id || userObject.telegram_id;
-    if (!id) return escapeMarkdownV2("Unknown Player"); 
+    if (!id) return escapeMarkdownV2("Unknown Player");
 
     const simpleName = userObject.first_name || userObject.firstName || userObject.username || `Player ${String(id).slice(-4)}`;
     return `[${escapeMarkdownV2(simpleName)}](tg://user?id=${id})`;
@@ -1445,7 +1446,7 @@ function createUserMention(userObject) {
  * @returns {string} MarkdownV2 escaped player reference.
  */
 function getPlayerDisplayReference(userObject, preferUsernameTag = true) {
-    if (!userObject) return escapeMarkdownV2("Mystery Player"); 
+    if (!userObject) return escapeMarkdownV2("Mystery Player");
 
     const username = userObject.username;
     if (preferUsernameTag && username) {
@@ -1495,14 +1496,14 @@ function formatCurrency(amountLamports, currencyName = 'SOL', displayRawLamports
     const solValue = Number(lamportsAsBigInt) / Number(LAMPORTS_PER_SOL);
     let effectiveDecimals = solDecimals;
 
-    if (solValue === Math.floor(solValue)) { 
+    if (solValue === Math.floor(solValue)) {
         effectiveDecimals = 0;
     } else {
         const stringValue = solValue.toString();
         const decimalPart = stringValue.split('.')[1];
         if (decimalPart) {
             effectiveDecimals = Math.min(decimalPart.length, solDecimals);
-        } else { 
+        } else {
             effectiveDecimals = 0;
         }
     }
@@ -1515,7 +1516,7 @@ function formatCurrency(amountLamports, currencyName = 'SOL', displayRawLamports
 
     try {
         return `${solValue.toLocaleString('en-US', {
-            minimumFractionDigits: effectiveDecimals, 
+            minimumFractionDigits: effectiveDecimals,
             maximumFractionDigits: effectiveDecimals
         })} SOL`;
     } catch (e) {
@@ -1545,16 +1546,16 @@ async function formatBalanceForDisplay(lamports, targetCurrency = 'USD') {
         try {
             if (typeof getSolUsdPrice !== 'function' || typeof convertLamportsToUSDString !== 'function') {
                 console.error("[formatBalanceForDisplay] Price conversion functions not available. Falling back to SOL.");
-                return formatCurrency(lamportsAsBigInt, 'SOL'); 
+                return formatCurrency(lamportsAsBigInt, 'SOL');
             }
             const price = await getSolUsdPrice();
             return convertLamportsToUSDString(lamportsAsBigInt, price);
         } catch (e) {
             console.error(`[formatBalanceForDisplay] Failed to get SOL/USD price for USD display: ${e.message}. Falling back to SOL.`);
-            return formatCurrency(lamportsAsBigInt, 'SOL'); 
+            return formatCurrency(lamportsAsBigInt, 'SOL');
         }
     } else if (upperTargetCurrency === 'LAMPORTS') {
-        return formatCurrency(lamportsAsBigInt, 'lamports', true); 
+        return formatCurrency(lamportsAsBigInt, 'lamports', true);
     }
     // Default to SOL
     return formatCurrency(lamportsAsBigInt, 'SOL');
@@ -1566,8 +1567,8 @@ async function formatBalanceForDisplay(lamports, targetCurrency = 'USD') {
  * @returns {string} A game ID.
  */
 function generateGameId(prefix = "game") {
-  const timestamp = Date.now().toString(36); 
-  const randomSuffix = Math.random().toString(36).substring(2, 10); 
+  const timestamp = Date.now().toString(36);
+  const randomSuffix = Math.random().toString(36).substring(2, 10);
   return `${prefix}_${timestamp}_${randomSuffix}`;
 }
 
@@ -1582,7 +1583,7 @@ function generateGameId(prefix = "game") {
 function formatDiceRolls(rollsArray, diceEmoji = '🎲') {
   if (!Array.isArray(rollsArray) || rollsArray.length === 0) return '';
   const diceVisuals = rollsArray.map(roll => {
-      const rollValue = Number(roll); 
+      const rollValue = Number(roll);
       return `${diceEmoji} ${isNaN(rollValue) ? '?' : rollValue}`;
   });
   return diceVisuals.join(' \u00A0 '); // Non-breaking spaces for better layout
@@ -1609,16 +1610,76 @@ function generateInternalPaymentTxId(type, userId = 'system') {
     const now = Date.now().toString(36);
     let randomPart;
     if (typeof crypto !== 'undefined' && typeof crypto.randomBytes === 'function') {
-        randomPart = crypto.randomBytes(4).toString('hex'); 
+        randomPart = crypto.randomBytes(4).toString('hex');
     } else {
         // console.warn('[GenInternalTxId] Crypto module not available for random part. Using Math.random.'); // Reduced log
-        randomPart = Math.random().toString(36).substring(2, 10); 
+        randomPart = Math.random().toString(36).substring(2, 10);
     }
-    
-    const userPartCleaned = String(userId).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 10) || 'sys'; 
-    let prefix = String(type).toLowerCase().substring(0, 6).replace(/[^a-z0-9_]/g, '') || 'gen'; 
+
+    const userPartCleaned = String(userId).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 10) || 'sys';
+    let prefix = String(type).toLowerCase().substring(0, 6).replace(/[^a-z0-9_]/g, '') || 'gen';
 
     return `${prefix}_${userPartCleaned}_${now}_${randomPart}`;
+}
+
+// --- NEW Group Game Session Management Functions ---
+
+/**
+ * Retrieves or creates a game session for a specific group chat.
+ * Interacts with the global `groupGameSessions` Map.
+ * @param {string} chatId - The ID of the Telegram group chat.
+ * @param {string | null} chatTitle - The title of the group chat (can be null if just updating).
+ * @returns {Promise<object>} The group session object.
+ */
+async function getGroupSession(chatId, chatTitle = null) {
+    const stringChatId = String(chatId);
+    if (groupGameSessions.has(stringChatId)) {
+        const session = groupGameSessions.get(stringChatId);
+        if (chatTitle && !session.title) { // Update title if it was missing
+            session.title = chatTitle;
+            groupGameSessions.set(stringChatId, session);
+        }
+        return session;
+    } else {
+        const newSession = {
+            id: stringChatId,
+            title: chatTitle || `Group Chat ${stringChatId}`, // Default title if not provided
+            currentGameId: null,         // ID of the currently active game or offer in this chat
+            activeGameType: null,      // Type of the active game/offer (e.g., GAME_IDS.COINFLIP_UNIFIED_OFFER)
+            activeBetAmount: 0n,       // Bet amount of the current game/offer
+            lastActivity: Date.now(),  // Timestamp of the last relevant activity in this session
+            activePlayers: {},         // Object to store players involved in the current game if needed (e.g., { userId: playerData })
+            // You might add other session-specific fields here if needed later
+        };
+        groupGameSessions.set(stringChatId, newSession);
+        console.log(`[GetGroupSession] New session created for chat ID: ${stringChatId}`);
+        return newSession;
+    }
+}
+
+/**
+ * Updates the details of the active game in a group session.
+ * @param {string} chatId - The ID of the Telegram group chat.
+ * @param {string | null} gameId - The ID of the new active game/offer, or null to clear.
+ * @param {string | null} gameType - The type of the new active game/offer, or null to clear.
+ * @param {bigint | number | null} betAmount - The bet amount for the new game/offer, or null to clear.
+ */
+async function updateGroupGameDetails(chatId, gameId, gameType, betAmount) {
+    const stringChatId = String(chatId);
+    const session = await getGroupSession(stringChatId, null); // Title isn't strictly necessary for update
+
+    session.currentGameId = gameId;
+    session.activeGameType = gameType;
+    session.activeBetAmount = gameId && betAmount !== null ? BigInt(betAmount) : 0n; // Store as BigInt if game is active
+    session.lastActivity = Date.now();
+
+    // If gameId is null, it implies the game is over, so clear active players for this session.
+    if (!gameId) {
+        session.activePlayers = {};
+    }
+
+    groupGameSessions.set(stringChatId, session);
+    console.log(`[UpdateGroupGameDetails] Updated session for chat ${stringChatId}: GameID=${gameId}, Type=${gameType}, Bet=${session.activeBetAmount}`);
 }
 
 // --- End of Part 3 ---
