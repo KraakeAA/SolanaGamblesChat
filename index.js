@@ -3266,7 +3266,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (HTML Revamp) ---
 async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, originalOfferMessageIdToDelete) {
     const chatId = offerData.chatId;
-    const logPrefix = `[DE_PvP_Start_Debug Offer:${offerData.gameId} CH:${chatId}]`; // Added Debug
+    const logPrefix = `[DE_PvP_Start_Debug Offer:${offerData.gameId} CH:${chatId}]`; // This is the correct prefix
     console.log(`${logPrefix} Entered function. Opponent: ${opponentUserObj.telegram_id}, Initiator (from offer): ${offerData.initiator.userId}`);
 
     const initiatorUserObjFull = offerData.initiatorUserObj || await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
@@ -3274,10 +3274,10 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
     if (!initiatorUserObjFull) {
         console.error(`${logPrefix} CRITICAL: Failed to get/create initiatorUserObjFull for ID: ${offerData.initiator.userId}. Aborting game start.`);
         await safeSendMessage(chatId, "⚙️ Critical error: Could not retrieve initiator's profile to start the PvP game. The offer may be bugged.", {parse_mode: 'HTML'});
-        activeGames.delete(offerData.gameId); // Ensure offer is cleaned up if it wasn't already
+        activeGames.delete(offerData.gameId); 
         return;
     }
-    if (!opponentUserObj) { // Should have been validated by caller, but double check
+    if (!opponentUserObj) { 
         console.error(`${logPrefix} CRITICAL: opponentUserObj is null/undefined. Aborting game start.`);
         await safeSendMessage(chatId, "⚙️ Critical error: Opponent profile missing. Cannot start PvP game.", {parse_mode: 'HTML'});
         return;
@@ -3293,7 +3293,7 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
         console.log(`${logPrefix} Deducting bet for initiator ${initiatorUserObjFull.telegram_id}. Amount: ${betAmountLamports}`);
         const initiatorBetResult = await updateUserBalanceAndLedger(client, initiatorUserObjFull.telegram_id, BigInt(-betAmountLamports), 'bet_placed_de_pvp_init', { game_id_custom_field: `offer_${offerData.gameId}_to_pvp`, opponent_id_custom_field: opponentUserObj.telegram_id }, `Initiator DE PvP from offer ${offerData.gameId}`);
         if (!initiatorBetResult.success) {
-            await client.query('ROLLBACK'); // Rollback before throwing
+            await client.query('ROLLBACK'); 
             throw new Error(`Initiator bet placement failed: ${initiatorBetResult.error}`);
         }
         initiatorUserObjFull.balance = initiatorBetResult.newBalanceLamports;
@@ -3302,10 +3302,10 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
         console.log(`${logPrefix} Deducting bet for opponent ${opponentUserObj.telegram_id}. Amount: ${betAmountLamports}`);
         const opponentBetResult = await updateUserBalanceAndLedger(client, opponentUserObj.telegram_id, BigInt(-betAmountLamports), 'bet_placed_de_pvp_join', { game_id_custom_field: `offer_${offerData.gameId}_to_pvp`, opponent_id_custom_field: initiatorUserObjFull.telegram_id }, `Opponent DE PvP from offer ${offerData.gameId}`);
         if (!opponentBetResult.success) {
-            await client.query('ROLLBACK'); // Rollback before throwing
+            await client.query('ROLLBACK'); 
             throw new Error(`Opponent bet placement failed: ${opponentBetResult.error}`);
         }
-        opponentUserObj.balance = opponentBetResult.newBalanceLamports; // Update passed opponent object
+        opponentUserObj.balance = opponentBetResult.newBalanceLamports; 
         console.log(`${logPrefix} Opponent bet success. New balance: ${opponentUserObj.balance}`);
         
         await client.query('COMMIT');
@@ -3314,7 +3314,6 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
         if (client) await client.query('ROLLBACK').catch(()=>{});
         console.error(`${logPrefix} DB error placing PvP bets: ${error.message}`, error.stack);
         await safeSendMessage(chatId, `⚙️ Database error placing bets for PvP Dice Escalator: ${escapeHTML(error.message)}. Game cannot start.`, {parse_mode: 'HTML'});
-        // No need to delete offerData.gameId from activeGames, as it was already deleted by the caller (handleDiceEscalatorAcceptPvPChallenge_New)
         return;
     } finally { if(client) client.release(); }
 
@@ -3331,16 +3330,16 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
     const gameData = {
         gameId: pvpGameId, 
         type: GAME_IDS.DICE_ESCALATOR_PVP, 
-        chatId: String(chatId), // Ensure chatId is string
+        chatId: String(chatId), 
         initiator: { 
             userId: initiatorUserObjFull.telegram_id, 
             displayName: getPlayerDisplayReference(initiatorUserObjFull), 
             score: 0, 
             rolls: [], 
-            isTurn: true, // P1 (initiator) starts
+            isTurn: true, 
             busted: false, 
             stood: false, 
-            status: 'awaiting_roll_emoji' // Player-specific status
+            status: 'awaiting_roll_emoji' 
         },
         opponent: { 
             userId: opponentUserObj.telegram_id, 
@@ -3350,10 +3349,10 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
             isTurn: false, 
             busted: false, 
             stood: false, 
-            status: 'waiting_turn' // Player-specific status
+            status: 'waiting_turn' 
         },
         betAmount: betAmountLamports, 
-        status: 'p1_awaiting_roll_emoji', // Main game status: P1's turn, awaiting any roll
+        status: 'p1_awaiting_roll_emoji', 
         currentMessageId: null, 
         createdAt: Date.now(), 
         lastRollValue: null, 
@@ -3369,7 +3368,8 @@ async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, origina
     
     console.log(`${logPrefix} Calling updateDiceEscalatorPvPMessage_New to send initial game board.`);
     await updateDiceEscalatorPvPMessage_New(gameData); 
-    console.log(`${LOG_PREFIX_DE_START_PVP} startDiceEscalatorPvPGame_New finished for GID: ${pvpGameId}.`);
+    // CORRECTED LOG LINE:
+    console.log(`${logPrefix} startDiceEscalatorPvPGame_New finished for GID: ${pvpGameId}.`);
 }
 
 async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userIdWhoRolled) {
