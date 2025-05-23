@@ -2633,7 +2633,7 @@ async function handleRPSPvBChoiceCallback(gameId, playerChoiceKey, userObj, orig
 
 async function finalizeRPSPvBGame(gameData) {
     const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, botChoice, userObj } = gameData;
-    const logPrefix = `[RPS_PvB_Finalize_V2 GID:${gameId}]`; // Updated log prefix
+    const logPrefix = `[RPS_PvB_Finalize_V3 GID:${gameId}]`;
     activeGames.delete(gameId);
     await updateGroupGameDetails(chatId, null, null, null);
 
@@ -2641,40 +2641,46 @@ async function finalizeRPSPvBGame(gameData) {
     const rpsOutcome = determineRPSOutcome(playerChoice, botChoice, playerRefHTML, "Bot Dealer");
     let payoutAmountLamports = 0n;
     let ledgerOutcomeCode = `loss_rps_pvb_${playerChoice}_vs_${botChoice}`;
-    let finalUserBalance = BigInt(userObj.balance);
+    let finalUserBalance = BigInt(userObj.balance); // This will be updated but not displayed
+
+    let financialOutcomeText = ""; // To state winnings/losses clearly
 
     if (rpsOutcome.result === 'win_player1') { // Player 1 (the user) wins
-        payoutAmountLamports = betAmount * 2n;
+        payoutAmountLamports = betAmount * 2n; // Total payout (stake + profit)
+        const profitAmount = betAmount; // Actual profit is 1x bet
+        financialOutcomeText = `Congratulations! You won <b>${escapeHTML(await formatBalanceForDisplay(profitAmount, 'USD'))}</b> in profit (total payout: ${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))})!`;
         ledgerOutcomeCode = `win_rps_pvb_${playerChoice}_vs_${botChoice}`;
     } else if (rpsOutcome.result === 'draw') {
-        payoutAmountLamports = betAmount;
+        payoutAmountLamports = betAmount; // Bet returned
+        financialOutcomeText = `Your wager of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> has been returned.`;
         ledgerOutcomeCode = `draw_rps_pvb_${playerChoice}_vs_${botChoice}`;
+    } else { // Bot wins (rpsOutcome.result === 'win_player2')
+        // payoutAmountLamports remains 0n (bet already deducted)
+        financialOutcomeText = `The Bot Dealer claims your wager of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`;
+        // ledgerOutcomeCode is already set to loss
     }
-    // If rpsOutcome.result === 'win_player2' (Bot wins), payoutAmountLamports remains 0n.
 
     let client;
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const balanceUpdate = await updateUserBalanceAndLedger(client, userId, payoutAmountLamports, ledgerOutcomeCode, { game_id_custom_field: gameId }, `RPS PvB: ${playerChoice} vs Bot ${botChoice}`);
         if (!balanceUpdate.success) throw new Error(balanceUpdate.error || "DB Error during RPS PvB payout.");
-        finalUserBalance = balanceUpdate.newBalanceLamports;
+        finalUserBalance = balanceUpdate.newBalanceLamports; // Update for internal tracking, but won't be displayed
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        // Append to the HTML description from rpsOutcome
         rpsOutcome.description = (rpsOutcome.description || "") + `<br><br>⚠️ Critical error settling wager. Admin notified.`;
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvB Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed.`, { parse_mode: 'HTML'});
     } finally { if (client) client.release(); }
 
     const titleResultHTML = `⚡️ <b>RPS PvB - The Dust Settles!</b> ⚡️`;
-    // Ensure choices are HTML escaped if they were not already by rpsOutcome.player1/2.choiceFormatted
-    // rpsOutcome.player1.choiceFormatted and rpsOutcome.player2.choiceFormatted are already escaped in the modified determineRPSOutcome
     const resultMessageHTML = `${titleResultHTML}\n\n${playerRefHTML} wagered <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.\n\n` +
-        `Your masterful choice: ${RPS_EMOJIS[playerChoice]} <b>${rpsOutcome.player1.choiceFormatted}</b>\n` +
-        `The Bot Dealer's cunning play: ${RPS_EMOJIS[botChoice]} <b>${rpsOutcome.player2.choiceFormatted}</b>\n\n` +
-        `<i>${rpsOutcome.description}</i>\n\n` + // This now contains the HTML formatted description with correct names
-        `Your new balance: approx. <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalance, 'USD'))}</b>.`;
+        `Your masterful choice: ${RPS_EMOJIS[playerChoice]} <b>${escapeHTML(rpsOutcome.player1.choiceFormatted)}</b>\n` +
+        `The Bot Dealer's cunning play: ${RPS_EMOJIS[botChoice]} <b>${escapeHTML(rpsOutcome.player2.choiceFormatted)}</b>\n\n` +
+        `<i>${rpsOutcome.description}</i>\n\n` + // Contains "Player X is the winner" with specific names
+        `${financialOutcomeText}`; // Clear statement of winnings/loss/draw
+        // Balance display line removed
 
     const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVB, betAmount);
     if (gameData.gameMessageId && bot) {
@@ -2829,7 +2835,7 @@ async function handleRPSPvPChoiceCallback(gameId, chooserId, choiceKey, userObj,
 
 async function finalizeRPSPvPGame(gameData) {
     const { gameId, chatId, betAmount, p1, p2 } = gameData;
-    const logPrefix = `[RPS_PvP_Finalize_V2 GID:${gameId}]`; // Updated log prefix
+    const logPrefix = `[RPS_PvP_Finalize_V3 GID:${gameId}]`;
     activeGames.delete(gameId);
     await updateGroupGameDetails(chatId, null, null, null);
 
@@ -2847,22 +2853,28 @@ async function finalizeRPSPvPGame(gameData) {
         return;
     }
 
-    // p1.mentionHTML and p2.mentionHTML are already HTML-escaped
     const rpsOutcome = determineRPSOutcome(p1.choice, p2.choice, p1.mentionHTML, p2.mentionHTML);
     let p1Payout = 0n; let p2Payout = 0n;
     let p1Ledger = `loss_rps_pvp_${p1.choice}_vs_${p2.choice}`;
     let p2Ledger = `loss_rps_pvp_${p2.choice}_vs_${p1.choice}`;
-    let finalP1Balance = BigInt(p1.userObj.balance);
-    let finalP2Balance = BigInt(p2.userObj.balance);
+    let finalP1Balance = BigInt(p1.userObj.balance); // For internal tracking, not display
+    let finalP2Balance = BigInt(p2.userObj.balance); // For internal tracking, not display
+
+    let financialOutcomeTextPvP = "";
+    const totalPotDisplay = escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'));
+    const singleBetDisplay = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
     if (rpsOutcome.result === 'win_player1') { // p1 wins
         p1Payout = betAmount * 2n;
+        financialOutcomeTextPvP = `${p1.mentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
         p1Ledger = `win_rps_pvp_${p1.choice}_vs_${p2.choice}`;
     } else if (rpsOutcome.result === 'win_player2') { // p2 wins
         p2Payout = betAmount * 2n;
+        financialOutcomeTextPvP = `${p2.mentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
         p2Ledger = `win_rps_pvp_${p2.choice}_vs_${p1.choice}`;
     } else if (rpsOutcome.result === 'draw') {
         p1Payout = betAmount; p2Payout = betAmount;
+        financialOutcomeTextPvP = `It's a draw! Bets of <b>${singleBetDisplay}</b> each are returned.`;
         p1Ledger = `draw_rps_pvp_${p1.choice}_vs_${p2.choice}`;
         p2Ledger = `draw_rps_pvp_${p2.choice}_vs_${p1.choice}`;
     }
@@ -2882,20 +2894,18 @@ async function finalizeRPSPvPGame(gameData) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
         rpsOutcome.description = (rpsOutcome.description || "") + `<br><br>⚠️ Critical error settling wagers. Admin notified.`;
+        financialOutcomeTextPvP = `⚠️ Critical error settling wagers. Admin notified.`; // Overwrite financial outcome on DB error
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed for P1:${p1.userId}, P2:${p2.userId}.`, { parse_mode: 'HTML'});
     } finally { if (client) client.release(); }
 
     const titleResultHTML = `💥✨ <b>RPS PvP - The Reckoning!</b> ✨💥`;
-    // Ensure choice strings are HTML escaped if not already done by rpsOutcome.player1/2.choiceFormatted
-    // rpsOutcome.player1/2.choiceFormatted are already escaped.
     const resultMessageHTML = `${titleResultHTML}\n\n` +
         `The dust settles between ${p1.mentionHTML} and ${p2.mentionHTML} (Wager: <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> each)!\n\n` +
-        `<b>${p1.mentionHTML} (P1) secretly chose:</b> ${RPS_EMOJIS[p1.choice]} <b>${rpsOutcome.player1.choiceFormatted}</b>\n` +
-        `<b>${p2.mentionHTML} (P2) secretly chose:</b> ${RPS_EMOJIS[p2.choice]} <b>${rpsOutcome.player2.choiceFormatted}</b>\n\n` +
-        `<i>${rpsOutcome.description}</i>\n\n` + // This now contains the HTML formatted description with specific player names
-        `Final Balances (approx. USD):\n` +
-        `${p1.mentionHTML}: <b>${escapeHTML(await formatBalanceForDisplay(finalP1Balance, 'USD'))}</b>\n` +
-        `${p2.mentionHTML}: <b>${escapeHTML(await formatBalanceForDisplay(finalP2Balance, 'USD'))}</b>`;
+        `<b>${p1.mentionHTML} (P1) secretly chose:</b> ${RPS_EMOJIS[p1.choice]} <b>${escapeHTML(rpsOutcome.player1.choiceFormatted)}</b>\n` +
+        `<b>${p2.mentionHTML} (P2) secretly chose:</b> ${RPS_EMOJIS[p2.choice]} <b>${escapeHTML(rpsOutcome.player2.choiceFormatted)}</b>\n\n` +
+        `<i>${rpsOutcome.description}</i>\n\n` + // Contains "Player X is the winner" with actual names
+        `${financialOutcomeTextPvP}`; // Clear statement of who won what, or draw outcome
+        // Balance display lines removed
 
     const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVP, betAmount);
     if (gameData.gameMessageId && bot) {
