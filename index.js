@@ -7467,7 +7467,7 @@ async function finalizeSevenOutGame(gameData, initialResultMessage, payoutAmount
 }
 
 // --- End of Part 5c, Section 3 (NEW) ---
-// --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING for Slots) ---
+// --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING for Slots - Results as New Message) ---
 // index.js - Part 5c, Section 4: Slot Frenzy Game Logic & Callback Router for Part 5c Games
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts
@@ -7477,11 +7477,10 @@ async function finalizeSevenOutGame(gameData, initialResultMessage, payoutAmount
 async function handleStartSlotCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_SLOT_START = `[Slot_Start_HTML UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_SLOT_START = `[Slot_Start_HTML_NewMsg UID:${userId} CH:${chatId}]`; // Updated log prefix
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         console.error(`${LOG_PREFIX_SLOT_START} Invalid betAmountLamports: ${betAmountLamports}.`);
-        // Using HTML for error messages too for consistency
         await safeSendMessage(chatId, "🎰 Oh dear! That bet amount for Slot Frenzy doesn't look quite right.<br>Please try again with a valid wager.", { parse_mode: 'HTML' });
         return;
     }
@@ -7493,7 +7492,6 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     }
     console.log(`${LOG_PREFIX_SLOT_START} Initiating Slot Frenzy. Bet: ${betAmountLamports}`);
 
-    // Ensure playerRef and bet displays are HTML-safe
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
@@ -7536,9 +7534,9 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     }
 
     const gameData = {
-        type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef: playerRefHTML, // Store HTML version of playerRef
+        type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef: playerRefHTML,
         userObj, betAmount: betAmountLamports, diceValue: null, payoutInfo: null,
-        status: 'spinning_waiting_helper', gameMessageId: null
+        status: 'spinning_waiting_helper', gameMessageId: null // gameMessageId will store the "spinning" message ID
     };
     activeGames.set(gameId, gameData);
 
@@ -7551,11 +7549,10 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 
     const sentSpinningMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
     if (sentSpinningMsg?.message_id) {
-        gameData.gameMessageId = sentSpinningMsg.message_id;
+        gameData.gameMessageId = sentSpinningMsg.message_id; // Store the ID of the "spinning" message
         activeGames.set(gameId, gameData);
     } else {
         console.error(`${LOG_PREFIX_SLOT_START} Failed to send initial Slot game message for ${gameId}. Refunding wager.`);
-        // Refund logic (as in your original code)
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -7571,6 +7568,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 
     let diceRollValue = null;
     let helperBotError = null;
+    // ... (dice roll request logic remains the same) ...
     let requestId = null;
     let dbPollClient = null;
 
@@ -7613,19 +7611,24 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         helperBotError = e.message;
     }
 
+    // ---- MODIFIED MESSAGE HANDLING ----
+    // Delete the "spinning..." message before sending the result or error
+    if (gameData.gameMessageId && bot) {
+        await bot.deleteMessage(chatId, Number(gameData.gameMessageId)).catch(e => {
+            console.warn(`${LOG_PREFIX_SLOT_START} Non-critical: Could not delete spinning message ID ${gameData.gameMessageId}: ${e.message}`);
+        });
+        gameData.gameMessageId = null; // Clear it as it's deleted
+    }
+    // ---- END OF MODIFIED MESSAGE HANDLING ----
+
     if (helperBotError || diceRollValue === null) {
         const errorMsgToUserHTML = `💣 <b>Slot Spin Malfunction!</b> 💣\n\n` +
                                `Oh no, ${playerRefHTML}! It seems the Slot Machine had a hiccup: <pre>${escapeHTML(String(helperBotError || "No result from helper").substring(0,150))}</pre>\n\n` +
                                `✅ Your bet of <b>${betDisplayUSD_HTML}</b> has been fully refunded.`;
         const errorKeyboard = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
-        if (gameData.gameMessageId && bot) {
-            await bot.editMessageText(errorMsgToUserHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: errorKeyboard }).catch(async () => {
-                 await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
-            });
-        } else {
-            await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
-        }
-        // Refund logic (as in your original code)
+        // Send error as a new message
+        await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
+
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -7676,19 +7679,13 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
         const balanceUpdate = await updateUserBalanceAndLedger(
-            clientOutcome,
-            userId,
-            payoutAmountLamports,
-            outcomeReasonLog,
-            {
-                game_id_custom_field: gameId,
-                slot_dice_value: diceRollValue
-            },
+            clientOutcome, userId, payoutAmountLamports, outcomeReasonLog,
+            { game_id_custom_field: gameId, slot_dice_value: diceRollValue },
             `Outcome of Slot Frenzy game ${gameId}. Slot value: ${diceRollValue}.`
         );
 
         if (balanceUpdate.success) {
-            finalUserBalanceLamports = balanceUpdate.newBalanceLamports; // Not displayed, but tracked
+            finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
             await clientOutcome.query('COMMIT');
         } else {
             await clientOutcome.query('ROLLBACK');
@@ -7703,24 +7700,16 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
-    // Balance display removed from final message
 
     const postGameKeyboardSlot = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
 
-    if (gameData.gameMessageId && bot) {
-        await bot.editMessageText(finalMessageTextHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboardSlot })
-            .catch(async (e) => {
-                 if (!e.message?.includes("message is not modified")) {
-                    await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
-                 }
-            });
-    } else {
-        await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
-    }
+    // Send final result as a new message
+    await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
+
     activeGames.delete(gameId);
 }
 
-// --- End of Part 5c, Section 4 (NEW) ---
+// --- End of Part 5c, Section 4 ---
 // --- Start of Part 5d (Mines Game - Casino Style): Mines Game Logic Handlers ---
 // index.js - Part 5d: Mines Game Logic & Callback Handlers
 //----------------------------------------------------------------------------------------------------
