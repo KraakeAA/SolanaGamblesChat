@@ -6957,7 +6957,7 @@ async function processDuelPvPRollByEmoji(gameData, diceValue, rollerUserId) {
     activeGames.set(gameData.gameId, gameData);
 }
 // --- End of Part 5c, Section 2 (COMPLETE REWRITE FOR NEW DUEL GAME LOGIC - CONSOLIDATED UPDATES) ---
-// --- Start of Part 5c, Section 3 (NEW) - Segment 1 & 2 (FULLY UPDATED FOR HELPER BOT DICE ROLLS for Ladder, Animated for SevenOut - SEVENOUT REPLACED WITH LUCKY SUM - ENHANCED HTML) ---
+// --- Start of Part 5c, Section 3 (NEW) - Segment 1 & 2 (FULLY UPDATED FOR HELPER BOT DICE ROLLS for Ladder, Animated for SevenOut - SEVENOUT REPLACED WITH LUCKY SUM - FIXES APPLIED) ---
 // index.js - Part 5c, Section 3: Greed's Ladder & Sevens Out (Lucky Sum Variant) Game Logic & Handlers
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts
@@ -7181,7 +7181,7 @@ const LUCKY_SUM_LOSING_NUMBERS = [5, 6, 7, 8];
 async function handleStartSevenOutCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_S7_LUCKY_SUM_START = `[S7_LuckySum_Start_HTML UID:${userId} CH:${chatId}]`; // Updated log prefix
+    const LOG_PREFIX_S7_LUCKY_SUM_START = `[S7_LuckySum_Start_HTML_Fix UID:${userId} CH:${chatId}]`;
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         await safeSendMessage(chatId, "🎲 Invalid bet for Lucky Sum! Please use a valid amount.", { parse_mode: 'HTML' });
@@ -7237,7 +7237,7 @@ async function handleStartSevenOutCommand(msg, betAmountLamports) {
         type: GAME_IDS.SEVEN_OUT, gameId, chatId, userId, playerRef: playerRefHTML, userObj,
         betAmount: betAmountLamports, rolls: [], currentSum: 0n,
         status: 'awaiting_single_roll',
-        gameMessageIdToDelete: null, // Will store ID of the "Rolling for you now" message
+        gameMessageIdToDelete: null,
         lastInteractionTime: Date.now()
     };
     activeGames.set(gameId, gameData);
@@ -7245,12 +7245,11 @@ async function handleStartSevenOutCommand(msg, betAmountLamports) {
     const titleHTML = `🎲 <b>Lucky Sum Roll!</b> 🎲`;
     const initialMessageTextHTML = `${titleHTML}\n\n${playerRefHTML}, your bet of <b>${betDisplayUSD_HTML}</b> is on the line for a game of Lucky Sum!\n\nI'll roll two dice for you now... Good luck! 🍀`;
 
-    // Send initial message and store its ID for deletion
     const sentInitialMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
     if (sentInitialMsg?.message_id) {
         gameData.gameMessageIdToDelete = sentInitialMsg.message_id;
-        activeGames.set(gameId, gameData); // Update gameData with messageId
-        await processSevenOutRoll(gameData); // Pass the whole gameData
+        activeGames.set(gameId, gameData);
+        await processSevenOutRoll(gameData);
     } else {
         console.error(`${LOG_PREFIX_S7_LUCKY_SUM_START} Failed to send initial Lucky Sum message. Refunding.`);
         let refundClient;
@@ -7267,9 +7266,8 @@ async function handleStartSevenOutCommand(msg, betAmountLamports) {
 }
 
 async function processSevenOutRoll(gameData) {
-    // This function is for the NEW "Lucky Sum" (Field Roll style) game.
-    const { gameId, userId, chatId, playerRef, betAmount } = gameData; // playerRef is already HTML safe
-    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V3 GID:${gameId} UID:${userId}]`; // V3 for correction
+    const { gameId, userId, chatId, playerRef, betAmount } = gameData;
+    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V4_Fix GID:${gameId} UID:${userId}]`;
 
     if (gameData.status !== 'awaiting_single_roll') {
         console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Invalid game state: ${gameData.status}. Expected 'awaiting_single_roll'.`);
@@ -7294,7 +7292,7 @@ async function processSevenOutRoll(gameData) {
     let currentSum = 0;
     let animatedDiceMessageIds = [];
 
-    for (let i = 0; i < 2; i++) { // Always 2 dice
+    for (let i = 0; i < 2; i++) {
         try {
             const diceMsg = await bot.sendDice(String(chatId), { emoji: '🎲' });
             currentRolls.push(diceMsg.dice.value);
@@ -7327,17 +7325,15 @@ async function processSevenOutRoll(gameData) {
     let profitMultiplier = 0;
     let outcomeReasonLog = `loss_s7_luckysum_sum${currentSum}`;
     let resultTitleHTML = "";
-    let resultDetailsHTML = "";
+    let resultDetailsHTML = ""; 
     let financialOutcomeHTML = "";
 
-    // --- CORRECTED: Initialize lamports variables ---
-    let profitAmountLamports = 0n;
-    let payoutAmountLamports = 0n;
-    // --- END OF CORRECTION ---
+    let profitAmountLamports = 0n; // Initialize here
+    let payoutAmountLamports = 0n; // Initialize here
 
     const betDisplayUSD_HTML_Result = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    if (payoutRule) { // It's a winning sum
+    if (payoutRule) { 
         win = true;
         profitMultiplier = payoutRule.multiplier;
         outcomeReasonLog = `win_s7_luckysum_sum${currentSum}_mult${profitMultiplier}`;
@@ -7347,10 +7343,10 @@ async function processSevenOutRoll(gameData) {
         profitAmountLamports = betAmount * BigInt(profitMultiplier); 
         payoutAmountLamports = betAmount + profitAmountLamports;    
         
-        financialOutcomeHTML = `You won <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit! (Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
-    } else { // It's a losing sum (5, 6, 7, 8 or unexpected)
+        financialOutcomeHTML = `You won <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit!\n(Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
+    } else { 
         win = false; 
-        // payoutAmountLamports is already 0n by default. profitAmountLamports is also 0n.
+        // payoutAmountLamports and profitAmountLamports remain 0n
         resultTitleHTML = `🎲😥 <b>Lucky Sum - Not This Time!</b> 😥🎲`;
         if (LUCKY_SUM_LOSING_NUMBERS.includes(currentSum)) {
             resultDetailsHTML = `A sum of <b>${currentSum}</b> means the house takes this round.`;
@@ -7376,9 +7372,8 @@ async function processSevenOutRoll(gameData) {
 
 
 async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLamports, outcomeReasonLog) {
-    // gameUIMessageIdToDelete is no longer needed here as previous messages are handled by processSevenOutRoll
     const { gameId, chatId, userId, playerRef, betAmount, userObj } = gameData;
-    const LOG_PREFIX_S7_FINALIZE_LUCKY = `[S7_LuckySum_Finalize_V2 GID:${gameId} UID:${userId}]`;
+    const LOG_PREFIX_S7_FINALIZE_LUCKY = `[S7_LuckySum_Finalize_V3_Fix GID:${gameId} UID:${userId}]`; // V3 for fix
     let finalUserBalanceLamports = BigInt(userObj.balance);
     let clientOutcome;
     let dbErrorText = "";
@@ -7386,11 +7381,16 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
-        const ledgerReason = `${outcomeReasonLog} (Game ID: ${gameId})`;
+        // --- FIX: Shortened ledgerReason for transaction_type column ---
+        const ledgerReasonForTransactionType = outcomeReasonLog.length > 50 ? outcomeReasonLog.substring(0, 47) + "..." : outcomeReasonLog;
+        const fullNotesForLedger = `${outcomeReasonLog} (Game ID: ${gameId})`; // Keep full detail in notes
+        // --- END FIX ---
+
         const balanceUpdate = await updateUserBalanceAndLedger(
             clientOutcome, userId, payoutAmountLamports,
-            ledgerReason, { game_id_custom_field: gameId, dice_rolls_s7_luckysum: gameData.rolls.join(','), sum_s7_luckysum: gameData.currentSum.toString() },
-            `Outcome of Lucky Sum (S7) game ${gameId}`
+            ledgerReasonForTransactionType, // Use shortened version here
+            { game_id_custom_field: gameId, dice_rolls_s7_luckysum: gameData.rolls.join(','), sum_s7_luckysum: gameData.currentSum.toString() },
+            fullNotesForLedger // Full details in notes
         );
 
         if (balanceUpdate.success) {
@@ -7398,30 +7398,28 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
             await clientOutcome.query('COMMIT');
         } else {
             await clientOutcome.query('ROLLBACK');
-            dbErrorText = `<br><br>⚠️ A critical casino vault error occurred settling your game: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Our pit boss has been alerted.`;
+            // Use \n for newlines in HTML context, Telegram converts to <br>
+            dbErrorText = `\n\n⚠️ A critical casino vault error occurred settling your game: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Our pit boss has been alerted.`;
             console.error(`${LOG_PREFIX_S7_FINALIZE_LUCKY} Failed to update balance for S7 Lucky Sum game ${gameId}. Error: ${balanceUpdate.error}`);
             if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL S7 LuckySum Payout/Refund Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRef} (<code>${escapeHTML(userId)}</code>)\nAmount Due: <code>${escapeHTML(formatCurrency(payoutAmountLamports))}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check required.`, {parse_mode:'HTML'});
         }
     } catch (dbError) {
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
         console.error(`${LOG_PREFIX_S7_FINALIZE_LUCKY} DB error during S7 Lucky Sum outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
-        dbErrorText = `<br><br>⚠️ A major dice table malfunction (database error) occurred. Our pit boss has been notified.`;
+        // Use \n for newlines in HTML context
+        dbErrorText = `\n\n⚠️ A major dice table malfunction (database error) occurred. Our pit boss has been notified.`;
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
 
     let finalMessageWithDbStatusHTML = resultMessageHTML + dbErrorText;
-    // Balance display is intentionally omitted.
 
     const postGameKeyboardS7 = createPostGameKeyboard(GAME_IDS.SEVEN_OUT, betAmount);
-
-    // Always send as a new message
     await safeSendMessage(String(chatId), finalMessageWithDbStatusHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardS7 });
-
     activeGames.delete(gameId);
 }
 
-// --- End of Part 5c, Section 3 (Ladder UNCHANGED, Sevens Out REPLACED with Lucky Sum - ENHANCED HTML) ---
+// --- End of Part 5c, Section 3 (Ladder UNCHANGED, Sevens Out REPLACED with Lucky Sum - FIXES APPLIED) ---
 // --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING for Slots - Results as New Message) ---
 // index.js - Part 5c, Section 4: Slot Frenzy Game Logic & Callback Router for Part 5c Games
 //----------------------------------------------------------------------------------------------------
