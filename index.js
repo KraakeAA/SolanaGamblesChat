@@ -7267,9 +7267,9 @@ async function handleStartSevenOutCommand(msg, betAmountLamports) {
 }
 
 async function processSevenOutRoll(gameData) {
-    // No more callbackQueryId or originalMessageId needed here as it's triggered internally
-    const { gameId, userId, chatId, playerRef, betAmount } = gameData;
-    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V2 GID:${gameId} UID:${userId}]`;
+    // This function is for the NEW "Lucky Sum" (Field Roll style) game.
+    const { gameId, userId, chatId, playerRef, betAmount } = gameData; // playerRef is already HTML safe
+    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V3 GID:${gameId} UID:${userId}]`; // V3 for correction
 
     if (gameData.status !== 'awaiting_single_roll') {
         console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Invalid game state: ${gameData.status}. Expected 'awaiting_single_roll'.`);
@@ -7279,7 +7279,6 @@ async function processSevenOutRoll(gameData) {
     gameData.status = 'processing_roll';
     activeGames.set(gameId, gameData);
 
-    // Delete the "I'll roll now..." message
     if (gameData.gameMessageIdToDelete && bot) {
         await bot.deleteMessage(chatId, Number(gameData.gameMessageIdToDelete)).catch(e => {
             console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Non-critical: Could not delete previous message ID ${gameData.gameMessageIdToDelete}: ${e.message}`);
@@ -7287,7 +7286,7 @@ async function processSevenOutRoll(gameData) {
         gameData.gameMessageIdToDelete = null;
     }
     
-    const rollingMessageHTML = `🎲 ${playerRef} is rolling for Lucky Sum... The dice are tumbling! 🌪️`;
+    const rollingMessageHTML = `🎲 ${playerRef} rolling for Lucky Sum... The dice are tumbling! 🌪️`;
     const tempRollingMsg = await safeSendMessage(chatId, rollingMessageHTML, { parse_mode: 'HTML' });
     await sleep(1000); 
 
@@ -7295,7 +7294,7 @@ async function processSevenOutRoll(gameData) {
     let currentSum = 0;
     let animatedDiceMessageIds = [];
 
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 2; i++) { // Always 2 dice
         try {
             const diceMsg = await bot.sendDice(String(chatId), { emoji: '🎲' });
             currentRolls.push(diceMsg.dice.value);
@@ -7328,8 +7327,13 @@ async function processSevenOutRoll(gameData) {
     let profitMultiplier = 0;
     let outcomeReasonLog = `loss_s7_luckysum_sum${currentSum}`;
     let resultTitleHTML = "";
-    let resultDetailsHTML = ""; // More detailed description of win/loss
-    let financialOutcomeHTML = ""; // Specifics about money
+    let resultDetailsHTML = "";
+    let financialOutcomeHTML = "";
+
+    // --- CORRECTED: Initialize lamports variables ---
+    let profitAmountLamports = 0n;
+    let payoutAmountLamports = 0n;
+    // --- END OF CORRECTION ---
 
     const betDisplayUSD_HTML_Result = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
@@ -7339,17 +7343,18 @@ async function processSevenOutRoll(gameData) {
         outcomeReasonLog = `win_s7_luckysum_sum${currentSum}_mult${profitMultiplier}`;
         resultTitleHTML = `🎲✨ <b>Lucky Sum - YOU WIN!</b> ✨🎲`;
         resultDetailsHTML = `Your roll sum of <b>${currentSum}</b> hit a lucky spot: ${escapeHTML(payoutRule.label)}`;
-        profitAmountLamports = betAmount * BigInt(profitMultiplier);
-        payoutAmountLamports = betAmount + profitAmountLamports;
+        
+        profitAmountLamports = betAmount * BigInt(profitMultiplier); 
+        payoutAmountLamports = betAmount + profitAmountLamports;    
+        
         financialOutcomeHTML = `You won <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit! (Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
     } else { // It's a losing sum (5, 6, 7, 8 or unexpected)
-        win = false;
-        payoutAmountLamports = 0n;
+        win = false; 
+        // payoutAmountLamports is already 0n by default. profitAmountLamports is also 0n.
         resultTitleHTML = `🎲😥 <b>Lucky Sum - Not This Time!</b> 😥🎲`;
         if (LUCKY_SUM_LOSING_NUMBERS.includes(currentSum)) {
             resultDetailsHTML = `A sum of <b>${currentSum}</b> means the house takes this round.`;
         } else {
-            // Fallback for sums not explicitly in WIN or LOSE (should not happen if rules are exhaustive for 2-12)
             console.error(`${LOG_PREFIX_S7_LUCKY_ROLL} Sum ${currentSum} not in defined win/loss outcomes! Defaulting to loss.`);
             resultDetailsHTML = `Your roll of <b>${currentSum}</b> didn't hit a winning number.`;
         }
@@ -7357,12 +7362,12 @@ async function processSevenOutRoll(gameData) {
     }
     
     gameData.status = 'game_over';
-    activeGames.set(gameId, gameData);
+    activeGames.set(gameId, gameData); 
 
     let messageToPlayerHTML = `${resultTitleHTML}\n<pre>==============================</pre>\n` +
                              `Player: <b>${playerRef}</b>\nWager: <b>${betDisplayUSD_HTML_Result}</b>\n` +
                              `<pre>------------------------------</pre>\n` +
-                             `Dice Rolled: ${formatDiceRolls(currentRolls)} ➠ Sum: <b>${currentSum}</b>\n` +
+                             `Dice Rolled: ${formatDiceRolls(currentRolls)} ➠ Sum: <b>${currentSum}</b>!\n` +
                              `<pre>==============================</pre>\n` +
                              `${resultDetailsHTML}\n${financialOutcomeHTML}`;
 
