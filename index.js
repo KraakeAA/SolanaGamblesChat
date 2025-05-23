@@ -3266,47 +3266,110 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (HTML Revamp) ---
 async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, originalOfferMessageIdToDelete) {
     const chatId = offerData.chatId;
-    const logPrefix = `[DE_PvP_Start_HTML_V4_StateFix Offer:${offerData.gameId} CH:${chatId}]`;
+    const logPrefix = `[DE_PvP_Start_Debug Offer:${offerData.gameId} CH:${chatId}]`; // Added Debug
+    console.log(`${logPrefix} Entered function. Opponent: ${opponentUserObj.telegram_id}, Initiator (from offer): ${offerData.initiator.userId}`);
+
     const initiatorUserObjFull = offerData.initiatorUserObj || await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
     
-    if (!initiatorUserObjFull || !opponentUserObj) { /* ... error handling ... */ return; }
+    if (!initiatorUserObjFull) {
+        console.error(`${logPrefix} CRITICAL: Failed to get/create initiatorUserObjFull for ID: ${offerData.initiator.userId}. Aborting game start.`);
+        await safeSendMessage(chatId, "⚙️ Critical error: Could not retrieve initiator's profile to start the PvP game. The offer may be bugged.", {parse_mode: 'HTML'});
+        activeGames.delete(offerData.gameId); // Ensure offer is cleaned up if it wasn't already
+        return;
+    }
+    if (!opponentUserObj) { // Should have been validated by caller, but double check
+        console.error(`${logPrefix} CRITICAL: opponentUserObj is null/undefined. Aborting game start.`);
+        await safeSendMessage(chatId, "⚙️ Critical error: Opponent profile missing. Cannot start PvP game.", {parse_mode: 'HTML'});
+        return;
+    }
+    console.log(`${logPrefix} Initiator: ${initiatorUserObjFull.telegram_id}, Opponent: ${opponentUserObj.telegram_id}`);
+
     const betAmountLamports = offerData.betAmount;
     let client = null;
+    console.log(`${logPrefix} Attempting DB operations for bet deductions.`);
     try {
         client = await pool.connect(); await client.query('BEGIN');
-        // Bet deduction for initiator
+        
+        console.log(`${logPrefix} Deducting bet for initiator ${initiatorUserObjFull.telegram_id}. Amount: ${betAmountLamports}`);
         const initiatorBetResult = await updateUserBalanceAndLedger(client, initiatorUserObjFull.telegram_id, BigInt(-betAmountLamports), 'bet_placed_de_pvp_init', { game_id_custom_field: `offer_${offerData.gameId}_to_pvp`, opponent_id_custom_field: opponentUserObj.telegram_id }, `Initiator DE PvP from offer ${offerData.gameId}`);
-        if (!initiatorBetResult.success) throw new Error(`Initiator bet placement failed: ${initiatorBetResult.error}`);
+        if (!initiatorBetResult.success) {
+            await client.query('ROLLBACK'); // Rollback before throwing
+            throw new Error(`Initiator bet placement failed: ${initiatorBetResult.error}`);
+        }
         initiatorUserObjFull.balance = initiatorBetResult.newBalanceLamports;
+        console.log(`${logPrefix} Initiator bet success. New balance: ${initiatorUserObjFull.balance}`);
 
-        // Bet deduction for opponent
+        console.log(`${logPrefix} Deducting bet for opponent ${opponentUserObj.telegram_id}. Amount: ${betAmountLamports}`);
         const opponentBetResult = await updateUserBalanceAndLedger(client, opponentUserObj.telegram_id, BigInt(-betAmountLamports), 'bet_placed_de_pvp_join', { game_id_custom_field: `offer_${offerData.gameId}_to_pvp`, opponent_id_custom_field: initiatorUserObjFull.telegram_id }, `Opponent DE PvP from offer ${offerData.gameId}`);
-        if (!opponentBetResult.success) throw new Error(`Opponent bet placement failed: ${opponentBetResult.error}`);
-        opponentUserObj.balance = opponentBetResult.newBalanceLamports; 
+        if (!opponentBetResult.success) {
+            await client.query('ROLLBACK'); // Rollback before throwing
+            throw new Error(`Opponent bet placement failed: ${opponentBetResult.error}`);
+        }
+        opponentUserObj.balance = opponentBetResult.newBalanceLamports; // Update passed opponent object
+        console.log(`${logPrefix} Opponent bet success. New balance: ${opponentUserObj.balance}`);
+        
         await client.query('COMMIT');
-    } catch (error) { /* ... error handling ... */ return; } 
-    finally { if(client) client.release(); }
+        console.log(`${logPrefix} Bet deductions committed to DB.`);
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(()=>{});
+        console.error(`${logPrefix} DB error placing PvP bets: ${error.message}`, error.stack);
+        await safeSendMessage(chatId, `⚙️ Database error placing bets for PvP Dice Escalator: ${escapeHTML(error.message)}. Game cannot start.`, {parse_mode: 'HTML'});
+        // No need to delete offerData.gameId from activeGames, as it was already deleted by the caller (handleDiceEscalatorAcceptPvPChallenge_New)
+        return;
+    } finally { if(client) client.release(); }
 
     if (originalOfferMessageIdToDelete && bot) {
-        await bot.deleteMessage(chatId, Number(originalOfferMessageIdToDelete)).catch(e => {});
+        console.log(`${logPrefix} Deleting original offer message ID: ${originalOfferMessageIdToDelete}`);
+        await bot.deleteMessage(chatId, Number(originalOfferMessageIdToDelete)).catch(e => {
+            console.warn(`${logPrefix} Non-critical: Could not delete unified DE offer message ${originalOfferMessageIdToDelete}: ${e.message}`);
+        });
     }
 
     const pvpGameId = generateGameId(GAME_IDS.DICE_ESCALATOR_PVP);
+    console.log(`${logPrefix} Generated new PvP Game ID: ${pvpGameId}`);
+    
     const gameData = {
-        gameId: pvpGameId, type: GAME_IDS.DICE_ESCALATOR_PVP, chatId: String(chatId),
-        initiator: { userId: initiatorUserObjFull.telegram_id, displayName: getPlayerDisplayReference(initiatorUserObjFull), score: 0, rolls: [], isTurn: true, busted: false, stood: false, status: 'awaiting_roll_emoji' },
-        opponent: { userId: opponentUserObj.telegram_id, displayName: getPlayerDisplayReference(opponentUserObj), score: 0, rolls: [], isTurn: false, busted: false, stood: false, status: 'waiting_turn' },
+        gameId: pvpGameId, 
+        type: GAME_IDS.DICE_ESCALATOR_PVP, 
+        chatId: String(chatId), // Ensure chatId is string
+        initiator: { 
+            userId: initiatorUserObjFull.telegram_id, 
+            displayName: getPlayerDisplayReference(initiatorUserObjFull), 
+            score: 0, 
+            rolls: [], 
+            isTurn: true, // P1 (initiator) starts
+            busted: false, 
+            stood: false, 
+            status: 'awaiting_roll_emoji' // Player-specific status
+        },
+        opponent: { 
+            userId: opponentUserObj.telegram_id, 
+            displayName: getPlayerDisplayReference(opponentUserObj), 
+            score: 0, 
+            rolls: [], 
+            isTurn: false, 
+            busted: false, 
+            stood: false, 
+            status: 'waiting_turn' // Player-specific status
+        },
         betAmount: betAmountLamports, 
-        status: 'p1_awaiting_roll_emoji', // MAIN GAME STATUS: P1's turn, awaiting any roll
+        status: 'p1_awaiting_roll_emoji', // Main game status: P1's turn, awaiting any roll
         currentMessageId: null, 
-        createdAt: Date.now(), lastRollValue: null, chatType: offerData.chatType,
+        createdAt: Date.now(), 
+        lastRollValue: null, 
+        chatType: offerData.chatType,
     };
     activeGames.set(pvpGameId, gameData);
+    console.log(`${logPrefix} New PvP game object created and stored in activeGames. Game Status: '${gameData.status}', P1 isTurn: ${gameData.initiator.isTurn}, P1 status: '${gameData.initiator.status}'`);
+
     if (offerData.chatType !== 'private') {
         await updateGroupGameDetails(offerData.chatId, pvpGameId, GAME_IDS.DICE_ESCALATOR_PVP, offerData.betAmount);
+        console.log(`${logPrefix} Group game details updated for chat: ${offerData.chatId}`);
     }
-    console.log(`${logPrefix} DE PvP Game ${pvpGameId} created. P1: ${gameData.initiator.displayName}, P2: ${gameData.opponent.displayName}. Game Status: ${gameData.status}, P1 Turn: ${gameData.initiator.isTurn}`);
+    
+    console.log(`${logPrefix} Calling updateDiceEscalatorPvPMessage_New to send initial game board.`);
     await updateDiceEscalatorPvPMessage_New(gameData); 
+    console.log(`${LOG_PREFIX_DE_START_PVP} startDiceEscalatorPvPGame_New finished for GID: ${pvpGameId}.`);
 }
 
 async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userIdWhoRolled) {
