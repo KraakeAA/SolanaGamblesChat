@@ -1814,6 +1814,7 @@ const COIN_EMOJI_DISPLAY = '🪙'; // Primary coin emoji for display
 const COIN_FLIP_ANIMATION_FRAMES = ['🌕', '🌖', '🌗', '🌘', '🌑', '🌒', '🌓', '🌔']; // Simple animation frames
 const COIN_FLIP_ANIMATION_INTERVAL_MS = 250;
 const COIN_FLIP_ANIMATION_DURATION_MS = 2000; // How long the animation message stays before revealing result
+const COIN_FLIP_ANIMATION_STEPS = Math.floor(COIN_FLIP_ANIMATION_DURATION_MS / COIN_FLIP_ANIMATION_INTERVAL_MS);
 
 // --- Coinflip Unified Offer Command ---
 async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports) {
