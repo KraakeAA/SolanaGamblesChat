@@ -6957,20 +6957,17 @@ async function processDuelPvPRollByEmoji(gameData, diceValue, rollerUserId) {
     activeGames.set(gameData.gameId, gameData);
 }
 // --- End of Part 5c, Section 2 (COMPLETE REWRITE FOR NEW DUEL GAME LOGIC - CONSOLIDATED UPDATES) ---
-// --- Start of Part 5c, Section 3 (NEW) - Segment 1 & 2 (FULLY UPDATED FOR HELPER BOT DICE ROLLS for Ladder, Animated for SevenOut) ---
-// index.js - Part 5c, Section 3: Greed's Ladder & Sevens Out (Simplified Craps) Game Logic & Handlers
-// (This entire block is placed after Original Part 5c, Section 2 in the new order)
+// --- Start of Part 5c, Section 3 (NEW) - Segment 1 & 2 (FULLY UPDATED FOR HELPER BOT DICE ROLLS for Ladder, Animated for SevenOut - SEVENOUT REPLACED WITH LUCKY SUM - ENHANCED HTML) ---
+// index.js - Part 5c, Section 3: Greed's Ladder & Sevens Out (Lucky Sum Variant) Game Logic & Handlers
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts
 
-// --- Greed's Ladder Game Logic ---
+// --- Greed's Ladder Game Logic (UNCHANGED) ---
 
 async function handleStartLadderCommand(msg, betAmountLamports) {
-    // ***** CORRECTED LINE FOR USER ID EXTRACTION *****
     const userId = String(msg.from.id || msg.from.telegram_id);
-    // ***** END OF CORRECTION *****
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_LADDER_START = `[Ladder_Start UID:${userId} CH:${chatId}]`; // Now uses corrected userId
+    const LOG_PREFIX_LADDER_START = `[Ladder_Start UID:${userId} CH:${chatId}]`;
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         console.error(`${LOG_PREFIX_LADDER_START} Invalid betAmountLamports: ${betAmountLamports}.`);
@@ -7006,7 +7003,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, BigInt(-betAmountLamports),
             'bet_placed_ladder', { game_id_custom_field: gameId },
-            `Bet for Greed's Ladder game ${gameId}` // Simplified note
+            `Bet for Greed's Ladder game ${gameId}`
         );
 
         if (!balanceUpdateResult || !balanceUpdateResult.success) {
@@ -7016,8 +7013,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
             return;
         }
         await client.query('COMMIT');
-        userObj.balance = balanceUpdateResult.newBalanceLamports; 
-        // console.log(`${LOG_PREFIX_LADDER_START} Wager ${betAmountLamports} placed. New balance for ${userId}: ${userObj.balance}`); // Reduced log
+        userObj.balance = balanceUpdateResult.newBalanceLamports;
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LADDER_START} DB Rollback Error: ${rbErr.message}`));
         console.error(`${LOG_PREFIX_LADDER_START} Database error during Greed's Ladder bet: ${dbError.message}`, dbError.stack?.substring(0,500));
@@ -7026,20 +7022,20 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     } finally {
         if (client) client.release();
     }
-    
-    const gameData = { 
+
+    const gameData = {
         type: GAME_IDS.LADDER, gameId, chatId, userId, playerRef, userObj,
-        betAmount: betAmountLamports, rolls: [], sum: 0n, status: 'rolling_waiting_helper', gameMessageId: null 
+        betAmount: betAmountLamports, rolls: [], sum: 0n, status: 'rolling_waiting_helper', gameMessageId: null
     };
-    activeGames.set(gameId, gameData); 
+    activeGames.set(gameId, gameData);
 
     const titleRolling = createStandardTitle("Greed's Ladder - The Climb Begins!", "🪜");
     let messageText = `${titleRolling}\n\n${playerRef} wagers *${betDisplayUSD}* and steps onto Greed's Ladder!\nRequesting *${escapeMarkdownV2(String(LADDER_ROLL_COUNT))} dice* from the Helper Bot... This may take a moment! 🎲⏳`;
-    
+
     const sentRollingMsg = await safeSendMessage(chatId, messageText, {parse_mode: 'MarkdownV2'});
     if (sentRollingMsg?.message_id) {
         gameData.gameMessageId = sentRollingMsg.message_id;
-        activeGames.set(gameId, gameData); 
+        activeGames.set(gameId, gameData);
     } else {
         console.error(`${LOG_PREFIX_LADDER_START} Failed to send initial Ladder game message for ${gameId}. Refunding wager.`);
         let refundClient = null;
@@ -7055,20 +7051,18 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         return;
     }
 
-    // Using getSingleDiceRollViaHelper, assuming it's defined and accessible (e.g. from Part 5b-S2 or a common utility section)
     let diceRolls = [];
     let helperBotError = null;
 
     for (let i = 0; i < LADDER_ROLL_COUNT; i++) {
         if (isShuttingDown) { helperBotError = "Shutdown during Ladder dice requests."; break; }
-        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `Ladder Roll ${i+1}`); 
+        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `Ladder Roll ${i+1}`);
         if (rollResult.error) {
             helperBotError = rollResult.message || `Failed to get Ladder Roll ${i+1}`;
             break;
         }
         diceRolls.push(rollResult.roll);
     }
-
 
     if (helperBotError || diceRolls.length !== LADDER_ROLL_COUNT) {
         const errorMsgToUser = `⚠️ ${playerRef}, there was an issue getting your dice rolls for Greed's Ladder: \`${escapeMarkdownV2(String(helperBotError || "Incomplete rolls from helper").substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded.`;
@@ -7088,7 +7082,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
             if (refundClient) await refundClient.query('ROLLBACK');
             console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Refund failed after Ladder helper error for game ${gameId}: ${dbErr.message}`);
         } finally { if (refundClient) refundClient.release(); }
-        activeGames.delete(gameId); 
+        activeGames.delete(gameId);
         return;
     }
 
@@ -7099,7 +7093,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     let payoutAmountLamports = 0n;
     let outcomeReasonLog = "";
     let resultTextPart = "";
-    let finalUserBalanceLamports = userObj.balance; 
+    let finalUserBalanceLamports = userObj.balance;
 
     const titleResult = createStandardTitle("Greed's Ladder - The Outcome!", "🏁");
     messageText = `${titleResult}\n\n${playerRef}'s wager: *${betDisplayUSD}*\nThe Helper Bot delivered dice: ${formatDiceRolls(gameData.rolls)}\nTotal Sum: *${escapeMarkdownV2(String(gameData.sum))}*\n\n`;
@@ -7113,32 +7107,32 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         for (const payoutTier of LADDER_PAYOUTS) {
             if (gameData.sum >= payoutTier.min && gameData.sum <= payoutTier.max) {
                 const profitLamports = betAmountLamports * BigInt(payoutTier.multiplier);
-                payoutAmountLamports = betAmountLamports + profitLamports; 
+                payoutAmountLamports = betAmountLamports + profitLamports;
                 outcomeReasonLog = `win_ladder_sum${gameData.sum}_mult${payoutTier.multiplier}`;
                 resultTextPart = `${escapeMarkdownV2(payoutTier.label)} You've reached a high rung and won *${escapeMarkdownV2(await formatBalanceForDisplay(profitLamports, 'USD'))}* in profit!`;
                 foundPayout = true;
                 break;
             }
         }
-        if (!foundPayout) { 
+        if (!foundPayout) {
             outcomeReasonLog = 'loss_ladder_no_payout_tier';
             resultTextPart = "😐 A cautious climb\\.\\.\\. but not high enough for a prize this time\\. Your wager is lost\\.";
         }
         gameData.status = 'game_over_resolved';
     }
     messageText += resultTextPart;
-    
+
     let clientOutcome = null;
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
         const ledgerReason = `${outcomeReasonLog} (Game ID: ${gameId})`;
         const balanceUpdate = await updateUserBalanceAndLedger(
-            clientOutcome, userId, payoutAmountLamports, 
-            ledgerReason, { game_id_custom_field: gameId }, 
+            clientOutcome, userId, payoutAmountLamports,
+            ledgerReason, { game_id_custom_field: gameId },
             `Outcome of Greed's Ladder game ${gameId}`
         );
-        
+
         if (balanceUpdate.success) {
             finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
             await clientOutcome.query('COMMIT');
@@ -7162,8 +7156,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     if (gameData.gameMessageId && bot) {
         await bot.editMessageText(messageText, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder })
             .catch(async (e) => {
-                // console.warn(`${LOG_PREFIX_LADDER_START} Failed to edit final Ladder message (ID: ${gameData.gameMessageId}), sending new: ${e.message}`); // Reduced log
-                await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder });
+                 await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder });
             });
     } else {
         await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder });
@@ -7171,36 +7164,43 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     activeGames.delete(gameId);
 }
 
-// --- Sevens Out (Simplified Craps) Game Logic ---
+
+// --- Sevens Out (Lucky Sum Variant) Game Logic ---
+
+const LUCKY_SUM_PAYOUTS = {
+    2: { multiplier: 2, label: "Snake Eyes! 🐍" },
+    12: { multiplier: 2, label: "Boxcars! 🚂" },
+    3: { multiplier: 1, label: "Easy Three!" },
+    4: { multiplier: 1, label: "Fever Four!" },
+    9: { multiplier: 1, label: "Nina Nine!" },
+    10: { multiplier: 1, label: "Big Ten!" },
+    11: { multiplier: 1, label: "Yo Eleven!" },
+};
+const LUCKY_SUM_LOSING_NUMBERS = [5, 6, 7, 8];
 
 async function handleStartSevenOutCommand(msg, betAmountLamports) {
-    // ***** CORRECTED LINE FOR USER ID EXTRACTION *****
     const userId = String(msg.from.id || msg.from.telegram_id);
-    // ***** END OF CORRECTION *****
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_S7_START = `[S7_Start UID:${userId} CH:${chatId}]`; // Now uses corrected userId
+    const LOG_PREFIX_S7_LUCKY_SUM_START = `[S7_LuckySum_Start_HTML UID:${userId} CH:${chatId}]`; // Updated log prefix
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
-        console.error(`${LOG_PREFIX_S7_START} Invalid betAmountLamports: ${betAmountLamports}.`);
-        await safeSendMessage(chatId, "🎲 Seven's a charm, but not with that bet! Please try again with a valid wager for Sevens Out\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "🎲 Invalid bet for Lucky Sum! Please use a valid amount.", { parse_mode: 'HTML' });
         return;
     }
 
     let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObj) {
-        await safeSendMessage(chatId, "😕 Greetings, roller! We couldn't find your player profile for Sevens Out\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "😕 Couldn't find your player profile for Lucky Sum. Try <code>/start</code>.", { parse_mode: 'HTML' });
         return;
     }
-    console.log(`${LOG_PREFIX_S7_START} Initiating Sevens Out. Bet: ${betAmountLamports}`);
 
-    const playerRef = getPlayerDisplayReference(userObj);
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
     if (BigInt(userObj.balance) < betAmountLamports) {
         const needed = betAmountLamports - BigInt(userObj.balance);
-        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(needed, 'USD'));
-        await safeSendMessage(chatId, `${playerRef}, your casino wallet is a bit light for a *${betDisplayUSD}* game of Sevens Out! You'll need about *${neededDisplay}* more\\. Ready to reload?`, {
-            parse_mode: 'MarkdownV2',
+        await safeSendMessage(chatId, `${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> Lucky Sum game. You need ~<b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
+            parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
         });
         return;
@@ -7213,212 +7213,170 @@ async function handleStartSevenOutCommand(msg, betAmountLamports) {
         await client.query('BEGIN');
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client, userId, BigInt(-betAmountLamports),
-            'bet_placed_s7', { game_id_custom_field: gameId },
-            `Bet for Sevens Out game ${gameId}` // Simplified note
+            'bet_placed_s7_luckysum', { game_id_custom_field: gameId },
+            `Bet for Lucky Sum (S7) game ${gameId}`
         );
 
-        if (!balanceUpdateResult || !balanceUpdateResult.success) {
+        if (!balanceUpdateResult.success) {
             await client.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_S7_START} Wager placement failed: ${balanceUpdateResult.error}`);
-            await safeSendMessage(chatId, `${playerRef}, your Sevens Out wager of *${betDisplayUSD}* hit a snag: \`${escapeMarkdownV2(balanceUpdateResult.error || "Wallet error")}\`\\. Please try once more\\.`, { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(chatId, `${playerRefHTML}, your Lucky Sum wager of <b>${betDisplayUSD_HTML}</b> failed: <code>${escapeHTML(balanceUpdateResult.error || "DB Error")}</code>.`, { parse_mode: 'HTML' });
             return;
         }
         await client.query('COMMIT');
         userObj.balance = balanceUpdateResult.newBalanceLamports;
-        // console.log(`${LOG_PREFIX_S7_START} Wager ${betAmountLamports} placed. New balance for ${userId}: ${userObj.balance}`); // Reduced log
     } catch (dbError) {
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_S7_START} DB Rollback Error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_S7_START} Database error during Sevens Out bet: ${dbError.message}`, dbError.stack?.substring(0,500));
-        await safeSendMessage(chatId, "⚙️ The dice table seems to be under maintenance (database error)! Failed to start\\. Please try again\\.", { parse_mode: 'MarkdownV2' });
+        if (client) await client.query('ROLLBACK');
+        console.error(`${LOG_PREFIX_S7_LUCKY_SUM_START} DB error: ${dbError.message}`);
+        await safeSendMessage(chatId, "⚙️ Database error starting Lucky Sum. Please try again.", { parse_mode: 'HTML' });
         return;
     } finally {
         if (client) client.release();
     }
-    
-    const gameData = { 
-        type: GAME_IDS.SEVEN_OUT, gameId, chatId, userId, playerRef, userObj,
-        betAmount: betAmountLamports, pointValue: null, rolls: [], currentSum: 0n,
-        status: 'come_out_roll_pending', 
-        gameMessageId: null, lastInteractionTime: Date.now() 
+
+    const gameData = {
+        type: GAME_IDS.SEVEN_OUT, gameId, chatId, userId, playerRef: playerRefHTML, userObj,
+        betAmount: betAmountLamports, rolls: [], currentSum: 0n,
+        status: 'awaiting_single_roll',
+        gameMessageIdToDelete: null, // Will store ID of the "Rolling for you now" message
+        lastInteractionTime: Date.now()
     };
     activeGames.set(gameId, gameData);
 
-    const title = createStandardTitle("Sevens Out - Come Out Roll!", "🎲");
-    const initialMessageText = `${title}\n\n${playerRef}, your wager of *${betDisplayUSD}* is locked in for Sevens Out! Stepping up for the crucial **Come Out Roll**\\.\\.\\.\n\nI'll roll the first set of dice for you! Good luck! 🍀`;
-    
-    const sentMessage = await safeSendMessage(chatId, initialMessageText, {parse_mode: 'MarkdownV2'});
-    if (sentMessage?.message_id) {
-        gameData.gameMessageId = sentMessage.message_id;
-        activeGames.set(gameId, gameData); 
-        
-        const mockMsgContextForFirstRoll = {
-            from: userObj,
-            chat: { id: chatId, type: msg.chat.type }, 
-            message_id: sentMessage.message_id 
-        };
-        await processSevenOutRoll(gameId, userObj, sentMessage.message_id, null, mockMsgContextForFirstRoll);
+    const titleHTML = `🎲 <b>Lucky Sum Roll!</b> 🎲`;
+    const initialMessageTextHTML = `${titleHTML}\n\n${playerRefHTML}, your bet of <b>${betDisplayUSD_HTML}</b> is on the line for a game of Lucky Sum!\n\nI'll roll two dice for you now... Good luck! 🍀`;
 
+    // Send initial message and store its ID for deletion
+    const sentInitialMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
+    if (sentInitialMsg?.message_id) {
+        gameData.gameMessageIdToDelete = sentInitialMsg.message_id;
+        activeGames.set(gameId, gameData); // Update gameData with messageId
+        await processSevenOutRoll(gameData); // Pass the whole gameData
     } else {
-        console.error(`${LOG_PREFIX_S7_START} Failed to send initial Sevens Out message for ${gameId}. Refunding wager.`);
+        console.error(`${LOG_PREFIX_S7_LUCKY_SUM_START} Failed to send initial Lucky Sum message. Refunding.`);
         let refundClient;
         try {
-            refundClient = await pool.connect();
-            await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_s7_setup_fail', {}, `Refund for S7 game ${gameId} (message send fail)`);
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_s7_luckysum_setup_fail', {}, `Refund S7_LuckySum ${gameId}`);
             await refundClient.query('COMMIT');
         } catch (err) {
             if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_S7_START} CRITICAL: Failed to refund user for S7 setup fail ${gameId}: ${err.message}`);
-        } finally {
-            if (refundClient) refundClient.release();
-        }
+            console.error(`${LOG_PREFIX_S7_LUCKY_SUM_START} CRITICAL: Refund failed for ${gameId}: ${err.message}`);
+        } finally { if (refundClient) refundClient.release(); }
         activeGames.delete(gameId);
     }
 }
 
-async function processSevenOutRoll(gameId, userObj, originalMessageId, callbackQueryId, msgContext) {
-    const userId = String(userObj.telegram_id);
-    const LOG_PREFIX_S7_ROLL = `[S7_Roll GID:${gameId} UID:${userId}]`;
-    const gameData = activeGames.get(gameId);
+async function processSevenOutRoll(gameData) {
+    // No more callbackQueryId or originalMessageId needed here as it's triggered internally
+    const { gameId, userId, chatId, playerRef, betAmount } = gameData;
+    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V2 GID:${gameId} UID:${userId}]`;
 
-    if (!gameData || gameData.userId !== userId) {
-        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "⏳ This Sevens Out game action is outdated or not yours.", show_alert: true });
+    if (gameData.status !== 'awaiting_single_roll') {
+        console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Invalid game state: ${gameData.status}. Expected 'awaiting_single_roll'.`);
         return;
     }
-    if (callbackQueryId && gameData.status !== 'point_phase_waiting_roll') {
-         if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "⚠️ It's not the right time to roll in this game!", show_alert: true });
-         return;
-    }
-    if (callbackQueryId && Number(gameData.gameMessageId) !== Number(originalMessageId)) {
-         if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "⚙️ Please use the newest game message buttons.", show_alert: true });
-         if (originalMessageId && bot) bot.editMessageReplyMarkup({}, { chat_id: String(gameData.chatId), message_id: Number(originalMessageId) }).catch(()=>{});
-         return;
-    }
 
-    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "🎲 Rolling the bones..."}).catch(()=>{});
-
-    const isComeOutRoll = gameData.status === 'come_out_roll_pending';
-    gameData.status = isComeOutRoll ? 'come_out_roll_processing' : 'point_phase_rolling';
+    gameData.status = 'processing_roll';
     activeGames.set(gameId, gameData);
 
-    const { chatId, playerRef, betAmount } = gameData;
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'));
-    const currentMainMessageId = gameData.gameMessageId; 
-
-    let rollingText = isComeOutRoll ? 
-        `${playerRef} is making the crucial **Come Out Roll** (Wager: *${betDisplayUSD}*)\\.\\.\\.` :
-        `${playerRef} rolls for their Point of *${escapeMarkdownV2(String(gameData.pointValue))}* (Wager: *${betDisplayUSD}*)\\.\\.\\.`;
-    rollingText += "\n\nDice are flying! 🌪️🎲";
-    
-    if (currentMainMessageId && bot) {
-        try {
-            await bot.editMessageText(rollingText, { chat_id: String(chatId), message_id: Number(currentMainMessageId), parse_mode: 'MarkdownV2', reply_markup: {} });
-        } catch(e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                // console.warn(`${LOG_PREFIX_S7_ROLL} Failed to edit rolling message (ID:${currentMainMessageId}). Error: ${e.message}`); // Reduced log
-            }
-        }
+    // Delete the "I'll roll now..." message
+    if (gameData.gameMessageIdToDelete && bot) {
+        await bot.deleteMessage(chatId, Number(gameData.gameMessageIdToDelete)).catch(e => {
+            console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Non-critical: Could not delete previous message ID ${gameData.gameMessageIdToDelete}: ${e.message}`);
+        });
+        gameData.gameMessageIdToDelete = null;
     }
-    await sleep(1000);
+    
+    const rollingMessageHTML = `🎲 ${playerRef} is rolling for Lucky Sum... The dice are tumbling! 🌪️`;
+    const tempRollingMsg = await safeSendMessage(chatId, rollingMessageHTML, { parse_mode: 'HTML' });
+    await sleep(1000); 
 
     let currentRolls = [];
     let currentSum = 0;
-    let animatedDiceIdsS7 = [];
-    for (let i = 0; i < 2; i++) { // Always 2 dice for Craps/S7
+    let animatedDiceMessageIds = [];
+
+    for (let i = 0; i < 2; i++) {
         try {
             const diceMsg = await bot.sendDice(String(chatId), { emoji: '🎲' });
             currentRolls.push(diceMsg.dice.value);
             currentSum += diceMsg.dice.value;
-            animatedDiceIdsS7.push(diceMsg.message_id);
-            await sleep(2200); // Wait for dice animation
+            if (diceMsg.message_id) animatedDiceMessageIds.push(diceMsg.message_id);
+            await sleep(2200);
         } catch (e) {
-            console.warn(`${LOG_PREFIX_S7_ROLL} Failed to send animated dice for S7 (Roll ${i+1}), using internal roll. Error: ${e.message}`);
-            const internalRollVal = rollDie(); // rollDie is from Part 3
+            console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Failed to send animated dice (Roll ${i+1}), using internal roll. Error: ${e.message}`);
+            const internalRollVal = rollDie();
             currentRolls.push(internalRollVal);
             currentSum += internalRollVal;
-            await safeSendMessage(String(chatId), `⚙️ ${playerRef} (Casino's Internal Dice Roll ${i + 1}): A *${escapeMarkdownV2(String(internalRollVal))}* 🎲 appears!`, { parse_mode: 'MarkdownV2' });
+            const fallbackMsg = await safeSendMessage(String(chatId), `⚙️ ${playerRef} (Casino's Internal Dice Roll ${i + 1}): A <b>${internalRollVal}</b> 🎲 appears!`, { parse_mode: 'HTML' });
+            if (fallbackMsg?.message_id) animatedDiceMessageIds.push(fallbackMsg.message_id);
             await sleep(500);
         }
     }
-    animatedDiceIdsS7.forEach(id => { if (bot) bot.deleteMessage(String(chatId), id).catch(() => {}); });
+
+    if (tempRollingMsg?.message_id && bot) {
+        await bot.deleteMessage(chatId, tempRollingMsg.message_id).catch(() => {});
+    }
+    for (const id of animatedDiceMessageIds) {
+        if (bot) await bot.deleteMessage(String(chatId), id).catch(() => {});
+    }
+    
     gameData.rolls = currentRolls;
     gameData.currentSum = BigInt(currentSum);
 
-    let messageToPlayer = isComeOutRoll ? `**Come Out Roll Results!**\n` : `**Point Phase Roll!**\n`;
-    messageToPlayer += `${playerRef}, you rolled: ${formatDiceRolls(currentRolls)} for a total of *${escapeMarkdownV2(String(currentSum))}*!\n`;
-    if (!isComeOutRoll && gameData.pointValue) {
-        messageToPlayer += `Your Point to hit is: *${escapeMarkdownV2(String(gameData.pointValue))}*\\.\n`;
-    }
-    messageToPlayer += "\n";
+    let win = false;
+    let payoutRule = LUCKY_SUM_PAYOUTS[currentSum];
+    let profitMultiplier = 0;
+    let outcomeReasonLog = `loss_s7_luckysum_sum${currentSum}`;
+    let resultTitleHTML = "";
+    let resultDetailsHTML = ""; // More detailed description of win/loss
+    let financialOutcomeHTML = ""; // Specifics about money
 
-    let gameEndsNow = false;
-    let resultTextPart = "";
-    let payoutAmountLamports = 0n;
-    let outcomeReasonLog = "";
-    let nextKeyboard = null;
+    const betDisplayUSD_HTML_Result = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    if (isComeOutRoll) {
-        if (currentSum === 7 || currentSum === 11) { // Natural Win
-            gameEndsNow = true; gameData.status = 'game_over_win_natural';
-            resultTextPart = `🎉 **Natural Winner!** A ${currentSum} on the Come Out Roll! You win!`;
-            payoutAmountLamports = betAmount * 2n; 
-            outcomeReasonLog = `win_s7_natural_${currentSum}`;
-        } else if (currentSum === 2 || currentSum === 3 || currentSum === 12) { // Craps Loss
-            gameEndsNow = true; gameData.status = 'game_over_loss_craps';
-            resultTextPart = `💔 **Craps!** A ${currentSum} on the Come Out means the house wins this round\\.`;
-            payoutAmountLamports = 0n; 
-            outcomeReasonLog = `loss_s7_craps_${currentSum}`;
-        } else { // Point Established
-            gameData.pointValue = BigInt(currentSum);
-            gameData.status = 'point_phase_waiting_roll';
-            resultTextPart = `🎯 **Point Established: ${escapeMarkdownV2(String(currentSum))}!**\nNow, roll your Point *before* a 7 to win! Good luck!`;
-            nextKeyboard = { inline_keyboard: [[{ text: `🎲 Roll for Point (${escapeMarkdownV2(String(currentSum))})!`, callback_data: `s7_roll:${gameId}` }],[{text: `📖 Rules`, callback_data:`${RULES_CALLBACK_PREFIX}${GAME_IDS.SEVEN_OUT}`}]] };
+    if (payoutRule) { // It's a winning sum
+        win = true;
+        profitMultiplier = payoutRule.multiplier;
+        outcomeReasonLog = `win_s7_luckysum_sum${currentSum}_mult${profitMultiplier}`;
+        resultTitleHTML = `🎲✨ <b>Lucky Sum - YOU WIN!</b> ✨🎲`;
+        resultDetailsHTML = `Your roll sum of <b>${currentSum}</b> hit a lucky spot: ${escapeHTML(payoutRule.label)}`;
+        profitAmountLamports = betAmount * BigInt(profitMultiplier);
+        payoutAmountLamports = betAmount + profitAmountLamports;
+        financialOutcomeHTML = `You won <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit! (Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
+    } else { // It's a losing sum (5, 6, 7, 8 or unexpected)
+        win = false;
+        payoutAmountLamports = 0n;
+        resultTitleHTML = `🎲😥 <b>Lucky Sum - Not This Time!</b> 😥🎲`;
+        if (LUCKY_SUM_LOSING_NUMBERS.includes(currentSum)) {
+            resultDetailsHTML = `A sum of <b>${currentSum}</b> means the house takes this round.`;
+        } else {
+            // Fallback for sums not explicitly in WIN or LOSE (should not happen if rules are exhaustive for 2-12)
+            console.error(`${LOG_PREFIX_S7_LUCKY_ROLL} Sum ${currentSum} not in defined win/loss outcomes! Defaulting to loss.`);
+            resultDetailsHTML = `Your roll of <b>${currentSum}</b> didn't hit a winning number.`;
         }
-    } else { // Point Phase
-        if (gameData.currentSum === gameData.pointValue) { // Point Hit - Win
-            gameEndsNow = true; gameData.status = 'game_over_win_point_hit';
-            resultTextPart = `🎉 **Point Hit! You rolled your Point of ${escapeMarkdownV2(String(gameData.pointValue))}!** You win!`;
-            payoutAmountLamports = betAmount * 2n;
-            outcomeReasonLog = `win_s7_point_${gameData.pointValue}`;
-        } else if (gameData.currentSum === 7n) { // Seven Out - Loss
-            gameEndsNow = true; gameData.status = 'game_over_loss_seven_out';
-            resultTextPart = `💔 **Seven Out!** You rolled a 7 before hitting your Point of ${escapeMarkdownV2(String(gameData.pointValue))}\\. House wins\\.`;
-            payoutAmountLamports = 0n;
-            outcomeReasonLog = `loss_s7_seven_out_point_${gameData.pointValue}`;
-        } else { // Neither Point nor 7 - Roll Again
-            gameData.status = 'point_phase_waiting_roll'; 
-            resultTextPart = `🎲 Keep rolling! Your Point is still *${escapeMarkdownV2(String(gameData.pointValue))}*\\. Avoid that 7!`;
-            nextKeyboard = { inline_keyboard: [[{ text: `🎲 Roll Again for Point (${escapeMarkdownV2(String(gameData.pointValue))})!`, callback_data: `s7_roll:${gameId}` }],[{text: `📖 Rules`, callback_data:`${RULES_CALLBACK_PREFIX}${GAME_IDS.SEVEN_OUT}`}]] };
-        }
+        financialOutcomeHTML = `Your wager of <b>${betDisplayUSD_HTML_Result}</b> is lost. Better luck next time! 🍀`;
     }
     
-    messageToPlayer += resultTextPart;
-    activeGames.set(gameId, gameData); 
+    gameData.status = 'game_over';
+    activeGames.set(gameId, gameData);
 
-    if (gameEndsNow) {
-        await finalizeSevenOutGame(gameData, messageToPlayer, payoutAmountLamports, outcomeReasonLog, currentMainMessageId);
-    } else {
-        if (currentMainMessageId && bot) {
-            await bot.editMessageText(messageToPlayer, { chat_id: String(chatId), message_id: Number(currentMainMessageId), parse_mode: 'MarkdownV2', reply_markup: nextKeyboard })
-            .catch(async (e) => {
-                if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                    // console.warn(`${LOG_PREFIX_S7_ROLL} Failed to edit S7 mid-game message (ID:${currentMainMessageId}), sending new. Error: ${e.message}`); // Reduced log
-                    const newMsg = await safeSendMessage(String(chatId), messageToPlayer, { parse_mode: 'MarkdownV2', reply_markup: nextKeyboard });
-                    if (newMsg?.message_id && activeGames.has(gameId)) activeGames.get(gameId).gameMessageId = newMsg.message_id;
-                }
-            });
-        } else { 
-            const newMsg = await safeSendMessage(String(chatId), messageToPlayer, { parse_mode: 'MarkdownV2', reply_markup: nextKeyboard });
-            if (newMsg?.message_id && activeGames.has(gameId)) activeGames.get(gameId).gameMessageId = newMsg.message_id;
-        }
-    }
+    let messageToPlayerHTML = `${resultTitleHTML}\n<pre>==============================</pre>\n` +
+                             `Player: <b>${playerRef}</b>\nWager: <b>${betDisplayUSD_HTML_Result}</b>\n` +
+                             `<pre>------------------------------</pre>\n` +
+                             `Dice Rolled: ${formatDiceRolls(currentRolls)} ➠ Sum: <b>${currentSum}</b>\n` +
+                             `<pre>==============================</pre>\n` +
+                             `${resultDetailsHTML}\n${financialOutcomeHTML}`;
+
+    await finalizeSevenOutGame(gameData, messageToPlayerHTML, payoutAmountLamports, outcomeReasonLog);
 }
 
-async function finalizeSevenOutGame(gameData, initialResultMessage, payoutAmountLamports, outcomeReasonLog, gameUIMessageId) {
+
+async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLamports, outcomeReasonLog) {
+    // gameUIMessageIdToDelete is no longer needed here as previous messages are handled by processSevenOutRoll
     const { gameId, chatId, userId, playerRef, betAmount, userObj } = gameData;
-    const LOG_PREFIX_S7_FINALIZE = `[S7_Finalize GID:${gameId} UID:${userId}]`;
-    let finalUserBalanceLamports = BigInt(userObj.balance); 
+    const LOG_PREFIX_S7_FINALIZE_LUCKY = `[S7_LuckySum_Finalize_V2 GID:${gameId} UID:${userId}]`;
+    let finalUserBalanceLamports = BigInt(userObj.balance);
     let clientOutcome;
+    let dbErrorText = "";
 
     try {
         clientOutcome = await pool.connect();
@@ -7426,47 +7384,39 @@ async function finalizeSevenOutGame(gameData, initialResultMessage, payoutAmount
         const ledgerReason = `${outcomeReasonLog} (Game ID: ${gameId})`;
         const balanceUpdate = await updateUserBalanceAndLedger(
             clientOutcome, userId, payoutAmountLamports,
-            ledgerReason, { game_id_custom_field: gameId },
-            `Outcome of Sevens Out game ${gameId}`
+            ledgerReason, { game_id_custom_field: gameId, dice_rolls_s7_luckysum: gameData.rolls.join(','), sum_s7_luckysum: gameData.currentSum.toString() },
+            `Outcome of Lucky Sum (S7) game ${gameId}`
         );
 
         if (balanceUpdate.success) {
             finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
             await clientOutcome.query('COMMIT');
-            if (payoutAmountLamports > betAmount && outcomeReasonLog.startsWith('win')) {
-                const profit = payoutAmountLamports - betAmount;
-                initialResultMessage += `\nYou pocket a neat *${escapeMarkdownV2(await formatBalanceForDisplay(profit, 'USD'))}* in profit\\!`;
-            }
         } else {
             await clientOutcome.query('ROLLBACK');
-            initialResultMessage += `\n\n⚠️ A critical casino vault error occurred settling your Sevens Out game: \`${escapeMarkdownV2(balanceUpdate.error || "DB Error")}\`\\. Our pit boss has been alerted for manual review\\.`;
-            console.error(`${LOG_PREFIX_S7_FINALIZE} Failed to update balance for Sevens Out game ${gameId}. Error: ${balanceUpdate.error}`);
-             if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL S7 Payout/Refund Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\` User: ${playerRef} (\`${escapeMarkdownV2(userId)}\`)\nAmount Due: \`${escapeMarkdownV2(formatCurrency(payoutAmountLamports))}\`\nDB Error: \`${escapeMarkdownV2(balanceUpdate.error || "N/A")}\`\\. Manual check required\\.`, {parse_mode:'MarkdownV2'});
+            dbErrorText = `<br><br>⚠️ A critical casino vault error occurred settling your game: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Our pit boss has been alerted.`;
+            console.error(`${LOG_PREFIX_S7_FINALIZE_LUCKY} Failed to update balance for S7 Lucky Sum game ${gameId}. Error: ${balanceUpdate.error}`);
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL S7 LuckySum Payout/Refund Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRef} (<code>${escapeHTML(userId)}</code>)\nAmount Due: <code>${escapeHTML(formatCurrency(payoutAmountLamports))}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check required.`, {parse_mode:'HTML'});
         }
     } catch (dbError) {
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
-        console.error(`${LOG_PREFIX_S7_FINALIZE} DB error during S7 outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
-        initialResultMessage += `\n\n⚠️ A major dice table malfunction (database error) occurred\\. Our pit boss has been notified\\.`;
+        console.error(`${LOG_PREFIX_S7_FINALIZE_LUCKY} DB error during S7 Lucky Sum outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
+        dbErrorText = `<br><br>⚠️ A major dice table malfunction (database error) occurred. Our pit boss has been notified.`;
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
-    
-    initialResultMessage += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`;
+
+    let finalMessageWithDbStatusHTML = resultMessageHTML + dbErrorText;
+    // Balance display is intentionally omitted.
+
     const postGameKeyboardS7 = createPostGameKeyboard(GAME_IDS.SEVEN_OUT, betAmount);
 
-    if (gameUIMessageId && bot) {
-        await bot.editMessageText(initialResultMessage, { chat_id: String(chatId), message_id: Number(gameUIMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardS7 })
-            .catch(async (e) => {
-                // console.warn(`${LOG_PREFIX_S7_FINALIZE} Failed to edit final S7 message (ID: ${gameUIMessageId}), sending new: ${e.message}`); // Reduced log
-                await safeSendMessage(String(chatId), initialResultMessage, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardS7 });
-            });
-    } else {
-        await safeSendMessage(String(chatId), initialResultMessage, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardS7 });
-    }
+    // Always send as a new message
+    await safeSendMessage(String(chatId), finalMessageWithDbStatusHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardS7 });
+
     activeGames.delete(gameId);
 }
 
-// --- End of Part 5c, Section 3 (NEW) ---
+// --- End of Part 5c, Section 3 (Ladder UNCHANGED, Sevens Out REPLACED with Lucky Sum - ENHANCED HTML) ---
 // --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING for Slots - Results as New Message) ---
 // index.js - Part 5c, Section 4: Slot Frenzy Game Logic & Callback Router for Part 5c Games
 //----------------------------------------------------------------------------------------------------
