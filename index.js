@@ -7467,48 +7467,47 @@ async function finalizeSevenOutGame(gameData, initialResultMessage, payoutAmount
 }
 
 // --- End of Part 5c, Section 3 (NEW) ---
-// --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS) ---
+// --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING for Slots) ---
 // index.js - Part 5c, Section 4: Slot Frenzy Game Logic & Callback Router for Part 5c Games
-// (This entire block is placed after Original Part 5c, Section 3 in the new order)
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts
 
 // --- Slot Frenzy Game Logic ---
 
 async function handleStartSlotCommand(msg, betAmountLamports) {
-    // ***** CORRECTED LINE FOR USER ID EXTRACTION *****
     const userId = String(msg.from.id || msg.from.telegram_id);
-    // ***** END OF CORRECTION *****
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_SLOT_START = `[Slot_Start UID:${userId} CH:${chatId}]`; // Now uses corrected userId
+    const LOG_PREFIX_SLOT_START = `[Slot_Start_HTML UID:${userId} CH:${chatId}]`;
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         console.error(`${LOG_PREFIX_SLOT_START} Invalid betAmountLamports: ${betAmountLamports}.`);
-        await safeSendMessage(chatId, "🎰 Hold your horses! That bet amount for Slot Frenzy doesn't look quite right\\. Please try again with a valid wager\\.", { parse_mode: 'MarkdownV2' });
+        // Using HTML for error messages too for consistency
+        await safeSendMessage(chatId, "🎰 Oh dear! That bet amount for Slot Frenzy doesn't look quite right.<br>Please try again with a valid wager.", { parse_mode: 'HTML' });
         return;
     }
 
     let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObj) {
-        await safeSendMessage(chatId, "😕 Hey spinner! We couldn't find your player profile for Slot Frenzy\\. Please hit \`/start\` first\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "😕 Hey spinner! We couldn't find your player profile for Slot Frenzy.<br>Please hit <code>/start</code> first.", { parse_mode: 'HTML' });
         return;
     }
     console.log(`${LOG_PREFIX_SLOT_START} Initiating Slot Frenzy. Bet: ${betAmountLamports}`);
 
-    const playerRef = getPlayerDisplayReference(userObj);
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    // Ensure playerRef and bet displays are HTML-safe
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
     if (BigInt(userObj.balance) < betAmountLamports) {
         const needed = betAmountLamports - BigInt(userObj.balance);
-        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(needed, 'USD'));
-        await safeSendMessage(chatId, `${playerRef}, your casino wallet needs a bit more sparkle for a *${betDisplayUSD}* spin on Slot Frenzy! You're short by about *${neededDisplay}*\\. Time to reload?`, {
-            parse_mode: 'MarkdownV2',
+        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD'));
+        await safeSendMessage(chatId, `${playerRefHTML}, your casino wallet needs a bit more sparkle for a <b>${betDisplayUSD_HTML}</b> spin on Slot Frenzy! You're short by about <b>${neededDisplayHTML}</b>. Time to reload?`, {
+            parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
         });
         return;
     }
 
-    const gameId = generateGameId(GAME_IDS.SLOT_FRENZY); 
+    const gameId = generateGameId(GAME_IDS.SLOT_FRENZY);
     let client = null;
     try {
         client = await pool.connect();
@@ -7522,36 +7521,41 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         if (!balanceUpdateResult || !balanceUpdateResult.success) {
             await client.query('ROLLBACK');
             console.error(`${LOG_PREFIX_SLOT_START} Wager placement failed: ${balanceUpdateResult.error}`);
-            await safeSendMessage(chatId, `${playerRef}, your Slot Frenzy wager of *${betDisplayUSD}* jammed: \`${escapeMarkdownV2(balanceUpdateResult.error || "Wallet error")}\`\\. Please try spinning again\\.`, { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(chatId, `${playerRefHTML}, your Slot Frenzy wager of <b>${betDisplayUSD_HTML}</b> jammed: <code>${escapeHTML(balanceUpdateResult.error || "Wallet error")}</code>. Please try spinning again.`, { parse_mode: 'HTML' });
             return;
         }
         await client.query('COMMIT');
         userObj.balance = balanceUpdateResult.newBalanceLamports;
     } catch (dbError) {
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_SLOT_START} DB Rollback Error: ${dbError.message}`));
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_SLOT_START} DB Rollback Error: ${rbErr.message}`));
         console.error(`${LOG_PREFIX_SLOT_START} Database error during Slot Frenzy bet: ${dbError.message}`, dbError.stack?.substring(0,500));
-        await safeSendMessage(chatId, "⚙️ The slot machine's gears are stuck (database error)! Failed to start\\. Please try again\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "⚙️ The slot machine's gears are stuck (database error)! Failed to start. Please try again.", { parse_mode: 'HTML' });
         return;
     } finally {
         if (client) client.release();
     }
 
-    const gameData = { 
-        type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef, userObj,
-        betAmount: betAmountLamports, diceValue: null, payoutInfo: null,
-        status: 'spinning_waiting_helper', gameMessageId: null 
+    const gameData = {
+        type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef: playerRefHTML, // Store HTML version of playerRef
+        userObj, betAmount: betAmountLamports, diceValue: null, payoutInfo: null,
+        status: 'spinning_waiting_helper', gameMessageId: null
     };
-    activeGames.set(gameId, gameData); 
+    activeGames.set(gameId, gameData);
 
-    const titleSpinning = createStandardTitle("Slot Frenzy - Reels are Spinning!", "🎰");
-    let messageText = `${titleSpinning}\n\n${playerRef}, you've placed a bet of *${betDisplayUSD}* on the magnificent Slot Frenzy machine!\nRequesting a spin from the Helper Bot... This may take a moment! Good luck! 🌟✨`;
-    
-    const sentSpinningMsg = await safeSendMessage(chatId, messageText, {parse_mode: 'MarkdownV2'});
+    const titleSpinningHTML = `🎰 <b>Slot Frenzy - Reels in Motion!</b> 🎰`;
+    let initialMessageTextHTML = `${titleSpinningHTML}\n<pre>==============================</pre>\n` +
+                             `Player: <b>${playerRefHTML}</b>\nBet: <b>${betDisplayUSD_HTML}</b>\n` +
+                             `<pre>==============================</pre>\n` +
+                             `Hold tight! The Helper Bot is revving up the Slot Machine! 💨\n`+
+                             `✨ May fortune favor your spin! ✨`;
+
+    const sentSpinningMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
     if (sentSpinningMsg?.message_id) {
         gameData.gameMessageId = sentSpinningMsg.message_id;
         activeGames.set(gameId, gameData);
     } else {
         console.error(`${LOG_PREFIX_SLOT_START} Failed to send initial Slot game message for ${gameId}. Refunding wager.`);
+        // Refund logic (as in your original code)
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -7564,7 +7568,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         activeGames.delete(gameId);
         return;
     }
-    
+
     let diceRollValue = null;
     let helperBotError = null;
     let requestId = null;
@@ -7577,7 +7581,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
             throw new Error(requestResult.error || "Failed to create slot spin request in DB.");
         }
         requestId = requestResult.requestId;
-        dbPollClient.release(); dbPollClient = null; 
+        dbPollClient.release(); dbPollClient = null;
 
         let attempts = 0;
         while(attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
@@ -7606,19 +7610,22 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     } catch (e) {
         if (dbPollClient) dbPollClient.release();
         console.warn(`${LOG_PREFIX_SLOT_START} Failed to get slot result from Helper Bot: ${e.message}`);
-        helperBotError = e.message; 
+        helperBotError = e.message;
     }
-    
+
     if (helperBotError || diceRollValue === null) {
-        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue with your Slot Frenzy spin via the Helper Bot: \`${escapeMarkdownV2(String(helperBotError || "No result from helper").substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded\\.`;
+        const errorMsgToUserHTML = `💣 <b>Slot Spin Malfunction!</b> 💣\n\n` +
+                               `Oh no, ${playerRefHTML}! It seems the Slot Machine had a hiccup: <pre>${escapeHTML(String(helperBotError || "No result from helper").substring(0,150))}</pre>\n\n` +
+                               `✅ Your bet of <b>${betDisplayUSD_HTML}</b> has been fully refunded.`;
         const errorKeyboard = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
         if (gameData.gameMessageId && bot) {
-            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: errorKeyboard }).catch(async () => {
-                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+            await bot.editMessageText(errorMsgToUserHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: errorKeyboard }).catch(async () => {
+                 await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
             });
         } else {
-            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
+            await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
         }
+        // Refund logic (as in your original code)
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -7633,75 +7640,84 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     }
 
     gameData.diceValue = diceRollValue;
-    const payoutInfo = SLOT_PAYOUTS[diceRollValue]; 
+    const payoutInfo = SLOT_PAYOUTS[diceRollValue];
     gameData.payoutInfo = payoutInfo;
     let payoutAmountLamports = 0n;
     let profitAmountLamports = 0n;
-    let outcomeReasonLog = `loss_slot_val${diceRollValue}`; // Default to loss
-    let resultTextPart = "";
-
-    const titleResult = createStandardTitle("Slot Frenzy - The Result!", "🎉");
-    messageText = `${titleResult}\n\n${playerRef}'s wager: *${betDisplayUSD}*\nThe Helper Bot spun the reels to: Value *${escapeMarkdownV2(String(diceRollValue))}*\n\n`;
+    let outcomeReasonLog = `loss_slot_val${diceRollValue}`;
+    let resultTextPartHTML = "";
+    let finalTitleHTML = "";
+    let finalUserBalanceLamports = userObj.balance;
 
     if (payoutInfo) {
         profitAmountLamports = betAmountLamports * BigInt(payoutInfo.multiplier);
-        payoutAmountLamports = betAmountLamports + profitAmountLamports; 
-        outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`; 
-        resultTextPart = `🌟 **${escapeMarkdownV2(payoutInfo.label)}** ${escapeMarkdownV2(payoutInfo.symbols)} 🌟\nCongratulations! You've won a dazzling *${escapeMarkdownV2(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}* in profit!`;
+        payoutAmountLamports = betAmountLamports + profitAmountLamports;
+        outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`;
+        finalTitleHTML = `🎉🎉 <b>${escapeHTML(payoutInfo.label)}</b> 🎉🎉`;
+        resultTextPartHTML = `✨ <b>AMAZING HIT!</b> ✨\n<b>${escapeHTML(payoutInfo.symbols)}</b>\n<pre>------------------------------</pre>\n` +
+                           `Congratulations! You've won a dazzling <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit!\n` +
+                           `(Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
         gameData.status = 'game_over_win';
     } else {
-        payoutAmountLamports = 0n; 
-        resultTextPart = `💔 Reel mismatch this time\\.\\.\\. The machine keeps your wager\\. Better luck on the next spin!`;
+        payoutAmountLamports = 0n;
+        finalTitleHTML = `😕 <b>Slot Frenzy - No Win This Time</b> 😕`;
+        resultTextPartHTML = `Reel Result: <i>Not a winning combination.</i>\n<pre>------------------------------</pre>\n` +
+                           `The machine keeps your wager of <b>${betDisplayUSD_HTML}</b>.\nBetter luck on the next spin! 🍀`;
         gameData.status = 'game_over_loss';
     }
-    messageText += resultTextPart;
-    
-    let finalUserBalanceLamports = userObj.balance; 
+
+    let finalMessageTextHTML = `${finalTitleHTML}\n<pre>==============================</pre>\n` +
+                             `Player: <b>${playerRefHTML}</b>\nWager: <b>${betDisplayUSD_HTML}</b>\n` +
+                             `Spin Value (from Helper): <code>${escapeHTML(String(diceRollValue))}</code>\n` +
+                             `<pre>==============================</pre>\n${resultTextPartHTML}`;
+
     let clientOutcome = null;
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
         const balanceUpdate = await updateUserBalanceAndLedger(
-            clientOutcome, 
-            userId, 
-            payoutAmountLamports, 
-            outcomeReasonLog, 
-            { 
-                game_id_custom_field: gameId, 
-                slot_dice_value: diceRollValue 
-            }, 
+            clientOutcome,
+            userId,
+            payoutAmountLamports,
+            outcomeReasonLog,
+            {
+                game_id_custom_field: gameId,
+                slot_dice_value: diceRollValue
+            },
             `Outcome of Slot Frenzy game ${gameId}. Slot value: ${diceRollValue}.`
         );
-        
+
         if (balanceUpdate.success) {
-            finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
+            finalUserBalanceLamports = balanceUpdate.newBalanceLamports; // Not displayed, but tracked
             await clientOutcome.query('COMMIT');
         } else {
             await clientOutcome.query('ROLLBACK');
-            messageText += `\n\n⚠️ A critical error occurred paying out your Slot winnings: \`${escapeMarkdownV2(balanceUpdate.error || "DB Error")}\`\\. Casino staff notified\\.`;
+            finalMessageTextHTML += `\n\n⚠️ A critical error occurred paying out your Slot winnings: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Casino staff notified.`;
             console.error(`${LOG_PREFIX_SLOT_START} Failed to update balance for Slot game ${gameId}. Error: ${balanceUpdate.error}`);
-            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL SLOT Payout Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\` User: ${playerRef}\nAmount: \`${formatCurrency(payoutAmountLamports)}\`\nDB Error: \`${escapeMarkdownV2(balanceUpdate.error || "N/A")}\`\\. Manual check needed\\.`, {parse_mode:'MarkdownV2'});
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL SLOT Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRefHTML}\nAmount: <code>${formatCurrency(payoutAmountLamports)}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check needed.`, {parse_mode:'HTML'});
         }
     } catch (dbError) {
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
         console.error(`${LOG_PREFIX_SLOT_START} DB error during Slot outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
-        messageText += `\n\n⚠️ A severe database malfunction occurred with the Slot machine\\. Casino staff notified\\.`;
+        finalMessageTextHTML += `\n\n⚠️ A severe database malfunction occurred with the Slot machine. Casino staff notified.`;
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
+    // Balance display removed from final message
 
-    messageText += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`;
     const postGameKeyboardSlot = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
 
-    if (gameData.gameMessageId && bot) { 
-        await bot.editMessageText(messageText, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardSlot })
+    if (gameData.gameMessageId && bot) {
+        await bot.editMessageText(finalMessageTextHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboardSlot })
             .catch(async (e) => {
-                await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardSlot });
+                 if (!e.message?.includes("message is not modified")) {
+                    await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
+                 }
             });
-    } else { 
-        await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardSlot });
+    } else {
+        await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
     }
-    activeGames.delete(gameId); 
+    activeGames.delete(gameId);
 }
 
 // --- End of Part 5c, Section 4 (NEW) ---
