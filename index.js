@@ -9100,6 +9100,8 @@ bot.on('message', async (msg) => {
         let isDiceEscalatorEmoji = false;
         let isDice21Emoji = false;
         let isDuelGameEmoji = false;
+        let matchedGameTypeForDice = null;
+
 
         let iterationCount = 0;
         for (const [gId, gData] of activeGames.entries()) {
