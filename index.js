@@ -1683,10 +1683,12 @@ async function updateGroupGameDetails(chatId, gameId, gameType, betAmount) {
 }
 
 // --- End of Part 3 ---
-// --- Start of Part 4 ---
+// --- Start of Part 4 --- (Ensure this is placed correctly in your file structure)
 // index.js - Part 4: Simplified Game Logic (Enhanced)
 //---------------------------------------------------------------------------
 // Assumes rollDie (from Part 3) is available.
+// Assumes escapeHTML (from Part 3) is available if dynamic names needed further escaping,
+// but player1Name/player2Name are expected to be pre-escaped HTML.
 
 // --- Coinflip Logic ---
 /**
@@ -1694,9 +1696,9 @@ async function updateGroupGameDetails(chatId, gameId, gameType, betAmount) {
  * @returns {object} Object with outcome ('heads'/'tails'), outcomeString ("Heads"/"Tails"), and emoji.
  */
 function determineCoinFlipOutcome() {
-  const isHeads = Math.random() < 0.5; 
+  const isHeads = Math.random() < 0.5;
   return isHeads
-    ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' } 
+    ? { outcome: 'heads', outcomeString: "Heads", emoji: '🪙' }
     : { outcome: 'tails', outcomeString: "Tails", emoji: '🪙' };
 }
 
@@ -1710,12 +1712,12 @@ function determineCoinFlipOutcome() {
 function determineDieRollOutcome(sides = 6) {
   if (typeof rollDie !== 'function') {
      console.error("[DetermineDieRollOutcome] CRITICAL Error: rollDie function is not defined. Fallback to 1.");
-     return { roll: 1, emoji: '🎲' }; 
+     return { roll: 1, emoji: '🎲' };
   }
-  sides = Number.isInteger(sides) && sides > 1 ? sides : 6; 
-  const roll = rollDie(sides); 
+  sides = Number.isInteger(sides) && sides > 1 ? sides : 6;
+  const roll = rollDie(sides);
 
-  return { roll: roll, emoji: '🎲' }; 
+  return { roll: roll, emoji: '🎲' };
 }
 
 // --- Rock Paper Scissors (RPS) Logic ---
@@ -1724,10 +1726,10 @@ const RPS_CHOICES = {
   PAPER: 'paper',
   SCISSORS: 'scissors'
 };
-const RPS_EMOJIS = { // Emojis are generally MarkdownV2 safe
-  [RPS_CHOICES.ROCK]: '🪨',   
-  [RPS_CHOICES.PAPER]: '📄',  
-  [RPS_CHOICES.SCISSORS]: '✂️' 
+const RPS_EMOJIS = { // Emojis are generally safe for HTML/MarkdownV2
+  [RPS_CHOICES.ROCK]: '🪨',
+  [RPS_CHOICES.PAPER]: '📄',
+  [RPS_CHOICES.SCISSORS]: '✂️'
 };
 // Defines what each choice beats and the verb for the action.
 const RPS_RULES = {
@@ -1750,15 +1752,17 @@ function getRandomRPSChoice() {
  * Determines the outcome of an RPS match given two choices.
  * @param {string} player1ChoiceKey - Player 1's choice (e.g., RPS_CHOICES.ROCK).
  * @param {string} player2ChoiceKey - Player 2's choice.
+ * @param {string} [player1NameHtml="Player 1"] - HTML-safe name of player 1.
+ * @param {string} [player2NameHtml="Player 2"] - HTML-safe name of player 2.
  * @returns {object} A detailed result object including:
  * - result: 'win_player1', 'win_player2', 'draw', or 'error'.
- * - description: A string pre-formatted for MarkdownV2. **Do NOT escape this again.**
+ * - description: An HTML-formatted string.
  * - player1: { choice, emoji, choiceFormatted }.
  * - player2: { choice, emoji, choiceFormatted }.
  */
-function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey) {
-  const LOG_PREFIX_RPS_OUTCOME = "[RPS_Outcome]"; // Shortened
-  
+function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey, player1NameHtml = "Player 1", player2NameHtml = "Player 2") {
+  const LOG_PREFIX_RPS_OUTCOME = "[RPS_Outcome_V3_HTML]";
+
   const p1c = String(player1ChoiceKey).toLowerCase();
   const p2c = String(player2ChoiceKey).toLowerCase();
 
@@ -1766,7 +1770,7 @@ function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey) {
     console.warn(`${LOG_PREFIX_RPS_OUTCOME} Invalid choices: P1='${player1ChoiceKey}', P2='${player2ChoiceKey}'.`);
     return {
         result: 'error',
-        description: "An internal error occurred due to invalid RPS choices\\. Please try again\\.", // User-friendly generic error
+        description: "An internal error occurred due to invalid RPS choices. Please try again.",
         player1: { choice: player1ChoiceKey, emoji: '❓', choiceFormatted: 'Invalid' },
         player2: { choice: player2ChoiceKey, emoji: '❓', choiceFormatted: 'Invalid' }
     };
@@ -1774,27 +1778,28 @@ function determineRPSOutcome(player1ChoiceKey, player2ChoiceKey) {
 
   const p1Emoji = RPS_EMOJIS[p1c];
   const p2Emoji = RPS_EMOJIS[p2c];
-  const p1ChoiceFormatted = p1c.charAt(0).toUpperCase() + p1c.slice(1);
-  const p2ChoiceFormatted = p2c.charAt(0).toUpperCase() + p2c.slice(1);
+  const p1ChoiceFormatted = escapeHTML(p1c.charAt(0).toUpperCase() + p1c.slice(1)); // Escape for safety if used in HTML
+  const p2ChoiceFormatted = escapeHTML(p2c.charAt(0).toUpperCase() + p2c.slice(1)); // Escape for safety
 
   let resultDescription;
-  let outcome; // 'win_player1', 'win_player2', 'draw'
+  let outcome;
 
-  if (p1c === p2c) { // Draw case
+  if (p1c === p2c) {
     outcome = 'draw';
-    // Note: MarkdownV2 pre-formatted string. Do not escape this again.
-    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} clashes with ${p2Emoji} ${p2ChoiceFormatted}\\! It's a *Draw*\\!`;
-  } else if (RPS_RULES[p1c]?.beats === p2c) { // Player 1 wins
+    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} clashes with ${p2Emoji} ${p2ChoiceFormatted}! It's a <b>Draw</b>!`;
+  } else if (RPS_RULES[p1c]?.beats === p2c) {
     outcome = 'win_player1';
-    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} *${RPS_RULES[p1c].verb}* ${p2Emoji} ${p2ChoiceFormatted}\\! Player 1 *claims victory*\\!`;
-  } else { // Player 2 wins
+    // player1NameHtml is expected to be already HTML-safe (e.g., from getPlayerDisplayReference + escapeHTML)
+    resultDescription = `${p1Emoji} ${p1ChoiceFormatted} <b>${escapeHTML(RPS_RULES[p1c].verb)}</b> ${p2Emoji} ${p2ChoiceFormatted}! ${player1NameHtml} <b>claims victory</b>!`;
+  } else {
     outcome = 'win_player2';
-    resultDescription = `${p2Emoji} ${p2ChoiceFormatted} *${RPS_RULES[p2c]?.verb || 'outplays'}* ${p1Emoji} ${p1ChoiceFormatted}\\! Player 2 *is the winner*\\!`;
+    // player2NameHtml is expected to be already HTML-safe
+    resultDescription = `${p2Emoji} ${p2ChoiceFormatted} <b>${escapeHTML(RPS_RULES[p2c]?.verb || 'outplays')}</b> ${p1Emoji} ${p1ChoiceFormatted}! ${player2NameHtml} <b>is the winner</b>!`;
   }
 
   return {
     result: outcome,
-    description: resultDescription, // This string is already MarkdownV2 formatted.
+    description: resultDescription, // HTML formatted description
     player1: { choice: p1c, emoji: p1Emoji, choiceFormatted: p1ChoiceFormatted },
     player2: { choice: p2c, emoji: p2Emoji, choiceFormatted: p2ChoiceFormatted }
   };
@@ -2628,45 +2633,50 @@ async function handleRPSPvBChoiceCallback(gameId, playerChoiceKey, userObj, orig
 
 async function finalizeRPSPvBGame(gameData) {
     const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, botChoice, userObj } = gameData;
-    const logPrefix = `[RPS_PvB_Finalize GID:${gameId}]`;
+    const logPrefix = `[RPS_PvB_Finalize_V2 GID:${gameId}]`; // Updated log prefix
     activeGames.delete(gameId);
     await updateGroupGameDetails(chatId, null, null, null);
 
-    const rpsOutcome = determineRPSOutcome(playerChoice, botChoice); // From Part 4
+    // playerRefHTML is already HTML-escaped. "Bot Dealer" is a safe string.
+    const rpsOutcome = determineRPSOutcome(playerChoice, botChoice, playerRefHTML, "Bot Dealer");
     let payoutAmountLamports = 0n;
     let ledgerOutcomeCode = `loss_rps_pvb_${playerChoice}_vs_${botChoice}`;
-    let finalUserBalance = BigInt(userObj.balance); // Start with balance before this game's outcome for calculation
+    let finalUserBalance = BigInt(userObj.balance);
 
-    if (rpsOutcome.result === 'win_player1') { // Player 1 is the user
-        payoutAmountLamports = betAmount * 2n; // Stake back + winnings
+    if (rpsOutcome.result === 'win_player1') { // Player 1 (the user) wins
+        payoutAmountLamports = betAmount * 2n;
         ledgerOutcomeCode = `win_rps_pvb_${playerChoice}_vs_${botChoice}`;
     } else if (rpsOutcome.result === 'draw') {
-        payoutAmountLamports = betAmount; // Refund original stake
+        payoutAmountLamports = betAmount;
         ledgerOutcomeCode = `draw_rps_pvb_${playerChoice}_vs_${botChoice}`;
-    } // Else loss, payoutAmountLamports is 0n (stake already deducted at start, so 0 for ledger)
+    }
+    // If rpsOutcome.result === 'win_player2' (Bot wins), payoutAmountLamports remains 0n.
 
     let client;
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const balanceUpdate = await updateUserBalanceAndLedger(client, userId, payoutAmountLamports, ledgerOutcomeCode, { game_id_custom_field: gameId }, `RPS PvB: ${playerChoice} vs Bot ${botChoice}`);
         if (!balanceUpdate.success) throw new Error(balanceUpdate.error || "DB Error during RPS PvB payout.");
-        finalUserBalance = balanceUpdate.newBalanceLamports; // Get the true final balance
+        finalUserBalance = balanceUpdate.newBalanceLamports;
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        rpsOutcome.description = (rpsOutcome.description || "") + `\n\n⚠️ Critical error settling wager. Admin notified.`;
+        // Append to the HTML description from rpsOutcome
+        rpsOutcome.description = (rpsOutcome.description || "") + `<br><br>⚠️ Critical error settling wager. Admin notified.`;
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvB Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed.`, { parse_mode: 'HTML'});
     } finally { if (client) client.release(); }
 
     const titleResultHTML = `⚡️ <b>RPS PvB - The Dust Settles!</b> ⚡️`;
+    // Ensure choices are HTML escaped if they were not already by rpsOutcome.player1/2.choiceFormatted
+    // rpsOutcome.player1.choiceFormatted and rpsOutcome.player2.choiceFormatted are already escaped in the modified determineRPSOutcome
     const resultMessageHTML = `${titleResultHTML}\n\n${playerRefHTML} wagered <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.\n\n` +
-        `Your masterful choice: ${RPS_EMOJIS[playerChoice]} <b>${escapeHTML(rpsOutcome.player1.choiceFormatted)}</b>\n` +
-        `The Bot Dealer's cunning play: ${RPS_EMOJIS[botChoice]} <b>${escapeHTML(rpsOutcome.player2.choiceFormatted)}</b>\n\n` +
-        `<i>${rpsOutcome.description}</i>\n\n` + // description is already HTML/MarkdownV2 safe
+        `Your masterful choice: ${RPS_EMOJIS[playerChoice]} <b>${rpsOutcome.player1.choiceFormatted}</b>\n` +
+        `The Bot Dealer's cunning play: ${RPS_EMOJIS[botChoice]} <b>${rpsOutcome.player2.choiceFormatted}</b>\n\n` +
+        `<i>${rpsOutcome.description}</i>\n\n` + // This now contains the HTML formatted description with correct names
         `Your new balance: approx. <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalance, 'USD'))}</b>.`;
 
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVB, betAmount); 
+    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVB, betAmount);
     if (gameData.gameMessageId && bot) {
         await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e)=>{
              if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
@@ -2819,7 +2829,7 @@ async function handleRPSPvPChoiceCallback(gameId, chooserId, choiceKey, userObj,
 
 async function finalizeRPSPvPGame(gameData) {
     const { gameId, chatId, betAmount, p1, p2 } = gameData;
-    const logPrefix = `[RPS_PvP_Finalize GID:${gameId}]`;
+    const logPrefix = `[RPS_PvP_Finalize_V2 GID:${gameId}]`; // Updated log prefix
     activeGames.delete(gameId);
     await updateGroupGameDetails(chatId, null, null, null);
 
@@ -2837,21 +2847,22 @@ async function finalizeRPSPvPGame(gameData) {
         return;
     }
 
-    const rpsOutcome = determineRPSOutcome(p1.choice, p2.choice); 
+    // p1.mentionHTML and p2.mentionHTML are already HTML-escaped
+    const rpsOutcome = determineRPSOutcome(p1.choice, p2.choice, p1.mentionHTML, p2.mentionHTML);
     let p1Payout = 0n; let p2Payout = 0n;
     let p1Ledger = `loss_rps_pvp_${p1.choice}_vs_${p2.choice}`;
     let p2Ledger = `loss_rps_pvp_${p2.choice}_vs_${p1.choice}`;
-    let finalP1Balance = BigInt(p1.userObj.balance); // Initial balance before this game's outcome
-    let finalP2Balance = BigInt(p2.userObj.balance); // Initial balance before this game's outcome
+    let finalP1Balance = BigInt(p1.userObj.balance);
+    let finalP2Balance = BigInt(p2.userObj.balance);
 
-    if (rpsOutcome.result === 'win_player1') {
-        p1Payout = betAmount * 2n; // Stake back + winnings
+    if (rpsOutcome.result === 'win_player1') { // p1 wins
+        p1Payout = betAmount * 2n;
         p1Ledger = `win_rps_pvp_${p1.choice}_vs_${p2.choice}`;
-    } else if (rpsOutcome.result === 'win_player2') {
-        p2Payout = betAmount * 2n; // Stake back + winnings
+    } else if (rpsOutcome.result === 'win_player2') { // p2 wins
+        p2Payout = betAmount * 2n;
         p2Ledger = `win_rps_pvp_${p2.choice}_vs_${p1.choice}`;
     } else if (rpsOutcome.result === 'draw') {
-        p1Payout = betAmount; p2Payout = betAmount; // Refund original stake
+        p1Payout = betAmount; p2Payout = betAmount;
         p1Ledger = `draw_rps_pvp_${p1.choice}_vs_${p2.choice}`;
         p2Ledger = `draw_rps_pvp_${p2.choice}_vs_${p1.choice}`;
     }
@@ -2870,21 +2881,23 @@ async function finalizeRPSPvPGame(gameData) {
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        rpsOutcome.description = (rpsOutcome.description || "") + `\n\n⚠️ Critical error settling wagers. Admin notified.`;
+        rpsOutcome.description = (rpsOutcome.description || "") + `<br><br>⚠️ Critical error settling wagers. Admin notified.`;
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed for P1:${p1.userId}, P2:${p2.userId}.`, { parse_mode: 'HTML'});
     } finally { if (client) client.release(); }
 
     const titleResultHTML = `💥✨ <b>RPS PvP - The Reckoning!</b> ✨💥`;
+    // Ensure choice strings are HTML escaped if not already done by rpsOutcome.player1/2.choiceFormatted
+    // rpsOutcome.player1/2.choiceFormatted are already escaped.
     const resultMessageHTML = `${titleResultHTML}\n\n` +
         `The dust settles between ${p1.mentionHTML} and ${p2.mentionHTML} (Wager: <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> each)!\n\n` +
-        `<b>${p1.mentionHTML} (P1) secretly chose:</b> ${RPS_EMOJIS[p1.choice]} ${escapeHTML(p1.choice.charAt(0).toUpperCase() + p1.choice.slice(1))}\n` +
-        `<b>${p2.mentionHTML} (P2) secretly chose:</b> ${RPS_EMOJIS[p2.choice]} ${escapeHTML(p2.choice.charAt(0).toUpperCase() + p2.choice.slice(1))}\n\n` +
-        `<i>${rpsOutcome.description}</i>\n\n` + // description is already HTML/MarkdownV2 safe
+        `<b>${p1.mentionHTML} (P1) secretly chose:</b> ${RPS_EMOJIS[p1.choice]} <b>${rpsOutcome.player1.choiceFormatted}</b>\n` +
+        `<b>${p2.mentionHTML} (P2) secretly chose:</b> ${RPS_EMOJIS[p2.choice]} <b>${rpsOutcome.player2.choiceFormatted}</b>\n\n` +
+        `<i>${rpsOutcome.description}</i>\n\n` + // This now contains the HTML formatted description with specific player names
         `Final Balances (approx. USD):\n` +
         `${p1.mentionHTML}: <b>${escapeHTML(await formatBalanceForDisplay(finalP1Balance, 'USD'))}</b>\n` +
         `${p2.mentionHTML}: <b>${escapeHTML(await formatBalanceForDisplay(finalP2Balance, 'USD'))}</b>`;
 
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVP, betAmount); // Use GAME_IDS.RPS_PVP for "play_again"
+    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVP, betAmount);
     if (gameData.gameMessageId && bot) {
         await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e)=>{
              if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
