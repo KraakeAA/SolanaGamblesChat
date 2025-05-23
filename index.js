@@ -3390,38 +3390,38 @@ async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userI
     const playerRefHTML = escapeHTML(currentPlayer.displayName);
     const tempRollMsg = await safeSendMessage(gameData.chatId, `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>! Calculating score...`, { parse_mode: 'HTML' });
     await sleep(1500);
-    // *** CORRECTED LINE: tempMsg to tempRollMsg ***
+    // *** CORRECTED LINE (Original fix for tempMsg typo) ***
     if (tempRollMsg?.message_id && bot) await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
     // *** END OF CORRECTION ***
 
     currentPlayer.rolls.push(diceValue);
     gameData.lastRollValue = diceValue;
 
+    // *** MODIFIED BUST LOGIC FOR PVP ***
     if (diceValue === DICE_ESCALATOR_BUST_ON) {
-        currentPlayer.busted = true; currentPlayer.score += 0; 
-        currentPlayer.status = 'bust'; currentPlayer.isTurn = false;
-        gameData.status = (currentPlayer === gameData.initiator) ? 'p1_busted' : 'p2_busted'; // More specific game status for bust
-        console.log(`${logPrefix} Player ${playerRefHTML} BUSTED. Game status: ${gameData.status}`);
-        // Check if other player can still play or if game ends
-        if (otherPlayer.stood || otherPlayer.busted) { // If other player already finished
-            gameData.status = 'game_over_pvp_resolved';
-        } else { // Other player's turn
-            otherPlayer.isTurn = true;
-            otherPlayer.status = 'awaiting_roll_emoji';
-            gameData.status = (otherPlayer === gameData.initiator) ? 'p1_awaiting_roll_emoji' : 'p2_awaiting_roll_emoji';
-        }
-    } else {
+        currentPlayer.busted = true; 
+        // currentPlayer.score might or might not be reset; game ends anyway. Current logic doesn't reset on bust for display.
+        currentPlayer.status = 'bust'; // Mark player as busted
+        currentPlayer.isTurn = false;   // Their turn is over
+
+        const bustedPlayerName = (currentPlayer === gameData.initiator) ? "Player 1 (Initiator)" : "Player 2 (Opponent)";
+        console.log(`${logPrefix} ${bustedPlayerName} BUSTED with a ${diceValue}. Game over.`);
+
+        // Game ends immediately upon any player busting in PvP
+        gameData.status = 'game_over_pvp_resolved'; 
+    } else { // Not a bust
         currentPlayer.score += diceValue;
-        // Player remains in 'awaiting_roll_emoji' and isTurn = true
+        // Player remains in 'awaiting_roll_emoji' and isTurn = true, so they can roll again or stand.
         // Main game status reflects this player's turn
         gameData.status = (currentPlayer === gameData.initiator) ? 'p1_awaiting_roll_emoji' : 'p2_awaiting_roll_emoji';
     }
+    // *** END OF MODIFIED BUST LOGIC FOR PVP ***
     
     activeGames.set(gameData.gameId, gameData);
 
     if (gameData.status.startsWith('game_over')) {
         await updateDiceEscalatorPvPMessage_New(gameData); 
-        await sleep(1000);
+        await sleep(1000); // Allow time for the "bust" message to be seen
         await resolveDiceEscalatorPvPGame_New(gameData, currentPlayer.busted ? currentPlayer.userId : null);
     } else {
         await updateDiceEscalatorPvPMessage_New(gameData); 
