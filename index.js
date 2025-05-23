@@ -2117,6 +2117,9 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
     await finalizeCoinflipPvBGame(gameData);
 }
 
+JavaScript
+// In Part 5a, Section 3 (ensure all dependencies like pool, updateUserBalanceAndLedger, formatBalanceForDisplay, etc. are available)
+
 async function finalizeCoinflipPvBGame(gameData) {
     const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, result, userObj } = gameData;
     const logPrefix = `[CF_PvB_Finalize GID:${gameId}]`;
@@ -2126,24 +2129,20 @@ async function finalizeCoinflipPvBGame(gameData) {
     const playerWins = playerChoice === result;
     let payoutAmountLamports = playerWins ? betAmount * 2n : 0n;
     let ledgerOutcomeCode = playerWins ? `win_coinflip_pvb_${playerChoice}` : `loss_coinflip_pvb_${playerChoice}_vs_${result}`;
-    let finalUserBalance = BigInt(userObj.balance); // Start with balance before this game's outcome for calculation
+    let finalUserBalance = BigInt(userObj.balance); // This will be updated but not displayed
 
     let client;
     try {
         client = await pool.connect(); await client.query('BEGIN');
-        // For wins, amount in updateUserBalanceAndLedger is total payout (stake + profit)
-        // For losses, amount is 0 (stake already deducted)
         const balanceUpdate = await updateUserBalanceAndLedger(client, userId, payoutAmountLamports, ledgerOutcomeCode, { game_id_custom_field: gameId }, `PvB Coinflip: ${playerChoice} vs Bot ${result}`);
         if (!balanceUpdate.success) throw new Error(balanceUpdate.error || "DB Error during Coinflip PvB payout.");
-        finalUserBalance = balanceUpdate.newBalanceLamports; // Get the true final balance
+        finalUserBalance = balanceUpdate.newBalanceLamports; // Update for internal tracking
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        // resultOutcomeText += `\n\n⚠️ Critical error settling wager. Admin notified.`; // This variable needs to be defined before appending
+        // resultOutcomeText += `\n\n⚠️ Critical error settling wager. Admin notified.`; // This variable needs to be defined before appending (if used)
         if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed.`, { parse_mode: 'HTML'});
-        // If DB fails, finalUserBalance might be incorrect, so we'd use pre-payout balance or a warning.
-        // For now, we'll proceed with the balance state before this attempt for the message if error.
     } finally { if (client) client.release(); }
 
     const resultDisplay = result === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
@@ -2151,8 +2150,8 @@ async function finalizeCoinflipPvBGame(gameData) {
     const resultMessageHTML = `${titleResultHTML}\n\n` +
         `You called: <b>${escapeHTML(playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails")}</b>\n` +
         `The coin landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
-        (playerWins ? `Congratulations! You won <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> in profit (total payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)!` : `The Bot Dealer claims the pot of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`) +
-        `\n\nYour new balance: approx. <b>${escapeHTML(await formatBalanceForDisplay(finalUserBalance, 'USD'))}</b>.`;
+        (playerWins ? `Congratulations! You won <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> in profit (total payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)!` : `The Bot Dealer claims the pot of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`);
+        // Balance display line removed
 
     const postGameKeyboard = createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, betAmount);
     if (gameData.gameMessageId && bot) {
@@ -2290,33 +2289,30 @@ async function finalizeCoinflipPvPGame(gameData) {
     const winnerObj = callerWon ? (callerId === p1.userId ? p1 : p2) : (callerId === p1.userId ? p2 : p1);
     const loserObj = callerWon ? (callerId === p1.userId ? p2 : p1) : (callerId === p1.userId ? p1 : p2);
 
-    let payoutAmountLamports = betAmount * 2n; // Winner gets the full pot (their bet back + opponent's bet)
-    let ledgerOutcomeCodeWinner = `win_coinflip_pvp_result`; // Simplified, details in notes
+    let payoutAmountLamports = betAmount * 2n; // Winner gets the full pot
+    let ledgerOutcomeCodeWinner = `win_coinflip_pvp_result`;
     let ledgerOutcomeCodeLoser = `loss_coinflip_pvp_result`;
-    let finalWinnerBalance = BigInt(winnerObj.userObj.balance); // Start with balance before this game for calc
-    let finalLoserBalance = BigInt(loserObj.userObj.balance);
+    let finalWinnerBalance = BigInt(winnerObj.userObj.balance); // For internal tracking
+    let finalLoserBalance = BigInt(loserObj.userObj.balance);  // For internal tracking
 
     let client;
     try {
         client = await pool.connect(); await client.query('BEGIN');
-        // Winner receives the total pot (their original bet was already deducted, so credit 2x bet)
         const winnerUpdate = await updateUserBalanceAndLedger(client, winnerObj.userId, payoutAmountLamports, ledgerOutcomeCodeWinner, { game_id_custom_field: gameId, opponent_id_custom_field: loserObj.userId }, `PvP Coinflip WIN. Caller: ${callerId===winnerObj.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice}, Result: ${result}`);
         if (!winnerUpdate.success) throw new Error(`Winner payout failed: ${winnerUpdate.error}`);
         finalWinnerBalance = winnerUpdate.newBalanceLamports;
 
-        // Loser's balance was already deducted, ledger entry for 0 net change to reflect loss.
         const loserUpdate = await updateUserBalanceAndLedger(client, loserObj.userId, 0n, ledgerOutcomeCodeLoser, { game_id_custom_field: gameId, opponent_id_custom_field: winnerObj.userId }, `PvP Coinflip LOSS. Caller: ${callerId===loserObj.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice}, Result: ${result}`);
-        if (!loserUpdate.success && loserUpdate.errorCode !== 'INSUFFICIENT_FUNDS') { // Log if not just an insufficient funds error (which is fine for a 0n update)
+        if (!loserUpdate.success && loserUpdate.errorCode !== 'INSUFFICIENT_FUNDS') {
              console.warn(`${logPrefix} Non-critical error updating loser's ledger (0n change): ${loserUpdate.error}`);
         }
-        finalLoserBalance = loserUpdate.newBalanceLamports; // This will reflect their balance after the initial bet was already deducted.
+        finalLoserBalance = loserUpdate.newBalanceLamports;
 
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL DB error during PvP Coinflip payout: ${e.message}`);
         if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nWinner: ${winnerObj.mentionHTML}\nLoser: ${loserObj.mentionHTML}\nError: ${escapeHTML(e.message)}. Manual balance check required.`, { parse_mode: 'HTML'});
-        // If DB fails, the balance display will be based on pre-payout states or last known good state.
     } finally { if (client) client.release(); }
 
     const callerActualMentionHTML = (callerId === p1.userId ? p1.mentionHTML : p2.mentionHTML);
@@ -2329,15 +2325,13 @@ async function finalizeCoinflipPvPGame(gameData) {
         `<b>${callerActualMentionHTML}</b> was chosen to make the call and predicted: <b>${escapeHTML(callDisplay)}</b>!\n` +
         `The coin majestically landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
         `And thus, the champion of this fateful flip is... 🥳🏆 <b>${winnerObj.mentionHTML}</b>! You seize the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>!\n\n` +
-        `Commiserations, ${loserObj.mentionHTML}! Better luck on the next toss.\n\n`+
-        `Updated Balances (approx. USD):\n` +
-        `${winnerObj.mentionHTML}: <b>${escapeHTML(await formatBalanceForDisplay(finalWinnerBalance, 'USD'))}</b>\n`+
-        `${loserObj.mentionHTML}: <b>${escapeHTML(await formatBalanceForDisplay(finalLoserBalance, 'USD'))}</b>`;
+        `Commiserations, ${loserObj.mentionHTML}! Better luck on the next toss.`;
+        // Balance display lines removed
 
     const postGameKeyboard = createPostGameKeyboard(GAME_IDS.COINFLIP_PVP, betAmount);
     if (gameData.gameMessageId && bot) {
         await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e)=>{
-            if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
+             if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
         });
     } else {
         await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
