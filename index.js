@@ -2117,7 +2117,6 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
     await finalizeCoinflipPvBGame(gameData);
 }
 
-JavaScript
 // In Part 5a, Section 3 (ensure all dependencies like pool, updateUserBalanceAndLedger, formatBalanceForDisplay, etc. are available)
 
 async function finalizeCoinflipPvBGame(gameData) {
