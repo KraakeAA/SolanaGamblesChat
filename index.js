@@ -9047,12 +9047,54 @@ bot.on('message', async (msg) => {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
                 }
                 if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
-                    const isInitiatorDE_PvP = (gData.initiator && gData.initiator.userId === rollerId && gData.initiator.isTurn && (gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji'));
-                    const isOpponentDE_PvP = (gData.opponent && gData.opponent.userId === rollerId && gData.opponent.isTurn && (gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji'));
-                    if (isInitiatorDE_PvP || isOpponentDE_PvP) {
-                        gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
-                    }
+                const logCtx = `[DiceRouter DE_PVP GID:${gId} Roller:${rollerId}]`; // Debug log context
+                console.log(`${logCtx} Checking game. Game Status: '${gData.status}'`);
+                
+                let P1_ID = gData.initiator?.userId;
+                let P1_IS_TURN = gData.initiator?.isTurn;
+                // P1_PLAYER_STATUS is not used in your original condition, so not strictly needed for the condition check itself
+                // let P1_PLAYER_STATUS = gData.initiator?.status; 
+
+                let P2_ID = gData.opponent?.userId;
+                let P2_IS_TURN = gData.opponent?.isTurn;
+                // P2_PLAYER_STATUS is not used in your original condition
+                // let P2_PLAYER_STATUS = gData.opponent?.status;
+
+                console.log(`${logCtx} P1 (${P1_ID}): isTurn=${P1_IS_TURN}`);
+                console.log(`${logCtx} P2 (${P2_ID}): isTurn=${P2_IS_TURN}`);
+
+                // Conditions from YOUR provided snippet
+                const isInitiatorDE_PvP_Condition = (gData.initiator && 
+                                           gData.initiator.userId === rollerId && 
+                                           gData.initiator.isTurn && 
+                                           (gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji'));
+                
+                const isOpponentDE_PvP_Condition = (gData.opponent && 
+                                          gData.opponent.userId === rollerId && 
+                                          gData.opponent.isTurn && 
+                                          (gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji'));
+
+                // Logging individual parts of the conditions
+                if (gData.initiator) {
+                    console.log(`${logCtx} Checking P1: UserMatch=${gData.initiator.userId === rollerId}, TurnMatch=${gData.initiator.isTurn}, GameStatusForP1RollCheck=${(gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji')}`);
                 }
+                if (gData.opponent) {
+                    console.log(`${logCtx} Checking P2: UserMatch=${gData.opponent.userId === rollerId}, TurnMatch=${gData.opponent.isTurn}, GameStatusForP2RollCheck=${(gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji')}`);
+                }
+                
+                console.log(`${logCtx} isInitiatorDE_PvP_Condition Result: ${isInitiatorDE_PvP_Condition}`);
+                console.log(`${logCtx} isOpponentDE_PvP_Condition Result: ${isOpponentDE_PvP_Condition}`);
+
+                if (isInitiatorDE_PvP_Condition || isOpponentDE_PvP_Condition) {
+                    console.log(`${logCtx} MATCH FOUND!`);
+                    gameIdForDiceRoll = gId; 
+                    gameDataForDiceRoll = gData; 
+                    isDiceEscalatorEmoji = true; // Setting your original flag
+                    break; 
+                } else {
+                    console.log(`${logCtx} NO MATCH for this DE_PVP game object with your original routing conditions.`);
+                }
+            }
                 // --- UPDATED CONDITION FOR DICE 21 PvB ---
                 if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId &&
                     (gData.status === 'player_turn_hit_stand_prompt' || // For subsequent hits
