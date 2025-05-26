@@ -13532,125 +13532,158 @@ async function addPayoutJob(jobData) {
 }
 
 async function handleWithdrawalPayoutJob(withdrawalId) {
-    const logPrefix = `[WithdrawJob ID:${withdrawalId}]`;
+    const logPrefix = `[WithdrawJob_HTML ID:${withdrawalId}]`; // Added HTML to log prefix
     console.log(`⚙️ ${logPrefix} Processing withdrawal payout...`);
     let clientForDb = null;
-    let sendSolResult = { success: false, error: "Send SOL not initiated", isRetryable: false }; 
+    // Initialize sendSolResult to ensure error.isRetryable can be checked even if sendSol is not reached
+    let sendSolResult = { success: false, error: "Send SOL not initiated", isRetryable: false, signature: null, blockTime: null }; 
+    const payerKeypair = MAIN_BOT_KEYPAIR; 
 
-    const details = await getWithdrawalDetailsDB(withdrawalId); // From Part P2
+    const details = await getWithdrawalDetailsDB(withdrawalId);
     if (!details) {
         const error = new Error(`Withdrawal details not found for ID ${withdrawalId}. Job cannot proceed.`);
-        error.isRetryable = false; throw error;
+        error.isRetryable = false; // This error is not typically retryable for the job
+        console.error(`${logPrefix} ${error.message}`);
+        // Optionally, update DB to a specific error state if details are missing, though this job might not run again if error is thrown.
+        // This depends on how your job queue handles thrown errors vs. explicit retry flags.
+        throw error;
     }
 
+    // If already in a final state, don't re-process.
     if (details.status === 'completed' || details.status === 'confirmed' || details.status === 'sent') {
+        console.log(`ℹ️ ${logPrefix} Withdrawal already in a final state (${details.status}). Skipping.`);
         return; 
     }
-    if (details.status === 'failed' && !sendSolResult.isRetryable) { 
-        // If previously failed non-retryably, don't try again unless sendSolResult indicates it is now retryable (e.g. new error)
-        // This logic might need refinement based on how isRetryable is set by sendSol.
-        // For now, if DB says failed, and we haven't just had a retryable failure, we stop.
-        return;
+    // If it previously failed and the failure was marked as non-retryable by sendSol, don't try again.
+    // The isRetryable flag on jobError (thrown at the end) controls queue retries.
+    if (details.status === 'failed' /* && specific non-retryable error was logged previously */) {
+        // This check might be too simple. The job queue's retry mechanism based on thrown error.isRetryable is better.
+        // For now, if it's 'failed', we might only proceed if a retry is explicitly desired or if the error type was transient.
+        // The current job queue retries based on thrown errors. If it gets here, it's a new attempt.
+        console.log(`ℹ️ ${logPrefix} Withdrawal previously marked 'failed'. This is attempt #${(jobData?.attempts || 0) + 1}. Proceeding.`);
     }
 
     const userId = String(details.user_telegram_id);
     const recipient = details.destination_address;
-    const amountToActuallySend = BigInt(details.amount_lamports);
-    const feeApplied = BigInt(details.fee_lamports);
-    const totalAmountDebitedFromUser = amountToActuallySend + feeApplied;
-    const userForNotif = await getOrCreateUser(userId); 
-    const playerRefForNotif = getPlayerDisplayReference(userForNotif || {id:userId, first_name:"Player"}); // getPlayerDisplayReference from Part 3
+    const amountToActuallySend = BigInt(details.amount_lamports); // Amount user receives
+    const feeApplied = BigInt(details.fee_lamports); // Fee deducted from user's balance initially
+    const totalAmountDebitedFromUser = amountToActuallySend + feeApplied; // This was already taken from user balance
 
+    const userForNotif = await getOrCreateUser(userId); 
+    // Ensure playerRefHTML is HTML-escaped for use in HTML messages
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userForNotif || {id:userId, first_name:"Player"}));
+
+    // Phase 1: Mark as 'processing'
     try {
         clientForDb = await pool.connect();
         await clientForDb.query('BEGIN');
-        await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'processing'); // From Part P2
+        await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'processing', null, null, null); // No sig/err/blocktime yet
         await clientForDb.query('COMMIT');
+        console.log(`${logPrefix} Marked withdrawal as 'processing' in DB.`);
     } catch (dbError) {
-        if (clientForDb) await clientForDb.query('ROLLBACK').catch(()=>{});
+        if (clientForDb) await clientForDb.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} DB Rollback Error setting 'processing': ${rbErr.message}`));
         console.error(`❌ ${logPrefix} DB error setting status to 'processing': ${dbError.message}`);
+        const jobError = new Error(`DB error pre-send: ${dbError.message}`); 
         jobError.isRetryable = true; // DB errors are often retryable
-        throw dbError; // Re-throw to trigger retry if applicable
+        throw jobError; 
     } finally {
         if (clientForDb) clientForDb.release();
-        clientForDb = null; // Ensure it's reset
+        clientForDb = null; 
     }
 
+    // Phase 2: Attempt SOL transfer
     try {
-        sendSolResult = await sendSol(MAIN_BOT_KEYPAIR, recipient, amountToActuallySend, `Withdrawal ID ${withdrawalId} from ${BOT_NAME}`, details.priority_fee_microlamports, details.compute_unit_limit); // sendSol from Part P1
+        sendSolResult = await sendSol(
+            payerKeypair, 
+            recipient, 
+            amountToActuallySend, 
+            `Withdrawal ID ${withdrawalId} from ${BOT_NAME}`, 
+            details.priority_fee_microlamports, 
+            details.compute_unit_limit
+        ); 
 
         clientForDb = await pool.connect(); 
         await clientForDb.query('BEGIN');
 
         if (sendSolResult.success && sendSolResult.signature) {
             console.log(`✅ ${logPrefix} sendSol successful. TX: ${sendSolResult.signature}. Marking 'completed'.`);
-            await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'completed', sendSolResult.signature, null, sendSolResult.blockTime);
-            await clientForDb.query('COMMIT');
             
-            await safeSendMessage(userId, // safeSendMessage from Part 1
-                `💸 *Withdrawal Sent Successfully, ${playerRefForNotif}!* 💸\n\n` +
-                `Your withdrawal of *${escapeMarkdownV2(formatCurrency(amountToActuallySend, 'SOL'))}* to wallet \`${escapeMarkdownV2(recipient)}\` has been processed.\n` + // Escaped .
-                `🧾 Transaction ID: \`${escapeMarkdownV2(sendSolResult.signature)}\`\n\n` +
-                `Funds should arrive shortly depending on network confirmations. Thank you for playing at ${escapeMarkdownV2(BOT_NAME)}!`, // Escaped !
-                { parse_mode: 'MarkdownV2' }
-            );
-            return; 
+            const finalSignature = sendSolResult.signature; // String
+            const finalBlockTime = (typeof sendSolResult.blockTime === 'number') ? sendSolResult.blockTime : null;
+            const finalErrorMessage = null; 
+
+            await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'completed', finalSignature, finalErrorMessage, finalBlockTime);
+            
+            await clientForDb.query('COMMIT');
+            console.log(`✅ ${logPrefix} Withdrawal ID ${withdrawalId} successfully marked 'completed' in DB.`);
+            
+            const successMsgHTML = `💸 <b>Withdrawal Sent Successfully, ${playerRefHTML}!</b> 💸\n\n` +
+                                 `Your withdrawal of <b>${escapeHTML(formatCurrency(amountToActuallySend, 'SOL'))}</b> to wallet <code>${escapeHTML(recipient)}</code> has been processed.\n` +
+                                 `🧾 Transaction ID: <a href="https://solscan.io/tx/${escapeHTML(sendSolResult.signature)}">${escapeHTML(sendSolResult.signature)}</a>\n\n` +
+                                 `Funds should arrive shortly depending on network confirmations. Thank you for playing at ${escapeHTML(BOT_NAME)}!`;
+            await safeSendMessage(userId, successMsgHTML, { parse_mode: 'HTML', disable_web_page_preview: true });
+            return; // Successful completion of the job
         } else { 
+            // sendSol failed
             const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure.';
             console.error(`❌ ${logPrefix} sendSol FAILED for withdrawal ID ${withdrawalId}. Reason: ${sendErrorMsg}. Type: ${sendSolResult.errorType}. Retryable: ${sendSolResult.isRetryable}`);
-            await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'failed', null, sendErrorMsg.substring(0, 250));
             
+            // Mark as failed in DB
+            await updateWithdrawalStatusDB(clientForDb, withdrawalId, 'failed', null, sendErrorMsg.substring(0, 250), null);
+            
+            // Refund the user (since balance was already debited when request was confirmed)
+            console.log(`${logPrefix} sendSol failed. Attempting to refund ${totalAmountDebitedFromUser} lamports to user ${userId}.`);
             const refundNotes = `Refund for failed withdrawal ID ${withdrawalId}. Send Error: ${sendErrorMsg.substring(0,100)}`;
-            const refundUpdateResult = await updateUserBalanceAndLedger( // from Part P2
-                clientForDb, userId, totalAmountDebitedFromUser, 
+            const refundUpdateResult = await updateUserBalanceAndLedger( 
+                clientForDb, userId, totalAmountDebitedFromUser, // Credit back the full amount
                 'withdrawal_refund', { withdrawal_id: withdrawalId }, refundNotes
             );
 
             if (refundUpdateResult.success) {
                 await clientForDb.query('COMMIT');
                 console.log(`✅ ${logPrefix} Successfully refunded ${formatCurrency(totalAmountDebitedFromUser, 'SOL')} to user ${userId}.`);
-                await safeSendMessage(userId,
-                    `⚠️ *Withdrawal Failed* ⚠️\n\n${playerRefForNotif}, your withdrawal of *${escapeMarkdownV2(formatCurrency(amountToActuallySend, 'SOL'))}* could not be processed at this time (Reason: \`${escapeMarkdownV2(sendErrorMsg)}\`).\n` + // Escaped ()
-                    `The full amount of *${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}* (including fee) has been refunded to your casino balance.`, // Escaped . and ()
-                    {parse_mode: 'MarkdownV2'}
-                );
+                const failureMsgHTML = `⚠️ <b>Withdrawal Failed</b> ⚠️\n\n${playerRefHTML}, your withdrawal of <b>${escapeHTML(formatCurrency(amountToActuallySend, 'SOL'))}</b> could not be processed at this time (Reason: <code>${escapeHTML(sendErrorMsg)}</code>).\n` +
+                                     `The full amount of <b>${escapeHTML(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}</b> (which was reserved for this withdrawal, including fees) has been refunded to your casino balance.`;
+                await safeSendMessage(userId, failureMsgHTML, {parse_mode: 'HTML'});
             } else {
                 await clientForDb.query('ROLLBACK');
                 console.error(`❌ CRITICAL ${logPrefix} FAILED TO REFUND USER ${userId} for withdrawal ${withdrawalId}. Amount: ${formatCurrency(totalAmountDebitedFromUser, 'SOL')}. Refund DB Error: ${refundUpdateResult.error}`);
                 if (typeof notifyAdmin === 'function') {
-                    notifyAdmin(`🚨🚨 *CRITICAL: FAILED WITHDRAWAL REFUND* 🚨🚨\nUser: ${playerRefForNotif} (\`${escapeMarkdownV2(String(userId))}\`)\nWD ID: \`${withdrawalId}\`\nAmount Due (Refund): \`${escapeMarkdownV2(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}\`\nSend Error: \`${escapeMarkdownV2(sendErrorMsg)}\`\nRefund DB Error: \`${escapeMarkdownV2(refundUpdateResult.error || 'Unknown')}\`\nMANUAL INTERVENTION REQUIRED.`, {parse_mode:'MarkdownV2'});
+                    notifyAdmin(`🚨🚨 *CRITICAL: FAILED WITHDRAWAL REFUND* 🚨🚨\nUser: ${playerRefHTML} (<code>${escapeHTML(String(userId))}</code>)\nWD ID: <code>${withdrawalId}</code>\nAmount Due (Refund): <code>${escapeHTML(formatCurrency(totalAmountDebitedFromUser, 'SOL'))}</code>\nSend Error: <code>${escapeHTML(sendErrorMsg)}</code>\nRefund DB Error: <code>${escapeHTML(refundUpdateResult.error || 'Unknown')}</code>\nMANUAL INTERVENTION REQUIRED.`, {parse_mode:'HTML'});
                 }
             }
             
             const errorToThrowForRetry = new Error(sendErrorMsg);
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true; 
-            throw errorToThrowForRetry;
+            throw errorToThrowForRetry; // This will make the job queue retry if isRetryable is true
         }
-    } catch (jobError) { // Catches errors from sendSol or DB ops after sendSol
-        if (clientForDb && clientForDb.release) { // Check if clientForDb was connected and not yet released
+    } catch (jobError) { 
+        // This catch block handles errors from sendSol OR subsequent DB operations if sendSol succeeded but DB failed
+        if (clientForDb && clientForDb.release) { 
              try { await clientForDb.query('ROLLBACK'); } catch(rbErr) { console.error(`${logPrefix} Final rollback error on jobError: ${rbErr.message}`);}
         }
-        console.error(`❌ ${logPrefix} Error during withdrawal job ID ${withdrawalId}: ${jobError.message}`, jobError.stack?.substring(0,500));
+        console.error(`❌ ${logPrefix} Error during withdrawal job ID ${withdrawalId} (Phase 2 - Send/Post-Send DB): ${jobError.message}`, jobError.stack?.substring(0,500));
         
-        // Ensure status is 'failed' if not already completed.
-        const updateClient = await pool.connect();
+        // Attempt to mark as 'failed' if not already completed, as a last resort.
+        const updateClientFinal = await pool.connect();
         try {
-            const currentDetailsAfterJobError = await getWithdrawalDetailsDB(withdrawalId, updateClient); 
+            const currentDetailsAfterJobError = await getWithdrawalDetailsDB(withdrawalId, updateClientFinal); 
             if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'completed' && currentDetailsAfterJobError.status !== 'failed') {
-                await updateWithdrawalStatusDB(updateClient, withdrawalId, 'failed', null, `Job error: ${String(jobError.message || jobError)}`.substring(0,250));
+                await updateWithdrawalStatusDB(updateClientFinal, withdrawalId, 'failed', null, `Job error: ${String(jobError.message || jobError)}`.substring(0,250), null);
             }
         } catch (finalStatusUpdateError) {
-            console.error(`${logPrefix} Failed to update status to 'failed' after job error: ${finalStatusUpdateError.message}`);
+            console.error(`${logPrefix} Failed to update status to 'failed' after job error (Phase 2): ${finalStatusUpdateError.message}`);
         } finally {
-            updateClient.release();
+            updateClientFinal.release();
         }
         
-        if (jobError.isRetryable === undefined) { // Ensure isRetryable is set
-             jobError.isRetryable = sendSolResult.isRetryable || false; 
+        // Ensure the error re-thrown to the job queue has the correct retry flag
+        if (jobError.isRetryable === undefined) { 
+            jobError.isRetryable = sendSolResult?.isRetryable || false; // Default to sendSolResult's retryable status or false
         }
         throw jobError; // Re-throw for retry mechanism in addPayoutJob
     } finally {
-        if (clientForDb && clientForDb.release) clientForDb.release(); // Ensure release if it was connected
+        if (clientForDb && clientForDb.release) clientForDb.release(); 
     }
 }
 
