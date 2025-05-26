@@ -11982,18 +11982,19 @@ async function handleWithdrawalAmountInput(msg, currentState) {
     const textAmount = msg.text ? msg.text.trim() : '';
     const logPrefix = `[WithdrawAmountInput_HTML_V3_Newline UID:${userId}]`; 
 
+    // This initial check should now pass given previous fixes, but the log inside it is important if it ever triggers again.
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_amount' || dmChatId !== userId ||
         !currentState.data.linkedWallet || typeof currentState.data.currentBalanceLamportsStr !== 'string') {
-        console.error(`${logPrefix} Invalid state or data for withdrawal amount. State: ${stringifyWithBigInt(currentState).substring(0,300)}`);
+        console.error(`${logPrefix} Invalid state or data at START of handleWithdrawalAmountInput. State: ${stringifyWithBigInt(currentState).substring(0,300)}`);
         clearUserState(userId);
-        await safeSendMessage(dmChatId, "⚙️ Error: Withdrawal context lost or invalid.\nPlease restart the withdrawal process from the <code>/wallet</code> menu.", { parse_mode: 'HTML' });
+        await safeSendMessage(dmChatId, "⚙️ Error: Withdrawal context lost or invalid (Initial Check).<br>Please restart the withdrawal process from the <code>/wallet</code> menu.", { parse_mode: 'HTML' });
         return;
     }
 
     const { linkedWallet, originalPromptMessageId, currentBalanceLamportsStr, originalGroupChatId, originalGroupMessageId } = currentState.data;
     const currentBalanceLamports = BigInt(currentBalanceLamportsStr);
     if (originalPromptMessageId && bot) { await bot.deleteMessage(dmChatId, originalPromptMessageId).catch(() => {}); }
-    clearUserState(userId);
+    clearUserState(userId); // Clear the 'awaiting_withdrawal_amount' state
 
     try {
         const solPrice = await getSolUsdPrice(); 
@@ -12006,14 +12007,14 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         if (textAmount.toLowerCase() === 'max') {
             const availableToWithdrawAfterFee = currentBalanceLamports - WITHDRAWAL_FEE_LAMPORTS;
             if (availableToWithdrawAfterFee < effectiveMinWithdrawalLamports) {
-                 throw new Error(`Your balance is too low to withdraw the maximum after fees.\nYou need at least <b>${minWithdrawDisplayUSD_HTML}</b> (plus fee) to make a withdrawal.`);
+                 throw new Error(`Your balance is too low to withdraw the maximum after fees.<br>You need at least <b>${minWithdrawDisplayUSD_HTML}</b> (plus fee) to make a withdrawal.`);
             }
             amountLamports = availableToWithdrawAfterFee; 
             amountUSD = parseFloat(Number(amountLamports) / Number(LAMPORTS_PER_SOL) * solPrice);
         } else {
             amountUSD = parseFloat(String(textAmount).replace(/[^0-9.]/g, ''));
             if (isNaN(amountUSD) || amountUSD <= 0) {
-                throw new Error("Invalid number format or non-positive amount.\nPlease enter a value like <code>50</code> or <code>75.50</code>, or type <code>max</code>.");
+                throw new Error("Invalid number format or non-positive amount.<br>Please enter a value like <code>50</code> or <code>75.50</code>, or type <code>max</code>.");
             }
             amountLamports = convertUSDToLamports(amountUSD, solPrice); 
         }
@@ -12050,8 +12051,28 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         });
 
         if (sentConfirmMsg?.message_id) {
-            userStateCache.set(userId, { /* ... as before ... */ });
-            if (originalGroupChatId && originalGroupMessageId && bot) { /* ... */ }
+            const stateToSetForConfirmation = {
+                state: 'awaiting_withdrawal_confirmation',
+                chatId: dmChatId, // Should be the DM chat ID (same as userId)
+                messageId: sentConfirmMsg.message_id, // ID of the Yes/No prompt message
+                data: { 
+                    linkedWallet: linkedWallet, 
+                    amountLamportsStr: amountLamports.toString(), // Amount user receives
+                    feeLamportsStr: feeLamports.toString(),      // Fee
+                    originalGroupChatId, 
+                    originalGroupMessageId 
+                },
+                timestamp: Date.now()
+            };
+            userStateCache.set(userId, stateToSetForConfirmation);
+            // --- ADDED DIAGNOSTIC LOG ---
+            console.log(`${logPrefix} State SET for awaiting_withdrawal_confirmation. Content: ${stringifyWithBigInt(userStateCache.get(userId))}`);
+            // --- END OF ADDED DIAGNOSTIC LOG ---
+            
+            if (originalGroupChatId && originalGroupMessageId && bot) { 
+                const userForGroupMsg = await getOrCreateUser(userId);
+                await bot.editMessageText(`${escapeHTML(getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"}))}, please check your DMs to confirm your withdrawal request.`, {chat_id: originalGroupChatId, message_id: Number(originalGroupMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+            }
         } else {
             throw new Error("Failed to send withdrawal confirmation message.\nPlease try again.");
         }
@@ -12061,7 +12082,10 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         await safeSendMessage(dmChatId, errorText, {
             parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] }
         });
-        if (originalGroupChatId && originalGroupMessageId && bot) { /* ... */ }
+        if (originalGroupChatId && originalGroupMessageId && bot) { 
+            const userForGroupMsg = await getOrCreateUser(userId);
+            await bot.editMessageText(`${escapeHTML(getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"}))}, there was an error with your withdrawal amount. Please check my DM.`, {chat_id: originalGroupChatId, message_id: Number(originalGroupMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+        }
     }
 }
 
