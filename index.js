@@ -12422,11 +12422,11 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
 
     let userObject = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!userObject) {
-        await safeSendMessage(targetDmChatId, "Error fetching your player profile for withdrawal.\nPlease try <code>/start</code> again.", { parse_mode: 'HTML' });
+        await safeSendMessage(targetDmChatId, "Error fetching your player profile for withdrawal.<br>Please try <code>/start</code> again.", { parse_mode: 'HTML' });
         return;
     }
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    clearUserState(userId);
+    clearUserState(userId); // Clears previous states before setting a new one for withdrawal
 
     let botUsername = "our bot";
     try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* Reduced log */ }
@@ -12454,11 +12454,12 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
         const currentBalanceLamports = await getUserBalance(userId);
 
         if (currentBalanceLamports === null) {
-            throw new Error("Could not retrieve your current balance.\nPlease try again shortly.");
+            throw new Error("Could not retrieve your current balance.<br>Please try again shortly.");
         }
 
         if (!linkedWallet) {
-            const noWalletText = `⚠️ ${playerRefHTML}, you don't have a Solana withdrawal wallet linked to your account yet!\n\n` +
+            // ... (noWalletText and keyboard as before) ...
+            const noWalletText = `⚠️ ${playerRefHTML}, you don't have a Solana withdrawal wallet linked to your account yet!<br><br>` +
                                  `Please link a wallet first using the button below, or by typing <code>/setwallet YOUR_SOL_ADDRESS</code> in this chat.`;
             const noWalletKeyboard = { inline_keyboard: [
                 [{ text: "🔗 Link Withdrawal Wallet Now", callback_data: "menu:link_wallet_prompt" }],
@@ -12485,17 +12486,27 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
         const promptKeyboard = { inline_keyboard: [[{ text: "❌ Cancel & Back to Wallet", callback_data: "menu:wallet" }]] };
         await bot.editMessageText(promptTextHTML, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: promptKeyboard, disable_web_page_preview: true });
 
-        userStateCache.set(userId, {
+        const stateToSet = {
             state: 'awaiting_withdrawal_amount',
             chatId: targetDmChatId,
             messageId: workingMessageId,
-            data: { /* ... as before ... */ },
+            data: {
+                linkedWallet: linkedWallet,
+                currentBalanceLamportsStr: currentBalanceLamports.toString(),
+                originalPromptMessageId: workingMessageId, 
+                originalGroupChatId: (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) ? originalCommandChatId : (msgOrCbMsg.isCallbackRedirect ? msgOrCbMsg.originalChatInfo?.id : null),
+                originalGroupMessageId: (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) ? null : (msgOrCbMsg.isCallbackRedirect ? msgOrCbMsg.originalChatInfo?.messageId : null)
+            },
             timestamp: Date.now()
-        });
+        };
+        userStateCache.set(userId, stateToSet);
+        // --- ADDED DIAGNOSTIC LOG ---
+        console.log(`${logPrefix} State SET for awaiting_withdrawal_amount. Content: ${stringifyWithBigInt(userStateCache.get(userId))}`);
+        // --- END OF ADDED DIAGNOSTIC LOG ---
 
     } catch (error) {
-        console.error(`${logPrefix} Error preparing withdrawal: ${error.message}`);
-        const errorText = `⚙️ Apologies, ${playerRefHTML}, an error occurred while preparing your withdrawal request: <code>${escapeHTML(error.message)}</code>.\nPlease try again from the wallet menu.`; // error.message might contain \n now
+        console.error(`${logPrefix} Error preparing withdrawal: ${error.message}`, error.stack?.substring(0,500));
+        const errorText = `⚙️ Apologies, ${playerRefHTML}, an error occurred while preparing your withdrawal request: <code>${escapeHTML(error.message)}</code>.<br>Please try again from the wallet menu.`;
         const errorKeyboard = { inline_keyboard: [[{ text: "💳 Back to Wallet Menu", callback_data: "menu:wallet" }]] };
         if (workingMessageId) {
             await bot.editMessageText(errorText, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: errorKeyboard })
