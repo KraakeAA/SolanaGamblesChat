@@ -8274,203 +8274,214 @@ async function handleMinesCancelOfferCallback(offerId, userObject, originalMessa
 // --- Command Handler Functions (General Casino Bot Commands) ---
 
 async function handleStartCommand(msg, args) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_START = `[StartCmd UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_START_V2 = `[StartCmd_V2 UID:${userId} CH:${chatId}]`; // V2 for new version
 
-    if (typeof clearUserState === 'function') {
-        clearUserState(userId);
-    } else {
-        userStateCache.delete(userId);
-    }
+    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing `/start` again.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const playerRef = getPlayerDisplayReference(userObject);
-    let botUsername = BOT_NAME || "our bot";
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { console.error(`${LOG_PREFIX_START} Could not fetch bot username: ${e.message}`); }
+    // Get user object first for any path
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        // This error message will be HTML
+        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); // HTML safe version
+    let botUsername = BOT_NAME || "our bot";
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
+    const botUsernameHTML = escapeHTML(botUsername);
 
-    if (args && args[0]) {
-        const deepLinkParam = args[0];
-        console.log(`${LOG_PREFIX_START} Processing deep link parameter: ${deepLinkParam}`);
 
-        if (deepLinkParam.startsWith('ref_')) {
-            const refCode = deepLinkParam.substring(4);
-            const referrerUserRecord = await getUserByReferralCode(refCode);
-            let refByDisplay = "a fellow player";
+    // 1. Handle deep link arguments first
+    if (args && args[0]) {
+        const deepLinkParam = args[0];
+        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
 
-            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
-                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
-                if (referrerFullObj) refByDisplay = getPlayerDisplayReference(referrerFullObj);
+        if (deepLinkParam.startsWith('ref_')) {
+            const refCode = deepLinkParam.substring(4);
+            // (Referral logic as in your original document - ensuring messages are HTML and sent to DM)
+            const referrerUserRecord = await getUserByReferralCode(refCode);
+            let refByDisplayHTML = "a fellow player";
 
-                if (!userObject.referrer_telegram_id) {
-                    const client = await pool.connect();
-                    try {
-                        await client.query('BEGIN');
-                        await client.query('UPDATE users SET referrer_telegram_id = $1 WHERE telegram_id = $2 AND referrer_telegram_id IS NULL', [referrerUserRecord.telegram_id, userId]);
-                        await client.query(
-                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
-                             VALUES ($1, $2, 'pending_criteria', NOW(), NOW())
-                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        await client.query('COMMIT');
-                        userObject = await getOrCreateUser(userId); 
-                        console.log(`${LOG_PREFIX_START} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} via ref_code ${refCode}.`);
-                    } catch (refError) {
-                        await client.query('ROLLBACK');
-                        console.error(`${LOG_PREFIX_START} Error linking referral for user ${userId} via code ${refCode}:`, refError);
-                    } finally {
-                        client.release();
-                    }
-                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
-                    // Already referred by this person
-                } else {
-                    const existingReferrer = await getOrCreateUser(userObject.referrer_telegram_id);
-                    if(existingReferrer) refByDisplay = getPlayerDisplayReference(existingReferrer) + " (your original referrer)";
-                    else refByDisplay = "your original referrer";
-                }
-            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
-                refByDisplay = "yourself (clever try! 😉)";
-            }
+            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
+                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
+                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
 
-            const referralMsg = `👋 Welcome, ${playerRef}! You joined via ${refByDisplay}. Explore the casino with \`/help\`!`;
-            if (chatType !== 'private') {
-                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-                await safeSendMessage(chatId, `${playerRef}, welcome! I've sent more info to our private chat: @${escapeMarkdownV2(botUsername)} 📬`, { parse_mode: 'MarkdownV2' });
-                await safeSendMessage(userId, referralMsg, { parse_mode: 'MarkdownV2' });
-            } else {
-                await safeSendMessage(chatId, referralMsg, { parse_mode: 'MarkdownV2' });
-            }
-            // Call handleHelpCommand to display the main help menu in DM
-            await handleHelpCommand({ 
-                from: { ...msg.from, id: userId, username: userObject.username, first_name: userObject.first_name, last_name: userObject.last_name }, // Use updated userObject details
-                chat: { id: userId, type: 'private' }, // Force chat to be private DM
-                message_id: null // Indicate no prior message to edit in DM for this call
-            });
-            return;
-        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) { 
-            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
-            const [actionName, ...actionParams] = actionDetails.split('_');
-            console.log(`${LOG_PREFIX_START} Deep link for menu/callback action: ${actionName}, Params: ${actionParams.join(',')}`);
-            
-            const userGuidanceText = `👋 Welcome back, ${playerRef}!\nTaking you to the requested section. You can always type \`/help\` for main options.`;
-            await safeSendMessage(userId, userGuidanceText, {parse_mode: 'MarkdownV2'});
-            
-            if (typeof handleMenuAction === 'function') {
-                // Simulate a callback originating from DM for handleMenuAction
-                await handleMenuAction(userId, userId, null, actionName, actionParams, true, 'private');
-            } else {
-                // Fallback to general help if specific menu action handler isn't available (should not happen if routed correctly)
-                await handleHelpCommand({ 
-                    from: { ...msg.from, id: userId, username: userObject.username, first_name: userObject.first_name, last_name: userObject.last_name }, 
-                    chat: { id: userId, type: 'private' } 
-                });
-            }
-            return;
-        }
-    }
+                if (!userObject.referrer_telegram_id) {
+                    // ... (DB logic to link referral - unchanged) ...
+                    let clientRefLink = null;
+                    try {
+                        clientRefLink = await pool.connect();
+                        await clientRefLink.query('BEGIN');
+                        await clientRefLink.query('UPDATE users SET referrer_telegram_id = $1 WHERE telegram_id = $2 AND referrer_telegram_id IS NULL', [referrerUserRecord.telegram_id, userId]);
+                        await clientRefLink.query(
+                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
+                             VALUES ($1, $2, 'pending_criteria', NOW(), NOW())
+                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        await clientRefLink.query('COMMIT');
+                        userObject = await getOrCreateUser(userId); // Re-fetch userObject
+                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id}`);
+                    } catch (refError) {
+                        if(clientRefLink) await clientRefLink.query('ROLLBACK');
+                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
+                    } finally {
+                        if(clientRefLink) clientRefLink.release();
+                    }
+                } else { /* User already has a referrer */ }
+            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
+                refByDisplayHTML = "yourself (clever try! 😉)";
+            }
+            
+            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You joined via ${refByDisplayHTML}.<br>Explore the casino using the menu I've just displayed!`;
+            
+            if (chatType !== 'private') {
+                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
+            }
+            // Send referral welcome and main menu to DM
+            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
+            const dmMsgContext = { // Simulate msg object for DM context
+                from: userObject, 
+                chat: { id: userId, type: 'private' }, 
+                message_id: null // To ensure handleHelpCommand sends a new message
+            };
+            await handleHelpCommand(dmMsgContext);
+            return;
+        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
+            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
+            const [actionName, ...actionParams] = actionDetails.split('_');
+            console.log(`${LOG_PREFIX_START_V2} Deep link for menu/callback action: ${actionName}, Params: ${actionParams.join(',')}`);
+            
+            // Inform user in DM and then route action
+            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!<br>Taking you to the requested section.`;
+            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
+            
+            if (typeof handleMenuAction === 'function') {
+                // handleMenuAction should primarily operate in DMs or handle its own redirection message editing.
+                // We ensure it's called with DM context if it's a deep link.
+                await handleMenuAction(userId, userId, null, actionName, actionParams, true, 'private');
+            } else {
+                console.error(`${LOG_PREFIX_START_V2} handleMenuAction not defined. Falling back to main help.`);
+                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+                await handleHelpCommand(dmMsgContext);
+            }
+            return;
+        }
+    }
 
-    // Default /start behavior
-    if (chatType !== 'private') {
-        if(msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-        await safeSendMessage(chatId, `👋 Welcome, ${playerRef}! For commands & casino actions, please DM me: @${escapeMarkdownV2(botUsername)} 📬`, { parse_mode: 'MarkdownV2' });
-        // Send full help to DM
-        await handleHelpCommand({ 
-            from: { ...msg.from, id: userId, username: userObject.username, first_name: userObject.first_name, last_name: userObject.last_name }, 
-            chat: { id: userId, type: 'private' },
-            message_id: null // New message in DM
-        });
-    } else { // Already in private chat
-        await safeSendMessage(userId, `🎉 Welcome to **${escapeMarkdownV2(BOT_NAME)}**, ${playerRef}! Type \`/help\` for a list of commands and features.`, { parse_mode: 'MarkdownV2' });
-        await handleHelpCommand(msg); // msg here is already the DM context
-    }
+    // 2. No deep link args, standard /start command
+    if (typeof clearUserState === 'function') {
+        clearUserState(userId);
+    } else {
+        userStateCache.delete(userId);
+    }
+
+    if (chatType === 'group' || chatType === 'supergroup') {
+        if (msg.message_id && chatId !== userId) { // Delete /start command from group
+            await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+        }
+        // Message in group guiding to DM
+        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
+        
+        // Send the actual help menu to the user's DM
+        const dmMsgContext = { 
+            from: userObject, // Pass the full user object
+            chat: { id: userId, type: 'private' }, 
+            message_id: null // This ensures handleHelpCommand sends a new message
+        };
+        await handleHelpCommand(dmMsgContext);
+    } else { // Private chat
+        if (msg.message_id) { // Delete user's /start command in DM
+            await bot.deleteMessage(userId, msg.message_id).catch(() => {});
+        }
+        // Directly call handleHelpCommand to show the main menu in the DM
+        // msg here already has chat.id = userId and chat.type = 'private'
+        // We pass null for message_id to ensure a new menu is sent, not an edit attempt of user's /start
+        const privateStartMsgContext = { ...msg, message_id: null, from: userObject }; 
+        await handleHelpCommand(privateStartMsgContext);
+    }
 }
 
 async function handleHelpCommand(msg) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const originalChatId = String(msg.chat.id); // Chat where /help was typed or callback originated
-    const originalChatType = msg.chat.type;
-    const originalMessageId = msg.message_id; // ID of the /help message or the message with the button
+    // msg.from and msg.chat are expected to be set correctly for the DM context here.
+    // msg.message_id might be the ID of a previous bot message (if called via "Back to Menu" button)
+    // or null/user's message ID (if called after /start).
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const dmChatId = String(msg.chat.id); // Should be same as userId
+    const originalMessageIdToEdit = (msg.chat.type === 'private' && msg.message_id && msg.from.is_bot === undefined) ? null : msg.message_id; // Edit only if msg.message_id is from a bot's own message button
+                                                                                                                                          // If msg.from.is_bot exists and is false, it's user's /start command.
+                                                                                                                                          // Better: handleHelpCommand should always send new after deleting user's cmd if it's /help in DM.
+                                                                                                                                          // For menu callbacks, msg.message.message_id is the one to edit.
 
-    const userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(originalChatId, "😕 Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const playerRef = getPlayerDisplayReference(userObject);
-    let botUsername = BOT_NAME || "our bot";
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { console.error(`[HelpCmd UID:${userId}] Could not fetch bot username: ${e.message}`); }
+    const LOG_PREFIX_HELP_V2 = `[HelpCmd_V2 UID:${userId} Chat:${dmChatId}]`;
+    console.log(`${LOG_PREFIX_HELP_V2} Displaying main help menu. MessageID to potentially edit: ${originalMessageIdToEdit}`);
 
-    // Construct the help message content
-    const minBetUsdDisplay = `$${MIN_BET_USD_val.toFixed(2)}`;
-    let referenceMinSol = "";
+    // Ensure userObject has latest details, especially if msg.from is minimal from a callback
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    let botUsername = BOT_NAME || "our bot";
     try {
-        const solPrice = await getSolUsdPrice();
-        const minBetLamportsDynamic = convertUSDToLamports(MIN_BET_USD_val, solPrice);
-        referenceMinSol = ` (${escapeMarkdownV2(formatCurrency(minBetLamportsDynamic, 'SOL'))} approx.)`;
-    } catch (priceErr) { /* fallback */ }
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) { /* Reduced log */ }
+    
+    const helpMessageHTML = 
+        `🎉 Welcome to <b>${escapeHTML(BOT_NAME)}</b>, ${playerRefHTML}!\n\n` +
+        `Your casino adventure starts here. What would you like to do?`;
 
-    const helpTextParts = [
-        `🌟 Welcome to **${escapeMarkdownV2(BOT_NAME)}**, ${playerRef}! Here are your commands:`,
-        `\n*👤 Account & Wallet:*`,
-        `▫️ \`/balance\` - Check your funds.`,
-        `▫️ \`/wallet\` - Manage deposits, withdrawals & linked SOL address (DM for details).`,
-        `▫️ \`/deposit\` - Get deposit address (DM for details).`,
-        `▫️ \`/withdraw\` - Withdraw SOL (DM for details).`,
-        `▫️ \`/setwallet <address>\` - Link/update your SOL wallet (DM for privacy).`,
-        `▫️ \`/history\` - View recent activity (DM for details).`,
-        `▫️ \`/referral\` - Get your referral link (DM for details).`,
-        `▫️ \`/tip <@user_or_id> <amount_usd> [msg]\` - Tip another player.`,
-        `\n*🎲 Games (Play in Groups):*`,
-        `Use \`<bet>\` in USD (e.g. \`5\`) or SOL (e.g. \`0.1 sol\`). Min bet: *${escapeMarkdownV2(minBetUsdDisplay)}*${referenceMinSol}`,
-        `▫️ \`/coinflip <bet>\` - 🪙 Heads or Tails.`,
-        `▫️ \`/rps <bet>\` - 🪨📄✂️ Rock Paper Scissors.`,
-        `▫️ \`/de <bet>\` - 🎲 Dice Escalator (PvP/PvB - Jackpot!).`,
-        `▫️ \`/d21 <bet>\` - 🃏 Dice Blackjack (PvP/PvB).`,
-        `▫️ \`/duel <bet>\` - ⚔️ High Roller Dice Duel (PvP/PvB).`,
-        `▫️ \`/ou7 <bet>\` - 🎲 Over/Under 7 (vs Bot).`,
-        `▫️ \`/ladder <bet>\` - 🪜 Greed's Ladder (vs Bot).`,
-        `▫️ \`/s7 <bet>\` - 🎲 Sevens Out / Fast Craps (vs Bot).`,
-        `▫️ \`/slot <bet>\` - 🎰 Slot Frenzy (vs Bot).`,
-        `▫️ \`/mines <bet>\` - 💣 Minesweeper - Choose difficulty via buttons (vs Bot).`,
-        `\n*📖 Info:*`,
-        `▫️ \`/rules\` - Detailed game rules (DM for full menu).`,
-        `▫️ \`/jackpot\` - Check Dice Escalator PvB Jackpot.`,
-        `\n💡 Tip: For wallet actions, please DM me: @${escapeMarkdownV2(botUsername)}`
-    ];
-    const helpMessage = helpTextParts.filter(Boolean).join('\n');
     const helpKeyboard = {
         inline_keyboard: [
-            [{ text: "💳 My Wallet", callback_data: "menu:wallet" }, { text: "📖 Game Rules", callback_data: "show_rules_menu" }],
-            [{ text: "💰 Quick Deposit", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]
+            [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
+            [{ text: "🎲 Play Games", callback_data: "menu:games_overview" }], 
+            [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],    
+            [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
+            // [{ text: "🏆 Leaderboards", callback_data: "menu:leaderboards" }], // Optional
+            // [{ text: "💬 Support/Community", url: "YOUR_SUPPORT_LINK_HERE" }] // Optional
         ]
     };
 
-    if (originalChatType !== 'private') {
-        if (originalMessageId) { 
-            await bot.deleteMessage(originalChatId, originalMessageId).catch(() => {});
+    // If this was triggered by a user typing /help in DM, their message was already deleted by the router
+    // If this was triggered by a menu button (isFromCallback=true for handleMenuAction), 
+    // handleMenuAction passes originalMessageId to edit.
+    // If called by handleStartCommand for a DM, originalMessageId is passed as null to send new.
+
+    if (originalMessageIdToEdit && msg.message?.from?.is_bot) { // Only edit if originalMessageId is from one of the bot's own messages with buttons
+        try {
+            await bot.editMessageText(helpMessageHTML, {
+                chat_id: dmChatId,
+                message_id: Number(originalMessageIdToEdit),
+                parse_mode: 'HTML',
+                reply_markup: helpKeyboard,
+                disable_web_page_preview: true
+            });
+            console.log(`${LOG_PREFIX_HELP_V2} Help menu edited successfully on message ${originalMessageIdToEdit}.`);
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`${LOG_PREFIX_HELP_V2} Failed to edit help message ${originalMessageIdToEdit}, sending new. Error: ${e.message}`);
+                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+            } else {
+                 console.log(`${LOG_PREFIX_HELP_V2} Help message content was not modified.`);
+            }
         }
-        await safeSendMessage(originalChatId, `${playerRef}, I've sent the help information to our private chat: @${escapeMarkdownV2(botUsername)} 📬`, { parse_mode: 'MarkdownV2' });
-        await safeSendMessage(userId, helpMessage, { parse_mode: 'MarkdownV2', reply_markup: helpKeyboard, disable_web_page_preview: true });
-    } else { // Already in private chat
-        // If originalMessageId exists (e.g. /help typed in DM, or a button leading here), delete it before sending new help.
-        if (originalMessageId) {
-             await bot.deleteMessage(userId, originalMessageId).catch(() => {});
-        }
-        await safeSendMessage(userId, helpMessage, { parse_mode: 'MarkdownV2', reply_markup: helpKeyboard, disable_web_page_preview: true });
-    }
+    } else {
+        // If originalMessageId was from user (like their typed /start or /help), it should have been deleted by handleStartCommand or the message router.
+        // Send as a new message.
+        console.log(`${LOG_PREFIX_HELP_V2} Sending new help menu.`);
+        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+    }
 }
 
 async function handleRulesCommand(invokedInChatIdStr, userObj, msgIdInInvokedChatStr = null, isEditAttempt = false, invokedChatType = 'private') {
