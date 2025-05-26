@@ -659,10 +659,23 @@ const depositProcessorQueue = new PQueue({
 });
 
 const SLOT_PAYOUTS = {
-    64: { multiplier: 100, symbols: "💎💎💎", label: "MEGA JACKPOT!" },
-    1:  { multiplier: 20,  symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
-    22: { multiplier: 10,  symbols: "🍋🍋🍋", label: "Triple Lemon!" },
-    43: { multiplier: 5,   symbols: "🔔🔔🔔", label: "Triple Bell!" },
+    // TRIPLE SEVEN (25x Multiplier) - 1 outcome out of 64
+    64: { multiplier: 25, symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },       // Telegram's value 64 IS 777
+
+    // TRIPLE BAR (15x Multiplier) - 1 outcome out of 64
+    1:  { multiplier: 15, symbols: "BAR-BAR-BAR", label: "Triple Bar!" },    // Telegram's value 1 IS BAR-BAR-BAR
+
+    // TRIPLE LEMON (10x Multiplier) - 1 outcome out of 64
+    22: { multiplier: 10, symbols: "🍋🍋🍋", label: "Triple Lemon!" },       // Telegram's value 22 IS Lemon-Lemon-Lemon
+    // Note: Telegram's value 43 (Bell-Bell-Bell) is a losing spin.
+
+    // TRIPLE CHERRY (5x Multiplier) - 3 outcomes out of 64
+    // The visual animation for these specific values (5, 15, 30) from Telegram's sendDice('🎰')
+    // will likely be mixed symbols, not a pure Triple Cherry.
+    // However, the bot will declare this outcome as "Triple Cherry!" and show 🍒🍒🍒.
+    5:  { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" },
+    15: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" },
+    30: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" }
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 // --- End of Part 1 ---
@@ -7420,7 +7433,6 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
 }
 
 // --- End of Part 5c, Section 3 (Ladder UNCHANGED, Sevens Out REPLACED with Lucky Sum - FIXES APPLIED) ---
-// --- Start of Part 5c, Section 4 (FULLY UPDATED FOR HELPER BOT DICE ROLLS & HTML MESSAGING for Slots - Results as New Message) ---
 // index.js - Part 5c, Section 4: Slot Frenzy Game Logic & Callback Router for Part 5c Games
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts
@@ -7430,7 +7442,7 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
 async function handleStartSlotCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_SLOT_START = `[Slot_Start_HTML_NewMsg UID:${userId} CH:${chatId}]`; // Updated log prefix
+    const LOG_PREFIX_SLOT_START = `[Slot_Start_HTML_NewMsg UID:${userId} CH:${chatId}]`;
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         console.error(`${LOG_PREFIX_SLOT_START} Invalid betAmountLamports: ${betAmountLamports}.`);
@@ -7443,7 +7455,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         await safeSendMessage(chatId, "😕 Hey spinner! We couldn't find your player profile for Slot Frenzy.<br>Please hit <code>/start</code> first.", { parse_mode: 'HTML' });
         return;
     }
-    console.log(`${LOG_PREFIX_SLOT_START} Initiating Slot Frenzy. Bet: ${betAmountLamports}`);
+    // console.log(`${LOG_PREFIX_SLOT_START} Initiating Slot Frenzy. Bet: ${betAmountLamports}`); // Reduced log
 
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
@@ -7489,19 +7501,19 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     const gameData = {
         type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef: playerRefHTML,
         userObj, betAmount: betAmountLamports, diceValue: null, payoutInfo: null,
-        status: 'spinning_waiting_helper', gameMessageId: null // gameMessageId will store the "spinning" message ID
+        status: 'spinning_waiting_helper', gameMessageId: null
     };
     activeGames.set(gameId, gameData);
 
     const titleSpinningHTML = `🎰 <b>Slot Frenzy - Reels in Motion!</b> 🎰`;
-    let initialMessageTextHTML = `${titleSpinningHTML}\n\n` + // Separator removed
-                                 `Player: <b>${playerRefHTML}</b>\nBet: <b>${betDisplayUSD_HTML}</b>\n\n` + // Separator removed
+    let initialMessageTextHTML = `${titleSpinningHTML}\n\n` +
+                                 `Player: <b>${playerRefHTML}</b>\nBet: <b>${betDisplayUSD_HTML}</b>\n\n` +
                                  `Hold tight! The Helper Bot is revving up the Slot Machine! 💨\n`+
                                  `✨ May fortune favor your spin! ✨`;
 
     const sentSpinningMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
     if (sentSpinningMsg?.message_id) {
-        gameData.gameMessageId = sentSpinningMsg.message_id; // Store the ID of the "spinning" message
+        gameData.gameMessageId = sentSpinningMsg.message_id;
         activeGames.set(gameId, gameData);
     } else {
         console.error(`${LOG_PREFIX_SLOT_START} Failed to send initial Slot game message for ${gameId}. Refunding wager.`);
@@ -7520,7 +7532,6 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 
     let diceRollValue = null;
     let helperBotError = null;
-    // ... (dice roll request logic remains the same) ...
     let requestId = null;
     let dbPollClient = null;
 
@@ -7563,22 +7574,18 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
         helperBotError = e.message;
     }
 
-    // ---- MODIFIED MESSAGE HANDLING ----
-    // Delete the "spinning..." message before sending the result or error
     if (gameData.gameMessageId && bot) {
         await bot.deleteMessage(chatId, Number(gameData.gameMessageId)).catch(e => {
-            console.warn(`${LOG_PREFIX_SLOT_START} Non-critical: Could not delete spinning message ID ${gameData.gameMessageId}: ${e.message}`);
+            // console.warn(`${LOG_PREFIX_SLOT_START} Non-critical: Could not delete spinning message ID ${gameData.gameMessageId}: ${e.message}`); // Reduced log
         });
-        gameData.gameMessageId = null; // Clear it as it's deleted
+        gameData.gameMessageId = null;
     }
-    // ---- END OF MODIFIED MESSAGE HANDLING ----
 
     if (helperBotError || diceRollValue === null) {
         const errorMsgToUserHTML = `💣 <b>Slot Spin Malfunction!</b> 💣\n\n` +
                                  `Oh no, ${playerRefHTML}! It seems the Slot Machine had a hiccup: <pre>${escapeHTML(String(helperBotError || "No result from helper").substring(0,150))}</pre>\n\n` +
                                  `✅ Your bet of <b>${betDisplayUSD_HTML}</b> has been fully refunded.`;
         const errorKeyboard = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
-        // Send error as a new message
         await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
 
         let refundClient = null;
@@ -7595,7 +7602,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     }
 
     gameData.diceValue = diceRollValue;
-    const payoutInfo = SLOT_PAYOUTS[diceRollValue];
+    const payoutInfo = SLOT_PAYOUTS[diceRollValue]; // Uses the updated SLOT_PAYOUTS
     gameData.payoutInfo = payoutInfo;
     let payoutAmountLamports = 0n;
     let profitAmountLamports = 0n;
@@ -7606,24 +7613,24 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 
     if (payoutInfo) {
         profitAmountLamports = betAmountLamports * BigInt(payoutInfo.multiplier);
-        payoutAmountLamports = betAmountLamports + profitAmountLamports;
+        payoutAmountLamports = betAmountLamports + profitAmountLamports; // Total returned to player (original bet + profit)
         outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`;
         finalTitleHTML = `🎉🎉 <b>${escapeHTML(payoutInfo.label)}</b> 🎉🎉`;
-        resultTextPartHTML = `✨ <b>AMAZING HIT!</b> ✨\n<b>${escapeHTML(payoutInfo.symbols)}</b>\n\n` + // Separator removed
+        resultTextPartHTML = `✨ <b>AMAZING HIT!</b> ✨\n<b>${escapeHTML(payoutInfo.symbols)}</b>\n\n` +
                              `Congratulations! You've won a dazzling <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit!\n` +
                              `(Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
         gameData.status = 'game_over_win';
     } else {
-        payoutAmountLamports = 0n;
+        payoutAmountLamports = 0n; // Bet is lost
         finalTitleHTML = `😕 <b>Slot Frenzy - No Win This Time</b> 😕`;
-        resultTextPartHTML = `Reel Result: <i>Not a winning combination.</i>\n\n` + // Separator removed
+        resultTextPartHTML = `Reel Result: <i>Not a winning combination.</i>\n\n` +
                              `The machine keeps your wager of <b>${betDisplayUSD_HTML}</b>.\nBetter luck on the next spin! 🍀`;
         gameData.status = 'game_over_loss';
     }
 
-    let finalMessageTextHTML = `${finalTitleHTML}\n\n` + // Separator removed
-                                 `Player: <b>${playerRefHTML}</b>\nWager: <b>${betDisplayUSD_HTML}</b>\n` +
-                                 `Spin Value (from Helper): <code>${escapeHTML(String(diceRollValue))}</code>\n\n` + // Separator removed
+    // MODIFIED: Removed the "Spin Value (from Helper)" line
+    let finalMessageTextHTML = `${finalTitleHTML}\n\n` +
+                                 `Player: <b>${playerRefHTML}</b>\nWager: <b>${betDisplayUSD_HTML}</b>\n\n` +
                                  `${resultTextPartHTML}`;
 
     let clientOutcome = null;
@@ -7654,10 +7661,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
     }
 
     const postGameKeyboardSlot = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
-
-    // Send final result as a new message
     await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
-
     activeGames.delete(gameId);
 }
 
