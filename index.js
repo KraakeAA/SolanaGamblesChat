@@ -11553,26 +11553,29 @@ async function createWithdrawalRequestDB(dbClient, userId, requestedAmountLampor
 
 async function updateWithdrawalStatusDB(dbClient, withdrawalId, status, signature = null, errorMessage = null, blockTime = null) {
     const LOG_PREFIX_UWS = `[UpdateWithdrawalStatus ID:${withdrawalId} Status:${status}]`;
+    // MODIFIED SQL Query: Added ::VARCHAR to $1
     const query = `
         UPDATE withdrawals 
-        SET status = $1, 
+        SET status = $1::VARCHAR,  -- Explicit cast for status
             transaction_signature = $2, 
             error_message = $3, 
             block_time = $4,
-            processed_at = CASE WHEN $1 IN ('completed', 'failed', 'confirmed', 'sent') THEN NOW() ELSE processed_at END,
+            processed_at = CASE WHEN $1::VARCHAR IN ('completed', 'failed', 'confirmed', 'sent') THEN NOW() ELSE processed_at END, -- Explicit cast here too
             updated_at = NOW()
         WHERE withdrawal_id = $5
         RETURNING withdrawal_id;
     `;
     try {
+        // Parameters: [status, signature, errorMessage, blockTime, withdrawalId]
         const res = await dbClient.query(query, [status, signature, errorMessage, blockTime, withdrawalId]);
         if (res.rowCount > 0) {
             // console.log(`${LOG_PREFIX_UWS} ✅ Withdrawal status updated successfully.`); // Reduced log
             return { success: true, withdrawalId: res.rows[0].withdrawal_id };
         }
-        console.warn(`${LOG_PREFIX_UWS} ⚠️ Withdrawal ID ${withdrawalId} not found or status not updated.`);
+        console.warn(`${LOG_PREFIX_UWS} ⚠️ Withdrawal ID ${withdrawalId} not found or no status update made (rowCount 0).`);
         return { success: false, error: "Withdrawal record not found or no update made." };
     } catch (err) {
+        // This console.error is what you're seeing in your logs for this specific error
         console.error(`${LOG_PREFIX_UWS} ❌ Error updating withdrawal status: ${err.message}`, err.stack?.substring(0,500));
         return { success: false, error: err.message, errorCode: err.code };
     }
