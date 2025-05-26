@@ -9953,20 +9953,46 @@ bot.on('callback_query', async (callbackQuery) => {
                     else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
                     break;
                 case 'process_withdrawal_confirm':
-                    if(typeof processWithdrawalConfirmation === 'function') {
-                        const decision = params[0];
-                        const currentState = userStateCache.get(userId);
-                        if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === userId) {
-                            await processWithdrawalConfirmation(userId, currentState.chatId, currentState.messageId, currentState.data.linkedWallet, currentState.data.amountLamportsStr, currentState.data.feeLamportsStr, currentState.data.originalGroupChatId, currentState.data.originalGroupMessageId);
-                        } else if (decision === 'no') {
-                            if (bot && originalMessageId) bot.editMessageText("Withdrawal cancelled by user.", {chat_id: effectiveChatId, message_id: Number(originalMessageId), reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}}).catch(()=>{});
-                            clearUserState(userId);
-                        } else {
-                            if (bot && originalMessageId) bot.editMessageText("Invalid confirmation or state expired. Withdrawal cancelled.", {chat_id: effectiveChatId, message_id: Number(originalMessageId), reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}}).catch(()=>{});
-                            clearUserState(userId);
+                // Ensure handleWithdrawalConfirmation function is defined and available
+                if (typeof handleWithdrawalConfirmation === 'function') { // CORRECTED to handleWithdrawalConfirmation
+                    const decision = params[0]; // 'yes' or 'no'
+                    const currentState = userStateCache.get(userId); // userId is defined in the outer scope of your callback handler
+
+                    // Ensure effectiveChatId is defined correctly, typically it's the DM chat ID (userId) for this state
+                    const effectiveDmChatId = currentState?.chatId || userId; 
+                    const messageIdToEditInDm = currentState?.messageId || originalMessageId;
+
+
+                    if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === userId) {
+                        // Call the correct handler
+                        await handleWithdrawalConfirmation(userId, currentState.chatId, currentState.messageId, currentState.data.linkedWallet, currentState.data.amountLamportsStr, currentState.data.feeLamportsStr, currentState.data.originalGroupChatId, currentState.data.originalGroupMessageId);
+                    } else if (decision === 'no') {
+                        if (bot && messageIdToEditInDm) {
+                            await bot.editMessageText("Withdrawal cancelled by user.", {
+                                chat_id: effectiveDmChatId, 
+                                message_id: Number(messageIdToEditInDm), 
+                                parse_mode:'HTML', // Use HTML
+                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
+                            }).catch(()=>{});
                         }
-                    } else console.error(`${LOG_PREFIX_CBQ} Missing handler: processWithdrawalConfirmation`);
-                    break;
+                        clearUserState(userId);
+                    } else { // Invalid state or unexpected 'decision'
+                        if (bot && messageIdToEditInDm) {
+                            await bot.editMessageText("Invalid confirmation or your session expired. Withdrawal cancelled.", {
+                                chat_id: effectiveDmChatId, 
+                                message_id: Number(messageIdToEditInDm), 
+                                parse_mode:'HTML', // Use HTML
+                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
+                            }).catch(()=>{});
+                        }
+                        clearUserState(userId);
+                    }
+                } else {
+                    console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation`); // Corrected name in log
+                    // Answer callback even if handler is missing
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation.", show_alert: true}).catch(()=>{});
+                }
+                break;
 
                 // COINFLIP & RPS NEW ROUTING
                 case 'cf_accept_bot': case 'cf_accept_pvp': case 'cf_cancel_offer':
@@ -11938,9 +11964,9 @@ async function handleWalletAddressInput(msg, currentState) {
 
 async function handleWithdrawalAmountInput(msg, currentState) {
     const userId = String(msg.from.id);
-    const dmChatId = String(msg.chat.id); // Should be DM
+    const dmChatId = String(msg.chat.id); 
     const textAmount = msg.text ? msg.text.trim() : '';
-    const logPrefix = `[WithdrawAmountInput_HTML UID:${userId}]`;
+    const logPrefix = `[WithdrawAmountInput_HTML_V2 UID:${userId}]`; // V2 for USD display
 
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_amount' || dmChatId !== userId ||
         !currentState.data.linkedWallet || typeof currentState.data.currentBalanceLamportsStr !== 'string') {
@@ -11956,46 +11982,48 @@ async function handleWithdrawalAmountInput(msg, currentState) {
     clearUserState(userId);
 
     try {
-        const solPrice = await getSolUsdPrice(); // Needed for converting MIN_WITHDRAWAL_USD_val
+        const solPrice = await getSolUsdPrice();
         const effectiveMinWithdrawalLamports = convertUSDToLamports(MIN_WITHDRAWAL_USD_val, solPrice);
-        const minWithdrawDisplaySOL_HTML = escapeHTML(await formatBalanceForDisplay(effectiveMinWithdrawalLamports, 'SOL'));
+        const minWithdrawDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(effectiveMinWithdrawalLamports, 'USD'));
 
-        let amountSOL;
+        let amountUSD;
+        let amountLamports;
+
         if (textAmount.toLowerCase() === 'max') {
-            const availableToWithdraw = currentBalanceLamports - WITHDRAWAL_FEE_LAMPORTS;
-            if (availableToWithdraw < effectiveMinWithdrawalLamports) {
-                 throw new Error(`Your balance is too low to withdraw the maximum after fees.<br>You need at least <b>${escapeHTML(await formatBalanceForDisplay(effectiveMinWithdrawalLamports + WITHDRAWAL_FEE_LAMPORTS, 'SOL'))}</b> total to cover minimum withdrawal and fee.`);
+            const availableToWithdrawAfterFee = currentBalanceLamports - WITHDRAWAL_FEE_LAMPORTS;
+            if (availableToWithdrawAfterFee < effectiveMinWithdrawalLamports) {
+                 throw new Error(`Your balance is too low to withdraw the maximum after fees.<br>You need at least <b>${minWithdrawDisplayUSD_HTML}</b> (plus fee) to make a withdrawal.`);
             }
-            amountSOL = parseFloat( (Number(availableToWithdraw) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS) );
-        } else if (textAmount.toLowerCase().endsWith('sol')) {
-            amountSOL = parseFloat(textAmount.toLowerCase().replace('sol', '').trim());
+            amountLamports = availableToWithdrawAfterFee; // This is the amount the user receives
+            amountUSD = parseFloat(Number(amountLamports) / Number(LAMPORTS_PER_SOL) * solPrice); // For display consistency
         } else {
-            amountSOL = parseFloat(String(textAmount).replace(/[^0-9.]/g, ''));
+            amountUSD = parseFloat(String(textAmount).replace(/[^0-9.]/g, ''));
+            if (isNaN(amountUSD) || amountUSD <= 0) {
+                throw new Error("Invalid number format or non-positive amount.<br>Please enter a value like <code>50</code> or <code>75.50</code>, or type <code>max</code>.");
+            }
+            amountLamports = convertUSDToLamports(amountUSD, solPrice); // Amount user wants to receive
         }
-
-        if (isNaN(amountSOL) || amountSOL <= 0) throw new Error("Invalid number format or non-positive amount.<br>Please enter a value like <code>0.5</code> or <code>10 sol</code> or type <code>max</code>.");
-
-        const amountLamports = BigInt(Math.floor(amountSOL * Number(LAMPORTS_PER_SOL)));
-        const feeLamports = WITHDRAWAL_FEE_LAMPORTS; // This is already a BigInt
+        
+        const feeLamports = WITHDRAWAL_FEE_LAMPORTS; // BigInt
         const totalDeductionLamports = amountLamports + feeLamports;
         
-        const balanceDisplaySOL_HTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'SOL'));
-        const amountToWithdrawDisplaySOL_HTML = escapeHTML(await formatBalanceForDisplay(amountLamports, 'SOL'));
-        const feeDisplaySOL_HTML = escapeHTML(await formatBalanceForDisplay(feeLamports, 'SOL'));
-        const totalDeductionDisplaySOL_HTML = escapeHTML(await formatBalanceForDisplay(totalDeductionLamports, 'SOL'));
+        const currentBalanceDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'USD'));
+        const amountToWithdrawDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(amountLamports, 'USD')); // What user gets
+        const feeDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(feeLamports, 'USD'));
+        const totalDeductionDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(totalDeductionLamports, 'USD')); // Total taken from user's balance
 
         if (amountLamports < effectiveMinWithdrawalLamports) {
-            throw new Error(`Withdrawal amount of <b>${amountToWithdrawDisplaySOL_HTML}</b> is less than the minimum of <b>${minWithdrawDisplaySOL_HTML}</b> (approx. $${escapeHTML(MIN_WITHDRAWAL_USD_val.toFixed(2))}).`);
+            throw new Error(`Withdrawal amount of <b>${amountToWithdrawDisplayUSD_HTML}</b> is less than the minimum of <b>${minWithdrawDisplayUSD_HTML}</b> (approx. $${escapeHTML(MIN_WITHDRAWAL_USD_val.toFixed(2))}).`);
         }
         if (currentBalanceLamports < totalDeductionLamports) {
-            throw new Error(`Insufficient balance. You need <b>${totalDeductionDisplaySOL_HTML}</b> (amount + fee) to withdraw <b>${amountToWithdrawDisplaySOL_HTML}</b>.<br>Your balance is <b>${balanceDisplaySOL_HTML}</b>.`);
+            throw new Error(`Insufficient balance. You need <b>${totalDeductionDisplayUSD_HTML}</b> (amount to receive + fee) to withdraw <b>${amountToWithdrawDisplayUSD_HTML}</b>.<br>Your current balance is approx. <b>${currentBalanceDisplayUSD_HTML}</b>.`);
         }
 
         const confirmationTextHTML = `⚜️ <b>Withdrawal Confirmation</b> ⚜️\n\n` +
                                  `Please review and confirm your withdrawal:\n\n` +
-                                 `🔹 Amount to Withdraw: <b>${amountToWithdrawDisplaySOL_HTML}</b>\n` +
-                                 `🔹 Withdrawal Fee: <b>${feeDisplaySOL_HTML}</b>\n` +
-                                 `🔹 Total Deducted: <b>${totalDeductionDisplaySOL_HTML}</b>\n` +
+                                 `🔹 Amount You Will Receive: <b>${amountToWithdrawDisplayUSD_HTML}</b>\n` +
+                                 `🔹 Withdrawal Fee: <b>${feeDisplayUSD_HTML}</b>\n` +
+                                 `🔹 Total Deducted From Your Balance: <b>${totalDeductionDisplayUSD_HTML}</b>\n` +
                                  `🔹 Recipient Wallet: <code>${escapeHTML(linkedWallet)}</code>\n\n` +
                                  `⚠️ Double-check the recipient address! Transactions are irreversible. Proceed?`;
 
@@ -12012,7 +12040,13 @@ async function handleWithdrawalAmountInput(msg, currentState) {
                 state: 'awaiting_withdrawal_confirmation',
                 chatId: dmChatId,
                 messageId: sentConfirmMsg.message_id,
-                data: { linkedWallet, amountLamportsStr: amountLamports.toString(), feeLamportsStr: feeLamports.toString(), originalGroupChatId, originalGroupMessageId },
+                data: { 
+                    linkedWallet, 
+                    amountLamportsStr: amountLamports.toString(), // Amount user receives
+                    feeLamportsStr: feeLamports.toString(),      // Fee
+                    originalGroupChatId, 
+                    originalGroupMessageId 
+                },
                 timestamp: Date.now()
             });
             if (originalGroupChatId && originalGroupMessageId && bot) {
@@ -12024,8 +12058,7 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         }
     } catch (e) {
         console.error(`${logPrefix} Error processing withdrawal amount: ${e.message}`);
-        // Error messages from throw new Error above are already HTML-safe or use <code>
-        const errorText = `⚠️ <b>Withdrawal Error:</b>\n${e.message}\n\nPlease restart the withdrawal process from the <code>/wallet</code> menu.`;
+        const errorText = `⚠️ <b>Withdrawal Amount Error:</b>\n${e.message}\n\nPlease restart the withdrawal process from the <code>/wallet</code> menu.`; // e.message is already HTML-safe or uses <code> from throw
         await safeSendMessage(dmChatId, errorText, {
             parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] }
         });
@@ -12403,7 +12436,7 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
     const originalMessageId = msgOrCbMsg.message_id;
     const isFromMenuActionOrRedirect = msgOrCbMsg.isCallbackRedirect !== undefined || !!(correctUserIdFromCb && correctUserIdFromCb === userId);
 
-    const logPrefix = `[WithdrawCmd_HTML UID:${userId} OrigChat:${originalCommandChatId}]`;
+    const logPrefix = `[WithdrawCmd_HTML_V2 UID:${userId} OrigChat:${originalCommandChatId}]`; // V2 for update
 
     let userObject = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!userObject) {
@@ -12426,7 +12459,7 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
     }
 
     const loadingDmMsgText = "Preparing your withdrawal request... ⏳";
-    const loadingDmMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText, {parse_mode: 'HTML'}); // Can be simple text, no complex HTML
+    const loadingDmMsg = await safeSendMessage(targetDmChatId, loadingDmMsgText, {parse_mode: 'HTML'});
     const workingMessageId = loadingDmMsg?.message_id;
 
     if (!workingMessageId) {
@@ -12455,17 +12488,17 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
 
         const solPrice = await getSolUsdPrice();
         const effectiveMinWithdrawalLamports = convertUSDToLamports(MIN_WITHDRAWAL_USD_val, solPrice);
-        const minWithdrawalDisplayHTML = escapeHTML(await formatBalanceForDisplay(effectiveMinWithdrawalLamports, 'SOL'));
-        const feeDisplayHTML = escapeHTML(await formatBalanceForDisplay(WITHDRAWAL_FEE_LAMPORTS, 'SOL'));
-        const currentBalanceDisplayHTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'SOL'));
+        const minWithdrawalDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(effectiveMinWithdrawalLamports, 'USD')); // For display
+        const feeDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(WITHDRAWAL_FEE_LAMPORTS, 'USD')); // For display
+        const currentBalanceDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'USD')); // For display
 
         const promptTextHTML = `💸 <b>Initiate Withdrawal</b>\n\n` +
                              `Player: ${playerRefHTML}\n` +
                              `Linked Wallet: <code>${escapeHTML(linkedWallet)}</code>\n` +
-                             `Available Balance: <b>${currentBalanceDisplayHTML}</b>\n\n` +
-                             `Minimum Withdrawal: <b>${minWithdrawalDisplayHTML}</b> (approx. $${escapeHTML(MIN_WITHDRAWAL_USD_val.toFixed(2))})\n` +
-                             `Withdrawal Fee: <b>${feeDisplayHTML}</b> (deducted from withdrawal amount)\n\n` +
-                             `Please reply with the amount of SOL you wish to withdraw (e.g., <code>0.5</code> or <code>10 sol</code> or type <code>max</code> to withdraw your maximum available balance after fees).`;
+                             `Available Balance: <b>${currentBalanceDisplayUSD_HTML}</b>\n\n` +
+                             `Minimum Withdrawal: <b>${minWithdrawalDisplayUSD_HTML}</b> (approx. $${escapeHTML(MIN_WITHDRAWAL_USD_val.toFixed(2))})\n` +
+                             `Withdrawal Fee: <b>${feeDisplayUSD_HTML}</b> (this will be deducted from the amount you withdraw)\n\n` +
+                             `Please reply with the amount you wish to withdraw in USD (e.g., <code>50</code> or <code>75.50</code>) or type <code>max</code> to withdraw your maximum available balance (after fees).`;
 
         const promptKeyboard = { inline_keyboard: [[{ text: "❌ Cancel & Back to Wallet", callback_data: "menu:wallet" }]] };
         await bot.editMessageText(promptTextHTML, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: promptKeyboard, disable_web_page_preview: true });
@@ -12756,14 +12789,14 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
 }
 
 
-async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessageIdInDm, recipientAddress, amountLamportsStr) {
+async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessageIdInDm, recipientAddress, amountLamportsStr, feeLamportsStr, originalGroupChatIdForNotif, originalGroupMessageIdForNotif) {
     const stringUserId = String(userId);
-    const logPrefix = `[WithdrawConfirm_HTML UID:${stringUserId}]`;
-    const currentState = userStateCache.get(stringUserId); // To get originalGroupChatId if needed
+    const logPrefix = `[WithdrawConfirm_HTML_V2 UID:${stringUserId}]`; // V2 for update
+    
+    const amountLamports = BigInt(amountLamportsStr); // Amount user receives
+    const feeLamports = BigInt(feeLamportsStr);       // Fee
+    const totalDeduction = amountLamports + feeLamports; // Total taken from user's balance
 
-    const amountLamports = BigInt(amountLamportsStr);
-    const feeLamports = WITHDRAWAL_FEE_LAMPORTS; // BigInt
-    const totalDeduction = amountLamports + feeLamports;
     const userObjForNotif = await getOrCreateUser(stringUserId); 
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObjForNotif || { id: stringUserId, first_name: "Player" }));
     let client = null;
@@ -12777,8 +12810,9 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
             throw new Error("User profile not found during withdrawal confirmation.");
         }
         const currentBalanceOnConfirm = BigInt(userDetailsCheck.rows[0].balance);
+        const solPrice = await getSolUsdPrice(); // For displaying amounts in errors if needed
         if (currentBalanceOnConfirm < totalDeduction) {
-            throw new Error(`Insufficient balance at time of confirmation.<br>Current: <b>${escapeHTML(await formatBalanceForDisplay(currentBalanceOnConfirm, 'SOL'))}</b>, Needed: <b>${escapeHTML(await formatBalanceForDisplay(totalDeduction, 'SOL'))}</b>.<br>Withdrawal cancelled.`);
+            throw new Error(`Insufficient balance at time of confirmation.<br>Current: <b>${escapeHTML(await formatBalanceForDisplay(currentBalanceOnConfirm, 'USD', solPrice))}</b>, Needed: <b>${escapeHTML(await formatBalanceForDisplay(totalDeduction, 'USD', solPrice))}</b>.<br>Withdrawal cancelled.`);
         }
 
         const wdReq = await createWithdrawalRequestDB(client, stringUserId, amountLamports, feeLamports, recipientAddress);
@@ -12787,7 +12821,7 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
         }
 
         const balUpdate = await updateUserBalanceAndLedger(
-            client, stringUserId, BigInt(-totalDeduction),
+            client, stringUserId, BigInt(-totalDeduction), // Deduct total
             'withdrawal_request_confirmed',
             { withdrawal_id: wdReq.withdrawalId },
             `Withdrawal confirmed to ${recipientAddress.slice(0,6)}...${recipientAddress.slice(-4)}`
@@ -12800,15 +12834,17 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
 
         if (typeof addPayoutJob === 'function') {
             await addPayoutJob({ type: 'payout_withdrawal', withdrawalId: wdReq.withdrawalId, userId: stringUserId });
-            const successMsgDmHTML = `✅ <b>Withdrawal Queued!</b><br>Your request to withdraw <b>${escapeHTML(formatCurrency(amountLamports, 'SOL'))}</b> to <code>${escapeHTML(recipientAddress)}</code> is now in the payout queue.<br>You'll be notified by DM once it's processed.`;
+            const amountToReceiveDisplayUSD = escapeHTML(await formatBalanceForDisplay(amountLamports, 'USD'));
+            const successMsgDmHTML = `✅ <b>Withdrawal Queued!</b><br>Your request to withdraw <b>${amountToReceiveDisplayUSD}</b> to <code>${escapeHTML(recipientAddress)}</code> is now in the payout queue.<br>You'll be notified by DM once it's processed.`;
+            
             if (confirmationMessageIdInDm && bot) {
-                await bot.editMessageText(successMsgDmHTML, {chat_id: dmChatId, message_id: confirmationMessageIdInDm, parse_mode:'HTML', reply_markup:{}});
+                await bot.editMessageText(successMsgDmHTML, {chat_id: dmChatId, message_id: Number(confirmationMessageIdInDm), parse_mode:'HTML', reply_markup:{}});
             } else {
                 await safeSendMessage(dmChatId, successMsgDmHTML, {parse_mode:'HTML'});
             }
             
-            if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) {
-                 await bot.editMessageText(`${playerRefHTML}'s withdrawal request for <b>${escapeHTML(formatCurrency(amountLamports, 'SOL'))}</b> has been queued successfully. Details in DM.`, {chat_id: currentState.data.originalGroupChatId, message_id: currentState.data.originalGroupMessageId, parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+            if (originalGroupChatIdForNotif && originalGroupMessageIdForNotif && bot) {
+                 await bot.editMessageText(`${playerRefHTML}'s withdrawal request for <b>${amountToReceiveDisplayUSD}</b> has been queued successfully. Details in DM.`, {chat_id: originalGroupChatIdForNotif, message_id: Number(originalGroupMessageIdForNotif), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
             }
         } else {
             console.error(`${logPrefix} 🚨 CRITICAL: addPayoutJob function is not defined! Cannot queue withdrawal ${wdReq.withdrawalId}.`);
@@ -12818,22 +12854,23 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
         console.error(`❌ ${logPrefix} Error processing withdrawal confirmation: ${e.message}`, e.stack?.substring(0,500));
-        // Error messages from throw new Error above are already HTML-safe or use <code>
-        const errorMsgDmHTML = `⚠️ <b>Withdrawal Failed:</b><br>${e.message}<br><br>Please try again or contact support if the issue persists.`;
+        const errorMsgDmHTML = `⚠️ <b>Withdrawal Failed:</b><br>${e.message}<br><br>Please try again or contact support if the issue persists.`; // e.message is already HTML safe or uses <code>
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] };
         if(confirmationMessageIdInDm && bot) {
-            await bot.editMessageText(errorMsgDmHTML, {chat_id: dmChatId, message_id: confirmationMessageIdInDm, parse_mode:'HTML', reply_markup: errorKeyboard}).catch(async ()=>{
+            await bot.editMessageText(errorMsgDmHTML, {chat_id: dmChatId, message_id: Number(confirmationMessageIdInDm), parse_mode:'HTML', reply_markup: errorKeyboard}).catch(async ()=>{
                  await safeSendMessage(dmChatId, errorMsgDmHTML, {parse_mode:'HTML', reply_markup: errorKeyboard});
             });
         } else {
             await safeSendMessage(dmChatId, errorMsgDmHTML, {parse_mode:'HTML', reply_markup: errorKeyboard});
         }
         
+        const currentState = userStateCache.get(stringUserId); // Re-fetch to get original group IDs if available
         if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) {
-            await bot.editMessageText(`${playerRefHTML}, there was an error processing your withdrawal confirmation. Please check your DMs.`, {chat_id: currentState.data.originalGroupChatId, message_id: currentState.data.originalGroupMessageId, parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+            await bot.editMessageText(`${playerRefHTML}, there was an error processing your withdrawal confirmation. Please check your DMs.`, {chat_id: currentState.data.originalGroupChatId, message_id: Number(currentState.data.originalGroupMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
         }
     } finally {
         if (client) client.release();
+        clearUserState(stringUserId); // Clear state after processing, regardless of outcome
     }
 }
 
