@@ -12817,9 +12817,15 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
 async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessageIdInDm, recipientAddress, amountLamportsStr, feeLamportsStr, originalGroupChatIdForNotif, originalGroupMessageIdForNotif) {
     const stringUserId = String(userId);
     const logPrefix = `[WithdrawConfirm_HTML_V3_Newline UID:${stringUserId}]`;
+
+    // --- ADDED DIAGNOSTIC LOGS ---
+    console.log(`${logPrefix} ENTERED handleWithdrawalConfirmation.`);
+    console.log(`${logPrefix} Received amountLamportsStr: '${amountLamportsStr}' (type: ${typeof amountLamportsStr})`);
+    console.log(`${logPrefix} Received feeLamportsStr: '${feeLamportsStr}' (type: ${typeof feeLamportsStr})`);
+    // --- END OF ADDED DIAGNOSTIC LOGS ---
     
     const amountLamports = BigInt(amountLamportsStr); 
-    const feeLamports = BigInt(feeLamportsStr);      
+    const feeLamports = BigInt(feeLamportsStr);       
     const totalDeduction = amountLamports + feeLamports; 
 
     const userObjForNotif = await getOrCreateUser(stringUserId); 
@@ -12845,7 +12851,13 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
             throw new Error(wdReq.error || "Failed to create database withdrawal request record.");
         }
 
-        const balUpdate = await updateUserBalanceAndLedger( /* ... as before ... */ );
+        // This is line approx 12848 from your previous error stack for this function if it calls updateUserBalanceAndLedger
+        const balUpdate = await updateUserBalanceAndLedger(
+            client, stringUserId, BigInt(-totalDeduction), 
+            'withdrawal_request_confirmed',
+            { withdrawal_id: wdReq.withdrawalId },
+            `Withdrawal confirmed to ${recipientAddress.slice(0,6)}...${recipientAddress.slice(-4)}`
+        );
         if (!balUpdate.success) {
             throw new Error(balUpdate.error || "Failed to deduct balance for withdrawal. Withdrawal not queued.");
         }
@@ -12854,16 +12866,19 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
 
         if (typeof addPayoutJob === 'function') {
             await addPayoutJob({ type: 'payout_withdrawal', withdrawalId: wdReq.withdrawalId, userId: stringUserId });
-            const amountToReceiveDisplayUSD = escapeHTML(await formatBalanceForDisplay(amountLamports, 'USD')); // Use USD display
+            const amountToReceiveDisplayUSD = escapeHTML(await formatBalanceForDisplay(amountLamports, 'USD')); 
             const successMsgDmHTML = `✅ <b>Withdrawal Queued!</b>\nYour request to withdraw <b>${amountToReceiveDisplayUSD}</b> to <code>${escapeHTML(recipientAddress)}</code> is now in the payout queue.\nYou'll be notified by DM once it's processed.`;
             
+            const currentState = userStateCache.get(stringUserId); // Re-fetch for originalGroup IDs
             if (confirmationMessageIdInDm && bot) {
                 await bot.editMessageText(successMsgDmHTML, {chat_id: dmChatId, message_id: Number(confirmationMessageIdInDm), parse_mode:'HTML', reply_markup:{}});
             } else {
                 await safeSendMessage(dmChatId, successMsgDmHTML, {parse_mode:'HTML'});
             }
             
-            if (originalGroupChatIdForNotif && originalGroupMessageIdForNotif && bot) { /* ... as before, ensure HTML ... */ }
+            if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) {
+                 await bot.editMessageText(`${playerRefHTML}'s withdrawal request for <b>${amountToReceiveDisplayUSD}</b> has been queued successfully. Details in DM.`, {chat_id: currentState.data.originalGroupChatId, message_id: Number(currentState.data.originalGroupMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+            }
         } else {
             console.error(`${logPrefix} 🚨 CRITICAL: addPayoutJob function is not defined! Cannot queue withdrawal ${wdReq.withdrawalId}.`);
             await notifyAdmin(`🚨 CRITICAL: Withdrawal ${wdReq.withdrawalId} for user ${stringUserId} had balance deducted BUT FAILED TO QUEUE for payout (addPayoutJob missing). MANUAL INTERVENTION REQUIRED TO REFUND OR PROCESS.`, {parse_mode:'HTML'});
@@ -12871,8 +12886,8 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
         }
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
-        console.error(`❌ ${logPrefix} Error processing withdrawal confirmation: ${e.message}`, e.stack?.substring(0,500));
-        const errorMsgDmHTML = `⚠️ <b>Withdrawal Failed:</b>\n${e.message}\n\nPlease try again or contact support if the issue persists.`; // e.message might contain HTML like <b> or \n now
+        console.error(`❌ ${logPrefix} Error processing withdrawal confirmation: ${e.message}`, e.stack?.substring(0,500)); // This is where your error was logged
+        const errorMsgDmHTML = `⚠️ <b>Withdrawal Failed:</b>\n${e.message}\n\nPlease try again or contact support if the issue persists.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] };
         if(confirmationMessageIdInDm && bot) {
             await bot.editMessageText(errorMsgDmHTML, {chat_id: dmChatId, message_id: Number(confirmationMessageIdInDm), parse_mode:'HTML', reply_markup: errorKeyboard}).catch(async ()=>{
@@ -12883,7 +12898,9 @@ async function handleWithdrawalConfirmation(userId, dmChatId, confirmationMessag
         }
         
         const currentState = userStateCache.get(stringUserId); 
-        if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) { /* ... as before, ensure HTML ... */ }
+        if (currentState?.data?.originalGroupChatId && currentState?.data?.originalGroupMessageId && bot) {
+            await bot.editMessageText(`${playerRefHTML}, there was an error processing your withdrawal confirmation. Please check your DMs.`, {chat_id: currentState.data.originalGroupChatId, message_id: Number(currentState.data.originalGroupMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+        }
     } finally {
         if (client) client.release();
         clearUserState(stringUserId); 
