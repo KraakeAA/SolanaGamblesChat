@@ -4076,60 +4076,61 @@ async function handleStartDice21Command(msg, betAmountLamports, gameModeArg = nu
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const logPrefix = `[D21_HandleStartCmd UID:${userId} CH:${chatId} Type:${chatType}]`;
-    console.log(`${logPrefix} Command /d21 received. Raw bet input: ${betAmountLamports}, GameModeArg (if any): ${gameModeArg}`);
+    const LOG_PREFIX_D21_START_HTML = `[D21_HandleStartCmd_HTML UID:${userId} CH:${chatId} Type:${chatType}]`; // Added _HTML
+    console.log(`${LOG_PREFIX_D21_START_HTML} Command /d21 received. Raw bet input: ${betAmountLamports}, GameModeArg (if any): ${gameModeArg}`);
 
     let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!initiatorUserObj) {
-        console.warn(`${logPrefix} Failed to get/create user object for ID: ${userId}. Cannot start game.`);
-        await safeSendMessage(chatId, "Apologies, your player profile couldn't be accessed right now. Please use the `/start` command with me first, and then try initiating the Dice 21 game again.", { parse_mode: 'MarkdownV2' });
+        console.warn(`${LOG_PREFIX_D21_START_HTML} Failed to get/create user object for ID: ${userId}. Cannot start game.`);
+        await safeSendMessage(chatId, "Apologies, your player profile couldn't be accessed right now.<br>Please use the <code>/start</code> command with me first, and then try initiating the Dice 21 game again.", { parse_mode: 'HTML' });
         return;
     }
-    const playerRef = getPlayerDisplayReference(initiatorUserObj);
+    // Prepare HTML-safe player reference
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
 
     if (chatType === 'private') {
-        console.log(`${logPrefix} Dice 21 command used in private chat by ${playerRef}. Informing user game is group-only.`);
-        await safeSendMessage(chatId, `🎲 Greetings, ${playerRef}!\n\nThe high-stakes Dice 21 game is exclusively available in our designated casino group chats. This allows for exciting Player vs Player action or challenging our Bot Dealer in a shared environment. \n\nTo start a game, please use the \`/d21 <bet>\` command within one of your casino groups. Good luck when you do!`, { parse_mode: 'MarkdownV2' });
+        console.log(`${LOG_PREFIX_D21_START_HTML} Dice 21 command used in private chat by ${playerRefHTML}. Informing user game is group-only.`);
+        await safeSendMessage(chatId, `🎲 Greetings, ${playerRefHTML}!<br><br>The high-stakes Dice 21 game is exclusively available in our designated casino group chats. This allows for exciting Player vs Player action or challenging our Bot Dealer in a shared environment.<br><br>To start a game, please use the <code>/d21 &lt;bet&gt;</code> command within one of your casino groups. Good luck when you do!`, { parse_mode: 'HTML' });
         return;
     }
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
-        console.log(`${logPrefix} Invalid or zero bet amount detected: ${betAmountLamports}. Informing user.`);
-        await safeSendMessage(chatId, `🃏 Salutations, ${playerRef}! To begin a game of Dice 21, please specify a valid positive bet amount using USD or SOL. For example: \`/d21 10\` (for a ~$10 USD wager) or \`/d21 0.2 sol\`.`, { parse_mode: 'MarkdownV2' });
+        console.log(`${LOG_PREFIX_D21_START_HTML} Invalid or zero bet amount detected: ${betAmountLamports}. Informing user.`);
+        await safeSendMessage(chatId, `🃏 Salutations, ${playerRefHTML}! To begin a game of Dice 21, please specify a valid positive bet amount using USD or SOL.<br>For example: <code>/d21 10</code> (for a ~$10 USD wager) or <code>/d21 0.2 sol</code>.`, { parse_mode: 'HTML' });
         return;
     }
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-    console.log(`${logPrefix} Initiator: ${playerRef}, Bet (USD Display): ${betDisplayUSD}, Bet (Lamports): ${betAmountLamports}`);
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    console.log(`${LOG_PREFIX_D21_START_HTML} Initiator: ${playerRefHTML}, Bet (USD Display): ${betDisplayUSD_HTML}, Bet (Lamports): ${betAmountLamports}`);
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
     if (gameSession.currentGameId && activeGames.has(gameSession.currentGameId)) {
         const existingGame = activeGames.get(gameSession.currentGameId);
-        if ( ([GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, GAME_IDS.DICE_21_UNIFIED_OFFER, GAME_IDS.DUEL_UNIFIED_OFFER, GAME_IDS.COINFLIP, GAME_IDS.RPS, GAME_IDS.MINES_OFFER].includes(existingGame.type) &&
-             (existingGame.status === 'pending_offer' || existingGame.status === 'waiting_opponent' || existingGame.status === 'waiting_for_choice' || existingGame.status === 'waiting_choices' || existingGame.status === 'awaiting_difficulty')) ||
-             ((existingGame.type === GAME_IDS.DICE_21_PVP || existingGame.type === GAME_IDS.DICE_ESCALATOR_PVP || existingGame.type === GAME_IDS.DUEL_PVP) && !existingGame.status.startsWith('game_over_'))
-           ) {
-            console.log(`${logPrefix} Another interactive game offer or active PvP game (ID: ${gameSession.currentGameId}, Type: ${existingGame.type}, Status: ${existingGame.status}) is already active.`);
-            await safeSendMessage(chatId, `⏳ Please hold on, ${playerRef}! Another game offer (like \`${escapeMarkdownV2(existingGame.type.replace(/_/g, ' '))}\`) or an active Player vs Player match is currently underway in this group. Kindly wait for it to conclude before initiating a new Dice 21 challenge.`, { parse_mode: 'MarkdownV2' });
+        if ( ([GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, GAME_IDS.DICE_21_UNIFIED_OFFER, GAME_IDS.DUEL_UNIFIED_OFFER, GAME_IDS.COINFLIP_UNIFIED_OFFER, GAME_IDS.RPS_UNIFIED_OFFER, GAME_IDS.MINES_OFFER].includes(existingGame.type) && // Added _UNIFIED_OFFER for CF & RPS
+              (existingGame.status === 'pending_offer' || existingGame.status === 'waiting_opponent' || existingGame.status === 'waiting_for_choice' || existingGame.status === 'waiting_choices' || existingGame.status === 'awaiting_difficulty')) ||
+             ((existingGame.type === GAME_IDS.DICE_21_PVP || existingGame.type === GAME_IDS.DICE_ESCALATOR_PVP || existingGame.type === GAME_IDS.DUEL_PVP || existingGame.type === GAME_IDS.COINFLIP_PVP || existingGame.type === GAME_IDS.RPS_PVP) && !existingGame.status.startsWith('game_over_')) // Added _PVP for CF & RPS
+            ) {
+            console.log(`${LOG_PREFIX_D21_START_HTML} Another interactive game offer or active PvP game (ID: ${gameSession.currentGameId}, Type: ${existingGame.type}, Status: ${existingGame.status}) is already active.`);
+            await safeSendMessage(chatId, `⏳ Please hold on, ${playerRefHTML}! Another game offer (like <code>${escapeHTML(existingGame.type.replace(/_/g, ' '))}</code>) or an active Player vs Player match is currently underway in this group.<br>Kindly wait for it to conclude before initiating a new Dice 21 challenge.`, { parse_mode: 'HTML' });
             return;
         }
     }
 
     if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
         const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
-        console.log(`${logPrefix} Initiator ${playerRef} has insufficient balance for ${betDisplayUSD} bet. Needs ${needed} more lamports.`);
-        await safeSendMessage(chatId, `${playerRef}, your casino balance is currently too low for a *${betDisplayUSD}* Dice 21 game. You require approximately *${escapeMarkdownV2(await formatBalanceForDisplay(needed, 'USD'))}* more for this particular wager.`, {
-            parse_mode: 'MarkdownV2',
+        console.log(`${LOG_PREFIX_D21_START_HTML} Initiator ${playerRefHTML} has insufficient balance for ${betDisplayUSD_HTML} bet. Needs ${needed} more lamports.`);
+        await safeSendMessage(chatId, `${playerRefHTML}, your casino balance is currently too low for a <b>${betDisplayUSD_HTML}</b> Dice 21 game.<br>You require approximately <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more for this particular wager.`, {
+            parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: "💰 Top Up Balance (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
         });
         return;
     }
 
     const offerId = generateGameId(GAME_IDS.DICE_21_UNIFIED_OFFER);
-    const offerMessageText =
-        `🎲 **Dice 21 Challenge by ${playerRef}!** 🎲\n\n` +
-        `${playerRef} has thrown down the gauntlet for a thrilling game of Dice 21, with a hefty wager of *${betDisplayUSD}* on the line!\n\n` +
+    const offerMessageTextHTML =
+        `🎲 <b>Dice 21 Challenge by ${playerRefHTML}!</b> 🎲\n\n` +
+        `${playerRefHTML} has thrown down the gauntlet for a thrilling game of Dice 21, with a hefty wager of <b>${betDisplayUSD_HTML}</b> on the line!\n\n` +
         `Will any brave challengers step up for a Player vs Player showdown?\n` +
-        `Alternatively, ${playerRef} can choose to battle wits with our expert Bot Dealer. The choice is yours!`;
+        `Alternatively, ${playerRefHTML} can choose to battle wits with our expert Bot Dealer. The choice is yours!`;
 
     const offerKeyboard = {
         inline_keyboard: [
@@ -4145,7 +4146,7 @@ async function handleStartDice21Command(msg, betAmountLamports, gameModeArg = nu
         chatId: String(chatId),
         chatType,
         initiatorId: userId,
-        initiatorMention: playerRef,
+        initiatorMention: playerRefHTML, // Store HTML version
         initiatorUserObj,
         betAmount: betAmountLamports,
         status: 'waiting_for_choice',
@@ -4155,24 +4156,24 @@ async function handleStartDice21Command(msg, betAmountLamports, gameModeArg = nu
     activeGames.set(offerId, offerData);
     await updateGroupGameDetails(chatId, offerId, GAME_IDS.DICE_21_UNIFIED_OFFER, betAmountLamports);
 
-    console.log(`${logPrefix} Sending Dice 21 unified offer (ID: ${offerId}) to chat ${chatId}.`);
-    const sentOfferMessage = await safeSendMessage(chatId, offerMessageText, { parse_mode: 'MarkdownV2', reply_markup: offerKeyboard });
+    console.log(`${LOG_PREFIX_D21_START_HTML} Sending Dice 21 unified offer (ID: ${offerId}) to chat ${chatId}.`);
+    const sentOfferMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: offerKeyboard });
 
     if (sentOfferMessage?.message_id) {
         const offerInMap = activeGames.get(offerId);
         if(offerInMap) {
-            offerInMap.gameSetupMessageId = sentOfferMessage.message_id;
+            offerInMap.gameSetupMessageId = String(sentOfferMessage.message_id); // Ensure it's string
             activeGames.set(offerId, offerInMap);
-            console.log(`${logPrefix} Unified offer message successfully sent (Msg ID: ${sentOfferMessage.message_id}). Offer ID: ${offerId}.`);
+            console.log(`${LOG_PREFIX_D21_START_HTML} Unified offer message successfully sent (Msg ID: ${sentOfferMessage.message_id}). Offer ID: ${offerId}.`);
         } else {
-            console.warn(`${logPrefix} Offer ${offerId} vanished from activeGames immediately after message ID was set. Orphaned offer message ${sentOfferMessage.message_id} might exist in chat.`);
-            if (bot) await bot.deleteMessage(chatId, sentOfferMessage.message_id).catch(delErr => console.warn(`${logPrefix} Could not delete potentially orphaned offer message ${sentOfferMessage.message_id}: ${delErr.message}`));
+            console.warn(`${LOG_PREFIX_D21_START_HTML} Offer ${offerId} vanished from activeGames immediately after message ID was set. Orphaned offer message ${sentOfferMessage.message_id} might exist in chat.`);
+            if (bot) await bot.deleteMessage(chatId, sentOfferMessage.message_id).catch(delErr => console.warn(`${LOG_PREFIX_D21_START_HTML} Could not delete potentially orphaned offer message ${sentOfferMessage.message_id}: ${delErr.message}`));
         }
     } else {
-        console.error(`${logPrefix} CRITICAL: Failed to send Dice 21 unified offer message for offer ID ${offerId}. Cleaning up this offer attempt.`);
+        console.error(`${LOG_PREFIX_D21_START_HTML} CRITICAL: Failed to send Dice 21 unified offer message for offer ID ${offerId}. Cleaning up this offer attempt.`);
         activeGames.delete(offerId);
         await updateGroupGameDetails(chatId, null, null, null);
-        await safeSendMessage(chatId, `An unexpected technical difficulty prevented the Dice 21 game offer by ${playerRef} from being created. Please attempt the command again. If the issue continues, our support team is here to help.`, {parse_mode:'MarkdownV2'});
+        await safeSendMessage(chatId, `An unexpected technical difficulty prevented the Dice 21 game offer by ${playerRefHTML} from being created. Please attempt the command again. If the issue continues, our support team is here to help.`, {parse_mode:'HTML'});
         return;
     }
 
@@ -4184,16 +4185,17 @@ async function handleStartDice21Command(msg, betAmountLamports, gameModeArg = nu
             await updateGroupGameDetails(chatId, null, null, null);
 
             if (currentOfferData.gameSetupMessageId && bot) {
-                const expiredOfferBetDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(currentOfferData.betAmount, 'USD'));
-                const offerExpiredMessageText = `⏳ The Dice 21 game offer initiated by ${currentOfferData.initiatorMention} for *${expiredOfferBetDisplayUSD}* has timed out as no option was selected. This offer is now closed.`;
+                // initiatorMention is already HTML safe from offerData
+                const expiredOfferBetDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentOfferData.betAmount, 'USD'));
+                const offerExpiredMessageTextHTML = `⏳ The Dice 21 game offer initiated by ${currentOfferData.initiatorMention} for <b>${expiredOfferBetDisplayUSD_HTML}</b> has timed out as no option was selected. This offer is now closed.`;
 
-                console.log(`${logPrefix} Editing expired offer message (ID: ${currentOfferData.gameSetupMessageId}) for offer ${offerId} due to timeout.`);
-                await bot.editMessageText(offerExpiredMessageText, {
+                console.log(`${LOG_PREFIX_D21_START_HTML} Editing expired offer message (ID: ${currentOfferData.gameSetupMessageId}) for offer ${offerId} due to timeout.`);
+                await bot.editMessageText(offerExpiredMessageTextHTML, {
                     chat_id: String(chatId),
                     message_id: Number(currentOfferData.gameSetupMessageId),
-                    parse_mode: 'MarkdownV2',
+                    parse_mode: 'HTML',
                     reply_markup: {}
-                }).catch(e => console.error(`${logPrefix} Error editing message for expired D21 unified offer (ID: ${currentOfferData.gameSetupMessageId}): ${e.message}. Message was: "${offerExpiredMessageText}"`));
+                }).catch(e => console.error(`${LOG_PREFIX_D21_START_HTML} Error editing message for expired D21 unified offer (ID: ${currentOfferData.gameSetupMessageId}): ${e.message}.`));
             }
         }
     }, JOIN_GAME_TIMEOUT_MS);
