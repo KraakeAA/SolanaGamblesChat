@@ -6967,29 +6967,29 @@ async function processDuelPvPRollByEmoji(gameData, diceValue, rollerUserId) {
 async function handleStartLadderCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_LADDER_START = `[Ladder_Start UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_LADDER_START = `[Ladder_Start UID:${userId} CH:${chatId}_HTML_V2]`; // Added HTML_V2
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         console.error(`${LOG_PREFIX_LADDER_START} Invalid betAmountLamports: ${betAmountLamports}.`);
-        await safeSendMessage(chatId, "🪜 Oh dear! The wager for Greed's Ladder seems incorrect\\. Please try again with a valid amount\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "🪜 Oh dear! The wager for Greed's Ladder seems incorrect.<br>Please try again with a valid amount.", { parse_mode: 'HTML' });
         return;
     }
 
     let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObj) {
-        await safeSendMessage(chatId, "😕 Greetings, climber! We couldn't find your adventurer profile for Greed's Ladder\\. Please try \`/start\` again\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "😕 Greetings, climber! We couldn't find your adventurer profile for Greed's Ladder.<br>Please try <code>/start</code> again.", { parse_mode: 'HTML' });
         return;
     }
-    console.log(`${LOG_PREFIX_LADDER_START} Initiating Greed's Ladder. Bet: ${betAmountLamports}`);
+    // console.log(`${LOG_PREFIX_LADDER_START} Initiating Greed's Ladder. Bet: ${betAmountLamports}`); // Reduced log
 
-    const playerRef = getPlayerDisplayReference(userObj);
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj)); // Ensure this is HTML safe
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
     if (BigInt(userObj.balance) < betAmountLamports) {
         const needed = betAmountLamports - BigInt(userObj.balance);
-        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(needed, 'USD'));
-        await safeSendMessage(chatId, `${playerRef}, your treasure chest is a bit light for the *${betDisplayUSD}* climb on Greed's Ladder! You'll need about *${neededDisplay}* more\\. Fortify your reserves?`, {
-            parse_mode: 'MarkdownV2',
+        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD'));
+        await safeSendMessage(chatId, `${playerRefHTML}, your treasure chest is a bit light for the <b>${betDisplayUSD_HTML}</b> climb on Greed's Ladder! You'll need about <b>${neededDisplayHTML}</b> more. Fortify your reserves?`, {
+            parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
         });
         return;
@@ -7009,7 +7009,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         if (!balanceUpdateResult || !balanceUpdateResult.success) {
             await client.query('ROLLBACK');
             console.error(`${LOG_PREFIX_LADDER_START} Wager placement failed: ${balanceUpdateResult.error}`);
-            await safeSendMessage(chatId, `${playerRef}, your Greed's Ladder wager of *${betDisplayUSD}* failed to post: \`${escapeMarkdownV2(balanceUpdateResult.error || "Wallet error")}\`\\. Please try again\\.`, { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(chatId, `${playerRefHTML}, your Greed's Ladder wager of <b>${betDisplayUSD_HTML}</b> failed to post: <code>${escapeHTML(balanceUpdateResult.error || "Wallet error")}</code>. Please try again.`, { parse_mode: 'HTML' });
             return;
         }
         await client.query('COMMIT');
@@ -7017,22 +7017,22 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LADDER_START} DB Rollback Error: ${rbErr.message}`));
         console.error(`${LOG_PREFIX_LADDER_START} Database error during Greed's Ladder bet: ${dbError.message}`, dbError.stack?.substring(0,500));
-        await safeSendMessage(chatId, "⚙️ The Ladder's foundations seem shaky (database error)! Failed to start\\. Please try again\\.", { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(chatId, "⚙️ The Ladder's foundations seem shaky (database error)! Failed to start. Please try again.", { parse_mode: 'HTML' });
         return;
     } finally {
         if (client) client.release();
     }
 
     const gameData = {
-        type: GAME_IDS.LADDER, gameId, chatId, userId, playerRef, userObj,
-        betAmount: betAmountLamports, rolls: [], sum: 0n, status: 'rolling_waiting_helper', gameMessageId: null
+        type: GAME_IDS.LADDER, gameId, chatId, userId, playerRef: playerRefHTML, // Store HTML safe ref
+        userObj, betAmount: betAmountLamports, rolls: [], sum: 0n, status: 'rolling_waiting_helper', gameMessageId: null
     };
     activeGames.set(gameId, gameData);
 
-    const titleRolling = createStandardTitle("Greed's Ladder - The Climb Begins!", "🪜");
-    let messageText = `${titleRolling}\n\n${playerRef} wagers *${betDisplayUSD}* and steps onto Greed's Ladder!\nRequesting *${escapeMarkdownV2(String(LADDER_ROLL_COUNT))} dice* from the Helper Bot... This may take a moment! 🎲⏳`;
+    const titleSpinningHTML = `🪜 <b>Greed's Ladder - The Climb Begins!</b> 🪜`;
+    let messageTextHTML = `${titleSpinningHTML}\n\n${playerRefHTML} wagers <b>${betDisplayUSD_HTML}</b> and steps onto Greed's Ladder!\nRequesting <b>${escapeHTML(String(LADDER_ROLL_COUNT))} dice</b> from the Helper Bot... This may take a moment! 🎲⏳`;
 
-    const sentRollingMsg = await safeSendMessage(chatId, messageText, {parse_mode: 'MarkdownV2'});
+    const sentRollingMsg = await safeSendMessage(chatId, messageTextHTML, {parse_mode: 'HTML'});
     if (sentRollingMsg?.message_id) {
         gameData.gameMessageId = sentRollingMsg.message_id;
         activeGames.set(gameId, gameData);
@@ -7056,7 +7056,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
 
     for (let i = 0; i < LADDER_ROLL_COUNT; i++) {
         if (isShuttingDown) { helperBotError = "Shutdown during Ladder dice requests."; break; }
-        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `Ladder Roll ${i+1}`);
+        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `Ladder Roll ${i+1}`); // Assuming this helper is defined elsewhere
         if (rollResult.error) {
             helperBotError = rollResult.message || `Failed to get Ladder Roll ${i+1}`;
             break;
@@ -7065,13 +7065,13 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     }
 
     if (helperBotError || diceRolls.length !== LADDER_ROLL_COUNT) {
-        const errorMsgToUser = `⚠️ ${playerRef}, there was an issue getting your dice rolls for Greed's Ladder: \`${escapeMarkdownV2(String(helperBotError || "Incomplete rolls from helper").substring(0,150))}\`\nYour bet of *${betDisplayUSD}* has been refunded.`;
+        const errorMsgToUserHTML = `⚠️ ${playerRefHTML}, there was an issue getting your dice rolls for Greed's Ladder: <code>${escapeHTML(String(helperBotError || "Incomplete rolls from helper").substring(0,150))}</code><br>Your bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`;
         if (gameData.gameMessageId && bot) {
-            await bot.editMessageText(errorMsgToUser, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) }).catch(async () => {
-                 await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
+            await bot.editMessageText(errorMsgToUserHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) }).catch(async () => {
+                 await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
             });
         } else {
-            await safeSendMessage(String(chatId), errorMsgToUser, { parse_mode: 'MarkdownV2', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
+            await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
         }
         let refundClient = null;
         try {
@@ -7091,75 +7091,79 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     let isBust = gameData.rolls.includes(LADDER_BUST_ON);
 
     let payoutAmountLamports = 0n;
-    let outcomeReasonLog = "";
-    let resultTextPart = "";
-    let finalUserBalanceLamports = userObj.balance;
+    let outcomeReasonLog = ""; // This will be used as transaction_type for ledger
+    let resultTextPartHTML = "";
+    // finalUserBalanceLamports is not needed here as we don't display it. It's handled by updateUserBalanceAndLedger.
 
-    const titleResult = createStandardTitle("Greed's Ladder - The Outcome!", "🏁");
-    messageText = `${titleResult}\n\n${playerRef}'s wager: *${betDisplayUSD}*\nThe Helper Bot delivered dice: ${formatDiceRolls(gameData.rolls)}\nTotal Sum: *${escapeMarkdownV2(String(gameData.sum))}*\n\n`;
+    const titleResultHTML = `🏁 <b>Greed's Ladder - The Outcome!</b> 🏁`;
+    messageTextHTML = `${titleResultHTML}\n\n${playerRefHTML}'s wager: <b>${betDisplayUSD_HTML}</b>\nThe Helper Bot delivered dice: ${formatDiceRolls(gameData.rolls)}\nTotal Sum: <b>${escapeHTML(String(gameData.sum))}</b>\n\n`;
 
     if (isBust) {
-        outcomeReasonLog = `loss_ladder_bust_roll${LADDER_BUST_ON}`;
-        resultTextPart = `💥 *CRASH! A ${escapeMarkdownV2(String(LADDER_BUST_ON))} appeared!* 💥\nYou've tumbled off Greed's Ladder! Your wager is lost\\.`;
+        outcomeReasonLog = `loss_ladder_bust_r${LADDER_BUST_ON}`; // Kept concise
+        resultTextPartHTML = `💥 <b>CRASH! A ${escapeHTML(String(LADDER_BUST_ON))} appeared!</b> 💥\nYou've tumbled off Greed's Ladder! Your wager is lost.`;
         gameData.status = 'game_over_player_bust';
     } else {
         let foundPayout = false;
         for (const payoutTier of LADDER_PAYOUTS) {
             if (gameData.sum >= payoutTier.min && gameData.sum <= payoutTier.max) {
                 const profitLamports = betAmountLamports * BigInt(payoutTier.multiplier);
-                payoutAmountLamports = betAmountLamports + profitLamports;
-                outcomeReasonLog = `win_ladder_sum${gameData.sum}_mult${payoutTier.multiplier}`;
-                resultTextPart = `${escapeMarkdownV2(payoutTier.label)} You've reached a high rung and won *${escapeMarkdownV2(await formatBalanceForDisplay(profitLamports, 'USD'))}* in profit!`;
+                payoutAmountLamports = betAmountLamports + profitLamports; // Total returned to player
+                outcomeReasonLog = `win_ladder_s${gameData.sum}_m${payoutTier.multiplier}`; // Kept concise
+                resultTextPartHTML = `${escapeHTML(payoutTier.label)} You've reached a high rung and won <b>${escapeHTML(await formatBalanceForDisplay(profitLamports, 'USD'))}</b> in profit!`;
                 foundPayout = true;
                 break;
             }
         }
         if (!foundPayout) {
-            outcomeReasonLog = 'loss_ladder_no_payout_tier';
-            resultTextPart = "😐 A cautious climb\\.\\.\\. but not high enough for a prize this time\\. Your wager is lost\\.";
+            outcomeReasonLog = 'loss_ladder_no_tier'; // Kept concise
+            resultTextPartHTML = "😐 A cautious climb... but not high enough for a prize this time. Your wager is lost.";
         }
         gameData.status = 'game_over_resolved';
     }
-    messageText += resultTextPart;
+    messageTextHTML += resultTextPartHTML;
 
     let clientOutcome = null;
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
-        const ledgerReason = `${outcomeReasonLog} (Game ID: ${gameId})`;
+        // FIX: Use concise outcomeReasonLog for transaction_type. More details in notes.
+        const ledgerNotes = `Greed's Ladder: Sum ${gameData.sum}, Rolls ${gameData.rolls.join(',')}. Outcome: ${outcomeReasonLog}. GameID: ${gameId}`;
         const balanceUpdate = await updateUserBalanceAndLedger(
             clientOutcome, userId, payoutAmountLamports,
-            ledgerReason, { game_id_custom_field: gameId },
-            `Outcome of Greed's Ladder game ${gameId}`
+            outcomeReasonLog, // Concise transaction_type
+            { game_id_custom_field: gameId }, // relatedIds
+            ledgerNotes // Detailed notes
         );
 
         if (balanceUpdate.success) {
-            finalUserBalanceLamports = balanceUpdate.newBalanceLamports;
+            // finalUserBalanceLamports = balanceUpdate.newBalanceLamports; // Not needed for display anymore
             await clientOutcome.query('COMMIT');
         } else {
             await clientOutcome.query('ROLLBACK');
-            messageText += `\n\n⚠️ A critical error occurred settling your Ladder game: \`${escapeMarkdownV2(balanceUpdate.error || "DB Error")}\`\\. Casino staff notified\\.`;
+            messageTextHTML += `\n\n⚠️ A critical error occurred settling your Ladder game: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Casino staff notified.`;
             console.error(`${LOG_PREFIX_LADDER_START} Failed to update balance for Ladder game ${gameId}. Error: ${balanceUpdate.error}`);
-            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL LADDER Payout Failure 🚨\nGame ID: \`${escapeMarkdownV2(gameId)}\` User: ${playerRef}\nAmount: \`${formatCurrency(payoutAmountLamports)}\`\nDB Error: \`${escapeMarkdownV2(balanceUpdate.error || "N/A")}\`\\. Manual check needed\\.`, {parse_mode:'MarkdownV2'});
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL LADDER Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRefHTML}\nAmount: <code>${formatCurrency(payoutAmountLamports)}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check needed.`, {parse_mode:'HTML'});
         }
     } catch (dbError) {
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
         console.error(`${LOG_PREFIX_LADDER_START} DB error during Ladder outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
-        messageText += `\n\n⚠️ A severe database error occurred resolving your climb\\. Casino staff notified\\.`;
+        messageTextHTML += `\n\n⚠️ A severe database error occurred resolving your climb. Casino staff notified.`;
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
 
-    messageText += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`;
+    // REMOVED: Final balance display
+    // messageTextHTML += `\n\nYour new casino balance: *${escapeMarkdownV2(await formatBalanceForDisplay(finalUserBalanceLamports, 'USD'))}*\\.`;
+
     const postGameKeyboardLadder = createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports);
 
     if (gameData.gameMessageId && bot) {
-        await bot.editMessageText(messageText, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder })
+        await bot.editMessageText(messageTextHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboardLadder })
             .catch(async (e) => {
-                 await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder });
+                 await safeSendMessage(String(chatId), messageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardLadder });
             });
     } else {
-        await safeSendMessage(String(chatId), messageText, { parse_mode: 'MarkdownV2', reply_markup: postGameKeyboardLadder });
+        await safeSendMessage(String(chatId), messageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardLadder });
     }
     activeGames.delete(gameId);
 }
