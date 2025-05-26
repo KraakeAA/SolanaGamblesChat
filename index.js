@@ -13105,10 +13105,12 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
         const { transferAmount, payerAddress } = analyzeTransactionAmounts(txResponse, depositAddress);
 
         if (transferAmount <= 0n) {
+            console.log(`${logPrefix} No positive transfer amount found for ${depositAddress} in TX ${txSignature}. Amount: ${transferAmount}. Marking processed.`);
             processedDepositTxSignatures.add(txSignature);
             return;
         }
-        const depositAmountSOLDisplay = await formatBalanceForDisplay(transferAmount, 'SOL'); // formatBalanceForDisplay from Part 3
+        // Prepare display amounts (these will be further escaped before inserting into HTML)
+        const depositAmountSOLDisplay = await formatBalanceForDisplay(transferAmount, 'SOL');
         console.log(`✅ ${logPrefix} Valid deposit: ${depositAmountSOLDisplay} from ${payerAddress || 'unknown source'}.`);
 
         client = await pool.connect();
@@ -13117,7 +13119,7 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
         const depositRecordResult = await recordConfirmedDepositDB(client, stringUserId, userDepositWalletId, depositAddress, txSignature, transferAmount, payerAddress, txResponse.blockTime);
         if (depositRecordResult.alreadyProcessed) {
             await client.query('ROLLBACK'); 
-            processedDepositTxSignatures.add(txSignature); // Ensure it's marked if DB said already processed
+            processedDepositTxSignatures.add(txSignature);
             return;
         }
         if (!depositRecordResult.success || !depositRecordResult.depositId) {
@@ -13125,16 +13127,13 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
         }
         const depositId = depositRecordResult.depositId;
 
-        // Mark address as inactive (but not necessarily swept yet by this function)
-        // Sweeping is a separate process. This just deactivates it for new deposits.
-        const markedInactive = await markDepositAddressInactiveDB(client, userDepositWalletId, false, null); // false for swept
+        const markedInactive = await markDepositAddressInactiveDB(client, userDepositWalletId, false, null); 
         if (!markedInactive) {
-            // This is not critical enough to fail the whole deposit crediting
             console.warn(`${logPrefix} ⚠️ Could not mark deposit address WID ${userDepositWalletId} as inactive after deposit.`);
         }
 
         const ledgerNote = `Deposit from ${payerAddress ? payerAddress.slice(0,6)+'...'+payerAddress.slice(-4) : 'Unknown'} to ${depositAddress.slice(0,6)}... TX:${txSignature.slice(0,6)}...`;
-        const balanceUpdateResult = await updateUserBalanceAndLedger(client, stringUserId, transferAmount, 'deposit', { deposit_id: depositId }, ledgerNote); // updateUserBalanceAndLedger from Part P2
+        const balanceUpdateResult = await updateUserBalanceAndLedger(client, stringUserId, transferAmount, 'deposit', { deposit_id: depositId }, ledgerNote); 
         if (!balanceUpdateResult.success || typeof balanceUpdateResult.newBalanceLamports === 'undefined') {
             throw new Error(`Failed to update user ${stringUserId} balance/ledger for deposit: ${balanceUpdateResult.error || "Unknown DB error."}`);
         }
@@ -13142,25 +13141,31 @@ async function processDepositTransaction(txSignature, depositAddress, userDeposi
         await client.query('COMMIT');
         processedDepositTxSignatures.add(txSignature);
 
+        // Prepare variables for the HTML message
         const newBalanceUSDDisplay = await formatBalanceForDisplay(balanceUpdateResult.newBalanceLamports, 'USD');
         const userForNotif = await getOrCreateUser(stringUserId); 
-        const playerRefForNotif = getPlayerDisplayReference(userForNotif || { id: stringUserId, first_name: "Player" }); // getPlayerDisplayReference from Part 3
+        // getPlayerDisplayReference output should be HTML-escaped for safety in HTML context
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userForNotif || { id: stringUserId, first_name: "Player" }));
         
-        await safeSendMessage(stringUserId, // safeSendMessage from Part 1
-            `🎉 *Deposit Confirmed, ${playerRefForNotif}!* 🎉\n\n` +
-            `Your deposit of *${escapeMarkdownV2(depositAmountSOLDisplay)}* has been successfully credited to your casino account.\n\n` + // Removed \\. as it's end of sentence.
-            `💰 Your New Balance: Approx. *${escapeMarkdownV2(newBalanceUSDDisplay)}*\n` + // Escaped period in Approx.
-            `🧾 Transaction ID: \`${escapeMarkdownV2(txSignature)}\`\n\n` +
-            `Time to hit the tables! Good luck! 🎰`, // Escaped !
-            { parse_mode: 'MarkdownV2' }
+        // Construct the HTML message
+        const confirmationMessageHTML = 
+            `🎉 <b>Deposit Confirmed, ${playerRefHTML}!</b> 🎉\n\n` +
+            `Your deposit of <b>${escapeHTML(depositAmountSOLDisplay)}</b> has been successfully credited to your casino account.\n\n` +
+            `💰 Your New Balance: Approx. <b>${escapeHTML(newBalanceUSDDisplay)}</b>\n` +
+            `🧾 Transaction ID: <code>${escapeHTML(txSignature)}</code>\n\n` +
+            `Time to hit the tables! Good luck! 🎰`;
+
+        await safeSendMessage(stringUserId, 
+            confirmationMessageHTML,
+            { parse_mode: 'HTML' } // Changed to HTML
         );
         
     } catch (error) {
         console.error(`❌ ${logPrefix} CRITICAL ERROR processing deposit TX ${txSignature}: ${error.message}`, error.stack?.substring(0,500));
         if (client) { await client.query('ROLLBACK').catch(rbErr => console.error(`❌ ${logPrefix} Rollback failed:`, rbErr)); }
-        processedDepositTxSignatures.add(txSignature); // Mark as processed to avoid retries on this erroring TX
-        if (typeof notifyAdmin === 'function') { // notifyAdmin from Part 1
-            await notifyAdmin(`🚨 *CRITICAL Error Processing Deposit* 🚨\nTX: \`${escapeMarkdownV2(txSignature)}\`\nAddr: \`${escapeMarkdownV2(depositAddress)}\`\nUser: \`${escapeMarkdownV2(stringUserId)}\`\n*Error:*\n\`${escapeMarkdownV2(String(error.message || error))}\`\nManual investigation required.`, {parse_mode:'MarkdownV2'});
+        processedDepositTxSignatures.add(txSignature); 
+        if (typeof notifyAdmin === 'function') { 
+            await notifyAdmin(`🚨 *CRITICAL Error Processing Deposit* 🚨\nTX: <code>${escapeHTML(txSignature)}</code>\nAddr: <code>${escapeHTML(depositAddress)}</code>\nUser: <code>${escapeHTML(stringUserId)}</code>\n*Error:*\n<pre>${escapeHTML(String(error.message || error))}</pre>\nManual investigation required.`, {parse_mode:'HTML'});
         }
     } finally {
         if (client) client.release();
