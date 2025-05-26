@@ -9953,44 +9953,58 @@ bot.on('callback_query', async (callbackQuery) => {
                     else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
                     break;
                 case 'process_withdrawal_confirm':
-                // Ensure handleWithdrawalConfirmation function is defined and available
-                if (typeof handleWithdrawalConfirmation === 'function') { // CORRECTED to handleWithdrawalConfirmation
-                    const decision = params[0]; // 'yes' or 'no'
-                    const currentState = userStateCache.get(userId); // userId is defined in the outer scope of your callback handler
+                // --- ADDED/MODIFIED DIAGNOSTIC LOGS ---
+                console.log(`${LOG_PREFIX_CBQ} Entered 'process_withdrawal_confirm' case. Raw Params: [${params.join(',')}]`);
+                // Ensure LOG_PREFIX_CBQ, userId, originalMessageId, etc. are defined in the scope of your callback handler
 
-                    // Ensure effectiveChatId is defined correctly, typically it's the DM chat ID (userId) for this state
-                    const effectiveDmChatId = currentState?.chatId || userId; 
-                    const messageIdToEditInDm = currentState?.messageId || originalMessageId;
+                if (typeof handleWithdrawalConfirmation === 'function') { // Assuming you've corrected this to handleWithdrawalConfirmation
+                    const decision = params[0];
+                    const currentState = userStateCache.get(userId); // userId from the callbackQuery.from.id
 
+                    console.log(`${LOG_PREFIX_CBQ} Retrieved state for 'process_withdrawal_confirm'. Decision: '${decision}'. State content: ${stringifyWithBigInt(currentState)}`);
 
-                    if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === userId) {
-                        // Call the correct handler
-                        await handleWithdrawalConfirmation(userId, currentState.chatId, currentState.messageId, currentState.data.linkedWallet, currentState.data.amountLamportsStr, currentState.data.feeLamportsStr, currentState.data.originalGroupChatId, currentState.data.originalGroupMessageId);
+                    // Determine which message to edit (the Yes/No prompt)
+                    const messageIdToEditInDm = currentState?.messageId || originalMessageId; // originalMessageId is from callbackQuery.message.message_id
+                    const effectiveDmChatId = currentState?.chatId || userId; // Should be userId for this state
+
+                    if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === String(userId)) {
+                        console.log(`${LOG_PREFIX_CBQ} 'yes' decision, state is valid and for correct user/chat. Calling handleWithdrawalConfirmation. Message ID to edit/use: ${currentState.messageId}`);
+                        await handleWithdrawalConfirmation(
+                            userId, 
+                            currentState.chatId, // Should be the DM chat ID (same as userId)
+                            currentState.messageId, // The ID of the Yes/No prompt message
+                            currentState.data.linkedWallet, 
+                            currentState.data.amountLamportsStr, 
+                            currentState.data.feeLamportsStr, 
+                            currentState.data.originalGroupChatId, 
+                            currentState.data.originalGroupMessageId
+                        );
                     } else if (decision === 'no') {
+                        console.log(`${LOG_PREFIX_CBQ} 'no' decision. Cancelling withdrawal. State was: ${currentState?.state}`);
                         if (bot && messageIdToEditInDm) {
                             await bot.editMessageText("Withdrawal cancelled by user.", {
                                 chat_id: effectiveDmChatId, 
                                 message_id: Number(messageIdToEditInDm), 
-                                parse_mode:'HTML', // Use HTML
+                                parse_mode:'HTML', 
                                 reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
-                            }).catch(()=>{});
+                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'no' decision message: ${e.message}`));
                         }
                         clearUserState(userId);
-                    } else { // Invalid state or unexpected 'decision'
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} Invalid confirmation decision ('${decision}') or state invalid/expired. Current state name: '${currentState?.state}'. Current state chatId: '${currentState?.chatId}' vs userId: '${String(userId)}'.`);
                         if (bot && messageIdToEditInDm) {
                             await bot.editMessageText("Invalid confirmation or your session expired. Withdrawal cancelled.", {
                                 chat_id: effectiveDmChatId, 
                                 message_id: Number(messageIdToEditInDm), 
-                                parse_mode:'HTML', // Use HTML
+                                parse_mode:'HTML', 
                                 reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
-                            }).catch(()=>{});
+                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'invalid state' message: ${e.message}`));
                         }
                         clearUserState(userId);
                     }
                 } else {
-                    console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation`); // Corrected name in log
-                    // Answer callback even if handler is missing
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation.", show_alert: true}).catch(()=>{});
+                    console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation. Cannot process confirmation.`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation: Handler missing.", show_alert: true}).catch(()=>{});
                 }
                 break;
 
