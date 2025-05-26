@@ -659,23 +659,10 @@ const depositProcessorQueue = new PQueue({
 });
 
 const SLOT_PAYOUTS = {
-    // TRIPLE SEVEN (25x Multiplier) - 1 outcome out of 64
-    64: { multiplier: 25, symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },       // Telegram's value 64 IS 777
-
-    // TRIPLE BAR (15x Multiplier) - 1 outcome out of 64
-    1:  { multiplier: 15, symbols: "BAR-BAR-BAR", label: "Triple Bar!" },    // Telegram's value 1 IS BAR-BAR-BAR
-
-    // TRIPLE LEMON (10x Multiplier) - 1 outcome out of 64
-    22: { multiplier: 10, symbols: "🍋🍋🍋", label: "Triple Lemon!" },       // Telegram's value 22 IS Lemon-Lemon-Lemon
-    // Note: Telegram's value 43 (Bell-Bell-Bell) is a losing spin.
-
-    // TRIPLE CHERRY (5x Multiplier) - 3 outcomes out of 64
-    // The visual animation for these specific values (5, 15, 30) from Telegram's sendDice('🎰')
-    // will likely be mixed symbols, not a pure Triple Cherry.
-    // However, the bot will declare this outcome as "Triple Cherry!" and show 🍒🍒🍒.
-    5:  { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" },
-    15: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" },
-    30: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" }
+    64: { multiplier: 25, symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
+    1:  { multiplier: 15, symbols: "BAR-BAR-BAR", label: "Triple Bar!" },
+    22: { multiplier: 10, symbols: "🍋🍋🍋", label: "Triple Lemon!" },
+    43: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" }
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 // --- End of Part 1 ---
