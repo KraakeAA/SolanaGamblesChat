@@ -6969,7 +6969,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     const chatId = String(msg.chat.id);
     const LOG_PREFIX_LADDER_START = `[Ladder_Start_HTML_V3_InstaBust UID:${userId} CH:${chatId}]`; // Updated log prefix
 
-    console.log(`${LOG_PREFIX_LADDER_START} Function called. Bet: ${betAmountLamports}`);
+    console.log(`${LOG_PREFIX_LADDER_START} Function called. Bet: ${betAmountLamports}`); // DIAGNOSTIC LOG
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
         console.error(`${LOG_PREFIX_LADDER_START} Invalid betAmountLamports: ${betAmountLamports}.`);
@@ -6979,27 +6979,28 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
 
     let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObj) {
-        console.error(`${LOG_PREFIX_LADDER_START} Failed to get/create user.`);
+        console.error(`${LOG_PREFIX_LADDER_START} Failed to get/create user.`); // DIAGNOSTIC LOG
         await safeSendMessage(chatId, "😕 Greetings, climber! We couldn't find your adventurer profile for Greed's Ladder.<br>Please try <code>/start</code> again.", { parse_mode: 'HTML' });
         return;
     }
-    console.log(`${LOG_PREFIX_LADDER_START} User obtained. Initiating Greed's Ladder. Bet: ${betAmountLamports}`);
+    console.log(`${LOG_PREFIX_LADDER_START} User obtained. Initiating Greed's Ladder. Bet: ${betAmountLamports}`); // DIAGNOSTIC LOG
 
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-    let betDisplayUSD_HTML;
+    let betDisplayUSD_HTML; 
     try {
         betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-        console.log(`${LOG_PREFIX_LADDER_START} betDisplayUSD_HTML constructed: ${betDisplayUSD_HTML}`);
+        console.log(`${LOG_PREFIX_LADDER_START} betDisplayUSD_HTML constructed: ${betDisplayUSD_HTML}`); // DIAGNOSTIC LOG
     } catch (e) {
-        console.error(`${LOG_PREFIX_LADDER_START} CRITICAL Error constructing betDisplayUSD_HTML: ${e.message}`, e);
+        console.error(`${LOG_PREFIX_LADDER_START} CRITICAL Error constructing betDisplayUSD_HTML: ${e.message}`, e); // DIAGNOSTIC LOG
         await safeSendMessage(chatId, "⚙️ Error preparing game display (price feed issue?). Please try again.", { parse_mode: 'HTML' });
         return;
     }
 
+
     if (BigInt(userObj.balance) < betAmountLamports) {
         const needed = betAmountLamports - BigInt(userObj.balance);
-        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD'));
-        console.log(`${LOG_PREFIX_LADDER_START} Insufficient balance.`);
+        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD')); 
+        console.log(`${LOG_PREFIX_LADDER_START} Insufficient balance.`); // DIAGNOSTIC LOG
         await safeSendMessage(chatId, `${playerRefHTML}, your treasure chest is a bit light for the <b>${betDisplayUSD_HTML}</b> climb on Greed's Ladder! You'll need about <b>${neededDisplayHTML}</b> more. Fortify your reserves?`, {
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
@@ -7010,7 +7011,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
     const gameId = generateGameId(GAME_IDS.LADDER);
     let client = null;
     try {
-        console.log(`${LOG_PREFIX_LADDER_START} Attempting to place bet in DB. GameID: ${gameId}`);
+        console.log(`${LOG_PREFIX_LADDER_START} Attempting to place bet in DB. GameID: ${gameId}`); // DIAGNOSTIC LOG
         client = await pool.connect();
         await client.query('BEGIN');
         const balanceUpdateResult = await updateUserBalanceAndLedger(
@@ -7021,16 +7022,16 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
 
         if (!balanceUpdateResult || !balanceUpdateResult.success) {
             await client.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_LADDER_START} Wager placement failed in DB: ${balanceUpdateResult.error}`);
+            console.error(`${LOG_PREFIX_LADDER_START} Wager placement failed in DB: ${balanceUpdateResult.error}`); // DIAGNOSTIC LOG
             await safeSendMessage(chatId, `${playerRefHTML}, your Greed's Ladder wager of <b>${betDisplayUSD_HTML}</b> failed to post: <code>${escapeHTML(balanceUpdateResult.error || "Wallet error")}</code>. Please try again.`, { parse_mode: 'HTML' });
             return;
         }
         await client.query('COMMIT');
         userObj.balance = balanceUpdateResult.newBalanceLamports;
-        console.log(`${LOG_PREFIX_LADDER_START} Bet placed successfully.`);
+        console.log(`${LOG_PREFIX_LADDER_START} Bet placed successfully.`); // DIAGNOSTIC LOG
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_LADDER_START} DB Rollback Error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_LADDER_START} Database error during Greed's Ladder bet processing: ${dbError.message}`, dbError.stack?.substring(0,500));
+        console.error(`${LOG_PREFIX_LADDER_START} Database error during Greed's Ladder bet processing: ${dbError.message}`, dbError.stack?.substring(0,500)); // DIAGNOSTIC LOG
         await safeSendMessage(chatId, "⚙️ The Ladder's foundations seem shaky (database error)! Failed to start. Please try again.", { parse_mode: 'HTML' });
         return;
     } finally {
@@ -7042,28 +7043,28 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         userObj, betAmount: betAmountLamports, rolls: [], sum: 0n, status: 'rolling_waiting_helper', gameMessageId: null
     };
     activeGames.set(gameId, gameData);
-    console.log(`${LOG_PREFIX_LADDER_START} Game data set in activeGames. Status: ${gameData.status}`);
+    console.log(`${LOG_PREFIX_LADDER_START} Game data set in activeGames. Status: ${gameData.status}`); // DIAGNOSTIC LOG
 
     const titleSpinningHTML = `🪜 <b>Greed's Ladder - The Climb Begins!</b> 🪜`;
     let messageTextHTML_Spinning = `${titleSpinningHTML}\n\n${playerRefHTML} wagers <b>${betDisplayUSD_HTML}</b> and steps onto Greed's Ladder!\nRequesting <b>${escapeHTML(String(LADDER_ROLL_COUNT))} dice</b> from the Helper Bot... This may take a moment! 🎲⏳`;
-    console.log(`${LOG_PREFIX_LADDER_START} Attempting to send 'Climb Begins' message.`);
+    console.log(`${LOG_PREFIX_LADDER_START} Attempting to send 'Climb Begins' message.`); // DIAGNOSTIC LOG
 
     const sentRollingMsg = await safeSendMessage(chatId, messageTextHTML_Spinning, {parse_mode: 'HTML'});
     if (sentRollingMsg?.message_id) {
         gameData.gameMessageId = sentRollingMsg.message_id;
         activeGames.set(gameId, gameData);
-        console.log(`${LOG_PREFIX_LADDER_START} 'Climb Begins' message sent. Msg ID: ${gameData.gameMessageId}`);
+        console.log(`${LOG_PREFIX_LADDER_START} 'Climb Begins' message sent. Msg ID: ${gameData.gameMessageId}`); // DIAGNOSTIC LOG
     } else {
-        console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Failed to send initial 'Climb Begins!' message for ${gameId}. Refunding wager.`);
+        console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Failed to send initial 'Climb Begins!' message for ${gameId}. Refunding wager.`); // DIAGNOSTIC LOG
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_ladder_setup_fail', {game_id_custom_field: gameId}, `Refund Ladder game ${gameId} (initial message send fail)`);
             await refundClient.query('COMMIT');
-            console.log(`${LOG_PREFIX_LADDER_START} Refund processed for initial message failure.`);
+            console.log(`${LOG_PREFIX_LADDER_START} Refund processed for initial message failure.`); // DIAGNOSTIC LOG
         } catch (dbErr) {
             if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Refund FAILED after initial message send fail for game ${gameId}: ${dbErr.message}`);
+            console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Refund FAILED after initial message send fail for game ${gameId}: ${dbErr.message}`); // DIAGNOSTIC LOG
         } finally { if (refundClient) refundClient.release(); }
         activeGames.delete(gameId);
         return;
@@ -7071,81 +7072,78 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
 
     let diceRolls = [];
     let helperBotError = null;
-    let isBust = false; // Initialize isBust for early exit
-    console.log(`${LOG_PREFIX_LADDER_START} Starting dice roll loop for ${LADDER_ROLL_COUNT} rolls.`);
+    let isBust = false; 
+    console.log(`${LOG_PREFIX_LADDER_START} Starting dice roll loop for ${LADDER_ROLL_COUNT} rolls.`); // DIAGNOSTIC LOG
 
     for (let i = 0; i < LADDER_ROLL_COUNT; i++) {
-        console.log(`${LOG_PREFIX_LADDER_START} Requesting roll ${i + 1}/${LADDER_ROLL_COUNT}.`);
-        if (isShuttingDown) { helperBotError = "Shutdown during Ladder dice requests."; console.log(`${LOG_PREFIX_LADDER_START} Shutdown detected during dice roll loop.`); break; }
+        console.log(`${LOG_PREFIX_LADDER_START} Requesting roll ${i + 1}/${LADDER_ROLL_COUNT}.`); // DIAGNOSTIC LOG
+        if (isShuttingDown) { helperBotError = "Shutdown during Ladder dice requests."; console.log(`${LOG_PREFIX_LADDER_START} Shutdown detected during dice roll loop.`); break; } 
         const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, userId, `Ladder Roll ${i+1}`);
         if (rollResult.error) {
             helperBotError = rollResult.message || `Failed to get Ladder Roll ${i+1}`;
-            console.error(`${LOG_PREFIX_LADDER_START} Helper Bot error on roll ${i + 1}: ${helperBotError}`);
-            break; // Exit loop on helper error
+            console.error(`${LOG_PREFIX_LADDER_START} Helper Bot error on roll ${i + 1}: ${helperBotError}`); // DIAGNOSTIC LOG
+            break; 
         }
         diceRolls.push(rollResult.roll);
-        console.log(`${LOG_PREFIX_LADDER_START} Roll ${i + 1} received: ${rollResult.roll}`);
+        console.log(`${LOG_PREFIX_LADDER_START} Roll ${i + 1} received: ${rollResult.roll}`); // DIAGNOSTIC LOG
 
         if (rollResult.roll === LADDER_BUST_ON) {
-            console.log(`${LOG_PREFIX_LADDER_START} Bust roll of ${LADDER_BUST_ON} detected on roll ${i + 1}. Game ends now.`);
-            isBust = true; // Set the bust flag
-            break; // Exit the loop immediately - INSTANT END ON BUST
+            console.log(`${LOG_PREFIX_LADDER_START} Bust roll of ${LADDER_BUST_ON} detected on roll ${i + 1}. Game ends now.`); // DIAGNOSTIC LOG
+            isBust = true; 
+            break; 
         }
     }
-    gameData.rolls = diceRolls; // Store actual rolls, even if loop broke early due to bust or error
+    gameData.rolls = diceRolls; 
     gameData.sum = BigInt(diceRolls.reduce((sum, val) => sum + val, 0));
 
-    // Handle cases where loop didn't complete due to helper error (and not due to player bust)
-    // If isBust is true, we skip this and proceed to bust logic.
     if (helperBotError || (!isBust && gameData.rolls.length !== LADDER_ROLL_COUNT)) {
-        console.error(`${LOG_PREFIX_LADDER_START} Helper Bot error or incorrect roll count (and not a player bust). Error: ${helperBotError}, Rolls: ${gameData.rolls.length}`);
+        console.error(`${LOG_PREFIX_LADDER_START} Helper Bot error or incorrect roll count (and not a player bust). Error: ${helperBotError}, Rolls: ${gameData.rolls.length}`); // DIAGNOSTIC LOG
         const errorMsgToUserHTML = `⚠️ ${playerRefHTML}, there was an issue getting your dice rolls for Greed's Ladder: <code>${escapeHTML(String(helperBotError || "Incomplete rolls from helper").substring(0,150))}</code><br>Your bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`;
         if (gameData.gameMessageId && bot) {
             await bot.editMessageText(errorMsgToUserHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) }).catch(async (e) => {
-                 console.error(`${LOG_PREFIX_LADDER_START} Failed to edit message for helperBotError. Error: ${e.message}. Sending new.`, e);
+                 console.error(`${LOG_PREFIX_LADDER_START} Failed to edit message for helperBotError. Error: ${e.message}. Sending new.`, e); // DIAGNOSTIC LOG
                  await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
             });
         } else {
             await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
         }
-        let refundClient = null; // Refund logic...
+        let refundClient = null; 
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_ladder_helper_fail', {game_id_custom_field: gameId}, `Refund Ladder game ${gameId} - Helper Bot error`);
             await refundClient.query('COMMIT');
-            console.log(`${LOG_PREFIX_LADDER_START} Refund processed for helper bot error.`);
+            console.log(`${LOG_PREFIX_LADDER_START} Refund processed for helper bot error.`); // DIAGNOSTIC LOG
         } catch (dbErr) {
             if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Refund FAILED after helper error for game ${gameId}: ${dbErr.message}`);
+            console.error(`${LOG_PREFIX_LADDER_START} CRITICAL: Refund FAILED after helper error for game ${gameId}: ${dbErr.message}`); // DIAGNOSTIC LOG
         } finally { if (refundClient) refundClient.release(); }
         activeGames.delete(gameId);
         return;
     }
 
-    console.log(`${LOG_PREFIX_LADDER_START} All dice rolls processed (or bust occurred). Final rolls: ${gameData.rolls.join(', ')}, Sum: ${gameData.sum}, isBust: ${isBust}`);
+    console.log(`${LOG_PREFIX_LADDER_START} All dice rolls processed (or bust occurred). Final rolls: ${gameData.rolls.join(', ')}, Sum: ${gameData.sum}, isBust: ${isBust}`); // DIAGNOSTIC LOG
 
     let payoutAmountLamports = 0n;
     let outcomeReasonLog = "";
     let resultTextPartHTML = "";
 
     const titleResultHTML = `🏁 <b>Greed's Ladder - The Outcome!</b> 🏁`;
-    let finalMessageTextHTML;
+    let finalMessageTextHTML; 
     try {
         finalMessageTextHTML = `${titleResultHTML}\n\n${playerRefHTML}'s wager: <b>${betDisplayUSD_HTML}</b>\nThe Helper Bot delivered dice: ${formatDiceRolls(gameData.rolls)}\nTotal Sum: <b>${escapeHTML(String(gameData.sum))}</b>\n\n`;
-        console.log(`${LOG_PREFIX_LADDER_START} Initial part of final message constructed.`);
+        console.log(`${LOG_PREFIX_LADDER_START} Initial part of final message constructed.`); // DIAGNOSTIC LOG
     } catch (e) {
-        console.error(`${LOG_PREFIX_LADDER_START} ERROR constructing initial part of finalMessageTextHTML: ${e.message}`, e);
+        console.error(`${LOG_PREFIX_LADDER_START} ERROR constructing initial part of finalMessageTextHTML: ${e.message}`, e); // DIAGNOSTIC LOG
         await safeSendMessage(chatId, "⚙️ Critical error preparing Greed's Ladder result display. Please contact support.", {parse_mode: 'HTML'});
         activeGames.delete(gameId);
         return;
     }
 
-    if (isBust) { // This flag is now correctly set if a 1 was rolled and loop broke early
+    if (isBust) { 
         outcomeReasonLog = `loss_ladder_bust_r${LADDER_BUST_ON}`;
-        // MODIFIED: Replaced <br> with newline character for HTML parse_mode
-        resultTextPartHTML = `💥 <b>CRASH! A ${escapeHTML(String(LADDER_BUST_ON))} appeared!</b> 💥\nYou've tumbled off Greed's Ladder! Your wager is lost.`;
+        resultTextPartHTML = `💥 <b>CRASH! A ${escapeHTML(String(LADDER_BUST_ON))} appeared!</b> 💥\nYou've tumbled off Greed's Ladder! Your wager is lost.`; // Newline for HTML
         gameData.status = 'game_over_player_bust';
-    } else {
+    } else { 
         let foundPayout = false;
         for (const payoutTier of LADDER_PAYOUTS) {
             if (gameData.sum >= payoutTier.min && gameData.sum <= payoutTier.max) {
@@ -7154,9 +7152,9 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
                 outcomeReasonLog = `win_ladder_s${gameData.sum}_m${payoutTier.multiplier}`;
                 try {
                     resultTextPartHTML = `${escapeHTML(payoutTier.label)} You've reached a high rung and won <b>${escapeHTML(await formatBalanceForDisplay(profitLamports, 'USD'))}</b> in profit!`;
-                    console.log(`${LOG_PREFIX_LADDER_START} Payout tier found: ${payoutTier.label}`);
+                    console.log(`${LOG_PREFIX_LADDER_START} Payout tier found: ${payoutTier.label}`); // DIAGNOSTIC LOG
                 } catch (e) {
-                    console.error(`${LOG_PREFIX_LADDER_START} ERROR in formatBalanceForDisplay for profit: ${e.message}`, e);
+                    console.error(`${LOG_PREFIX_LADDER_START} ERROR in formatBalanceForDisplay for profit: ${e.message}`, e); // DIAGNOSTIC LOG
                     resultTextPartHTML = `${escapeHTML(payoutTier.label)} You've reached a high rung! (Error displaying profit in USD, SOL value: ${escapeHTML(formatCurrency(profitLamports, 'SOL'))})`;
                 }
                 foundPayout = true;
@@ -7166,63 +7164,63 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         if (!foundPayout) {
             outcomeReasonLog = 'loss_ladder_no_tier';
             resultTextPartHTML = "😐 A cautious climb... but not high enough for a prize this time. Your wager is lost.";
-            console.log(`${LOG_PREFIX_LADDER_START} No payout tier met.`);
+            console.log(`${LOG_PREFIX_LADDER_START} No payout tier met.`); // DIAGNOSTIC LOG
         }
         gameData.status = 'game_over_resolved';
     }
     finalMessageTextHTML += resultTextPartHTML;
-    console.log(`${LOG_PREFIX_LADDER_START} Final message content constructed (before DB): ${finalMessageTextHTML.substring(0, 250)}...`);
+    console.log(`${LOG_PREFIX_LADDER_START} Final message content constructed (before DB): ${finalMessageTextHTML.substring(0, 250)}...`); 
 
     let clientOutcome = null;
     try {
-        console.log(`${LOG_PREFIX_LADDER_START} Starting DB update for game outcome.`);
+        console.log(`${LOG_PREFIX_LADDER_START} Starting DB update for game outcome.`); // DIAGNOSTIC LOG
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
         const ledgerNotes = `Greed's Ladder: Sum ${gameData.sum}, Rolls ${gameData.rolls.join(',')}. Outcome: ${outcomeReasonLog}. GameID: ${gameId}`;
         const balanceUpdate = await updateUserBalanceAndLedger(
             clientOutcome, userId, payoutAmountLamports,
-            outcomeReasonLog,
-            { game_id_custom_field: gameId },
+            outcomeReasonLog, 
+            { game_id_custom_field: gameId }, 
             ledgerNotes
         );
 
         if (balanceUpdate.success) {
             await clientOutcome.query('COMMIT');
-            console.log(`${LOG_PREFIX_LADDER_START} DB update successful.`);
+            console.log(`${LOG_PREFIX_LADDER_START} DB update successful.`); // DIAGNOSTIC LOG
         } else {
             await clientOutcome.query('ROLLBACK');
             const dbFailText = `\n\n⚠️ A critical error occurred settling your Ladder game: <code>${escapeHTML(balanceUpdate.error || "DB Error")}</code>. Casino staff notified.`;
             finalMessageTextHTML += dbFailText;
-            console.error(`${LOG_PREFIX_LADDER_START} Failed to update balance for Ladder game ${gameId}. DB Error: ${balanceUpdate.error}`);
+            console.error(`${LOG_PREFIX_LADDER_START} Failed to update balance for Ladder game ${gameId}. DB Error: ${balanceUpdate.error}`); // DIAGNOSTIC LOG
             if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL LADDER Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code> User: ${playerRefHTML}\nAmount: <code>${formatCurrency(payoutAmountLamports)}</code>\nDB Error: <code>${escapeHTML(balanceUpdate.error || "N/A")}</code>. Manual check needed.`, {parse_mode:'HTML'});
         }
     } catch (dbError) {
         if (clientOutcome) await clientOutcome.query('ROLLBACK').catch(()=>{});
         const dbCatchFailText = `\n\n⚠️ A severe database error occurred resolving your climb. Casino staff notified.`;
         finalMessageTextHTML += dbCatchFailText;
-        console.error(`${LOG_PREFIX_LADDER_START} DB CATCH block error during Ladder outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500));
+        console.error(`${LOG_PREFIX_LADDER_START} DB CATCH block error during Ladder outcome for ${gameId}: ${dbError.message}`, dbError.stack?.substring(0,500)); // DIAGNOSTIC LOG
     } finally {
         if (clientOutcome) clientOutcome.release();
     }
-    console.log(`${LOG_PREFIX_LADDER_START} DB operations complete. Attempting to send final message.`);
+    console.log(`${LOG_PREFIX_LADDER_START} DB operations complete. Attempting to send final message.`); 
 
     const postGameKeyboardLadder = createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports);
 
     if (gameData.gameMessageId && bot) {
-        console.log(`${LOG_PREFIX_LADDER_START} Attempting to EDIT message ID: ${gameData.gameMessageId}`);
+        console.log(`${LOG_PREFIX_LADDER_START} Attempting to EDIT message ID: ${gameData.gameMessageId}`); // DIAGNOSTIC LOG
         await bot.editMessageText(finalMessageTextHTML, { chat_id: String(chatId), message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboardLadder })
             .catch(async (e) => {
-                 console.error(`${LOG_PREFIX_LADDER_START} Failed to EDIT message ${gameData.gameMessageId}. Error: ${e.message}. Attempting to SEND new.`, e);
+                 console.error(`${LOG_PREFIX_LADDER_START} Failed to EDIT message ${gameData.gameMessageId}. Error: ${e.message}. Attempting to SEND new.`, e); // DIAGNOSTIC LOG
                  const sentFallback = await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardLadder });
-                 console.log(`${LOG_PREFIX_LADDER_START} Fallback safeSendMessage attempt result: ${sentFallback ? 'Sent (Msg ID: ' + sentFallback.message_id + ')' : 'Failed'}`);
+                 console.log(`${LOG_PREFIX_LADDER_START} Fallback safeSendMessage attempt result: ${sentFallback ? 'Sent (Msg ID: ' + sentFallback.message_id + ')' : 'Failed'}`); // DIAGNOSTIC LOG
             });
     } else {
-        console.log(`${LOG_PREFIX_LADDER_START} No gameMessageId to edit, attempting to SEND new final message.`);
+        console.log(`${LOG_PREFIX_LADDER_START} No gameMessageId to edit, attempting to SEND new final message.`); // DIAGNOSTIC LOG
         const sentNew = await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardLadder });
-        console.log(`${LOG_PREFIX_LADDER_START} Initial safeSendMessage for final result attempt: ${sentNew ? 'Sent (Msg ID: ' + sentNew.message_id + ')' : 'Failed'}`);
+        console.log(`${LOG_PREFIX_LADDER_START} Initial safeSendMessage for final result attempt: ${sentNew ? 'Sent (Msg ID: ' + sentNew.message_id + ')' : 'Failed'}`); // DIAGNOSTIC LOG
     }
     activeGames.delete(gameId);
-    console.log(`${LOG_PREFIX_LADDER_START} Game ${gameId} removed from activeGames. Function end.`);
+    console.log(`${LOG_PREFIX_LADDER_START} Game ${gameId} removed from activeGames. Function end.`); // DIAGNOSTIC LOG
 }
 
 
@@ -9755,10 +9753,10 @@ bot.on('message', async (msg) => {
                         if(betOU7) await handleStartOverUnder7Command(msg, betOU7);
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartOverUnder7Command`); break;
                 case 'ladder': case 'greedsladder':
-                    if (typeof handleStartLadderCommand === 'function') {
-                        const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betLadder) await handleStartLadderCommand(msg, betLadder);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartLadderCommand`); break;
+                if (typeof handleStartLadderCommand === 'function') {
+                    const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                    if(betLadder) await handleStartLadderCommand(msg, betLadder);
+                } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartLadderCommand`); break;
                 case 's7': case 'sevenout': case 'craps':
                     if (typeof handleStartSevenOutCommand === 'function') {
                         const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
