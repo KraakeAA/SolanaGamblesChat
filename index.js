@@ -1,4 +1,4 @@
-// --- Start of Part 1 (REVISED - For New Dice Escalator Game IDs and Constants & PVP_TURN_TIMEOUT_MS) ---
+// --- Start of Part 1 (REVISED - For New Dice Escalator Game IDs and Constants & PVP_TURN_TIMEOUT_MS & MIN_WITHDRAWAL_USD) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
@@ -96,7 +96,10 @@ const PAYMENT_ENV_DEFAULTS = {
   'DEPOSIT_ADDRESS_EXPIRY_MINUTES': '60',
   'DEPOSIT_CONFIRMATIONS': 'confirmed',
   'WITHDRAWAL_FEE_LAMPORTS': '10000',
-  'MIN_WITHDRAWAL_LAMPORTS': '10000000',
+  // 'MIN_WITHDRAWAL_LAMPORTS': '10000000', // This fixed SOL value is no longer the primary determinant for min withdrawal.
+                                            // The system will now primarily use MIN_WITHDRAWAL_USD.
+                                            // If you keep this in your .env, it will still be loaded into process.env below.
+  'MIN_WITHDRAWAL_USD': '50.00',         // NEW: Minimum withdrawal based on USD value.
   'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',
   'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
   'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',
@@ -140,7 +143,15 @@ const PAYMENT_ENV_DEFAULTS = {
   'MAX_BET_USD': '100.00',
 };
 
-const OPTIONAL_ENV_DEFAULTS = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
+// Ensure MIN_WITHDRAWAL_LAMPORTS is still part of OPTIONAL_ENV_DEFAULTS if users might have it in their .env
+// It just won't be used by the primary withdrawal minimum logic.
+// If it's NOT in OPTIONAL_ENV_DEFAULTS and also not in .env, process.env.MIN_WITHDRAWAL_LAMPORTS will be undefined.
+const tempOptionalDefaults = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
+if (!tempOptionalDefaults.hasOwnProperty('MIN_WITHDRAWAL_LAMPORTS')) { // If it was removed from PAYMENT_ENV_DEFAULTS strictly
+    tempOptionalDefaults['MIN_WITHDRAWAL_LAMPORTS'] = '0'; // Provide a base default if it was fully removed
+}
+const OPTIONAL_ENV_DEFAULTS = tempOptionalDefaults;
+
 
 Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
   if (process.env[key] === undefined) {
@@ -161,11 +172,11 @@ const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY
 
 // --- GAME_IDS Constant (UPDATED for Coinflip & RPS) ---
 const GAME_IDS = {
-    COINFLIP: 'coinflip', // Base ID, might be used for generic rules if needed
+    COINFLIP: 'coinflip', 
     COINFLIP_UNIFIED_OFFER: 'coinflip_unified_offer',
     COINFLIP_PVB: 'coinflip_pvb',
     COINFLIP_PVP: 'coinflip_pvp',
-    RPS: 'rps', // Base ID
+    RPS: 'rps', 
     RPS_UNIFIED_OFFER: 'rps_unified_offer',
     RPS_PVB: 'rps_pvb',
     RPS_PVP: 'rps_pvp',
@@ -219,17 +230,17 @@ const MINES_DIFFICULTY_CONFIG = {
     easy: {
         rows: 5, cols: 5, mines: 3, label: "Easy (5x5, 3 Mines)",
         multipliers: [ 0, 1.08, 1.18, 1.29, 1.42, 1.55, 1.70, 1.88, 2.08, 2.30, 2.55,
-                        2.85, 3.20, 3.60, 4.05, 4.50, 5.00, 6.00, 7.50, 10.00, 15.00, 25.00, 50.00 ]
+                       2.85, 3.20, 3.60, 4.05, 4.50, 5.00, 6.00, 7.50, 10.00, 15.00, 25.00, 50.00 ]
     },
     medium: {
         rows: 5, cols: 5, mines: 5, label: "Medium (5x5, 5 Mines)",
         multipliers: [ 0, 1.12, 1.28, 1.47, 1.70, 1.98, 2.30, 2.70, 3.15, 3.70, 4.35,
-                        5.10, 6.00, 7.10, 8.50, 10.50, 13.00, 16.50, 22.00, 30.00, 75.00 ]
+                       5.10, 6.00, 7.10, 8.50, 10.50, 13.00, 16.50, 22.00, 30.00, 75.00 ]
     },
     hard:   {
         rows: 5, cols: 5, mines: 7, label: "Hard (5x5, 7 Mines)",
         multipliers: [ 0, 1.18, 1.40, 1.68, 2.00, 2.40, 2.90, 3.50, 4.20, 5.10, 6.20,
-                        7.50, 9.20, 11.50, 14.50, 18.00, 23.00, 30.00, 100.00 ]
+                       7.50, 9.20, 11.50, 14.50, 18.00, 23.00, 30.00, 100.00 ]
     },
 };
 // --- END OF MINES GAME CONSTANTS ---
@@ -261,7 +272,7 @@ if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
-if (!REFERRAL_PAYOUT_KEYPAIR) { // Fallback if not set or invalid
+if (!REFERRAL_PAYOUT_KEYPAIR) { 
     REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
 }
 
@@ -278,7 +289,7 @@ let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
     combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
-if (combinedRpcEndpointsForConnection.length === 0) { // Absolute fallback if nothing is provided
+if (combinedRpcEndpointsForConnection.length === 0) { 
     console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). Using default public Solana RPC as a last resort.");
     combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
 }
@@ -298,7 +309,7 @@ const MIN_BET_USD_val = parseFloat(process.env.MIN_BET_USD);
 const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
-const PVP_TURN_TIMEOUT_MS = parseInt(process.env.PVP_TURN_TIMEOUT_MS, 10); // ADDED HERE
+const PVP_TURN_TIMEOUT_MS = parseInt(process.env.PVP_TURN_TIMEOUT_MS, 10); 
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
 const RULES_CALLBACK_PREFIX = process.env.RULES_CALLBACK_PREFIX;
 const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
@@ -310,7 +321,11 @@ const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPI
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase() || 'confirmed';
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
-const MIN_WITHDRAWAL_LAMPORTS = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS);
+
+// MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE is for reference or non-critical uses if `process.env.MIN_WITHDRAWAL_LAMPORTS` is still set.
+// The primary withdrawal logic will use MIN_WITHDRAWAL_USD_val.
+const MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS || '0'); // Default to '0' if not set to avoid BigInt errors
+const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD); // Parsed from new env var
 
 
 // Critical Configuration Validations
@@ -321,7 +336,6 @@ if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MAST
 if (isNaN(PVP_TURN_TIMEOUT_MS) || PVP_TURN_TIMEOUT_MS <= 0) {
     console.warn(`⚠️ WARNING: PVP_TURN_TIMEOUT_MS ('${process.env.PVP_TURN_TIMEOUT_MS}') is not a valid positive number. PvP turn timeouts may not function as expected (will be very short or default).`);
 }
-
 
 const criticalGameScoresCheck = { TARGET_JACKPOT_SCORE, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
 for (const [key, value] of Object.entries(criticalGameScoresCheck)) {
@@ -338,6 +352,17 @@ if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
     console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
     process.exit(1);
 }
+// NEW VALIDATION FOR MIN_WITHDRAWAL_USD_val
+if (isNaN(MIN_WITHDRAWAL_USD_val) || MIN_WITHDRAWAL_USD_val <= 0) {
+    console.error(`🚨 FATAL ERROR: MIN_WITHDRAWAL_USD ('${process.env.MIN_WITHDRAWAL_USD}') must be a positive number. Bot cannot start.`);
+    process.exit(1);
+}
+// Optional: Warning if legacy MIN_WITHDRAWAL_LAMPORTS is problematic but not fatal for this specific check
+if (MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE < 0n) {
+    console.warn(`⚠️ WARNING: MIN_WITHDRAWAL_LAMPORTS ('${process.env.MIN_WITHDRAWAL_LAMPORTS}') is negative. This value is legacy for withdrawal minimums but should ideally be non-negative if set.`);
+}
+
+
 if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
     console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
     process.exit(1);
@@ -388,7 +413,7 @@ function formatLamportsToSolStringForLog(lamports) {
     return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
-// --- Log Key Configurations (PVP_TURN_TIMEOUT_MS added) ---
+// --- Log Key Configurations (PVP_TURN_TIMEOUT_MS added, Min Withdrawal line UPDATED) ---
 console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Dice Escalator (PvB): Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Player Bust On: ${DICE_ESCALATOR_BUST_ON}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
   Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
@@ -397,7 +422,7 @@ console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Default Starting Credits: ${formatLamportsToSolStringForLog(DEFAULT_STARTING_BALANCE_LAMPORTS)} SOL
   Command Cooldown: ${COMMAND_COOLDOWN_MS / 1000}s, Game Join Timeout (Offers): ${JOIN_GAME_TIMEOUT_MS / 1000 / 60}min
   PvP Turn Timeout: ${PVP_TURN_TIMEOUT_MS / 1000}s
-  Min Withdrawal: ${formatLamportsToSolStringForLog(MIN_WITHDRAWAL_LAMPORTS)} SOL, Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL
+  Min Withdrawal: Approx. $${MIN_WITHDRAWAL_USD_val.toFixed(2)} USD (actual SOL equivalent varies based on current price), Fee: ${formatLamportsToSolStringForLog(WITHDRAWAL_FEE_LAMPORTS)} SOL
   Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
   SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
   Dice Roll Polling (Helper Bot System): Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
@@ -492,8 +517,6 @@ const solPriceCache = new Map();
 
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
-  // Characters we will still escape: _ * [ ] ( ) ~ ` > # + - = | { } \
-  // REMOVED: . ! ' from the original aggressive list.
   return String(text).replace(/([_*\[\]()~`>#+\-=|{}\\])/g, '\\$1');
 };
 
@@ -511,16 +534,15 @@ async function safeSendMessage(chatId, text, options = {}) {
         const ellipsisBase = ` \\.\\.\\. (_message truncated by ${escapeMarkdownV2(BOT_NAME)}_)`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-    } else if (finalOptions.parse_mode !== 'HTML' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Adjusted for HTML length check
+    } else if (finalOptions.parse_mode !== 'HTML' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
         const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length); // HTML messages can be longer, but this is a general fallback
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length); 
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) { // HTML also has a 4096 char limit
-        const ellipsisBase = ` ... (<i>message truncated by ${escapeHTML(BOT_NAME)}</i>)`;
+    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) { 
+        const ellipsisBase = ` ... (<i>message truncated by ${escapeHTML(BOT_NAME)}</i>)`; // Assuming escapeHTML is defined
         const truncateAt = Math.max(0, 4096 - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
     }
-
 
     if (!bot || typeof bot.sendMessage !== 'function') {
         console.error(`${LOG_PREFIX_SSM} ⚠️ Error: Telegram 'bot' instance or sendMessage function not available.`);
@@ -540,8 +562,8 @@ async function safeSendMessage(chatId, text, options = {}) {
                     let plainTextFallbackOptions = { ...options };
                     delete plainTextFallbackOptions.parse_mode;
 
-                    let plainTextForFallback = text;
-                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { // Max length for plain text fallback
+                    let plainTextForFallback = text; 
+                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
                         const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME}, original was parse error)`;
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
                         plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
@@ -658,11 +680,11 @@ const depositProcessorQueue = new PQueue({
     throwOnTimeout: true
 });
 
-const SLOT_PAYOUTS = {
+const SLOT_PAYOUTS = { // This is the version they last finalized
     64: { multiplier: 25, symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
     1:  { multiplier: 15, symbols: "BAR-BAR-BAR", label: "Triple Bar!" },
     22: { multiplier: 10, symbols: "🍋🍋🍋", label: "Triple Lemon!" },
-    43: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" }
+    43: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" } // Key 43 (visual Bell) pays as Cherry
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 // --- End of Part 1 ---
