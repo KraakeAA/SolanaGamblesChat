@@ -9615,7 +9615,7 @@ function createStandardTitle(titleText, emoji = '✨') {
 }
 
 // console.log("Part 5a, Section 4 (REVISED for Simplified Post-Game Keyboard) - Complete.");
-// --- End of Part 5a, Section 4 ---
+// --- End of Part 5a, Section 4
 // --- Start of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator Jackpot Choice & OU7 Fix) ---
 // index.js - Part 5a, Section 1: Core Listeners Setup (Message & Callback) and Populated Routers
 // (This entire block should be placed LATE in your index.js, AFTER all game logic, general commands, and UI helpers, but BEFORE Part 6)
@@ -9624,11 +9624,11 @@ function createStandardTitle(titleText, emoji = '✨') {
 
 // Dependencies from previous Parts (assumed to be globally available or correctly imported)
 // Part 1: isShuttingDown, userStateCache, COMMAND_COOLDOWN_MS, bot, getPlayerDisplayReference,
-//         safeSendMessage, escapeMarkdownV2, MIN_BET_USD_val, MAX_BET_USD_val, LAMPORTS_PER_SOL,
-//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, ADMIN_USER_ID, BOT_NAME,
-//         MIN_BET_AMOUNT_LAMPORTS_config, MAX_BET_AMOUNT_LAMPORTS_config, stringifyWithBigInt,
-//         RULES_CALLBACK_PREFIX, DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION,
-//         userCooldowns, pool, activeGames, groupGameSessions, GAME_IDS (with new DE, CF, RPS IDs and MINES_OFFER)
+//         safeSendMessage, escapeMarkdownV2, MIN_BET_USD_val, MAX_BET_USD_val, LAMPORTS_PER_SOL,
+//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, ADMIN_USER_ID, BOT_NAME,
+//         MIN_BET_AMOUNT_LAMPORTS_config, MAX_BET_AMOUNT_LAMPORTS_config, stringifyWithBigInt,
+//         RULES_CALLBACK_PREFIX, DEPOSIT_CALLBACK_ACTION, WITHDRAW_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION,
+//         userCooldowns, pool, activeGames, groupGameSessions, GAME_IDS (with new DE, CF, RPS IDs and MINES_OFFER)
 // Part 2: getOrCreateUser, findRecipientUser
 // Part 3: createUserMention, formatCurrency
 // Part P3: clearUserState, routeStatefulInput, handleMenuAction, handleWithdrawalConfirmation
@@ -9638,1581 +9638,1579 @@ function createStandardTitle(titleText, emoji = '✨') {
 
 // --- Helper to parse bet amount for game commands (USD primary) ---
 const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationChatType, userIdForLog = 'N/A') => {
-    const LOG_PREFIX_PBA = `[ParseBet CH:${commandInitiationChatId} UID:${userIdForLog}]`;
-    let betAmountLamports;
-    let minBetLamports, maxBetLamports;
-    let minBetDisplay, maxBetDisplay;
-    let defaultBetDisplay;
+    const LOG_PREFIX_PBA = `[ParseBet CH:${commandInitiationChatId} UID:${userIdForLog}]`;
+    let betAmountLamports;
+    let minBetLamports, maxBetLamports;
+    let minBetDisplay, maxBetDisplay;
+    let defaultBetDisplay;
 
-    try {
-        const solPrice = await getSolUsdPrice();
+    try {
+        const solPrice = await getSolUsdPrice();
 
-        minBetLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice);
-        maxBetLamports = convertUSDToLamports(MAX_BET_USD_val, solPrice);
+        minBetLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice);
+        maxBetLamports = convertUSDToLamports(MAX_BET_USD_val, solPrice);
 
-        minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(minBetLamports, solPrice));
-        maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(maxBetLamports, solPrice));
-        defaultBetDisplay = minBetDisplay;
+        minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(minBetLamports, solPrice));
+        maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(maxBetLamports, solPrice));
+        defaultBetDisplay = minBetDisplay;
 
-        if (!arg || String(arg).trim() === "") {
-            betAmountLamports = minBetLamports;
-            return betAmountLamports;
-        } else {
-            const argStr = String(arg).trim().toLowerCase();
-            let isExplicitSol = argStr.endsWith('sol');
-            let isExplicitLamports = argStr.endsWith('lamports');
-            let potentialNumberPart = argStr.replace('sol', '').replace('lamports', '').trim();
-            let parsedValueFloat = parseFloat(potentialNumberPart);
-            let parsedValueBigInt = null;
-            try { parsedValueBigInt = BigInt(potentialNumberPart); } catch {}
+        if (!arg || String(arg).trim() === "") {
+            betAmountLamports = minBetLamports;
+            return betAmountLamports;
+        } else {
+            const argStr = String(arg).trim().toLowerCase();
+            let isExplicitSol = argStr.endsWith('sol');
+            let isExplicitLamports = argStr.endsWith('lamports');
+            let potentialNumberPart = argStr.replace('sol', '').replace('lamports', '').trim();
+            let parsedValueFloat = parseFloat(potentialNumberPart);
+            let parsedValueBigInt = null;
+            try { parsedValueBigInt = BigInt(potentialNumberPart); } catch {}
 
-            if (isExplicitSol) {
-                if (isNaN(parsedValueFloat) || parsedValueFloat <= 0) throw new Error("Invalid amount for 'sol' suffix.");
-                betAmountLamports = BigInt(Math.floor(parsedValueFloat * Number(LAMPORTS_PER_SOL)));
-                const equivalentUsdValue = parsedValueFloat * solPrice;
-                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                    const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
-                    const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                    betAmountLamports = minBetLamports;
-                }
-            } else if (isExplicitLamports) {
-                if (parsedValueBigInt === null || parsedValueBigInt <= 0n) throw new Error("Invalid amount for 'lamports' suffix.");
-                betAmountLamports = parsedValueBigInt;
-                const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                    const betInLamportsDisplay = escapeMarkdownV2(formatCurrency(betAmountLamports, 'lamports', true));
-                    const message = `⚠️ Your bet of *${betInLamportsDisplay}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
-                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                    betAmountLamports = minBetLamports;
-                }
-            } else {
-                if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
-                    const usdThreshold = MAX_BET_USD_val * 1.5;
+            if (isExplicitSol) {
+                if (isNaN(parsedValueFloat) || parsedValueFloat <= 0) throw new Error("Invalid amount for 'sol' suffix.");
+                betAmountLamports = BigInt(Math.floor(parsedValueFloat * Number(LAMPORTS_PER_SOL)));
+                const equivalentUsdValue = parsedValueFloat * solPrice;
+                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                    const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
+                    const message = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                    betAmountLamports = minBetLamports;
+                }
+            } else if (isExplicitLamports) {
+                if (parsedValueBigInt === null || parsedValueBigInt <= 0n) throw new Error("Invalid amount for 'lamports' suffix.");
+                betAmountLamports = parsedValueBigInt;
+                const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+                if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                    const betInLamportsDisplay = escapeMarkdownV2(formatCurrency(betAmountLamports, 'lamports', true));
+                    const message = `⚠️ Your bet of *${betInLamportsDisplay}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is outside current USD limits (*${minBetDisplay}* - *${maxBetDisplay}*). Your bet is set to the minimum: *${defaultBetDisplay}*.`;
+                    await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                    betAmountLamports = minBetLamports;
+                }
+            } else {
+                if (!isNaN(parsedValueFloat) && parsedValueFloat > 0) {
+                    const usdThreshold = MAX_BET_USD_val * 1.5;
 
-                    if ( (argStr.includes('.')) || (!argStr.includes('.') && parsedValueFloat <= usdThreshold && parsedValueFloat >= MIN_BET_USD_val) ) {
-                        let usdAmountToConvert = parsedValueFloat;
-                        betAmountLamports = convertUSDToLamports(usdAmountToConvert, solPrice);
+                    if ( (argStr.includes('.')) || (!argStr.includes('.') && parsedValueFloat <= usdThreshold && parsedValueFloat >= MIN_BET_USD_val) ) {
+                        let usdAmountToConvert = parsedValueFloat;
+                        betAmountLamports = convertUSDToLamports(usdAmountToConvert, solPrice);
 
-                        if (usdAmountToConvert < MIN_BET_USD_val || usdAmountToConvert > MAX_BET_USD_val) {
-                            const betUsdDisplay = escapeMarkdownV2(usdAmountToConvert.toFixed(2));
-                            const message = `⚠️ Your bet of *${betUsdDisplay} USD* is outside the allowed limits: *${minBetDisplay}* - *${maxBetDisplay}*. Your bet has been adjusted to the minimum: *${defaultBetDisplay}*.`;
-                            await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
-                            betAmountLamports = minBetLamports;
-                        }
-                    } else {
-                        if (parsedValueBigInt !== null && parsedValueBigInt > 0n) {
-                            betAmountLamports = parsedValueBigInt;
-                            const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+                        if (usdAmountToConvert < MIN_BET_USD_val || usdAmountToConvert > MAX_BET_USD_val) {
+                            const betUsdDisplay = escapeMarkdownV2(usdAmountToConvert.toFixed(2));
+                            const message = `⚠️ Your bet of *${betUsdDisplay} USD* is outside the allowed limits: *${minBetDisplay}* - *${maxBetDisplay}*. Your bet has been adjusted to the minimum: *${defaultBetDisplay}*.`;
+                            await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+                            betAmountLamports = minBetLamports;
+                        }
+                    } else {
+                        if (parsedValueBigInt !== null && parsedValueBigInt > 0n) {
+                            betAmountLamports = parsedValueBigInt;
+                            const equivalentUsdValue = Number(betAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-                            if (betAmountLamports === minBetLamports) {
-                                // Exact minimum lamport value, accept.
-                            } else if (betAmountLamports === maxBetLamports) {
-                                // Exact maximum lamport value, accept.
-                            } else if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
-                                const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
-                                let adjustmentMessage;
-                                if (equivalentUsdValue < MIN_BET_USD_val) {
-                                    adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is below the minimum limit of *${minBetDisplay}*. Adjusted to minimum.`;
-                                    betAmountLamports = minBetLamports;
-                                } else {
-                                    adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) exceeds the maximum limit of *${maxBetDisplay}*. Adjusted to maximum.`;
-                                    betAmountLamports = maxBetLamports;
-                                }
-                                await safeSendMessage(commandInitiationChatId, adjustmentMessage, { parse_mode: 'MarkdownV2' });
-                            }
-                        } else {
-                            throw new Error("Invalid numeric bet value provided (large integer path).");
-                        }
-                    }
-                } else {
-                    throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
-                }
-            }
-        }
+                            if (betAmountLamports === minBetLamports) {
+                                // Exact minimum lamport value, accept.
+                            } else if (betAmountLamports === maxBetLamports) {
+                                // Exact maximum lamport value, accept.
+                            } else if (equivalentUsdValue < MIN_BET_USD_val || equivalentUsdValue > MAX_BET_USD_val) {
+                                const betInSOLDisplayDynamic = escapeMarkdownV2(formatCurrency(betAmountLamports, 'SOL'));
+                                let adjustmentMessage;
+                                if (equivalentUsdValue < MIN_BET_USD_val) {
+                                    adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) is below the minimum limit of *${minBetDisplay}*. Adjusted to minimum.`;
+                                    betAmountLamports = minBetLamports;
+                                } else {
+                                    adjustmentMessage = `⚠️ Your bet of *${betInSOLDisplayDynamic}* (approx. ${escapeMarkdownV2(convertLamportsToUSDString(betAmountLamports, solPrice))}) exceeds the maximum limit of *${maxBetDisplay}*. Adjusted to maximum.`;
+                                    betAmountLamports = maxBetLamports;
+                                }
+                                await safeSendMessage(commandInitiationChatId, adjustmentMessage, { parse_mode: 'MarkdownV2' });
+                            }
+                        } else {
+                            throw new Error("Invalid numeric bet value provided (large integer path).");
+                        }
+                    }
+                } else {
+                    throw new Error("Could not parse bet amount. Use numbers, or 'sol'/'lamports' suffix.");
+                }
+            }
+        }
 
-        const effectiveMinLamportsSystem = MIN_BET_AMOUNT_LAMPORTS_config;
-        const effectiveMaxLamportsSystem = MAX_BET_AMOUNT_LAMPORTS_config;
+        const effectiveMinLamportsSystem = MIN_BET_AMOUNT_LAMPORTS_config;
+        const effectiveMaxLamportsSystem = MAX_BET_AMOUNT_LAMPORTS_config;
 
-        if (betAmountLamports === minBetLamports) {
-            if (betAmountLamports > effectiveMaxLamportsSystem) {
-                const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
-                console.warn(`${LOG_PREFIX_PBA} minBetLamports (${formatCurrency(betAmountLamports)}) somehow exceeds effectiveMaxLamportsSystem (${formatCurrency(effectiveMaxLamportsSystem)}). Clamping to max.`);
-                await safeSendMessage(commandInitiationChatId, `ℹ️ Your $0.50 bet (converted to lamports) unusually exceeded the system's absolute maximum. Adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
-                return effectiveMaxLamportsSystem;
-            }
-            return betAmountLamports;
-        }
+        if (betAmountLamports === minBetLamports) {
+            if (betAmountLamports > effectiveMaxLamportsSystem) {
+                const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
+                console.warn(`${LOG_PREFIX_PBA} minBetLamports (${formatCurrency(betAmountLamports)}) somehow exceeds effectiveMaxLamportsSystem (${formatCurrency(effectiveMaxLamportsSystem)}). Clamping to max.`);
+                await safeSendMessage(commandInitiationChatId, `ℹ️ Your $0.50 bet (converted to lamports) unusually exceeded the system's absolute maximum. Adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
+                return effectiveMaxLamportsSystem;
+            }
+            return betAmountLamports;
+        }
 
-        if (betAmountLamports < effectiveMinLamportsSystem) {
-            const adjustedMinDisplaySystem = await formatBalanceForDisplay(effectiveMinLamportsSystem, 'USD', solPrice);
-            console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is BELOW absolute system lamport limit ${formatCurrency(effectiveMinLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMinDisplaySystem)}.`);
-            await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet was below the system's absolute minimum value and has been adjusted to *${escapeMarkdownV2(adjustedMinDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
-            return effectiveMinLamportsSystem;
-        }
-        if (betAmountLamports > effectiveMaxLamportsSystem) {
-            if (betAmountLamports === maxBetLamports) {
-                // This IS the exact maximum lamport value from MAX_BET_USD_val. Accept it.
-            } else {
-                const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
-                console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is ABOVE absolute system lamport limit ${formatCurrency(effectiveMaxLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMaxDisplaySystem)}.`);
-                await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet exceeded the system's absolute maximum value and has been adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
-                return effectiveMaxLamportsSystem;
-            }
-        }
-        return betAmountLamports;
+        if (betAmountLamports < effectiveMinLamportsSystem) {
+            const adjustedMinDisplaySystem = await formatBalanceForDisplay(effectiveMinLamportsSystem, 'USD', solPrice);
+            console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is BELOW absolute system lamport limit ${formatCurrency(effectiveMinLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMinDisplaySystem)}.`);
+            await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet was below the system's absolute minimum value and has been adjusted to *${escapeMarkdownV2(adjustedMinDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
+            return effectiveMinLamportsSystem;
+        }
+        if (betAmountLamports > effectiveMaxLamportsSystem) {
+            if (betAmountLamports === maxBetLamports) {
+                // This IS the exact maximum lamport value from MAX_BET_USD_val. Accept it.
+            } else {
+                const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
+                console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is ABOVE absolute system lamport limit ${formatCurrency(effectiveMaxLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMaxDisplaySystem)}.`);
+                await safeSendMessage(commandInitiationChatId, `ℹ️ Your specified bet exceeded the system's absolute maximum value and has been adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
+                return effectiveMaxLamportsSystem;
+            }
+        }
+        return betAmountLamports;
 
-    } catch (priceError) {
-        console.error(`${LOG_PREFIX_PBA} CRITICAL error during bet parsing (e.g. SOL price unavailable): ${priceError.message}`);
-        const minLamportsFallbackDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL'));
-        const message = `⚙️ Apologies, we couldn't determine current bet limits due to a price feed issue. Your bet has been set to the internal minimum of *${minLamportsFallbackDisplay}*.`;
-        await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
+    } catch (priceError) {
+        console.error(`${LOG_PREFIX_PBA} CRITICAL error during bet parsing (e.g. SOL price unavailable): ${priceError.message}`);
+        const minLamportsFallbackDisplay = escapeMarkdownV2(formatCurrency(MIN_BET_AMOUNT_LAMPORTS_config, 'SOL'));
+        const message = `⚙️ Apologies, we couldn't determine current bet limits due to a price feed issue. Your bet has been set to the internal minimum of *${minLamportsFallbackDisplay}*.`;
+        await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
 
-        try {
-            if (!arg || String(arg).trim() === "") return MIN_BET_AMOUNT_LAMPORTS_config;
-            let fallbackAmountLamports;
-            const argStrFB = String(arg).trim().toLowerCase();
-            if (argStrFB.endsWith('sol') || argStrFB.includes('.')) {
-                const solValFB = parseFloat(argStrFB.replace('sol', '').replace('lamports','').trim());
-                if (isNaN(solValFB) || solValFB <=0) return MIN_BET_AMOUNT_LAMPORTS_config;
-                fallbackAmountLamports = BigInt(Math.floor(solValFB * Number(LAMPORTS_PER_SOL)));
-            } else if (argStrFB.endsWith('lamports')) {
-                const lampValFB = BigInt(argStrFB.replace('lamports','').trim());
-                if (lampValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
-                fallbackAmountLamports = lampValFB;
-            } else {
-                const intValFB = BigInt(argStrFB);
-                if (intValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
-                if (intValFB > 0n && intValFB < 10000n && !argStrFB.includes('.') && !argStrFB.endsWith('000000')) {
-                    fallbackAmountLamports = BigInt(Math.floor(Number(intValFB) * Number(LAMPORTS_PER_SOL)));
-                } else {
-                    fallbackAmountLamports = intValFB;
-                }
-            }
+        try {
+            if (!arg || String(arg).trim() === "") return MIN_BET_AMOUNT_LAMPORTS_config;
+            let fallbackAmountLamports;
+            const argStrFB = String(arg).trim().toLowerCase();
+            if (argStrFB.endsWith('sol') || argStrFB.includes('.')) {
+                const solValFB = parseFloat(argStrFB.replace('sol', '').replace('lamports','').trim());
+                if (isNaN(solValFB) || solValFB <=0) return MIN_BET_AMOUNT_LAMPORTS_config;
+                fallbackAmountLamports = BigInt(Math.floor(solValFB * Number(LAMPORTS_PER_SOL)));
+            } else if (argStrFB.endsWith('lamports')) {
+                const lampValFB = BigInt(argStrFB.replace('lamports','').trim());
+                if (lampValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
+                fallbackAmountLamports = lampValFB;
+            } else {
+                const intValFB = BigInt(argStrFB);
+                if (intValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
+                if (intValFB > 0n && intValFB < 10000n && !argStrFB.includes('.') && !argStrFB.endsWith('000000')) {
+                    fallbackAmountLamports = BigInt(Math.floor(Number(intValFB) * Number(LAMPORTS_PER_SOL)));
+                } else {
+                    fallbackAmountLamports = intValFB;
+                }
+            }
 
-            if (fallbackAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config) return MIN_BET_AMOUNT_LAMPORTS_config;
-            if (fallbackAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) return MAX_BET_AMOUNT_LAMPORTS_config;
-            return fallbackAmountLamports;
-        } catch {
-            return MIN_BET_AMOUNT_LAMPORTS_config;
-        }
-    }
+            if (fallbackAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config) return MIN_BET_AMOUNT_LAMPORTS_config;
+            if (fallbackAmountLamports > MAX_BET_AMOUNT_LAMPORTS_config) return MAX_BET_AMOUNT_LAMPORTS_config;
+            return fallbackAmountLamports;
+        } catch {
+            return MIN_BET_AMOUNT_LAMPORTS_config;
+        }
+    }
 };
 
 
 // --- Main Message Handler (`bot.on('message')`) ---
 bot.on('message', async (msg) => {
-    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
-    console.log(`${LOG_PREFIX_MSG_HANDLER} Received message: ${msg.text ? `Text: "${msg.text}"` : (msg.dice ? `Dice: Value ${msg.dice.value}` : "Non-text/dice message")}`);
+    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
+    console.log(`${LOG_PREFIX_MSG_HANDLER} Received message: ${msg.text ? `Text: "${msg.text}"` : (msg.dice ? `Dice: Value ${msg.dice.value}` : "Non-text/dice message")}`);
 
 
-    if (isShuttingDown) {
-        console.log(`${LOG_PREFIX_MSG_HANDLER} Bot is shutting down. Ignoring message.`);
-        return;
-    }
-    if (!msg || !msg.from || !msg.chat || !msg.date) {
-        console.warn(`${LOG_PREFIX_MSG_HANDLER} Ignoring malformed/incomplete message.`);
-        return;
-    }
+    if (isShuttingDown) {
+        console.log(`${LOG_PREFIX_MSG_HANDLER} Bot is shutting down. Ignoring message.`);
+        return;
+    }
+    if (!msg || !msg.from || !msg.chat || !msg.date) {
+        console.warn(`${LOG_PREFIX_MSG_HANDLER} Ignoring malformed/incomplete message.`);
+        return;
+    }
 
-    if (msg.from.is_bot) {
-        try {
-            const selfBotInfo = await bot.getMe();
-            if (String(msg.from.id) !== String(selfBotInfo.id)) {
-                console.log(`${LOG_PREFIX_MSG_HANDLER} Ignoring message from other bot: ${msg.from.username || msg.from.id}`);
-                return;
-            }
-            if (!msg.dice) {
-                console.log(`${LOG_PREFIX_MSG_HANDLER} Ignoring self-sent non-dice message.`);
-                return;
-            }
-            console.log(`${LOG_PREFIX_MSG_HANDLER} Processing self-sent dice message (value: ${msg.dice.value}).`);
-        } catch (getMeError) {
-            console.error(`${LOG_PREFIX_MSG_HANDLER} Error in getMe self-check: ${getMeError.message}. Ignoring message.`);
-            return;
-        }
-    }
+    if (msg.from.is_bot) {
+        try {
+            const selfBotInfo = await bot.getMe();
+            if (String(msg.from.id) !== String(selfBotInfo.id)) {
+                console.log(`${LOG_PREFIX_MSG_HANDLER} Ignoring message from other bot: ${msg.from.username || msg.from.id}`);
+                return;
+            }
+            if (!msg.dice) {
+                console.log(`${LOG_PREFIX_MSG_HANDLER} Ignoring self-sent non-dice message.`);
+                return;
+            }
+            console.log(`${LOG_PREFIX_MSG_HANDLER} Processing self-sent dice message (value: ${msg.dice.value}).`);
+        } catch (getMeError) {
+            console.error(`${LOG_PREFIX_MSG_HANDLER} Error in getMe self-check: ${getMeError.message}. Ignoring message.`);
+            return;
+        }
+    }
 
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const text = msg.text || "";
-    const chatType = msg.chat.type;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const text = msg.text || "";
+    const chatType = msg.chat.type;
 
-    if (msg.dice && msg.from && !msg.from.is_bot) {
-        const diceValue = msg.dice.value;
-        const rollerId = String(msg.from.id || msg.from.telegram_id);
-        console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] User ${rollerId} sent 🎲 (value: ${diceValue}) in chat ${chatId}. ActiveGames size: ${activeGames.size}`);
+    if (msg.dice && msg.from && !msg.from.is_bot) {
+        const diceValue = msg.dice.value;
+        const rollerId = String(msg.from.id || msg.from.telegram_id);
+        console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] User ${rollerId} sent 🎲 (value: ${diceValue}) in chat ${chatId}. ActiveGames size: ${activeGames.size}`);
 
-        let gameIdForDiceRoll = null;
-        let gameDataForDiceRoll = null;
-        let isDiceEscalatorEmoji = false;
-        let isDice21Emoji = false;
-        let isDuelGameEmoji = false;
-        let matchedGameTypeForDice = null;
+        let gameIdForDiceRoll = null;
+        let gameDataForDiceRoll = null;
+        let isDiceEscalatorEmoji = false;
+        let isDice21Emoji = false;
+        let isDuelGameEmoji = false;
+        let matchedGameTypeForDice = null;
 
 
-        let iterationCount = 0;
-        for (const [gId, gData] of activeGames.entries()) {
-            iterationCount++;
-            if (String(gData.chatId) === chatId) {
-                const isDEPvBRollExpected = gData.status === 'player_turn_awaiting_emoji';
-                if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && isDEPvBRollExpected) {
-                    gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
-                }
-                if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
-                    const logCtx = `[DiceRouter DE_PVP GID:${gId} Roller:${rollerId}]`; // Keep debug logs for now
-                    console.log(`${logCtx} Checking game. Game Status: '${gData.status}'`);
-                    console.log(`${logCtx} P1 (${gData.initiator?.userId}): isTurn=${gData.initiator?.isTurn}`);
-                    console.log(`${logCtx} P2 (${gData.opponent?.userId}): isTurn=${gData.opponent?.isTurn}`);
+        let iterationCount = 0;
+        for (const [gId, gData] of activeGames.entries()) {
+            iterationCount++;
+            if (String(gData.chatId) === chatId) {
+                const isDEPvBRollExpected = gData.status === 'player_turn_awaiting_emoji';
+                if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && isDEPvBRollExpected) {
+                    gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
+                }
+                if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
+                    const logCtx = `[DiceRouter DE_PVP GID:${gId} Roller:${rollerId}]`; // Keep debug logs for now
+                    console.log(`${logCtx} Checking game. Game Status: '${gData.status}'`);
+                    console.log(`${logCtx} P1 (${gData.initiator?.userId}): isTurn=${gData.initiator?.isTurn}`);
+                    console.log(`${logCtx} P2 (${gData.opponent?.userId}): isTurn=${gData.opponent?.isTurn}`);
 
-                    const isInitiatorDE_PvP = (gData.initiator &&
-                        gData.initiator.userId === rollerId &&
-                        gData.initiator.isTurn &&
-                        ( // Broader status check for Dice Escalator
-                            gData.status === 'p1_awaiting_roll_emoji' ||
-                            gData.status === 'p1_awaiting_roll1_emoji' || // Keep for safety if used elsewhere
-                            gData.status === 'p1_awaiting_roll2_emoji'  // Keep for safety if used elsewhere
-                        ));
+                    const isInitiatorDE_PvP = (gData.initiator &&
+                        gData.initiator.userId === rollerId &&
+                        gData.initiator.isTurn &&
+                        ( // Broader status check for Dice Escalator
+                            gData.status === 'p1_awaiting_roll_emoji' ||
+                            gData.status === 'p1_awaiting_roll1_emoji' || // Keep for safety if used elsewhere
+                            gData.status === 'p1_awaiting_roll2_emoji'  // Keep for safety if used elsewhere
+                        ));
 
-                    const isOpponentDE_PvP = (gData.opponent &&
-                        gData.opponent.userId === rollerId &&
-                        gData.opponent.isTurn &&
-                        ( // Broader status check for Dice Escalator
-                            gData.status === 'p2_awaiting_roll_emoji' ||
-                            gData.status === 'p2_awaiting_roll1_emoji' || // Keep for safety
-                            gData.status === 'p2_awaiting_roll2_emoji'  // Keep for safety
-                        ));
+                    const isOpponentDE_PvP = (gData.opponent &&
+                        gData.opponent.userId === rollerId &&
+                        gData.opponent.isTurn &&
+                        ( // Broader status check for Dice Escalator
+                            gData.status === 'p2_awaiting_roll_emoji' ||
+                            gData.status === 'p2_awaiting_roll1_emoji' || // Keep for safety
+                            gData.status === 'p2_awaiting_roll2_emoji'  // Keep for safety
+                        ));
 
-                    console.log(`${logCtx} Condition for P1 match: UserMatch=${gData.initiator?.userId === rollerId}, TurnMatch=${gData.initiator?.isTurn}, StatusCheck=${isInitiatorDE_PvP}`);
-                    console.log(`${logCtx} Condition for P2 match: UserMatch=${gData.opponent?.userId === rollerId}, TurnMatch=${gData.opponent?.isTurn}, StatusCheck=${isOpponentDE_PvP}`);
+                    console.log(`${logCtx} Condition for P1 match: UserMatch=${gData.initiator?.userId === rollerId}, TurnMatch=${gData.initiator?.isTurn}, StatusCheck=${isInitiatorDE_PvP}`);
+                    console.log(`${logCtx} Condition for P2 match: UserMatch=${gData.opponent?.userId === rollerId}, TurnMatch=${gData.opponent?.isTurn}, StatusCheck=${isOpponentDE_PvP}`);
 
-                    if (isInitiatorDE_PvP || isOpponentDE_PvP) {
-                        console.log(`${logCtx} MATCH FOUND!`);
-                        gameIdForDiceRoll = gId;
-                        gameDataForDiceRoll = gData;
-                        isDiceEscalatorEmoji = true; // <<< THIS IS THE FIX
-                        matchedGameTypeForDice = GAME_IDS.DICE_ESCALATOR_PVP; // Use the unified variable
-                        break;
-                    } else {
-                        console.log(`${logCtx} NO MATCH for this DE_PVP game object.`);
-                    }
-                }
-                // --- UPDATED CONDITION FOR DICE 21 PvB ---
-                if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId &&
-                    (gData.status === 'player_turn_hit_stand_prompt' || // For subsequent hits
-                        gData.status === 'player_initial_roll_1_prompted' ||
-                        gData.status === 'player_initial_roll_2_prompted'
-                    )
-                    ) {
-                    gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
-                }
-                // --- END OF UPDATED CONDITION ---
-                if (gData.type === GAME_IDS.DICE_21_PVP) {
-                    const isInitiatorD21_PvP = (gData.initiator && gData.initiator.userId === rollerId && gData.initiator.isTurn && gData.status === 'initiator_turn' && gData.initiator.status === 'playing_turn');
-                    const isOpponentD21_PvP = (gData.opponent && gData.opponent.userId === rollerId && gData.opponent.isTurn && gData.status === 'opponent_turn' && gData.opponent.status === 'playing_turn');
-                    if (isInitiatorD21_PvP || isOpponentD21_PvP) {
-                        gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
-                    }
-                }
-                if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && (gData.status === 'player_awaiting_roll1_emoji' || gData.status === 'player_awaiting_roll2_emoji')) {
-                    gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
-                }
-                if (gData.type === GAME_IDS.DUEL_PVP) {
-                    const isInitiatorDuel_PvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && (gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji'));
-                    const isOpponentDuel_PvP = (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && (gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji'));
-                    if (isInitiatorDuel_PvP || isOpponentDuel_PvP) {
-                        gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
-                    }
-                }
-            }
-        }
+                    if (isInitiatorDE_PvP || isOpponentDE_PvP) {
+                        console.log(`${logCtx} MATCH FOUND!`);
+                        gameIdForDiceRoll = gId;
+                        gameDataForDiceRoll = gData;
+                        isDiceEscalatorEmoji = true; // <<< THIS IS THE FIX
+                        matchedGameTypeForDice = GAME_IDS.DICE_ESCALATOR_PVP; // Use the unified variable
+                        break;
+                    } else {
+                        console.log(`${logCtx} NO MATCH for this DE_PVP game object.`);
+                    }
+                }
+                // --- UPDATED CONDITION FOR DICE 21 PvB ---
+                if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId &&
+                    (gData.status === 'player_turn_hit_stand_prompt' || // For subsequent hits
+                        gData.status === 'player_initial_roll_1_prompted' ||
+                        gData.status === 'player_initial_roll_2_prompted'
+                    )
+                    ) {
+                    gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
+                }
+                // --- END OF UPDATED CONDITION ---
+                if (gData.type === GAME_IDS.DICE_21_PVP) {
+                    const isInitiatorD21_PvP = (gData.initiator && gData.initiator.userId === rollerId && gData.initiator.isTurn && gData.status === 'initiator_turn' && gData.initiator.status === 'playing_turn');
+                    const isOpponentD21_PvP = (gData.opponent && gData.opponent.userId === rollerId && gData.opponent.isTurn && gData.status === 'opponent_turn' && gData.opponent.status === 'playing_turn');
+                    if (isInitiatorD21_PvP || isOpponentD21_PvP) {
+                        gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
+                    }
+                }
+                if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && (gData.status === 'player_awaiting_roll1_emoji' || gData.status === 'player_awaiting_roll2_emoji')) {
+                    gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
+                }
+                if (gData.type === GAME_IDS.DUEL_PVP) {
+                    const isInitiatorDuel_PvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && (gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji'));
+                    const isOpponentDuel_PvP = (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && (gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji'));
+                    if (isInitiatorDuel_PvP || isOpponentDuel_PvP) {
+                        gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
+                    }
+                }
+            }
+        }
 
-        if (gameIdForDiceRoll && gameDataForDiceRoll) {
-            console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Processing dice for game ${gameIdForDiceRoll} (Type: ${gameDataForDiceRoll.type}). Deleting user dice message ${msg.message_id}.`);
-            bot.deleteMessage(chatId, msg.message_id).catch(() => { console.warn(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Failed to delete user's dice emoji message ${msg.message_id}`); });
+        if (gameIdForDiceRoll && gameDataForDiceRoll) {
+            console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Processing dice for game ${gameIdForDiceRoll} (Type: ${gameDataForDiceRoll.type}). Deleting user dice message ${msg.message_id}.`);
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { console.warn(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Failed to delete user's dice emoji message ${msg.message_id}`); });
 
-            if (isDiceEscalatorEmoji) {
-                console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Dice Escalator processor.`);
-                if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVB) {
-                    if (typeof processDiceEscalatorPvBRollByEmoji_New === 'function') {
-                        await processDiceEscalatorPvBRollByEmoji_New(gameDataForDiceRoll, diceValue);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDiceEscalatorPvBRollByEmoji_New`);
-                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP) {
-                    if (typeof processDiceEscalatorPvPRollByEmoji_New === 'function') {
-                        await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDiceEscalatorPvPRollByEmoji_New`);
-                }
-            } else if (isDice21Emoji) {
-                console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Dice 21 processor.`);
-                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) {
-                    if (typeof processDice21PvBRollByEmoji === 'function') await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg); // Pass full msg context
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvBRollByEmoji for PvB`);
-                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) {
-                    if (typeof processDice21PvPRollByEmoji === 'function') await processDice21PvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); // Pass rollerId for PvP
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvPRollByEmoji for PvP`);
-                }
-            } else if (isDuelGameEmoji) {
-                console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Duel processor.`);
-                if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVB) {
-                    if (typeof processDuelPvBRollByEmoji === 'function') await processDuelPvBRollByEmoji(gameDataForDiceRoll, diceValue);
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDuelPvBRollByEmoji`);
-                } else if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVP) {
-                    if (typeof processDuelPvPRollByEmoji === 'function') await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId);
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDuelPvPRollByEmoji`);
-                }
-            }
-            return;
-        } else {
-            console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] No active game found matching criteria for dice roll from user ${rollerId} in chat ${chatId}. Dice value: ${diceValue}.`);
-        }
-    }
+            if (isDiceEscalatorEmoji) {
+                console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Dice Escalator processor.`);
+                if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVB) {
+                    if (typeof processDiceEscalatorPvBRollByEmoji_New === 'function') {
+                        await processDiceEscalatorPvBRollByEmoji_New(gameDataForDiceRoll, diceValue);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDiceEscalatorPvBRollByEmoji_New`);
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP) {
+                    if (typeof processDiceEscalatorPvPRollByEmoji_New === 'function') {
+                        await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDiceEscalatorPvPRollByEmoji_New`);
+                }
+            } else if (isDice21Emoji) {
+                console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Dice 21 processor.`);
+                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) {
+                    if (typeof processDice21PvBRollByEmoji === 'function') await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg); // Pass full msg context
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvBRollByEmoji for PvB`);
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) {
+                    if (typeof processDice21PvPRollByEmoji === 'function') await processDice21PvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); // Pass rollerId for PvP
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvPRollByEmoji for PvP`);
+                }
+            } else if (isDuelGameEmoji) {
+                console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Duel processor.`);
+                if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVB) {
+                    if (typeof processDuelPvBRollByEmoji === 'function') await processDuelPvBRollByEmoji(gameDataForDiceRoll, diceValue);
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDuelPvBRollByEmoji`);
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVP) {
+                    if (typeof processDuelPvPRollByEmoji === 'function') await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId);
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDuelPvPRollByEmoji`);
+                }
+            }
+            return;
+        } else {
+            console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] No active game found matching criteria for dice roll from user ${rollerId} in chat ${chatId}. Dice value: ${diceValue}.`);
+        }
+    }
 
-    if (userStateCache.has(userId) && !text.startsWith('/')) {
-        const currentState = userStateCache.get(userId);
-        console.log(`${LOG_PREFIX_MSG_HANDLER} User ${userId} has pending state: ${currentState.state}. Routing to stateful input.`);
-        if (typeof routeStatefulInput === 'function') {
-            await routeStatefulInput(msg, currentState);
-            return;
-        } else {
-            console.warn(`${LOG_PREFIX_MSG_HANDLER} routeStatefulInput function not available. Cleared user state for ${userId} as a fallback.`);
-            if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
-        }
-    }
+    if (userStateCache.has(userId) && !text.startsWith('/')) {
+        const currentState = userStateCache.get(userId);
+        console.log(`${LOG_PREFIX_MSG_HANDLER} User ${userId} has pending state: ${currentState.state}. Routing to stateful input.`);
+        if (typeof routeStatefulInput === 'function') {
+            await routeStatefulInput(msg, currentState);
+            return;
+        } else {
+            console.warn(`${LOG_PREFIX_MSG_HANDLER} routeStatefulInput function not available. Cleared user state for ${userId} as a fallback.`);
+            if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+        }
+    }
 
-    if (text.startsWith('/')) {
-        if (!userId || userId === "undefined") {
-            console.error(`${LOG_PREFIX_MSG_HANDLER} CRITICAL: User ID undefined for command. Msg: ${stringifyWithBigInt(msg).substring(0,200)}`);
-            await safeSendMessage(chatId, "⚠️ Error with your user session. Please try the `/start` command again.", {}); return;
-        }
-        let userForCommandProcessing = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-        if (!userForCommandProcessing) {
-            console.warn(`${LOG_PREFIX_MSG_HANDLER} Could not get/create user for command processing. User ID: ${userId}`);
-            await safeSendMessage(chatId, "😕 I couldn't access your player profile just now. Please try the `/start` command and then your desired action.", {}); return;
-        }
+    if (text.startsWith('/')) {
+        if (!userId || userId === "undefined") {
+            console.error(`${LOG_PREFIX_MSG_HANDLER} CRITICAL: User ID undefined for command. Msg: ${stringifyWithBigInt(msg).substring(0,200)}`);
+            await safeSendMessage(chatId, "⚠️ Error with your user session. Please try the `/start` command again.", {}); return;
+        }
+        let userForCommandProcessing = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+        if (!userForCommandProcessing) {
+            console.warn(`${LOG_PREFIX_MSG_HANDLER} Could not get/create user for command processing. User ID: ${userId}`);
+            await safeSendMessage(chatId, "😕 I couldn't access your player profile just now. Please try the `/start` command and then your desired action.", {}); return;
+        }
 
-        const now = Date.now();
-        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
-            console.log(`${LOG_PREFIX_MSG_HANDLER} Command cooldown active for user ${userId}. Ignoring command: ${text}`);
-            return;
-        }
-        userCooldowns.set(userId, now);
+        const now = Date.now();
+        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
+            console.log(`${LOG_PREFIX_MSG_HANDLER} Command cooldown active for user ${userId}. Ignoring command: ${text}`);
+            return;
+        }
+        userCooldowns.set(userId, now);
 
-        let fullCommand = text.substring(1);
-        let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
-        const commandArgs = fullCommand.split(/\s+/).slice(1);
-        const originalMessageId = msg.message_id;
+        let fullCommand = text.substring(1);
+        let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
+        const commandArgs = fullCommand.split(/\s+/).slice(1);
+        const originalMessageId = msg.message_id;
 
-        if (commandName.includes('@')) {
-            try {
-                const selfBotInfo = await bot.getMe();
-                const botUsernameLower = selfBotInfo.username.toLowerCase();
-                if (commandName.endsWith(`@${botUsernameLower}`)) {
-                    commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
-                } else if (chatType === 'group' || chatType === 'supergroup') {
-                    console.log(`${LOG_PREFIX_MSG_HANDLER} Command /${commandName} directed at another bot in group. Ignoring.`);
-                    return;
-                } else {
-                    commandName = commandName.split('@')[0];
-                }
-            } catch (getMeErr) { console.error(`${LOG_PREFIX_MSG_HANDLER} Error stripping @botname from command /${commandName}: ${getMeErr.message}`); }
-        }
+        if (commandName.includes('@')) {
+            try {
+                const selfBotInfo = await bot.getMe();
+                const botUsernameLower = selfBotInfo.username.toLowerCase();
+                if (commandName.endsWith(`@${botUsernameLower}`)) {
+                    commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
+                } else if (chatType === 'group' || chatType === 'supergroup') {
+                    console.log(`${LOG_PREFIX_MSG_HANDLER} Command /${commandName} directed at another bot in group. Ignoring.`);
+                    return;
+                } else {
+                    commandName = commandName.split('@')[0];
+                }
+            } catch (getMeErr) { console.error(`${LOG_PREFIX_MSG_HANDLER} Error stripping @botname from command /${commandName}: ${getMeErr.message}`); }
+        }
 
-        console.log(`${LOG_PREFIX_MSG_HANDLER} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${userId} (${userForCommandProcessing.username || 'NoUsername'}) in Chat ${chatId} (${chatType})`);
+        console.log(`${LOG_PREFIX_MSG_HANDLER} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${userId} (${userForCommandProcessing.username || 'NoUsername'}) in Chat ${chatId} (${chatType})`);
 
-        try {
-            switch (commandName) {
-                case 'start': await handleStartCommand(msg, commandArgs); break;
-                case 'help': await handleHelpCommand(msg); break;
-                case 'balance': case 'bal': await handleBalanceCommand(msg); break;
-                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, originalMessageId, false, chatType); break;
-                case 'jackpot': await handleJackpotCommand(chatId, userForCommandProcessing, chatType); break;
-                case 'leaderboards': await handleLeaderboardsCommand(msg, commandArgs); break;
-                case 'wallet': if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleWalletCommand`); break;
-                case 'deposit': if (typeof handleDepositCommand === 'function') await handleDepositCommand(msg, commandArgs, userId); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleDepositCommand`); break;
-                case 'withdraw': if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(msg, commandArgs, userId); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleWithdrawCommand`); break;
-                case 'referral': if (typeof handleReferralCommand === 'function') await handleReferralCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleReferralCommand`); break;
-                case 'history': if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleHistoryCommand`); break;
-                case 'setwallet': if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleSetWalletCommand`); break;
-                case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
-                case 'tip':
-                    if (typeof handleTipCommand === 'function') {
-                        await handleTipCommand(msg, commandArgs, userForCommandProcessing);
-                    } else {
-                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleTipCommand`);
-                        await safeSendMessage(chatId, "The tipping feature is currently under maintenance.", {});
-                    }
-                    break;
-                case 'coinflip': case 'cf': // Added cf alias
-                    if (chatType === 'private') {
-                        await safeSendMessage(chatId, `🪙 The Coinflip arena awaits in **group chats**! Please use \`/coinflip <bet>\` or \`/cf <bet>\` there to challenge others or the bot.`, { parse_mode: 'MarkdownV2' });
-                        break;
-                    }
-                    if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') { // UPDATED Handler
-                        const betCF = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF); // Pass full msg object
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartCoinflipUnifiedOfferCommand`);
-                    break;
-                case 'rps':
-                    if (chatType === 'private') {
-                        await safeSendMessage(chatId, `🪨📄✂️ The Rock Paper Scissors arena is best experienced in **group chats**! Please use \`/rps <bet>\` there to challenge opponents or the bot.`, { parse_mode: 'MarkdownV2' });
-                        break;
-                    }
-                    if (typeof handleStartRPSUnifiedOfferCommand === 'function') { // UPDATED Handler
-                        const betRPS = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS); // Pass full msg object
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartRPSUnifiedOfferCommand`);
-                    break;
-                case 'de': 
-            case 'diceescalator':
-                // --- ADDED: Block game initiation in private chat ---
-                if (chatType === 'private') {
-                    const playerRefForDMBlock_DE = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
-                    await safeSendMessage(chatId, `🎲 Greetings, ${playerRefForDMBlock_DE}!<br><br>The Dice Escalator game, including direct challenges, must be initiated in a <b>group chat</b>.<br>Please use <code>/de &lt;bet&gt; [@username]</code> there to start the action!`, { parse_mode: 'HTML' });
-                    break; // Important: Exit this case block
-                }
-                // --- END OF ADDED BLOCK ---
+        try {
+            switch (commandName) {
+                case 'start': await handleStartCommand(msg, commandArgs); break;
+                case 'help': await handleHelpCommand(msg); break;
+                case 'balance': case 'bal': await handleBalanceCommand(msg); break;
+                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, originalMessageId, false, chatType); break;
+                case 'jackpot': await handleJackpotCommand(chatId, userForCommandProcessing, chatType); break;
+                case 'leaderboards': await handleLeaderboardsCommand(msg, commandArgs); break;
+                case 'wallet': if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleWalletCommand`); break;
+                case 'deposit': if (typeof handleDepositCommand === 'function') await handleDepositCommand(msg, commandArgs, userId); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleDepositCommand`); break;
+                case 'withdraw': if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(msg, commandArgs, userId); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleWithdrawCommand`); break;
+                case 'referral': if (typeof handleReferralCommand === 'function') await handleReferralCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleReferralCommand`); break;
+                case 'history': if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleHistoryCommand`); break;
+                case 'setwallet': if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleSetWalletCommand`); break;
+                case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
+                case 'tip':
+                    if (typeof handleTipCommand === 'function') {
+                        await handleTipCommand(msg, commandArgs, userForCommandProcessing);
+                    } else {
+                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleTipCommand`);
+                        await safeSendMessage(chatId, "The tipping feature is currently under maintenance.", {});
+                    }
+                    break;
+                case 'coinflip': case 'cf': // Added cf alias
+                    if (chatType === 'private') {
+                        await safeSendMessage(chatId, `🪙 The Coinflip arena awaits in **group chats**! Please use \`/coinflip <bet>\` or \`/cf <bet>\` there to challenge others or the bot.`, { parse_mode: 'MarkdownV2' });
+                        break;
+                    }
+                    if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') { // UPDATED Handler
+                        const betCF = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF); // Pass full msg object
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartCoinflipUnifiedOfferCommand`);
+                    break;
+                case 'rps':
+                    if (chatType === 'private') {
+                        await safeSendMessage(chatId, `🪨📄✂️ The Rock Paper Scissors arena is best experienced in **group chats**! Please use \`/rps <bet>\` there to challenge opponents or the bot.`, { parse_mode: 'MarkdownV2' });
+                        break;
+                    }
+                    if (typeof handleStartRPSUnifiedOfferCommand === 'function') { // UPDATED Handler
+                        const betRPS = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS); // Pass full msg object
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartRPSUnifiedOfferCommand`);
+                    break;
+                case 'de': 
+            case 'diceescalator':
+                // --- ADDED: Block game initiation in private chat ---
+                if (chatType === 'private') {
+                    const playerRefForDMBlock_DE = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
+                    await safeSendMessage(chatId, `🎲 Greetings, ${playerRefForDMBlock_DE}!<br><br>The Dice Escalator game, including direct challenges, must be initiated in a <b>group chat</b>.<br>Please use <code>/de &lt;bet&gt; [@username]</code> there to start the action!`, { parse_mode: 'HTML' });
+                    break; // Important: Exit this case block
+                }
+                // --- END OF ADDED BLOCK ---
 
-                if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
-                    let betArg = null;
-                    let targetUsernameRaw = null;
+                if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
+                    let betArg = null;
+                    let targetUsernameRaw = null;
 
-                    // Argument parsing logic (as previously discussed)
-                    if (commandArgs.length === 1) {
-                        if (commandArgs[0].startsWith('@')) {
-                            targetUsernameRaw = commandArgs[0];
-                        } else {
-                            betArg = commandArgs[0];
-                        }
-                    } else if (commandArgs.length >= 2) {
-                        if (commandArgs[0].startsWith('@')) {
-                            targetUsernameRaw = commandArgs[0];
-                            betArg = commandArgs[1];
-                        } else if (commandArgs[1].startsWith('@')) {
-                            targetUsernameRaw = commandArgs[1];
-                            betArg = commandArgs[0];
-                        } else {
-                            betArg = commandArgs[0];
-                        }
-                    }
-                    
-                    const betDE = await parseBetAmount(betArg, chatId, chatType, userId);
+                    // Argument parsing logic (as previously discussed)
+                    if (commandArgs.length === 1) {
+                        if (commandArgs[0].startsWith('@')) {
+                            targetUsernameRaw = commandArgs[0];
+                        } else {
+                            betArg = commandArgs[0];
+                        }
+                    } else if (commandArgs.length >= 2) {
+                        if (commandArgs[0].startsWith('@')) {
+                            targetUsernameRaw = commandArgs[0];
+                            betArg = commandArgs[1];
+                        } else if (commandArgs[1].startsWith('@')) {
+                            targetUsernameRaw = commandArgs[1];
+                            betArg = commandArgs[0];
+                        } else {
+                            betArg = commandArgs[0];
+                        }
+                    }
+                    
+                    const betDE = await parseBetAmount(betArg, chatId, chatType, userId);
 
-                    if (betDE && typeof betDE === 'bigint' && betDE > 0n) {
-                        let targetUserObject = null;
-                        if (targetUsernameRaw) {
-                            // console.log(`[DE Route] Attempting to find target user for challenge: ${targetUsernameRaw}`); // Log from previous version
-                            targetUserObject = await findRecipientUser(targetUsernameRaw); 
+                    if (betDE && typeof betDE === 'bigint' && betDE > 0n) {
+                        let targetUserObject = null;
+                        if (targetUsernameRaw) {
+                            // console.log(`[DE Route] Attempting to find target user for challenge: ${targetUsernameRaw}`); // Log from previous version
+                            targetUserObject = await findRecipientUser(targetUsernameRaw); 
 
-                            if (!targetUserObject) {
-                                await safeSendMessage(chatId, `😕 User ${escapeHTML(targetUsernameRaw)} not found. They might need to interact with me first. Challenge cancelled.`, { parse_mode: 'HTML' });
-                                break; 
-                            }
-                            if (String(targetUserObject.telegram_id) === String(userId)) {
-                                const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
-                                await safeSendMessage(chatId, `😅 You can't challenge yourself to a Dice Escalator duel, ${initiatorRefHTML}!`, { parse_mode: 'HTML' });
-                                break; 
-                            }
-                            // console.log(`[DE Route] Target user found: ${targetUserObject.username || targetUserObject.telegram_id}. Initiator: ${userId}`); // Log from previous version
-                        }
-                        
-                        await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetUserObject);
-                    }
-                    // parseBetAmount handles its own error messaging if betDE is invalid
-                } else {
-                    console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`);
-                    await safeSendMessage(chatId, "⚙️ The Dice Escalator game is temporarily unavailable. Please try again later.", { parse_mode: 'HTML' });
-                }
-                break;
-                case 'd21': case 'blackjack':
-                    if (typeof handleStartDice21Command === 'function') {
-                        const betD21 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betD21) await handleStartDice21Command(msg, betD21, commandArgs[1]);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDice21Command`); break;
-                case 'duel': case 'highroller':
-                    if (chatType === 'private') {
-                        await safeSendMessage(chatId, `⚔️ The High Roller Duel game can only be started in a group chat. Please use the command there to challenge others or the Bot Dealer!`, { parse_mode: 'MarkdownV2' });
-                        break;
-                    }
-                    if (typeof handleStartDuelUnifiedOfferCommand === 'function') {
-                        const betDuel = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDuelUnifiedOfferCommand`); break;
-                case 'ou7': case 'overunder7':
-                    if (typeof handleStartOverUnder7Command === 'function') {
-                        const betOU7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betOU7) await handleStartOverUnder7Command(msg, betOU7);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartOverUnder7Command`); break;
-                case 'ladder': case 'greedsladder':
-                if (typeof handleStartLadderCommand === 'function') {
-                    const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                    if(betLadder) await handleStartLadderCommand(msg, betLadder);
-                } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartLadderCommand`); break;
-                case 's7': case 'sevenout': case 'craps':
-                    if (typeof handleStartSevenOutCommand === 'function') {
-                        const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betS7) await handleStartSevenOutCommand(msg, betS7);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartSevenOutCommand`); break;
-                case 'slot': case 'slots': case 'slotfrenzy':
-                    if (typeof handleStartSlotCommand === 'function') {
-                        const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betSlot) await handleStartSlotCommand(msg, betSlot);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartSlotCommand`); break;
-                case 'mines':
-                    if (typeof handleStartMinesCommand === 'function') {
-                        await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
-                    } else {
-                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartMinesCommand`);
-                        await safeSendMessage(chatId, "The Mines game is currently under construction.", {});
-                    }
-                    break;
+                            if (!targetUserObject) {
+                                await safeSendMessage(chatId, `😕 User ${escapeHTML(targetUsernameRaw)} not found. They might need to interact with me first. Challenge cancelled.`, { parse_mode: 'HTML' });
+                                break; 
+                            }
+                            if (String(targetUserObject.telegram_id) === String(userId)) {
+                                const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
+                                await safeSendMessage(chatId, `😅 You can't challenge yourself to a Dice Escalator duel, ${initiatorRefHTML}!`, { parse_mode: 'HTML' });
+                                break; 
+                            }
+                            // console.log(`[DE Route] Target user found: ${targetUserObject.username || targetUserObject.telegram_id}. Initiator: ${userId}`); // Log from previous version
+                        }
+                        
+                        await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetUserObject);
+                    }
+                    // parseBetAmount handles its own error messaging if betDE is invalid
+                } else {
+                    console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`);
+                    await safeSendMessage(chatId, "⚙️ The Dice Escalator game is temporarily unavailable. Please try again later.", { parse_mode: 'HTML' });
+                }
+                break;
+                case 'd21': case 'blackjack':
+                    if (typeof handleStartDice21Command === 'function') {
+                        const betD21 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betD21) await handleStartDice21Command(msg, betD21, commandArgs[1]);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDice21Command`); break;
+                case 'duel': case 'highroller':
+                    if (chatType === 'private') {
+                        await safeSendMessage(chatId, `⚔️ The High Roller Duel game can only be started in a group chat. Please use the command there to challenge others or the Bot Dealer!`, { parse_mode: 'MarkdownV2' });
+                        break;
+                    }
+                    if (typeof handleStartDuelUnifiedOfferCommand === 'function') {
+                        const betDuel = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDuelUnifiedOfferCommand`); break;
+                case 'ou7': case 'overunder7':
+                    if (typeof handleStartOverUnder7Command === 'function') {
+                        const betOU7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betOU7) await handleStartOverUnder7Command(msg, betOU7);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartOverUnder7Command`); break;
+                case 'ladder': case 'greedsladder':
+                if (typeof handleStartLadderCommand === 'function') {
+                    const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                    if(betLadder) await handleStartLadderCommand(msg, betLadder);
+                } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartLadderCommand`); break;
+                case 's7': case 'sevenout': case 'craps':
+                    if (typeof handleStartSevenOutCommand === 'function') {
+                        const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betS7) await handleStartSevenOutCommand(msg, betS7);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartSevenOutCommand`); break;
+                case 'slot': case 'slots': case 'slotfrenzy':
+                    if (typeof handleStartSlotCommand === 'function') {
+                        const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betSlot) await handleStartSlotCommand(msg, betSlot);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartSlotCommand`); break;
+                case 'mines':
+                    if (typeof handleStartMinesCommand === 'function') {
+                        await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
+                    } else {
+                        console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartMinesCommand`);
+                        await safeSendMessage(chatId, "The Mines game is currently under construction.", {});
+                    }
+                    break;
 
-                default:
-                    const selfBotInfoDefault = await bot.getMe();
-                    if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
-                        console.log(`${LOG_PREFIX_MSG_HANDLER} Unknown command: /${commandName}`);
-                        await safeSendMessage(chatId, `🤔 Hmmm, I don't recognize the command \`/${escapeMarkdownV2(commandName || "")}\`. Try \`/help\` for a list of my amazing games and features!!`, { parse_mode: 'MarkdownV2' });
-                    }
-                    break;
+                default:
+                    const selfBotInfoDefault = await bot.getMe();
+                    if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
+                        console.log(`${LOG_PREFIX_MSG_HANDLER} Unknown command: /${commandName}`);
+                        await safeSendMessage(chatId, `🤔 Hmmm, I don't recognize the command \`/${escapeMarkdownV2(commandName || "")}\`. Try \`/help\` for a list of my amazing games and features!!`, { parse_mode: 'MarkdownV2' });
+                    }
+                    break;
 
-                    case 'dca': // Standardized: direct_challenge_accept
-            case 'dcd': // Standardized: direct_challenge_decline
-            case 'cdc': // Standardized: cancel_initiator_direct_challenge
-                console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
-                
-                if (typeof handleDirectChallengeResponse === 'function') {
-                    const offerIdFromParams = params[0];
-                    // The 'action' itself ('dca', 'dcd', 'cdc') is passed directly to the handler
-                    await handleDirectChallengeResponse(
-                        action, 
-                        offerIdFromParams,
-                        userObjectForCallback,    // User who clicked
-                        originalMessageId,        // ID of the message with buttons (in the group)
-                        originalChatId,           // ID of the group chat
-                        originalChatType,         // Should be 'group' or 'supergroup'
-                        callbackQueryId
-                    );
-                } else {
-                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
-                }
-                break;
-            // --- END OF NEW CASES FOR DIRECT PvP CHALLENGES ---
-            
-            // Ensure your existing Dice Escalator unified offer callbacks are distinct
-            // and come AFTER the new direct challenge cases if there's any overlap in prefixes,
-            // or ensure their callback_data strings are unique.
-            // The 'de_cancel_unified_offer' is different from 'de_cancel_direct_challenge'.
-            case 'de_accept_bot_game':
-            case 'de_accept_pvp_challenge': // This is for general unified DE offers
-            case 'de_cancel_unified_offer': 
-            case 'de_stand_pvb':
-            case 'de_stand_pvp':
-            case 'play_again_de_pvb':
-            case 'play_again_de_pvp':
-            case 'de_pvb_go_for_jackpot':
-                console.log(`${LOG_PREFIX_CBQ} Routing to forwardDiceEscalatorCallback_New for action: ${action}`);
-                if (typeof forwardDiceEscalatorCallback_New === 'function') {
-                    await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                } else { 
-                    console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for DE action: ${action}`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This Dice Escalator action is currently unavailable.", show_alert: true}).catch(()=>{});
-                }
-                break;
-            }
-        } catch (commandError) {
-            console.error(`${LOG_PREFIX_MSG_HANDLER} 🚨 UNHANDLED ERROR IN COMMAND ROUTER for /${commandName}: ${commandError.message}`, commandError.stack?.substring(0, 700));
-            await safeSendMessage(chatId, `⚙️ Oops! A critical error occurred while I was processing your command \`/${escapeMarkdownV2(commandName || "")}\`. My apologies! Please try again in a moment.`, { parse_mode: 'MarkdownV2' });
-            if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 Command Router Error for /${escapeMarkdownV2(commandName)} from User: ${userId} in Chat: ${chatId}. Error: \`${escapeMarkdownV2(commandError.message)}\``);
-        }
-    }
+                    case 'dca': // Standardized: direct_challenge_accept
+            case 'dcd': // Standardized: direct_challenge_decline
+            case 'cdc': // Standardized: cancel_initiator_direct_challenge
+                console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
+                
+                if (typeof handleDirectChallengeResponse === 'function') {
+                    const offerIdFromParams = params[0];
+                    // The 'action' itself ('dca', 'dcd', 'cdc') is passed directly to the handler
+                    await handleDirectChallengeResponse(
+                        action, 
+                        offerIdFromParams,
+                        userObjectForCallback,    // User who clicked
+                        originalMessageId,        // ID of the message with buttons (in the group)
+                        originalChatId,           // ID of the group chat
+                        originalChatType,         // Should be 'group' or 'supergroup'
+                        callbackQueryId
+                    );
+                } else {
+                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
+                }
+                break;
+            // --- END OF NEW CASES FOR DIRECT PvP CHALLENGES ---
+            
+            // Ensure your existing Dice Escalator unified offer callbacks are distinct
+            // and come AFTER the new direct challenge cases if there's any overlap in prefixes,
+            // or ensure their callback_data strings are unique.
+            // The 'de_cancel_unified_offer' is different from 'de_cancel_direct_challenge'.
+            case 'de_accept_bot_game':
+            case 'de_accept_pvp_challenge': // This is for general unified DE offers
+            case 'de_cancel_unified_offer': 
+            case 'de_stand_pvb':
+            case 'de_stand_pvp':
+            case 'play_again_de_pvb':
+            case 'play_again_de_pvp':
+            case 'de_pvb_go_for_jackpot':
+                console.log(`${LOG_PREFIX_CBQ} Routing to forwardDiceEscalatorCallback_New for action: ${action}`);
+                if (typeof forwardDiceEscalatorCallback_New === 'function') {
+                    await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                } else { 
+                    console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for DE action: ${action}`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This Dice Escalator action is currently unavailable.", show_alert: true}).catch(()=>{});
+                }
+                break;
+            }
+        } catch (commandError) {
+            console.error(`${LOG_PREFIX_MSG_HANDLER} 🚨 UNHANDLED ERROR IN COMMAND ROUTER for /${commandName}: ${commandError.message}`, commandError.stack?.substring(0, 700));
+            await safeSendMessage(chatId, `⚙️ Oops! A critical error occurred while I was processing your command \`/${escapeMarkdownV2(commandName || "")}\`. My apologies! Please try again in a moment.`, { parse_mode: 'MarkdownV2' });
+            if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 Command Router Error for /${escapeMarkdownV2(commandName)} from User: ${userId} in Chat: ${chatId}. Error: \`${escapeMarkdownV2(commandError.message)}\``);
+        }
+    }
 });
-
-
 // --- Callback Query Handler (`bot.on('callback_query')`) ---
 bot.on('callback_query', async (callbackQuery) => {
-    const LOG_PREFIX_CBQ = `[CBQ ID:${callbackQuery.id} User:${callbackQuery.from.id} Chat:${callbackQuery.message?.chat?.id || 'N/A'}]`;
-    console.log(`${LOG_PREFIX_CBQ} Received callback_query. Data: ${callbackQuery.data}`);
+    const LOG_PREFIX_CBQ = `[CBQ ID:${callbackQuery.id} User:${callbackQuery.from.id} Chat:${callbackQuery.message?.chat?.id || 'N/A'}]`;
+    console.log(`${LOG_PREFIX_CBQ} Received callback_query. Data: ${callbackQuery.data}`);
 
-    if (isShuttingDown) {
-        console.log(`${LOG_PREFIX_CBQ} Bot is shutting down. Answering callback and returning.`);
-        await bot.answerCallbackQuery(callbackQuery.id, { text: "The bot is currently shutting down. Please try again later." }).catch(() => {});
-        return;
-    }
+    if (isShuttingDown) {
+        console.log(`${LOG_PREFIX_CBQ} Bot is shutting down. Answering callback and returning.`);
+        await bot.answerCallbackQuery(callbackQuery.id, { text: "The bot is currently shutting down. Please try again later." }).catch(() => {});
+        return;
+    }
 
-    const msg = callbackQuery.message;
-    const userFromCb = callbackQuery.from;
-    const callbackQueryId = callbackQuery.id;
-    const data = callbackQuery.data;
+    const msg = callbackQuery.message;
+    const userFromCb = callbackQuery.from;
+    const callbackQueryId = callbackQuery.id;
+    const data = callbackQuery.data;
 
-    if (!msg || !userFromCb || !data) {
-        console.warn(`${LOG_PREFIX_CBQ} Ignoring malformed/incomplete callback query. Data: ${data}`);
-        await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
-        return;
-    }
+    if (!msg || !userFromCb || !data) {
+        console.warn(`${LOG_PREFIX_CBQ} Ignoring malformed/incomplete callback query. Data: ${data}`);
+        await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
+        return;
+    }
 
-    const userId = String(userFromCb.id || userFromCb.telegram_id);
-    if (!userId || userId === "undefined") {
-        console.error(`${LOG_PREFIX_CBQ} CRITICAL: User ID undefined for callback. Callback Data: ${data}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "⚠️ An error occurred identifying your session. Please try the action again.", show_alert: true }).catch(() => {});
-        return;
-    }
+    const userId = String(userFromCb.id || userFromCb.telegram_id);
+    if (!userId || userId === "undefined") {
+        console.error(`${LOG_PREFIX_CBQ} CRITICAL: User ID undefined for callback. Callback Data: ${data}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "⚠️ An error occurred identifying your session. Please try the action again.", show_alert: true }).catch(() => {});
+        return;
+    }
 
-    const originalChatId = String(msg.chat.id);
-    const originalChatType = msg.chat.type;
-    const originalMessageId = String(msg.message_id);
+    const originalChatId = String(msg.chat.id);
+    const originalChatType = msg.chat.type;
+    const originalMessageId = String(msg.message_id);
 
-    // Answer callback query quickly to stop loading animation on client for most actions.
-    // Some specific handlers might answer it themselves with custom text.
-    // For now, let's keep a general answer here. If specific handlers need to answer,
-    // they can, and a second answer will be ignored by Telegram.
-    // OR, we can remove this and ensure every specific handler answers.
-    // Let's lean towards specific handlers answering, or a default answer if not handled.
-    // For now, keep this initial answer, it's often good UX.
-    // await bot.answerCallbackQuery(callbackQueryId).catch(()=>{ console.warn(`${LOG_PREFIX_CBQ} Initial answerCallbackQuery failed for ID ${callbackQueryId}. Action: ${data.split(':')[0]}`); });
+    // Answer callback query quickly to stop loading animation on client for most actions.
+    // Some specific handlers might answer it themselves with custom text.
+    // For now, let's keep a general answer here. If specific handlers need to answer,
+    // they can, and a second answer will be ignored by Telegram.
+    // OR, we can remove this and ensure every specific handler answers.
+    // Let's lean towards specific handlers answering, or a default answer if not handled.
+    // For now, keep this initial answer, it's often good UX.
+    // await bot.answerCallbackQuery(callbackQueryId).catch(()=>{ console.warn(`${LOG_PREFIX_CBQ} Initial answerCallbackQuery failed for ID ${callbackQueryId}. Action: ${data.split(':')[0]}`); });
 
 
-    let userObjectForCallback = await getOrCreateUser(userId, userFromCb.username, userFromCb.first_name, userFromCb.last_name);
-    if (!userObjectForCallback) {
-        console.error(`${LOG_PREFIX_CBQ} Failed to get/create user for callback processing. User ID: ${userId}. Callback Data: ${data}`);
-        await bot.answerCallbackQuery(callbackQueryId, {text: "Error fetching your profile.", show_alert: true}).catch(()=>{});
-        return; // Cannot proceed without user object
-    }
+    let userObjectForCallback = await getOrCreateUser(userId, userFromCb.username, userFromCb.first_name, userFromCb.last_name);
+    if (!userObjectForCallback) {
+        console.error(`${LOG_PREFIX_CBQ} Failed to get/create user for callback processing. User ID: ${userId}. Callback Data: ${data}`);
+        await bot.answerCallbackQuery(callbackQueryId, {text: "Error fetching your profile.", show_alert: true}).catch(()=>{});
+        return; // Cannot proceed without user object
+    }
 
-    const [action, ...params] = data.split(':');
-    console.log(`${LOG_PREFIX_CBQ} Parsed Action: "${action}", Params: [${params.join(', ')}] (Chat: ${originalChatId}, Type: ${originalChatType}, MsgID: ${originalMessageId})`);
+    const [action, ...params] = data.split(':');
+    console.log(`${LOG_PREFIX_CBQ} Parsed Action: "${action}", Params: [${params.join(', ')}] (Chat: ${originalChatId}, Type: ${originalChatType}, MsgID: ${originalMessageId})`);
 
-    if (action === 'menu' && (params[0] === 'main' || params[0] === 'wallet' || params[0] === 'game_selection' || params[0] === 'rules')) {
-        console.log(`${LOG_PREFIX_CBQ} Clearing user state for ${userId} due to menu navigation: ${action}:${params[0]}`);
-        if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
-    }
+    if (action === 'menu' && (params[0] === 'main' || params[0] === 'wallet' || params[0] === 'game_selection' || params[0] === 'rules')) {
+        console.log(`${LOG_PREFIX_CBQ} Clearing user state for ${userId} due to menu navigation: ${action}:${params[0]}`);
+        if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+    }
 
-    let isCallbackRedirectedToDm = false;
-    const sensitiveActions = [
-        DEPOSIT_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION, 'quick_deposit',
-        WITHDRAW_CALLBACK_ACTION, 'menu:wallet', 'menu:history', 'menu:link_wallet_prompt',
-        'menu:referral', 'process_withdrawal_confirm'
-    ];
-    const fullCallbackActionForSensitivityCheck = action === 'menu' ? `${action}:${params[0]}` : action;
+    let isCallbackRedirectedToDm = false;
+    const sensitiveActions = [
+        DEPOSIT_CALLBACK_ACTION, QUICK_DEPOSIT_CALLBACK_ACTION, 'quick_deposit',
+        WITHDRAW_CALLBACK_ACTION, 'menu:wallet', 'menu:history', 'menu:link_wallet_prompt',
+        'menu:referral', 'process_withdrawal_confirm'
+    ];
+    const fullCallbackActionForSensitivityCheck = action === 'menu' ? `${action}:${params[0]}` : action;
 
-    if ((originalChatType === 'group' || originalChatType === 'supergroup') && sensitiveActions.includes(fullCallbackActionForSensitivityCheck)) {
-        console.log(`${LOG_PREFIX_CBQ} Sensitive action "${fullCallbackActionForSensitivityCheck}" in group. Redirecting user ${userId} to DM.`);
-        isCallbackRedirectedToDm = true;
-        let botUsernameForRedirect = BOT_NAME || "our bot";
-        try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsernameForRedirect = selfInfo.username; } catch (e) { console.warn(`${LOG_PREFIX_CBQ} Could not fetch bot username for DM redirect message: ${e.message}`); }
+    if ((originalChatType === 'group' || originalChatType === 'supergroup') && sensitiveActions.includes(fullCallbackActionForSensitivityCheck)) {
+        console.log(`${LOG_PREFIX_CBQ} Sensitive action "${fullCallbackActionForSensitivityCheck}" in group. Redirecting user ${userId} to DM.`);
+        isCallbackRedirectedToDm = true;
+        let botUsernameForRedirect = BOT_NAME || "our bot";
+        try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsernameForRedirect = selfInfo.username; } catch (e) { console.warn(`${LOG_PREFIX_CBQ} Could not fetch bot username for DM redirect message: ${e.message}`); }
 
-        const redirectText = `${getPlayerDisplayReference(userObjectForCallback)}, for your privacy and security, please continue this action in our direct message. I've sent you a prompt there: @${escapeMarkdownV2(botUsernameForRedirect)}`;
-        const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
-        const menuActionForUrl = action === 'menu' ? `${action}_${params[0]}` : action;
+        const redirectText = `${getPlayerDisplayReference(userObjectForCallback)}, for your privacy and security, please continue this action in our direct message. I've sent you a prompt there: @${escapeMarkdownV2(botUsernameForRedirect)}`;
+        const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
+        const menuActionForUrl = action === 'menu' ? `${action}_${params[0]}` : action;
 
-        if (originalMessageId && bot) {
-            await bot.editMessageText(redirectText, {
-                chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'MarkdownV2',
-                reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeMarkdownV2(botUsernameForRedirect)}`, url: `https://t.me/${botUsernameForRedirect}?start=cb_${menuActionForUrl}${callbackParamsForUrl}`}]] }
-            }).catch(e => {
-                if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                    console.warn(`${LOG_PREFIX_CBQ} Failed to edit redirect message in group: ${e.message}. Sending new message as fallback.`);
-                    safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'});
-                }
-            });
-        } else {
-            console.warn(`${LOG_PREFIX_CBQ} Original message ID missing for DM redirect. Sending new message.`);
-            await safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'});
-        }
-    }
-    const mockMsgObjectForHandler = { // Used if a handler expects a 'msg' like object
-        from: userObjectForCallback, // Contains full user details
-        chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
-        message_id: isCallbackRedirectedToDm ? null : originalMessageId, // If redirected to DM, new message will be sent, old one doesn't apply directly
-        isCallbackRedirect: isCallbackRedirectedToDm,
-        originalChatInfo: isCallbackRedirectedToDm ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
-    };
+        if (originalMessageId && bot) {
+            await bot.editMessageText(redirectText, {
+                chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'MarkdownV2',
+                reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeMarkdownV2(botUsernameForRedirect)}`, url: `https://t.me/${botUsernameForRedirect}?start=cb_${menuActionForUrl}${callbackParamsForUrl}`}]] }
+            }).catch(e => {
+                if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                    console.warn(`${LOG_PREFIX_CBQ} Failed to edit redirect message in group: ${e.message}. Sending new message as fallback.`);
+                    safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'});
+                }
+            });
+        } else {
+            console.warn(`${LOG_PREFIX_CBQ} Original message ID missing for DM redirect. Sending new message.`);
+            await safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'});
+        }
+    }
+    const mockMsgObjectForHandler = { // Used if a handler expects a 'msg' like object
+        from: userObjectForCallback, // Contains full user details
+        chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
+        message_id: isCallbackRedirectedToDm ? null : originalMessageId, // If redirected to DM, new message will be sent, old one doesn't apply directly
+        isCallbackRedirect: isCallbackRedirectedToDm,
+        originalChatInfo: isCallbackRedirectedToDm ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
+    };
 
-    try {
-        if (action.startsWith(RULES_CALLBACK_PREFIX)) {
-            const gameCodeForRule = action.substring(RULES_CALLBACK_PREFIX.length);
-            console.log(`${LOG_PREFIX_CBQ} Routing to handleDisplayGameRules for game code: ${gameCodeForRule}`);
-            if (typeof handleDisplayGameRules === 'function') {
-                // Ensure handleDisplayGameRules is called with the correct context (DM context after redirect if applicable)
-                await handleDisplayGameRules(mockMsgObjectForHandler.chat.id, mockMsgObjectForHandler.message_id, gameCodeForRule, userObjectForCallback, mockMsgObjectForHandler.chat.type);
-            } else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDisplayGameRules`);
-        } else {
-            console.log(`${LOG_PREFIX_CBQ} Routing callback action "${action}" via main switch statement.`);
-            const effectiveChatId = isCallbackRedirectedToDm ? userId : originalChatId;
-            const effectiveMessageId = isCallbackRedirectedToDm ? null : originalMessageId; // If redirected, don't try to edit the group message with action result
+    try {
+        if (action.startsWith(RULES_CALLBACK_PREFIX)) {
+            const gameCodeForRule = action.substring(RULES_CALLBACK_PREFIX.length);
+            console.log(`${LOG_PREFIX_CBQ} Routing to handleDisplayGameRules for game code: ${gameCodeForRule}`);
+            if (typeof handleDisplayGameRules === 'function') {
+                // Ensure handleDisplayGameRules is called with the correct context (DM context after redirect if applicable)
+                await handleDisplayGameRules(mockMsgObjectForHandler.chat.id, mockMsgObjectForHandler.message_id, gameCodeForRule, userObjectForCallback, mockMsgObjectForHandler.chat.type);
+            } else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDisplayGameRules`);
+        } else {
+            console.log(`${LOG_PREFIX_CBQ} Routing callback action "${action}" via main switch statement.`);
+            const effectiveChatId = isCallbackRedirectedToDm ? userId : originalChatId;
+            const effectiveMessageId = isCallbackRedirectedToDm ? null : originalMessageId; // If redirected, don't try to edit the group message with action result
 
-            switch (action) {
-                case 'show_rules_menu':
-                    if (typeof handleRulesCommand === 'function') await handleRulesCommand(effectiveChatId, userObjectForCallback, effectiveMessageId, true, isCallbackRedirectedToDm ? 'private' : originalChatType);
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleRulesCommand`);
-                    break;
-                case DEPOSIT_CALLBACK_ACTION:
-                case QUICK_DEPOSIT_CALLBACK_ACTION:
-                case 'quick_deposit':
-                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler which has correct context
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDepositCommand`);
-                    break;
-                case WITHDRAW_CALLBACK_ACTION:
-                    if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawCommand`);
-                    break;
-                case 'menu':
-                    console.log(`${LOG_PREFIX_CBQ} Routing to handleMenuAction for action: ${action}:${params[0]}`);
-                    if (typeof handleMenuAction === 'function') await handleMenuAction(userId, originalChatId, originalMessageId, params[0], params.slice(1), true, originalChatType); // handleMenuAction handles its own DM redirection logic internally
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
-                    break;
-                case 'process_withdrawal_confirm':
-                // --- ADDED/MODIFIED DIAGNOSTIC LOGS ---
-                console.log(`${LOG_PREFIX_CBQ} Entered 'process_withdrawal_confirm' case. Raw Params: [${params.join(',')}]`);
-                // Ensure LOG_PREFIX_CBQ, userId, originalMessageId, etc. are defined in the scope of your callback handler
+            switch (action) {
+                case 'show_rules_menu':
+                    if (typeof handleRulesCommand === 'function') await handleRulesCommand(effectiveChatId, userObjectForCallback, effectiveMessageId, true, isCallbackRedirectedToDm ? 'private' : originalChatType);
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleRulesCommand`);
+                    break;
+                case DEPOSIT_CALLBACK_ACTION:
+                case QUICK_DEPOSIT_CALLBACK_ACTION:
+                case 'quick_deposit':
+                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler which has correct context
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDepositCommand`);
+                    break;
+                case WITHDRAW_CALLBACK_ACTION:
+                    if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawCommand`);
+                    break;
+                case 'menu':
+                    console.log(`${LOG_PREFIX_CBQ} Routing to handleMenuAction for action: ${action}:${params[0]}`);
+                    if (typeof handleMenuAction === 'function') await handleMenuAction(userId, originalChatId, originalMessageId, params[0], params.slice(1), true, originalChatType); // handleMenuAction handles its own DM redirection logic internally
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
+                    break;
+                case 'process_withdrawal_confirm':
+                // --- ADDED/MODIFIED DIAGNOSTIC LOGS ---
+                console.log(`${LOG_PREFIX_CBQ} Entered 'process_withdrawal_confirm' case. Raw Params: [${params.join(',')}]`);
+                // Ensure LOG_PREFIX_CBQ, userId, originalMessageId, etc. are defined in the scope of your callback handler
 
-                if (typeof handleWithdrawalConfirmation === 'function') { // Assuming you've corrected this to handleWithdrawalConfirmation
-                    const decision = params[0];
-                    const currentState = userStateCache.get(userId); // userId from the callbackQuery.from.id
+                if (typeof handleWithdrawalConfirmation === 'function') { // Assuming you've corrected this to handleWithdrawalConfirmation
+                    const decision = params[0];
+                    const currentState = userStateCache.get(userId); // userId from the callbackQuery.from.id
 
-                    console.log(`${LOG_PREFIX_CBQ} Retrieved state for 'process_withdrawal_confirm'. Decision: '${decision}'. State content: ${stringifyWithBigInt(currentState)}`);
+                    console.log(`${LOG_PREFIX_CBQ} Retrieved state for 'process_withdrawal_confirm'. Decision: '${decision}'. State content: ${stringifyWithBigInt(currentState)}`);
 
-                    // Determine which message to edit (the Yes/No prompt)
-                    const messageIdToEditInDm = currentState?.messageId || originalMessageId; // originalMessageId is from callbackQuery.message.message_id
-                    const effectiveDmChatId = currentState?.chatId || userId; // Should be userId for this state
+                    // Determine which message to edit (the Yes/No prompt)
+                    const messageIdToEditInDm = currentState?.messageId || originalMessageId; // originalMessageId is from callbackQuery.message.message_id
+                    const effectiveDmChatId = currentState?.chatId || userId; // Should be userId for this state
 
-                    if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === String(userId)) {
-                        console.log(`${LOG_PREFIX_CBQ} 'yes' decision, state is valid and for correct user/chat. Calling handleWithdrawalConfirmation. Message ID to edit/use: ${currentState.messageId}`);
-                        await handleWithdrawalConfirmation(
-                            userId, 
-                            currentState.chatId, // Should be the DM chat ID (same as userId)
-                            currentState.messageId, // The ID of the Yes/No prompt message
-                            currentState.data.linkedWallet, 
-                            currentState.data.amountLamportsStr, 
-                            currentState.data.feeLamportsStr, 
-                            currentState.data.originalGroupChatId, 
-                            currentState.data.originalGroupMessageId
-                        );
-                    } else if (decision === 'no') {
-                        console.log(`${LOG_PREFIX_CBQ} 'no' decision. Cancelling withdrawal. State was: ${currentState?.state}`);
-                        if (bot && messageIdToEditInDm) {
-                            await bot.editMessageText("Withdrawal cancelled by user.", {
-                                chat_id: effectiveDmChatId, 
-                                message_id: Number(messageIdToEditInDm), 
-                                parse_mode:'HTML', 
-                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
-                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'no' decision message: ${e.message}`));
-                        }
-                        clearUserState(userId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} Invalid confirmation decision ('${decision}') or state invalid/expired. Current state name: '${currentState?.state}'. Current state chatId: '${currentState?.chatId}' vs userId: '${String(userId)}'.`);
-                        if (bot && messageIdToEditInDm) {
-                            await bot.editMessageText("Invalid confirmation or your session expired. Withdrawal cancelled.", {
-                                chat_id: effectiveDmChatId, 
-                                message_id: Number(messageIdToEditInDm), 
-                                parse_mode:'HTML', 
-                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
-                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'invalid state' message: ${e.message}`));
-                        }
-                        clearUserState(userId);
-                    }
-                } else {
-                    console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation. Cannot process confirmation.`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation: Handler missing.", show_alert: true}).catch(()=>{});
-                }
-                break;
+                    if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === String(userId)) {
+                        console.log(`${LOG_PREFIX_CBQ} 'yes' decision, state is valid and for correct user/chat. Calling handleWithdrawalConfirmation. Message ID to edit/use: ${currentState.messageId}`);
+                        await handleWithdrawalConfirmation(
+                            userId, 
+                            currentState.chatId, // Should be the DM chat ID (same as userId)
+                            currentState.messageId, // The ID of the Yes/No prompt message
+                            currentState.data.linkedWallet, 
+                            currentState.data.amountLamportsStr, 
+                            currentState.data.feeLamportsStr, 
+                            currentState.data.originalGroupChatId, 
+                            currentState.data.originalGroupMessageId
+                        );
+                    } else if (decision === 'no') {
+                        console.log(`${LOG_PREFIX_CBQ} 'no' decision. Cancelling withdrawal. State was: ${currentState?.state}`);
+                        if (bot && messageIdToEditInDm) {
+                            await bot.editMessageText("Withdrawal cancelled by user.", {
+                                chat_id: effectiveDmChatId, 
+                                message_id: Number(messageIdToEditInDm), 
+                                parse_mode:'HTML', 
+                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
+                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'no' decision message: ${e.message}`));
+                        }
+                        clearUserState(userId);
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} Invalid confirmation decision ('${decision}') or state invalid/expired. Current state name: '${currentState?.state}'. Current state chatId: '${currentState?.chatId}' vs userId: '${String(userId)}'.`);
+                        if (bot && messageIdToEditInDm) {
+                            await bot.editMessageText("Invalid confirmation or your session expired. Withdrawal cancelled.", {
+                                chat_id: effectiveDmChatId, 
+                                message_id: Number(messageIdToEditInDm), 
+                                parse_mode:'HTML', 
+                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
+                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'invalid state' message: ${e.message}`));
+                        }
+                        clearUserState(userId);
+                    }
+                } else {
+                    console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation. Cannot process confirmation.`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation: Handler missing.", show_alert: true}).catch(()=>{});
+                }
+                break;
 
-                // COINFLIP & RPS NEW ROUTING
-                case 'cf_accept_bot': case 'cf_accept_pvp': case 'cf_cancel_offer':
-                case 'cf_pvb_choice': case 'cf_pvp_call':
-                case 'rps_accept_bot': case 'rps_accept_pvp': case 'rps_cancel_offer':
-                case 'rps_pvb_choice': case 'rps_pvp_choice':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardCoinflipRPSCallback for action: ${action}`);
-                    if (typeof forwardCoinflipRPSCallback === 'function') {
-                        await forwardCoinflipRPSCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardCoinflipRPSCallback for Coinflip/RPS action: ${action}`);
-                        await bot.answerCallbackQuery(callbackQueryId, {text: "Action handler not found.", show_alert: true}).catch(()=>{});
-                    }
-                    break;
+                // COINFLIP & RPS NEW ROUTING
+                case 'cf_accept_bot': case 'cf_accept_pvp': case 'cf_cancel_offer':
+                case 'cf_pvb_choice': case 'cf_pvp_call':
+                case 'rps_accept_bot': case 'rps_accept_pvp': case 'rps_cancel_offer':
+                case 'rps_pvb_choice': case 'rps_pvp_choice':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardCoinflipRPSCallback for action: ${action}`);
+                    if (typeof forwardCoinflipRPSCallback === 'function') {
+                        await forwardCoinflipRPSCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardCoinflipRPSCallback for Coinflip/RPS action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Action handler not found.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                case 'join_game':       // This case should be for OLDER games if any still use it.
-                case 'cancel_game':     // This case should be for OLDER games if any still use it.
-                // case 'rps_choose':   // Now handled by rps_pvb_choice or rps_pvp_choice above
-                case 'play_again_coinflip': // Updated to new flow below
-                case 'play_again_rps':      // Updated to new flow below
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardGameCallback for action: ${action}`);
-                    if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    else console.warn(`${LOG_PREFIX_CBQ} forwardGameCallback not defined for ${action}`);
-                    break;
+                case 'join_game':       // This case should be for OLDER games if any still use it.
+                case 'cancel_game':     // This case should be for OLDER games if any still use it.
+                // case 'rps_choose':   // Now handled by rps_pvb_choice or rps_pvp_choice above
+                case 'play_again_coinflip': // Updated to new flow below
+                case 'play_again_rps':      // Updated to new flow below
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardGameCallback for action: ${action}`);
+                    if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    else console.warn(`${LOG_PREFIX_CBQ} forwardGameCallback not defined for ${action}`);
+                    break;
 
-                case 'de_accept_bot_game':
-                case 'de_accept_pvp_challenge':
-                case 'de_cancel_unified_offer':
-                case 'de_stand_pvb':
-                case 'de_stand_pvp':
-                case 'play_again_de_pvb':
-                case 'play_again_de_pvp':
-                case 'de_pvb_go_for_jackpot':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDiceEscalatorCallback_New for action: ${action}`);
-                    if (typeof forwardDiceEscalatorCallback_New === 'function') {
-                        await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for Dice Escalator action: ${action}`);
-                    break;
+                case 'de_accept_bot_game':
+                case 'de_accept_pvp_challenge':
+                case 'de_cancel_unified_offer':
+                case 'de_stand_pvb':
+                case 'de_stand_pvp':
+                case 'play_again_de_pvb':
+                case 'play_again_de_pvp':
+                case 'de_pvb_go_for_jackpot':
+                    console.log(`${LOG_PREFIX_CBQ} Routing to forwardDiceEscalatorCallback_New for action: ${action}`);
+                    if (typeof forwardDiceEscalatorCallback_New === 'function') {
+                        await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for Dice Escalator action: ${action}`);
+                    break;
 
-                case 'd21_accept_bot_game': case 'd21_accept_pvp_challenge': case 'd21_cancel_unified_offer':
-                case 'd21_stand': case 'play_again_d21': case 'd21_pvb_cancel':
-                case 'd21_pvp_stand': case 'play_again_d21_pvp':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDice21Callback for action: ${action}`);
-                    if (typeof forwardDice21Callback === 'function') {
-                        await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDice21Callback not defined for D21 action: ${action}`);
-                    break;
+                case 'd21_accept_bot_game': case 'd21_accept_pvp_challenge': case 'd21_cancel_unified_offer':
+                case 'd21_stand': case 'play_again_d21': case 'd21_pvb_cancel':
+                case 'd21_pvp_stand': case 'play_again_d21_pvp':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDice21Callback for action: ${action}`);
+                    if (typeof forwardDice21Callback === 'function') {
+                        await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDice21Callback not defined for D21 action: ${action}`);
+                    break;
 
-                case 'duel_accept_bot_game': case 'duel_accept_pvp_challenge': case 'duel_cancel_unified_offer':
-                case 'play_again_duel':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDuelCallback for action: ${action}`);
-                    if (typeof forwardDuelCallback === 'function') {
-                        await forwardDuelCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDuelCallback not defined for Duel action: ${action}`);
-                    break;
+                case 'duel_accept_bot_game': case 'duel_accept_pvp_challenge': case 'duel_cancel_unified_offer':
+                case 'play_again_duel':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDuelCallback for action: ${action}`);
+                    if (typeof forwardDuelCallback === 'function') {
+                        await forwardDuelCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDuelCallback not defined for Duel action: ${action}`);
+                    break;
 
-                case 'mines_difficulty_select':
-                case 'mines_cancel_offer':
-                case 'mines_tile':
-                case 'mines_cashout':
-                case 'play_again_mines':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardMinesCallback for action: ${action}`);
-                    if (typeof forwardMinesCallback === 'function') {
-                        await forwardMinesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} forwardMinesCallback not defined or direct handler missing for Mines action: ${action}`);
-                         await bot.answerCallbackQuery(callbackQueryId, {text: "Mines action handler not found.", show_alert: true}).catch(()=>{});
-                    }
-                    break;
+                case 'mines_difficulty_select':
+                case 'mines_cancel_offer':
+                case 'mines_tile':
+                case 'mines_cashout':
+                case 'play_again_mines':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardMinesCallback for action: ${action}`);
+                    if (typeof forwardMinesCallback === 'function') {
+                        await forwardMinesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} forwardMinesCallback not defined or direct handler missing for Mines action: ${action}`);
+                         await bot.answerCallbackQuery(callbackQueryId, {text: "Mines action handler not found.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                case 'ou7_choice': case 'play_again_ou7':
-                case 'ladder_roll': case 'play_again_ladder': // Assuming ladder_roll is a valid action
-                case 's7_roll': case 'play_again_s7':
-                case 'play_again_slot':
-                case 'jackpot_display_noop': // Special case for no-op
-                    if (action === 'jackpot_display_noop') {
-                        console.log(`${LOG_PREFIX_CBQ} Jackpot display no-op handled.`);
-                        await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); // Ensure it's answered
-                    } else if (typeof forwardAdditionalGamesCallback === 'function') {
-                        console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardAdditionalGamesCallback for action: ${action}`);
-                        await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} forwardAdditionalGamesCallback not defined or direct handler missing for general game action: ${action}`);
-                        await bot.answerCallbackQuery(callbackQueryId, {text: "Game action handler not found.", show_alert: true}).catch(()=>{});
-                    }
-                    break;
-                case 'noop_ok': case 'noop':
-                    console.log(`${LOG_PREFIX_CBQ} No-op action '${action}' handled. Deleting message if it exists and is not from group (or if it's a specific 'OK' type button).`);
-                    if (originalMessageId && bot && (originalChatType === 'private' || action === 'noop_ok')) {
-                         await bot.deleteMessage(originalChatId, Number(originalMessageId)).catch(() => {});
-                    }
-                    await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); // Already answered generally, but safe to call again
-                    break;
+                case 'ou7_choice': case 'play_again_ou7':
+                case 'ladder_roll': case 'play_again_ladder': // Assuming ladder_roll is a valid action
+                case 's7_roll': case 'play_again_s7':
+                case 'play_again_slot':
+                case 'jackpot_display_noop': // Special case for no-op
+                    if (action === 'jackpot_display_noop') {
+                        console.log(`${LOG_PREFIX_CBQ} Jackpot display no-op handled.`);
+                        await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); // Ensure it's answered
+                    } else if (typeof forwardAdditionalGamesCallback === 'function') {
+                        console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardAdditionalGamesCallback for action: ${action}`);
+                        await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} forwardAdditionalGamesCallback not defined or direct handler missing for general game action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Game action handler not found.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
+                case 'noop_ok': case 'noop':
+                    console.log(`${LOG_PREFIX_CBQ} No-op action '${action}' handled. Deleting message if it exists and is not from group (or if it's a specific 'OK' type button).`);
+                    if (originalMessageId && bot && (originalChatType === 'private' || action === 'noop_ok')) {
+                         await bot.deleteMessage(originalChatId, Number(originalMessageId)).catch(() => {});
+                    }
+                    await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); // Already answered generally, but safe to call again
+                    break;
 
-                default:
-                    console.warn(`${LOG_PREFIX_CBQ} Unknown callback action encountered in main switch: "${action}" with params: [${params.join(', ')}]`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
-                    break;
-            }
-        }
-    } catch (callbackError) {
-        console.error(`${LOG_PREFIX_CBQ} 🚨 UNHANDLED ERROR IN CALLBACK ROUTER for action ${action}: ${callbackError.message}`, callbackError.stack?.substring(0, 700));
-        await safeSendMessage(userId, `⚙️ Oops! A critical error occurred while processing your action (\`${escapeMarkdownV2(action)}\`). My apologies! Please try again. If the problem persists, contacting support might be necessary.`, { parse_mode: 'MarkdownV2' });
-        if (typeof notifyAdmin === 'function') {
-            notifyAdmin(`🚨 Callback Router System Error 🚨\nAction: \`${escapeMarkdownV2(action)}\`\nUser: ${userId} (${userFromCb.username || 'N/A'})\nError: \`${escapeMarkdownV2(String(callbackError.message || callbackError))}\`\nThis was an unhandled exception in the main callback router.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
-        }
-    }
+                default:
+                    console.warn(`${LOG_PREFIX_CBQ} Unknown callback action encountered in main switch: "${action}" with params: [${params.join(', ')}]`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
+                    break;
+            }
+        }
+    } catch (callbackError) {
+        console.error(`${LOG_PREFIX_CBQ} 🚨 UNHANDLED ERROR IN CALLBACK ROUTER for action ${action}: ${callbackError.message}`, callbackError.stack?.substring(0, 700));
+        await safeSendMessage(userId, `⚙️ Oops! A critical error occurred while processing your action (\`${escapeMarkdownV2(action)}\`). My apologies! Please try again. If the problem persists, contacting support might be necessary.`, { parse_mode: 'MarkdownV2' });
+        if (typeof notifyAdmin === 'function') {
+            notifyAdmin(`🚨 Callback Router System Error 🚨\nAction: \`${escapeMarkdownV2(action)}\`\nUser: ${userId} (${userFromCb.username || 'N/A'})\nError: \`${escapeMarkdownV2(String(callbackError.message || callbackError))}\`\nThis was an unhandled exception in the main callback router.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
+        }
+    }
 });
 
 
 // --- Helper function to forward game callbacks for Coinflip/RPS (NEW) ---
 async function forwardCoinflipRPSCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_CF_RPS_CB_FWD = `[CF_RPS_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_CF_RPS_CB_FWD} Processing Coinflip/RPS action. Params: ${params.join(',')}`);
+    const LOG_PREFIX_CF_RPS_CB_FWD = `[CF_RPS_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_CF_RPS_CB_FWD} Processing Coinflip/RPS action. Params: ${params.join(',')}`);
 
-    const offerIdOrGameId = params[0];
-    const choiceOrPlayerId = params[1]; // For Coinflip PvB choice, RPS PvB choice, Coinflip PvP caller ID check, RPS PvP chooser ID
-    const actualChoice = params[2];    // For Coinflip PvP call choice, RPS PvP choiceKey
+    const offerIdOrGameId = params[0];
+    const choiceOrPlayerId = params[1]; // For Coinflip PvB choice, RPS PvB choice, Coinflip PvP caller ID check, RPS PvP chooser ID
+    const actualChoice = params[2];    // For Coinflip PvP call choice, RPS PvP choiceKey
 
-    const chatDataForHandler = { id: originalChatId, type: originalChatType }; // For handlers that need chat context
+    const chatDataForHandler = { id: originalChatId, type: originalChatType }; // For handlers that need chat context
 
-    switch (action) {
-        // Coinflip Callbacks
-        case 'cf_accept_bot':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_bot.`); return; }
-            if (typeof handleCoinflipAcceptBotGameCallback === 'function') await handleCoinflipAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipAcceptBotGameCallback`);
-            break;
-        case 'cf_accept_pvp':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_pvp.`); return; }
-            if (typeof handleCoinflipAcceptPvPChallengeCallback === 'function') await handleCoinflipAcceptPvPChallengeCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipAcceptPvPChallengeCallback`);
-            break;
-        case 'cf_cancel_offer':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_cancel_offer.`); return; }
-            if (typeof handleCoinflipCancelOfferCallback === 'function') await handleCoinflipCancelOfferCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipCancelOfferCallback`);
-            break;
-        case 'cf_pvb_choice': // params: [gameId, choice]
-            const playerChoiceCF = choiceOrPlayerId; // In this case, params[1] is the choice
-            if (!offerIdOrGameId || !playerChoiceCF) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing gameId or choice for cf_pvb_choice.`); return; }
-            if (typeof handleCoinflipPvBChoiceCallback === 'function') await handleCoinflipPvBChoiceCallback(offerIdOrGameId, playerChoiceCF, userObject, originalMessageId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvBChoiceCallback`);
-            break;
-        case 'cf_pvp_call': // params: [gameId, callerIdCheck, callChoice]
-            const callerIdCheckCF = choiceOrPlayerId; // params[1] is callerIdCheck
-            const callChoiceCF = actualChoice;       // params[2] is callChoice
-            if (!offerIdOrGameId || !callerIdCheckCF || !callChoiceCF) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing params for cf_pvp_call.`); return; }
-            if (typeof handleCoinflipPvPCallCallback === 'function') await handleCoinflipPvPCallCallback(offerIdOrGameId, callerIdCheckCF, callChoiceCF, userObject, originalMessageId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvPCallCallback`);
-            break;
+    switch (action) {
+        // Coinflip Callbacks
+        case 'cf_accept_bot':
+            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_bot.`); return; }
+            if (typeof handleCoinflipAcceptBotGameCallback === 'function') await handleCoinflipAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipAcceptBotGameCallback`);
+            break;
+        case 'cf_accept_pvp':
+            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_pvp.`); return; }
+            if (typeof handleCoinflipAcceptPvPChallengeCallback === 'function') await handleCoinflipAcceptPvPChallengeCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipAcceptPvPChallengeCallback`);
+            break;
+        case 'cf_cancel_offer':
+            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_cancel_offer.`); return; }
+            if (typeof handleCoinflipCancelOfferCallback === 'function') await handleCoinflipCancelOfferCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipCancelOfferCallback`);
+            break;
+        case 'cf_pvb_choice': // params: [gameId, choice]
+            const playerChoiceCF = choiceOrPlayerId; // In this case, params[1] is the choice
+            if (!offerIdOrGameId || !playerChoiceCF) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing gameId or choice for cf_pvb_choice.`); return; }
+            if (typeof handleCoinflipPvBChoiceCallback === 'function') await handleCoinflipPvBChoiceCallback(offerIdOrGameId, playerChoiceCF, userObject, originalMessageId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvBChoiceCallback`);
+            break;
+        case 'cf_pvp_call': // params: [gameId, callerIdCheck, callChoice]
+            const callerIdCheckCF = choiceOrPlayerId; // params[1] is callerIdCheck
+            const callChoiceCF = actualChoice;       // params[2] is callChoice
+            if (!offerIdOrGameId || !callerIdCheckCF || !callChoiceCF) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing params for cf_pvp_call.`); return; }
+            if (typeof handleCoinflipPvPCallCallback === 'function') await handleCoinflipPvPCallCallback(offerIdOrGameId, callerIdCheckCF, callChoiceCF, userObject, originalMessageId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvPCallCallback`);
+            break;
 
-        // RPS Callbacks
-        case 'rps_accept_bot':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_bot.`); return; }
-            if (typeof handleRPSAcceptBotGameCallback === 'function') await handleRPSAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSAcceptBotGameCallback`);
-            break;
-        case 'rps_accept_pvp':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_pvp.`); return; }
-            if (typeof handleRPSAcceptPvPChallengeCallback === 'function') await handleRPSAcceptPvPChallengeCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSAcceptPvPChallengeCallback`);
-            break;
-        case 'rps_cancel_offer':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_cancel_offer.`); return; }
-            if (typeof handleRPSCancelOfferCallback === 'function') await handleRPSCancelOfferCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSCancelOfferCallback`);
-            break;
-        case 'rps_pvb_choice': // params: [gameId, choiceKey]
-            const playerChoiceRPS = choiceOrPlayerId; // params[1] is the choiceKey
-            if (!offerIdOrGameId || !playerChoiceRPS) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing gameId or choiceKey for rps_pvb_choice.`); return; }
-            if (typeof handleRPSPvBChoiceCallback === 'function') await handleRPSPvBChoiceCallback(offerIdOrGameId, playerChoiceRPS, userObject, originalMessageId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSPvBChoiceCallback`);
-            break;
-        case 'rps_pvp_choice': // params: [gameId, chooserId, choiceKey]
-            const chooserIdRPS = choiceOrPlayerId; // params[1] is chooserId
-            const choiceKeyRPS = actualChoice;     // params[2] is choiceKey
-            if (!offerIdOrGameId || !chooserIdRPS || !choiceKeyRPS) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing params for rps_pvp_choice.`); return; }
-            if (typeof handleRPSPvPChoiceCallback === 'function') await handleRPSPvPChoiceCallback(offerIdOrGameId, chooserIdRPS, choiceKeyRPS, userObject, originalMessageId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSPvPChoiceCallback`);
-            break;
+        // RPS Callbacks
+        case 'rps_accept_bot':
+            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_bot.`); return; }
+            if (typeof handleRPSAcceptBotGameCallback === 'function') await handleRPSAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSAcceptBotGameCallback`);
+            break;
+        case 'rps_accept_pvp':
+            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_pvp.`); return; }
+            if (typeof handleRPSAcceptPvPChallengeCallback === 'function') await handleRPSAcceptPvPChallengeCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSAcceptPvPChallengeCallback`);
+            break;
+        case 'rps_cancel_offer':
+            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_cancel_offer.`); return; }
+            if (typeof handleRPSCancelOfferCallback === 'function') await handleRPSCancelOfferCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSCancelOfferCallback`);
+            break;
+        case 'rps_pvb_choice': // params: [gameId, choiceKey]
+            const playerChoiceRPS = choiceOrPlayerId; // params[1] is the choiceKey
+            if (!offerIdOrGameId || !playerChoiceRPS) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing gameId or choiceKey for rps_pvb_choice.`); return; }
+            if (typeof handleRPSPvBChoiceCallback === 'function') await handleRPSPvBChoiceCallback(offerIdOrGameId, playerChoiceRPS, userObject, originalMessageId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSPvBChoiceCallback`);
+            break;
+        case 'rps_pvp_choice': // params: [gameId, chooserId, choiceKey]
+            const chooserIdRPS = choiceOrPlayerId; // params[1] is chooserId
+            const choiceKeyRPS = actualChoice;     // params[2] is choiceKey
+            if (!offerIdOrGameId || !chooserIdRPS || !choiceKeyRPS) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing params for rps_pvp_choice.`); return; }
+            if (typeof handleRPSPvPChoiceCallback === 'function') await handleRPSPvPChoiceCallback(offerIdOrGameId, chooserIdRPS, choiceKeyRPS, userObject, originalMessageId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleRPSPvPChoiceCallback`);
+            break;
 
-        default:
-            console.warn(`${LOG_PREFIX_CF_RPS_CB_FWD} Unhandled Coinflip/RPS action in forwarder: ${action}`);
-            await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown game action.", show_alert: false}).catch(()=>{});
-            break;
-    }
+        default:
+            console.warn(`${LOG_PREFIX_CF_RPS_CB_FWD} Unhandled Coinflip/RPS action in forwarder: ${action}`);
+            await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown game action.", show_alert: false}).catch(()=>{});
+            break;
+    }
 }
 
 
 // --- Helper function to forward game callbacks for Coinflip/RPS (OLD, to be deprecated or merged if any unique logic remains) ---
 async function forwardGameCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_GAME_CB_FWD = `[GameCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_GAME_CB_FWD} Processing action. Params: ${params.join(',')}`);
-    const gameIdOrBetAmountStr = params[0];
-    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId }; // For Play Again
+    const LOG_PREFIX_GAME_CB_FWD = `[GameCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_GAME_CB_FWD} Processing action. Params: ${params.join(',')}`);
+    const gameIdOrBetAmountStr = params[0];
+    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId }; // For Play Again
 
-    switch (action) {
-        case 'join_game': // Assuming this is for an older game structure, not the new CF/RPS
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId for join_game.`); return; }
-            if (typeof handleJoinGameCallback === 'function') await handleJoinGameCallback(originalChatId, userObject, gameIdOrBetAmountStr, originalMessageId, callbackQueryId, originalChatType);
-            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleJoinGameCallback`);
-            break;
-        case 'cancel_game': // Assuming this is for an older game structure
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId for cancel_game.`); return; }
-            if (typeof handleCancelGameCallback === 'function') await handleCancelGameCallback(originalChatId, userObject, gameIdOrBetAmountStr, originalMessageId, callbackQueryId, originalChatType);
-            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleCancelGameCallback`);
-            break;
-        case 'rps_choose': // This was for the older RPS DM choice, now handled by specific PvP/PvB choice callbacks.
-                           // Kept for now if older RPS games might still be active or if some logic needs to be salvaged.
-                           // Ideally, this path should no longer be hit by new RPS games.
-            const gameIdRPS_old = params[0];
-            const choice_old = params[1];
-            console.warn(`${LOG_PREFIX_GAME_CB_FWD} Old 'rps_choose' callback received. GameID: ${gameIdRPS_old}, Choice: ${choice_old}. This path should be deprecated.`);
-            if (!gameIdRPS_old || !choice_old) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId or choice for old rps_choose.`); return; }
-            if (typeof handleRPSChoiceCallback === 'function') await handleRPSChoiceCallback(originalChatId, userObject, gameIdRPS_old, choice_old, originalMessageId, callbackQueryId, originalChatType);
-            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleRPSChoiceCallback (for old rps_choose path)`);
-            break;
-        case 'play_again_coinflip':
-        case 'play_again_rps':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing bet amount for ${action}.`); return; }
-            try {
-                const betAmountReplay = BigInt(gameIdOrBetAmountStr);
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+    switch (action) {
+        case 'join_game': // Assuming this is for an older game structure, not the new CF/RPS
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId for join_game.`); return; }
+            if (typeof handleJoinGameCallback === 'function') await handleJoinGameCallback(originalChatId, userObject, gameIdOrBetAmountStr, originalMessageId, callbackQueryId, originalChatType);
+            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleJoinGameCallback`);
+            break;
+        case 'cancel_game': // Assuming this is for an older game structure
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId for cancel_game.`); return; }
+            if (typeof handleCancelGameCallback === 'function') await handleCancelGameCallback(originalChatId, userObject, gameIdOrBetAmountStr, originalMessageId, callbackQueryId, originalChatType);
+            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleCancelGameCallback`);
+            break;
+        case 'rps_choose': // This was for the older RPS DM choice, now handled by specific PvP/PvB choice callbacks.
+                           // Kept for now if older RPS games might still be active or if some logic needs to be salvaged.
+                           // Ideally, this path should no longer be hit by new RPS games.
+            const gameIdRPS_old = params[0];
+            const choice_old = params[1];
+            console.warn(`${LOG_PREFIX_GAME_CB_FWD} Old 'rps_choose' callback received. GameID: ${gameIdRPS_old}, Choice: ${choice_old}. This path should be deprecated.`);
+            if (!gameIdRPS_old || !choice_old) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing gameId or choice for old rps_choose.`); return; }
+            if (typeof handleRPSChoiceCallback === 'function') await handleRPSChoiceCallback(originalChatId, userObject, gameIdRPS_old, choice_old, originalMessageId, callbackQueryId, originalChatType);
+            else console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing handler: handleRPSChoiceCallback (for old rps_choose path)`);
+            break;
+        case 'play_again_coinflip':
+        case 'play_again_rps':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing bet amount for ${action}.`); return; }
+            try {
+                const betAmountReplay = BigInt(gameIdOrBetAmountStr);
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
 
-                if (action === 'play_again_coinflip' && typeof handleStartCoinflipUnifiedOfferCommand === 'function') {
-                    await handleStartCoinflipUnifiedOfferCommand(mockMsgForReplay, betAmountReplay); // Call NEW Unified Offer
-                } else if (action === 'play_again_rps' && typeof handleStartRPSUnifiedOfferCommand === 'function') {
-                    await handleStartRPSUnifiedOfferCommand(mockMsgForReplay, betAmountReplay); // Call NEW Unified Offer
-                } else {
-                    console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing NEW UNIFIED start command handler for ${action}`);
-                }
-            } catch (e) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_GAME_CB_FWD} Unhandled action in forwardGameCallback: ${action}`);
-    }
+                if (action === 'play_again_coinflip' && typeof handleStartCoinflipUnifiedOfferCommand === 'function') {
+                    await handleStartCoinflipUnifiedOfferCommand(mockMsgForReplay, betAmountReplay); // Call NEW Unified Offer
+                } else if (action === 'play_again_rps' && typeof handleStartRPSUnifiedOfferCommand === 'function') {
+                    await handleStartRPSUnifiedOfferCommand(mockMsgForReplay, betAmountReplay); // Call NEW Unified Offer
+                } else {
+                    console.error(`${LOG_PREFIX_GAME_CB_FWD} Missing NEW UNIFIED start command handler for ${action}`);
+                }
+            } catch (e) { console.error(`${LOG_PREFIX_GAME_CB_FWD} Invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
+            break;
+        default:
+            console.warn(`${LOG_PREFIX_GAME_CB_FWD} Unhandled action in forwardGameCallback: ${action}`);
+    }
 }
 
 // --- Helper function to forward Dice 21 callbacks ---
 async function forwardDice21Callback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_D21_CB_FWD = `[D21_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_D21_CB_FWD} Processing action. Params: ${params.join(',')}`);
-    const gameIdOrBetAmountStr = params[0];
-    const chatDataForHandler = { id: originalChatId, type: originalChatType };
+    const LOG_PREFIX_D21_CB_FWD = `[D21_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_D21_CB_FWD} Processing action. Params: ${params.join(',')}`);
+    const gameIdOrBetAmountStr = params[0];
+    const chatDataForHandler = { id: originalChatId, type: originalChatType };
 
-    switch (action) {
-        case 'd21_accept_bot_game':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_accept_bot_game.`); return; }
-            if (typeof handleDice21AcceptBotGame === 'function') await handleDice21AcceptBotGame(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21AcceptBotGame`);
-            break;
-        case 'd21_accept_pvp_challenge':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_accept_pvp_challenge.`); return; }
-            if (typeof handleDice21AcceptPvPChallenge === 'function') await handleDice21AcceptPvPChallenge(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21AcceptPvPChallenge`);
-            break;
-        case 'd21_cancel_unified_offer':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_cancel_unified_offer.`); return; }
-            if (typeof handleDice21CancelUnifiedOffer === 'function') await handleDice21CancelUnifiedOffer(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21CancelUnifiedOffer`);
-            break;
-        case 'd21_stand':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_stand.`); return; }
-            if (typeof handleDice21PvBStand === 'function') await handleDice21PvBStand(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
-            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBStand`);
-            break;
-        case 'play_again_d21':
-        case 'play_again_d21_pvp':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing bet amount for ${action}.`); return; }
-            try {
-                const betAmountD21Replay = BigInt(gameIdOrBetAmountStr);
-                const mockMsgForD21Replay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-                if (typeof handleStartDice21Command === 'function') {
-                    await handleStartDice21Command(mockMsgForD21Replay, betAmountD21Replay);
-                } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleStartDice21Command for ${action} replay`);
-            } catch (e) { console.error(`${LOG_PREFIX_D21_CB_FWD} Invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
-            break;
-        case 'd21_pvb_cancel':
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvb_cancel.`); return; }
-            if (typeof handleDice21PvBCancel === 'function') await handleDice21PvBCancel(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
-            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBCancel`);
-            break;
-        case 'd21_pvp_stand':
-            if (!gameIdOrBetAmountStr) {
-                console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvp_stand.`);
-                if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Missing game ID for stand action.", show_alert: true }).catch(() => {});
-                return;
-            }
-            const userIdStringForStand = String(userObject.id || userObject.telegram_id); // Get the string ID
-            if (typeof handleDice21PvPStand === 'function') {
-                await handleDice21PvPStand(gameIdOrBetAmountStr, userIdStringForStand, originalMessageId, callbackQueryId, chatDataForHandler);
-            } else {
-                console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvPStand`);
-            }
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_D21_CB_FWD} Unhandled D21 action in forwarder: ${action}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown Dice 21 action.", show_alert: false }).catch(() => {});
-            break;
-    }
+    switch (action) {
+        case 'd21_accept_bot_game':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_accept_bot_game.`); return; }
+            if (typeof handleDice21AcceptBotGame === 'function') await handleDice21AcceptBotGame(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21AcceptBotGame`);
+            break;
+        case 'd21_accept_pvp_challenge':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_accept_pvp_challenge.`); return; }
+            if (typeof handleDice21AcceptPvPChallenge === 'function') await handleDice21AcceptPvPChallenge(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21AcceptPvPChallenge`);
+            break;
+        case 'd21_cancel_unified_offer':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing offerId for d21_cancel_unified_offer.`); return; }
+            if (typeof handleDice21CancelUnifiedOffer === 'function') await handleDice21CancelUnifiedOffer(gameIdOrBetAmountStr, userObject, originalMessageId, originalChatId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21CancelUnifiedOffer`);
+            break;
+        case 'd21_stand':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_stand.`); return; }
+            if (typeof handleDice21PvBStand === 'function') await handleDice21PvBStand(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
+            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBStand`);
+            break;
+        case 'play_again_d21':
+        case 'play_again_d21_pvp':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing bet amount for ${action}.`); return; }
+            try {
+                const betAmountD21Replay = BigInt(gameIdOrBetAmountStr);
+                const mockMsgForD21Replay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+                if (typeof handleStartDice21Command === 'function') {
+                    await handleStartDice21Command(mockMsgForD21Replay, betAmountD21Replay);
+                } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleStartDice21Command for ${action} replay`);
+            } catch (e) { console.error(`${LOG_PREFIX_D21_CB_FWD} Invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
+            break;
+        case 'd21_pvb_cancel':
+            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvb_cancel.`); return; }
+            if (typeof handleDice21PvBCancel === 'function') await handleDice21PvBCancel(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, chatDataForHandler);
+            else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvBCancel`);
+            break;
+        case 'd21_pvp_stand':
+            if (!gameIdOrBetAmountStr) {
+                console.error(`${LOG_PREFIX_D21_CB_FWD} Missing gameId for d21_pvp_stand.`);
+                if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Missing game ID for stand action.", show_alert: true }).catch(() => {});
+                return;
+            }
+            const userIdStringForStand = String(userObject.id || userObject.telegram_id); // Get the string ID
+            if (typeof handleDice21PvPStand === 'function') {
+                await handleDice21PvPStand(gameIdOrBetAmountStr, userIdStringForStand, originalMessageId, callbackQueryId, chatDataForHandler);
+            } else {
+                console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleDice21PvPStand`);
+            }
+            break;
+        default:
+            console.warn(`${LOG_PREFIX_D21_CB_FWD} Unhandled D21 action in forwarder: ${action}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown Dice 21 action.", show_alert: false }).catch(() => {});
+            break;
+    }
 }
 
 // --- Helper function to forward Duel callbacks ---
 async function forwardDuelCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_DUEL_CB_FWD = `[Duel_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_DUEL_CB_FWD} Processing action. Params: ${params.join(',')}`);
-    const offerIdOrBetAmountStr = params[0];
-    const mockMsgForHandler = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+    const LOG_PREFIX_DUEL_CB_FWD = `[Duel_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_DUEL_CB_FWD} Processing action. Params: ${params.join(',')}`);
+    const offerIdOrBetAmountStr = params[0];
+    const mockMsgForHandler = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
 
-    switch (action) {
-        case 'duel_accept_bot_game':
-            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing offerId for duel_accept_bot_game.`); return; }
-            if (typeof handleDuelAcceptBotGameCallback === 'function') await handleDuelAcceptBotGameCallback(offerIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleDuelAcceptBotGameCallback`);
-            break;
-        case 'duel_accept_pvp_challenge':
-            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing offerId for duel_accept_pvp_challenge.`); return; }
-            if (typeof handleDuelAcceptPvPChallengeCallback === 'function') await handleDuelAcceptPvPChallengeCallback(offerIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleDuelAcceptPvPChallengeCallback`);
-            break;
-        case 'duel_cancel_unified_offer':
-            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing offerId for duel_cancel_unified_offer.`); return; }
-            if (typeof handleDuelCancelUnifiedOfferCallback === 'function') await handleDuelCancelUnifiedOfferCallback(offerIdOrBetAmountStr, userObject, originalMessageId, originalChatId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleDuelCancelUnifiedOfferCallback`);
-            break;
-        case 'play_again_duel':
-            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing bet amount for play_again_duel.`); return; }
-            try {
-                const betAmountDuelReplay = BigInt(offerIdOrBetAmountStr);
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-                if (typeof handleStartDuelUnifiedOfferCommand === 'function') {
-                    await handleStartDuelUnifiedOfferCommand(mockMsgForHandler, betAmountDuelReplay);
-                } else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleStartDuelUnifiedOfferCommand for Duel replay`);
-            } catch (e) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Invalid bet amount for play_again_duel: '${offerIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_DUEL_CB_FWD} Unhandled Duel action in forwarder: ${action}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown Duel action.", show_alert: false }).catch(() => {});
-            break;
-    }
+    switch (action) {
+        case 'duel_accept_bot_game':
+            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing offerId for duel_accept_bot_game.`); return; }
+            if (typeof handleDuelAcceptBotGameCallback === 'function') await handleDuelAcceptBotGameCallback(offerIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleDuelAcceptBotGameCallback`);
+            break;
+        case 'duel_accept_pvp_challenge':
+            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing offerId for duel_accept_pvp_challenge.`); return; }
+            if (typeof handleDuelAcceptPvPChallengeCallback === 'function') await handleDuelAcceptPvPChallengeCallback(offerIdOrBetAmountStr, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleDuelAcceptPvPChallengeCallback`);
+            break;
+        case 'duel_cancel_unified_offer':
+            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing offerId for duel_cancel_unified_offer.`); return; }
+            if (typeof handleDuelCancelUnifiedOfferCallback === 'function') await handleDuelCancelUnifiedOfferCallback(offerIdOrBetAmountStr, userObject, originalMessageId, originalChatId, callbackQueryId);
+            else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleDuelCancelUnifiedOfferCallback`);
+            break;
+        case 'play_again_duel':
+            if (!offerIdOrBetAmountStr) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing bet amount for play_again_duel.`); return; }
+            try {
+                const betAmountDuelReplay = BigInt(offerIdOrBetAmountStr);
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+                if (typeof handleStartDuelUnifiedOfferCommand === 'function') {
+                    await handleStartDuelUnifiedOfferCommand(mockMsgForHandler, betAmountDuelReplay);
+                } else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleStartDuelUnifiedOfferCommand for Duel replay`);
+            } catch (e) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Invalid bet amount for play_again_duel: '${offerIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
+            break;
+        default:
+            console.warn(`${LOG_PREFIX_DUEL_CB_FWD} Unhandled Duel action in forwarder: ${action}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown Duel action.", show_alert: false }).catch(() => {});
+            break;
+    }
 }
 
 // --- Helper function to forward Dice Escalator callbacks (New Structure with Jackpot Choice) ---
 async function forwardDiceEscalatorCallback_New(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_DE_CB_FWD_NEW = `[DE_CB_Fwd_New UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Processing action. Action: ${action}, Params: ${params.join(',')}`);
-    const gameIdOrOfferIdOrBet = params[0];
-    const mockMsgForPlayAgain = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+    const LOG_PREFIX_DE_CB_FWD_NEW = `[DE_CB_Fwd_New UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Processing action. Action: ${action}, Params: ${params.join(',')}`);
+    const gameIdOrOfferIdOrBet = params[0];
+    const mockMsgForPlayAgain = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
 
-    switch (action) {
-        case 'de_accept_bot_game':
-            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing offerId for de_accept_bot_game.`); return; }
-            if (typeof handleDiceEscalatorAcceptBotGame_New === 'function') {
-                await handleDiceEscalatorAcceptBotGame_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorAcceptBotGame_New`);
-            break;
-        case 'de_accept_pvp_challenge':
-            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing offerId for de_accept_pvp_challenge.`); return; }
-            if (typeof handleDiceEscalatorAcceptPvPChallenge_New === 'function') {
-                await handleDiceEscalatorAcceptPvPChallenge_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorAcceptPvPChallenge_New`);
-            break;
-        case 'de_cancel_unified_offer':
-            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing offerId for de_cancel_unified_offer.`); return; }
-            if (typeof handleDiceEscalatorCancelUnifiedOffer_New === 'function') {
-                await handleDiceEscalatorCancelUnifiedOffer_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, originalChatId, callbackQueryId);
-            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorCancelUnifiedOffer_New`);
-            break;
-        case 'de_pvb_go_for_jackpot':
-            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing gameId for de_pvb_go_for_jackpot.`); return; }
-            if (typeof handleDEGoForJackpot === 'function') {
-                await handleDEGoForJackpot(gameIdOrOfferIdOrBet, userObject, originalMessageId, callbackQueryId, { id: originalChatId, type: originalChatType });
-            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDEGoForJackpot`);
-            break;
-        case 'de_stand_pvb':
-            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing gameId for de_stand_pvb.`); return; }
-            if (typeof handleDiceEscalatorPvBStand_New === 'function') {
-                await handleDiceEscalatorPvBStand_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, callbackQueryId, { id: originalChatId, type: originalChatType });
-            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorPvBStand_New`);
-            break;
-        case 'play_again_de_pvb':
-            const betAmountPvBStr_DE_Corrected = gameIdOrOfferIdOrBet;
-            if (!betAmountPvBStr_DE_Corrected) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing bet for play_again_de_pvb.`); return; }
-            try {
-                const betAmountPvB_DE_Corrected = BigInt(betAmountPvBStr_DE_Corrected);
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+    switch (action) {
+        case 'de_accept_bot_game':
+            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing offerId for de_accept_bot_game.`); return; }
+            if (typeof handleDiceEscalatorAcceptBotGame_New === 'function') {
+                await handleDiceEscalatorAcceptBotGame_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorAcceptBotGame_New`);
+            break;
+        case 'de_accept_pvp_challenge':
+            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing offerId for de_accept_pvp_challenge.`); return; }
+            if (typeof handleDiceEscalatorAcceptPvPChallenge_New === 'function') {
+                await handleDiceEscalatorAcceptPvPChallenge_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorAcceptPvPChallenge_New`);
+            break;
+        case 'de_cancel_unified_offer':
+            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing offerId for de_cancel_unified_offer.`); return; }
+            if (typeof handleDiceEscalatorCancelUnifiedOffer_New === 'function') {
+                await handleDiceEscalatorCancelUnifiedOffer_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, originalChatId, callbackQueryId);
+            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorCancelUnifiedOffer_New`);
+            break;
+        case 'de_pvb_go_for_jackpot':
+            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing gameId for de_pvb_go_for_jackpot.`); return; }
+            if (typeof handleDEGoForJackpot === 'function') {
+                await handleDEGoForJackpot(gameIdOrOfferIdOrBet, userObject, originalMessageId, callbackQueryId, { id: originalChatId, type: originalChatType });
+            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDEGoForJackpot`);
+            break;
+        case 'de_stand_pvb':
+            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing gameId for de_stand_pvb.`); return; }
+            if (typeof handleDiceEscalatorPvBStand_New === 'function') {
+                await handleDiceEscalatorPvBStand_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, callbackQueryId, { id: originalChatId, type: originalChatType });
+            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorPvBStand_New`);
+            break;
+        case 'play_again_de_pvb':
+            const betAmountPvBStr_DE_Corrected = gameIdOrOfferIdOrBet;
+            if (!betAmountPvBStr_DE_Corrected) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing bet for play_again_de_pvb.`); return; }
+            try {
+                const betAmountPvB_DE_Corrected = BigInt(betAmountPvBStr_DE_Corrected);
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
 
-                if (typeof startDiceEscalatorPvBGame_New === 'function') {
-                    await startDiceEscalatorPvBGame_New(mockMsgForPlayAgain.chat, userObject, betAmountPvB_DE_Corrected, null, true);
-                } else {
-                    console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: startDiceEscalatorPvBGame_New`);
-                }
-            } catch (e) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Invalid bet amount for play_again_de_pvb: '${betAmountPvBStr_DE_Corrected}'`, e); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
-            break;
-        case 'de_stand_pvp':
-            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing gameId for de_stand_pvp.`); return; }
-            if (typeof handleDiceEscalatorPvPStand_New === 'function') {
-                await handleDiceEscalatorPvPStand_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, callbackQueryId, { id: originalChatId, type: originalChatType });
-            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorPvPStand_New`);
-            break;
-        case 'play_again_de_pvp':
-            const betAmountPvPStr_DE = gameIdOrOfferIdOrBet;
-            if (!betAmountPvPStr_DE) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing bet for play_again_de_pvp.`); return; }
-            try {
-                const betAmountPvP_DE = BigInt(betAmountPvPStr_DE);
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-                if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
-                    await handleStartDiceEscalatorUnifiedOfferCommand_New(mockMsgForPlayAgain, betAmountPvP_DE);
-                } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New for DE PvP replay`);
-            } catch (e) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Invalid bet amount for play_again_de_pvp: '${betAmountPvPStr_DE}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_DE_CB_FWD_NEW} Unhandled Dice Escalator action in forwarder: ${action}`);
-            await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown Dice Escalator action.", show_alert: false}).catch(()=>{});
-            break;
-    }
+                if (typeof startDiceEscalatorPvBGame_New === 'function') {
+                    await startDiceEscalatorPvBGame_New(mockMsgForPlayAgain.chat, userObject, betAmountPvB_DE_Corrected, null, true);
+                } else {
+                    console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: startDiceEscalatorPvBGame_New`);
+                }
+            } catch (e) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Invalid bet amount for play_again_de_pvb: '${betAmountPvBStr_DE_Corrected}'`, e); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
+            break;
+        case 'de_stand_pvp':
+            if (!gameIdOrOfferIdOrBet) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing gameId for de_stand_pvp.`); return; }
+            if (typeof handleDiceEscalatorPvPStand_New === 'function') {
+                await handleDiceEscalatorPvPStand_New(gameIdOrOfferIdOrBet, userObject, originalMessageId, callbackQueryId, { id: originalChatId, type: originalChatType });
+            } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleDiceEscalatorPvPStand_New`);
+            break;
+        case 'play_again_de_pvp':
+            const betAmountPvPStr_DE = gameIdOrOfferIdOrBet;
+            if (!betAmountPvPStr_DE) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing bet for play_again_de_pvp.`); return; }
+            try {
+                const betAmountPvP_DE = BigInt(betAmountPvPStr_DE);
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+                if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
+                    await handleStartDiceEscalatorUnifiedOfferCommand_New(mockMsgForPlayAgain, betAmountPvP_DE);
+                } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New for DE PvP replay`);
+            } catch (e) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Invalid bet amount for play_again_de_pvp: '${betAmountPvPStr_DE}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
+            break;
+        default:
+            console.warn(`${LOG_PREFIX_DE_CB_FWD_NEW} Unhandled Dice Escalator action in forwarder: ${action}`);
+            await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown Dice Escalator action.", show_alert: false}).catch(()=>{});
+            break;
+    }
 }
 
 // --- UPDATED Helper function to forward Mines game callbacks ---
 async function forwardMinesCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_MINES_CB_FWD = `[MinesCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_MINES_CB_FWD} Processing action. Params: ${params.join(',')}`);
-    const gameIdOrOfferId = params[0]; // Can be offer ID or game ID
-    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+    const LOG_PREFIX_MINES_CB_FWD = `[MinesCB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_MINES_CB_FWD} Processing action. Params: ${params.join(',')}`);
+    const gameIdOrOfferId = params[0]; // Can be offer ID or game ID
+    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
 
-    switch(action) {
-        case 'mines_difficulty_select': // params: [offerId, difficultyKey]
-            const difficultyKey = params[1];
-            if (!gameIdOrOfferId || !difficultyKey) {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId or difficultyKey for mines_difficulty_select.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Error selecting difficulty.", show_alert: true});
-                return;
-            }
-            if (typeof handleMinesDifficultySelectionCallback === 'function') {
-                await handleMinesDifficultySelectionCallback(gameIdOrOfferId, userObject, difficultyKey, callbackQueryId, originalMessageId, originalChatId, originalChatType);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesDifficultySelectionCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines difficulty selection is under construction!", show_alert: false});
-            }
-            break;
-        case 'mines_cancel_offer': // params: [offerId]
-             if (!gameIdOrOfferId) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId for mines_cancel_offer.`); return; }
-             if (typeof handleMinesCancelOfferCallback === 'function') {
-                await handleMinesCancelOfferCallback(gameIdOrOfferId, userObject, originalMessageId, originalChatId, callbackQueryId);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCancelOfferCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines offer cancellation is under construction!", show_alert: false});
-            }
-            break;
-        case 'mines_tile': // params: [gameId, row, col]
-            const row = params[1];
-            const col = params[2];
-            if (!gameIdOrOfferId || row === undefined || col === undefined) {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId, row, or col for mines_tile.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Error revealing tile.", show_alert: true});
-                return;
-            }
-            if (typeof handleMinesTileClickCallback === 'function') {
-                await handleMinesTileClickCallback(gameIdOrOfferId, userObject, parseInt(row), parseInt(col), callbackQueryId, originalMessageId, originalChatId);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesTileClickCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines tile clicking is under construction!", show_alert: false});
-            }
-            break;
-        case 'mines_cashout': // params: [gameId]
-            if (!gameIdOrOfferId) {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId for mines_cashout.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Error cashing out.", show_alert: true});
-                return;
-            }
-            if (typeof handleMinesCashOutCallback === 'function') {
-                await handleMinesCashOutCallback(gameIdOrOfferId, userObject, callbackQueryId, originalMessageId, originalChatId);
-            } else {
-                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCashOutCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines cash out is under construction!", show_alert: false});
-            }
-            break;
-        case 'play_again_mines': // params: [betAmountLamports]
-            const betAmountStr = gameIdOrOfferId; // In this case, the first param is the bet amount
-            if (!betAmountStr) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing bet amount for play_again_mines.`); return; }
-            try {
-                const betAmountMinesReplay = BigInt(betAmountStr);
-                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-                if (typeof handleStartMinesCommand === 'function') {
-                    // handleStartMinesCommand expects (msg, args, userObj)
-                    // We pass mockMsgForReplay (which is like msg), an array for args, and userObject
-                    await handleStartMinesCommand(mockMsgForReplay, [betAmountMinesReplay.toString()], userObject);
-                } else console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleStartMinesCommand for Mines replay`);
-            } catch (e) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Invalid bet amount for play_again_mines: '${betAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
-            break;
-        default:
-            console.warn(`${LOG_PREFIX_MINES_CB_FWD} Unhandled Mines action in forwarder: ${action}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "That Mines action isn't ready yet!", show_alert: false }).catch(() => {});
-            break;
-    }
+    switch(action) {
+        case 'mines_difficulty_select': // params: [offerId, difficultyKey]
+            const difficultyKey = params[1];
+            if (!gameIdOrOfferId || !difficultyKey) {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId or difficultyKey for mines_difficulty_select.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error selecting difficulty.", show_alert: true});
+                return;
+            }
+            if (typeof handleMinesDifficultySelectionCallback === 'function') {
+                await handleMinesDifficultySelectionCallback(gameIdOrOfferId, userObject, difficultyKey, callbackQueryId, originalMessageId, originalChatId, originalChatType);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesDifficultySelectionCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines difficulty selection is under construction!", show_alert: false});
+            }
+            break;
+        case 'mines_cancel_offer': // params: [offerId]
+             if (!gameIdOrOfferId) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing offerId for mines_cancel_offer.`); return; }
+             if (typeof handleMinesCancelOfferCallback === 'function') {
+                await handleMinesCancelOfferCallback(gameIdOrOfferId, userObject, originalMessageId, originalChatId, callbackQueryId);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCancelOfferCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines offer cancellation is under construction!", show_alert: false});
+            }
+            break;
+        case 'mines_tile': // params: [gameId, row, col]
+            const row = params[1];
+            const col = params[2];
+            if (!gameIdOrOfferId || row === undefined || col === undefined) {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId, row, or col for mines_tile.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error revealing tile.", show_alert: true});
+                return;
+            }
+            if (typeof handleMinesTileClickCallback === 'function') {
+                await handleMinesTileClickCallback(gameIdOrOfferId, userObject, parseInt(row), parseInt(col), callbackQueryId, originalMessageId, originalChatId);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesTileClickCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines tile clicking is under construction!", show_alert: false});
+            }
+            break;
+        case 'mines_cashout': // params: [gameId]
+            if (!gameIdOrOfferId) {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing gameId for mines_cashout.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error cashing out.", show_alert: true});
+                return;
+            }
+            if (typeof handleMinesCashOutCallback === 'function') {
+                await handleMinesCashOutCallback(gameIdOrOfferId, userObject, callbackQueryId, originalMessageId, originalChatId);
+            } else {
+                console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleMinesCashOutCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Mines cash out is under construction!", show_alert: false});
+            }
+            break;
+        case 'play_again_mines': // params: [betAmountLamports]
+            const betAmountStr = gameIdOrOfferId; // In this case, the first param is the bet amount
+            if (!betAmountStr) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing bet amount for play_again_mines.`); return; }
+            try {
+                const betAmountMinesReplay = BigInt(betAmountStr);
+                if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+                if (typeof handleStartMinesCommand === 'function') {
+                    // handleStartMinesCommand expects (msg, args, userObj)
+                    // We pass mockMsgForReplay (which is like msg), an array for args, and userObject
+                    await handleStartMinesCommand(mockMsgForReplay, [betAmountMinesReplay.toString()], userObject);
+                } else console.error(`${LOG_PREFIX_MINES_CB_FWD} Missing handler: handleStartMinesCommand for Mines replay`);
+            } catch (e) { console.error(`${LOG_PREFIX_MINES_CB_FWD} Invalid bet amount for play_again_mines: '${betAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
+            break;
+        default:
+            console.warn(`${LOG_PREFIX_MINES_CB_FWD} Unhandled Mines action in forwarder: ${action}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "That Mines action isn't ready yet!", show_alert: false }).catch(() => {});
+            break;
+    }
 }
 // --- END OF UPDATED forwardMinesCallback function ---
 
 
 // --- Helper function to forward other game callbacks (Corrected) ---
 async function forwardAdditionalGamesCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const LOG_PREFIX_ADD_GAME_CB = `[AddGameCB_Fwd_CORRECTED UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_ADD_GAME_CB} Processing action. Params: ${params.join(',')}`);
-    const gameIdOrBetAmountStr = params[0];
-    const msgContext = { chatId: originalChatId, chatType: originalChatType, messageId: originalMessageId };
-    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
+    const LOG_PREFIX_ADD_GAME_CB = `[AddGameCB_Fwd_CORRECTED UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
+    console.log(`${LOG_PREFIX_ADD_GAME_CB} Processing action. Params: ${params.join(',')}`);
+    const gameIdOrBetAmountStr = params[0];
+    const msgContext = { chatId: originalChatId, chatType: originalChatType, messageId: originalMessageId };
+    const mockMsgForReplay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
 
-    try {
-        const betAmount = (action.startsWith('play_again_') && gameIdOrBetAmountStr) ? BigInt(gameIdOrBetAmountStr) : null;
+    try {
+        const betAmount = (action.startsWith('play_again_') && gameIdOrBetAmountStr) ? BigInt(gameIdOrBetAmountStr) : null;
 
-        if (action.startsWith('play_again_')) {
-            if (!betAmount) {
-                console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing or invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'.`);
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Missing or invalid bet amount for replay.", show_alert: true });
-                return;
-            }
-            if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
-        }
+        if (action.startsWith('play_again_')) {
+            if (!betAmount) {
+                console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing or invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'.`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Missing or invalid bet amount for replay.", show_alert: true });
+                return;
+            }
+            if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
+        }
 
-        switch (action) {
-            case 'ou7_choice':
-                const choiceOU7 = params[1];
-                if (!gameIdOrBetAmountStr || !choiceOU7) { console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing params for ou7_choice.`); return; }
-                if (typeof handleOverUnder7Choice === 'function') {
-                    // CORRECTED ARGUMENT ORDER HERE:
-                    await handleOverUnder7Choice(gameIdOrBetAmountStr, choiceOU7, userObject, originalMessageId, callbackQueryId, msgContext);
-                } else {
-                    console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleOverUnder7Choice`);
-                }
-                break;
-            case 'play_again_ou7':
-                if (typeof handleStartOverUnder7Command === 'function') await handleStartOverUnder7Command(mockMsgForReplay, betAmount);
-                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartOverUnder7Command`);
-                break;
-            case 'play_again_ladder':
-                if (typeof handleStartLadderCommand === 'function') await handleStartLadderCommand(mockMsgForReplay, betAmount);
-                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartLadderCommand`);
-                break;
-            case 's7_roll':
-                if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing gameId for s7_roll.`); return; }
-                if (typeof processSevenOutRoll === 'function') {
-                     await processSevenOutRoll(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, msgContext);
-                } else {
-                    console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: processSevenOutRoll`);
-                }
-                break;
-            case 'play_again_s7':
-                if (typeof handleStartSevenOutCommand === 'function') await handleStartSevenOutCommand(mockMsgForReplay, betAmount);
-                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartSevenOutCommand`);
-                break;
-            case 'play_again_slot':
-                if (typeof handleStartSlotCommand === 'function') await handleStartSlotCommand(mockMsgForReplay, betAmount);
-                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartSlotCommand`);
-                break;
-            case 'jackpot_display_noop':
-                 console.log(`${LOG_PREFIX_ADD_GAME_CB} Jackpot display no-op handled.`);
-                 // Already answered generally
-                 break;
-            default:
-                console.warn(`${LOG_PREFIX_ADD_GAME_CB} Unhandled action in forwardAdditionalGamesCallback: ${action}`);
-        }
-    } catch (e) {
-        console.error(`${LOG_PREFIX_ADD_GAME_CB} Error processing ${action} for param '${gameIdOrBetAmountStr}': ${e.message}`, e.stack);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error processing action.", show_alert: true });
-    }
+        switch (action) {
+            case 'ou7_choice':
+                const choiceOU7 = params[1];
+                if (!gameIdOrBetAmountStr || !choiceOU7) { console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing params for ou7_choice.`); return; }
+                if (typeof handleOverUnder7Choice === 'function') {
+                    // CORRECTED ARGUMENT ORDER HERE:
+                    await handleOverUnder7Choice(gameIdOrBetAmountStr, choiceOU7, userObject, originalMessageId, callbackQueryId, msgContext);
+                } else {
+                    console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleOverUnder7Choice`);
+                }
+                break;
+            case 'play_again_ou7':
+                if (typeof handleStartOverUnder7Command === 'function') await handleStartOverUnder7Command(mockMsgForReplay, betAmount);
+                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartOverUnder7Command`);
+                break;
+            case 'play_again_ladder':
+                if (typeof handleStartLadderCommand === 'function') await handleStartLadderCommand(mockMsgForReplay, betAmount);
+                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartLadderCommand`);
+                break;
+            case 's7_roll':
+                if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing gameId for s7_roll.`); return; }
+                if (typeof processSevenOutRoll === 'function') {
+                     await processSevenOutRoll(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, msgContext);
+                } else {
+                    console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: processSevenOutRoll`);
+                }
+                break;
+            case 'play_again_s7':
+                if (typeof handleStartSevenOutCommand === 'function') await handleStartSevenOutCommand(mockMsgForReplay, betAmount);
+                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartSevenOutCommand`);
+                break;
+            case 'play_again_slot':
+                if (typeof handleStartSlotCommand === 'function') await handleStartSlotCommand(mockMsgForReplay, betAmount);
+                else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartSlotCommand`);
+                break;
+            case 'jackpot_display_noop':
+                 console.log(`${LOG_PREFIX_ADD_GAME_CB} Jackpot display no-op handled.`);
+                 // Already answered generally
+                 break;
+            default:
+                console.warn(`${LOG_PREFIX_ADD_GAME_CB} Unhandled action in forwardAdditionalGamesCallback: ${action}`);
+        }
+    } catch (e) {
+        console.error(`${LOG_PREFIX_ADD_GAME_CB} Error processing ${action} for param '${gameIdOrBetAmountStr}': ${e.message}`, e.stack);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error processing action.", show_alert: true });
+    }
 }
 
 async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj, originalMessageIdInGroupStr, originalChatIdFromGroupStr, originalChatTypeFromGroup, callbackQueryId) {
-    const clickerId = String(clickerUserObj.id || clickerUserObj.telegram_id);
-    const originalMessageIdInGroup = Number(originalMessageIdInGroupStr);
-    const originalChatIdFromGroup = String(originalChatIdFromGroupStr);
+    const clickerId = String(clickerUserObj.id || clickerUserObj.telegram_id);
+    const originalMessageIdInGroup = Number(originalMessageIdInGroupStr);
+    const originalChatIdFromGroup = String(originalChatIdFromGroupStr);
 
-    const logPrefix = `[DirectChallengeResp GID:${offerId} Clicker:${clickerId} Act:${actionName} Chat:${originalChatIdFromGroup}]`;
-    console.log(`${logPrefix} Processing direct challenge response.`);
+    const logPrefix = `[DirectChallengeResp GID:${offerId} Clicker:${clickerId} Act:${actionName} Chat:${originalChatIdFromGroup}]`;
+    console.log(`${logPrefix} Processing direct challenge response.`);
 
-    const offerData = activeGames.get(offerId);
+    const offerData = activeGames.get(offerId);
 
-    if (!offerData) {
-        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge has expired or is no longer valid.", show_alert: true }).catch(() => {});
-        if (originalMessageIdInGroup && bot) {
-            bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: originalMessageIdInGroup }).catch(() => {});
-        }
-        return;
-    }
+    if (!offerData) {
+        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames.`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge has expired or is no longer valid.", show_alert: true }).catch(() => {});
+        if (originalMessageIdInGroup && bot) {
+            bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: originalMessageIdInGroup }).catch(() => {});
+        }
+        return;
+    }
 
-    if (offerData.type !== GAME_IDS.DIRECT_PVP_CHALLENGE || offerData.status !== 'pending_direct_challenge_response') {
-        console.warn(`${logPrefix} Offer ${offerId} is not a pending direct PvP challenge. Status: ${offerData.status}, Type: ${offerData.type}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge is not in a valid state to respond to.", show_alert: true }).catch(() => {});
-        return;
-    }
+    if (offerData.type !== GAME_IDS.DIRECT_PVP_CHALLENGE || offerData.status !== 'pending_direct_challenge_response') {
+        console.warn(`${logPrefix} Offer ${offerId} is not a pending direct PvP challenge. Status: ${offerData.status}, Type: ${offerData.type}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge is not in a valid state to respond to.", show_alert: true }).catch(() => {});
+        return;
+    }
 
-    const initiatorUserObj = offerData.initiatorUserObj; 
-    const targetUserObj = offerData.targetUserObj;   
-    const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObj));
-    const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObj));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
+    const initiatorUserObj = offerData.initiatorUserObj; 
+    const targetUserObj = offerData.targetUserObj;   
+    const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
 
-    if (!initiatorUserObj || !targetUserObj) {
-        console.error(`${logPrefix} Critical: Missing full initiator or target user object in offerData for ${offerId}.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true }).catch(()=>{});
-        activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-         if (bot && offerData.offerMessageIdInGroup) {
-             bot.editMessageText("Error processing challenge: Player details missing from offer.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
-        }
-        return;
-    }
+    if (!initiatorUserObj || !targetUserObj) {
+        console.error(`${logPrefix} Critical: Missing full initiator or target user object in offerData for ${offerId}.`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true }).catch(()=>{});
+        activeGames.delete(offerId);
+        await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+         if (bot && offerData.offerMessageIdInGroup) {
+             bot.editMessageText("Error processing challenge: Player details missing from offer.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
+        }
+        return;
+    }
 
-    switch (actionName) {
-        case 'dca': // direct_challenge_accept
-            if (clickerId !== String(offerData.targetUserId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
-                return;
-            }
+    switch (actionName) {
+        case 'dca': // direct_challenge_accept
+            if (clickerId !== String(offerData.targetUserId)) {
+                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
+                return;
+            }
 
-            await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting challenge from ${initiatorMentionHTML}... Verifying details...` }).catch(() => {});
+            await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting challenge from ${initiatorMentionHTML}... Verifying details...` }).catch(() => {});
 
-            const freshInitiator = await getOrCreateUser(offerData.initiatorId);
-            const freshTarget = await getOrCreateUser(offerData.targetUserId); 
+            const freshInitiator = await getOrCreateUser(offerData.initiatorId);
+            const freshTarget = await getOrCreateUser(offerData.targetUserId); 
 
-            if (!freshInitiator || !freshTarget) {
-                 console.error(`${logPrefix} Failed to fetch fresh user details for balance check on accept.`);
-                 await safeSendMessage(originalChatIdFromGroup, `⚙️ An error occurred fetching player details. Challenge cannot proceed.`, { parse_mode: 'HTML' });
-                 if (bot && offerData.offerMessageIdInGroup) {
-                    bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
-                 }
-                 activeGames.delete(offerId); 
-                 await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-                 return;
-            }
+            if (!freshInitiator || !freshTarget) {
+                 console.error(`${logPrefix} Failed to fetch fresh user details for balance check on accept.`);
+                 await safeSendMessage(originalChatIdFromGroup, `⚙️ An error occurred fetching player details. Challenge cannot proceed.`, { parse_mode: 'HTML' });
+                 if (bot && offerData.offerMessageIdInGroup) {
+                    bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
+                 }
+                 activeGames.delete(offerId); 
+                 await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+                 return;
+            }
 
-            if (BigInt(freshTarget.balance) < offerData.betAmount) {
-                const declineMsgTargetNoFunds = `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the challenge from ${initiatorMentionHTML}. Challenge cancelled.`;
-                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgTargetNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'})});
-                else await safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'});
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-                return;
-            }
-            if (BigInt(freshInitiator.balance) < offerData.betAmount) {
-                const declineMsgInitiatorNoFunds = `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds.`;
-                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgInitiatorNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'})});
-                else await safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'});
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-                return;
-            }
+            if (BigInt(freshTarget.balance) < offerData.betAmount) {
+                const declineMsgTargetNoFunds = `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the challenge from ${initiatorMentionHTML}. Challenge cancelled.`;
+                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgTargetNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'})});
+                else await safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'});
+                activeGames.delete(offerId);
+                await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+                return;
+            }
+            if (BigInt(freshInitiator.balance) < offerData.betAmount) {
+                const declineMsgInitiatorNoFunds = `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds.`;
+                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgInitiatorNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'})});
+                else await safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'});
+                activeGames.delete(offerId);
+                await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+                return;
+            }
 
-            console.log(`${logPrefix} Challenge accepted by ${targetMentionHTML}. Balances OK. Proceeding to deduct bets and start ${offerData.gameToStart}.`);
-            
-            let client = null;
-            let pvpGameSetupData; 
-            try {
-                client = await pool.connect(); 
-                await client.query('BEGIN');
-                
-                const gameNameForLedger = offerData.gameToStart.replace('_PVP','').toLowerCase();
-                const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-offerData.betAmount), 
-                                                                  `bet_placed_${gameNameForLedger}_direct_init`, 
-                                                                  { game_id_custom_field: offerId, opponent_id_custom_field: offerData.targetUserId }, 
-                                                                  `Direct PvP bet vs ${targetMentionHTML} for ${offerData.gameToStart}`);
-                if (!initBetRes.success) throw new Error(`Initiator bet placement failed: ${initBetRes.error}`);
-                freshInitiator.balance = initBetRes.newBalanceLamports; 
-                
-                const targetBetRes = await updateUserBalanceAndLedger(client, offerData.targetUserId, BigInt(-offerData.betAmount), 
-                                                                    `bet_placed_${gameNameForLedger}_direct_join`, 
-                                                                    { game_id_custom_field: offerId, opponent_id_custom_field: offerData.initiatorId }, 
-                                                                    `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
-                if (!targetBetRes.success) throw new Error(`Target player bet placement failed: ${targetBetRes.error}`);
-                freshTarget.balance = targetBetRes.newBalanceLamports; 
-                
-                await client.query('COMMIT');
-                console.log(`${logPrefix} Bets successfully deducted for both players for ${offerData.gameToStart}.`);
+            console.log(`${logPrefix} Challenge accepted by ${targetMentionHTML}. Balances OK. Proceeding to deduct bets and start ${offerData.gameToStart}.`);
+            
+            let client = null;
+            let pvpGameSetupData; 
+            try {
+                client = await pool.connect(); 
+                await client.query('BEGIN');
+                
+                const gameNameForLedger = offerData.gameToStart.replace('_PVP','').toLowerCase();
+                const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-offerData.betAmount), 
+                                                                  `bet_placed_${gameNameForLedger}_direct_init`, 
+                                                                  { game_id_custom_field: offerId, opponent_id_custom_field: offerData.targetUserId }, 
+                                                                  `Direct PvP bet vs ${targetMentionHTML} for ${offerData.gameToStart}`);
+                if (!initBetRes.success) throw new Error(`Initiator bet placement failed: ${initBetRes.error}`);
+                freshInitiator.balance = initBetRes.newBalanceLamports; 
+                
+                const targetBetRes = await updateUserBalanceAndLedger(client, offerData.targetUserId, BigInt(-offerData.betAmount), 
+                                                                    `bet_placed_${gameNameForLedger}_direct_join`, 
+                                                                    { game_id_custom_field: offerId, opponent_id_custom_field: offerData.initiatorId }, 
+                                                                    `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
+                if (!targetBetRes.success) throw new Error(`Target player bet placement failed: ${targetBetRes.error}`);
+                freshTarget.balance = targetBetRes.newBalanceLamports; 
+                
+                await client.query('COMMIT');
+                console.log(`${logPrefix} Bets successfully deducted for both players for ${offerData.gameToStart}.`);
 
-                pvpGameSetupData = {
-                    chatId: offerData.originalGroupId,
-                    chatType: originalChatTypeFromGroup, 
-                    betAmount: offerData.betAmount,
-                    initiatorUserObj: freshInitiator, 
-                    opponentUserObj: freshTarget,   
-                    offerMessageIdInGroup: offerData.offerMessageIdInGroup 
-                };
+                pvpGameSetupData = {
+                    chatId: offerData.originalGroupId,
+                    chatType: originalChatTypeFromGroup, 
+                    betAmount: offerData.betAmount,
+                    initiatorUserObj: freshInitiator, 
+                    opponentUserObj: freshTarget,   
+                    offerMessageIdInGroup: offerData.offerMessageIdInGroup 
+                };
 
-            } catch (e) {
-                if (client) await client.query('ROLLBACK').catch(()=>{});
-                console.error(`${logPrefix} DB error during bet deductions for direct challenge ${offerId}: ${e.message}`);
-                const dbErrorMsg = `⚙️ A database error occurred while processing bets for the challenge between ${initiatorMentionHTML} and ${targetMentionHTML}. The game cannot start. Please try again.`;
-                if (bot && offerData.offerMessageIdInGroup) {
-                    await bot.editMessageText(dbErrorMsg, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'})});
-                } else {
-                    await safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'});
-                }
-                activeGames.delete(offerId); 
-                await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-                return;
-            } finally {
-                if (client) client.release();
-            }
-            
-            activeGames.delete(offerId); 
-            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null); 
+            } catch (e) {
+                if (client) await client.query('ROLLBACK').catch(()=>{});
+                console.error(`${logPrefix} DB error during bet deductions for direct challenge ${offerId}: ${e.message}`);
+                const dbErrorMsg = `⚙️ A database error occurred while processing bets for the challenge between ${initiatorMentionHTML} and ${targetMentionHTML}. The game cannot start. Please try again.`;
+                if (bot && offerData.offerMessageIdInGroup) {
+                    await bot.editMessageText(dbErrorMsg, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'})});
+                } else {
+                    await safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'});
+                }
+                activeGames.delete(offerId); 
+                await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+                return;
+            } finally {
+                if (client) client.release();
+            }
+            
+            activeGames.delete(offerId); 
+            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null); 
 
-            const gameDisplayName = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
-            const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\n\nA <b>${gameDisplayName}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting now...`;
-            if (bot && offerData.offerMessageIdInGroup) { 
-                await bot.editMessageText(acceptedMsgHTML, {
-                    chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup),
-                    parse_mode: 'HTML', reply_markup: {}
-                }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge accepted (will proceed anyway): ${e.message}`));
-            } else { 
-                await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' });
-            }
+            const gameDisplayName = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
+            const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\n\nA <b>${gameDisplayName}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting now...`;
+            if (bot && offerData.offerMessageIdInGroup) { 
+                await bot.editMessageText(acceptedMsgHTML, {
+                    chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup),
+                    parse_mode: 'HTML', reply_markup: {}
+                }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge accepted (will proceed anyway): ${e.message}`));
+            } else { 
+                await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' });
+            }
 
-            // Call the appropriate game starter based on offerData.gameToStart
-            // IMPORTANT: Each game starter needs to be able to handle these parameters.
-            switch (offerData.gameToStart) {
-                case GAME_IDS.DICE_ESCALATOR_PVP:
-                    if (typeof startDiceEscalatorPvPGame_New === 'function') {
-                        // Assuming startDiceEscalatorPvPGame_New is refactored or can handle:
-                        // (initiatorUserObj, opponentUserObj, betAmount, groupChatId, groupChatType, messageIdToDeleteFromOffer)
-                        await startDiceEscalatorPvPGame_New(
-                            pvpGameSetupData.initiatorUserObj, 
-                            pvpGameSetupData.opponentUserObj, 
-                            pvpGameSetupData.betAmount, 
-                            pvpGameSetupData.chatId,
-                            pvpGameSetupData.chatType, 
-                            null // The offer message is already edited to "Accepted", no need for game starter to delete it.
-                        );
-                    } else { 
-                        console.error(`${logPrefix} Missing handler: startDiceEscalatorPvPGame_New`);
-                        await safeSendMessage(originalChatIdFromGroup, "⚙️ Error starting Dice Escalator PvP: Handler missing.", {parse_mode: 'HTML'});
-                    }
-                    break;
-                // case GAME_IDS.COINFLIP_PVP:
-                //     if (typeof startCoinflipPvPGame === 'function') {
-                //         await startCoinflipPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
-                //     } else { console.error... }
-                //     break;
-                // case GAME_IDS.RPS_PVP:
-                //     if (typeof startRPSPvPGame === 'function') {
-                //         await startRPSPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
-                //     } else { console.error... }
-                //     break;
-                // ... Add cases for DICE_21_PVP, DUEL_PVP as you implement them ...
-                default:
-                    console.error(`${logPrefix} Unknown gameTypeForAccept in offerData: ${offerData.gameToStart}. Cannot start game.`);
-                    await safeSendMessage(originalChatIdFromGroup, `⚙️ Error: Cannot start game type "<code>${escapeHTML(offerData.gameToStart)}</code>". Bets were deducted. Admin notified.`, {parse_mode: 'HTML'});
-                    if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`🚨 CRITICAL: Direct Challenge for ${offerData.gameToStart} accepted, bets deducted, but no game starter function found. OfferID: ${offerId}. Players ${offerData.initiatorId} & ${offerData.targetUserId} may need manual game start or refund.`, {parse_mode: 'HTML'});
-                    }
-            }
-            break;
+            // Call the appropriate game starter based on offerData.gameToStart
+            // IMPORTANT: Each game starter needs to be able to handle these parameters.
+            switch (offerData.gameToStart) {
+                case GAME_IDS.DICE_ESCALATOR_PVP:
+                    if (typeof startDiceEscalatorPvPGame_New === 'function') {
+                        // Assuming startDiceEscalatorPvPGame_New is refactored or can handle:
+                        // (initiatorUserObj, opponentUserObj, betAmount, groupChatId, groupChatType, messageIdToDeleteFromOffer)
+                        await startDiceEscalatorPvPGame_New(
+                            pvpGameSetupData.initiatorUserObj, 
+                            pvpGameSetupData.opponentUserObj, 
+                            pvpGameSetupData.betAmount, 
+                            pvpGameSetupData.chatId,
+                            pvpGameSetupData.chatType, 
+                            null // The offer message is already edited to "Accepted", no need for game starter to delete it.
+                        );
+                    } else { 
+                        console.error(`${logPrefix} Missing handler: startDiceEscalatorPvPGame_New`);
+                        await safeSendMessage(originalChatIdFromGroup, "⚙️ Error starting Dice Escalator PvP: Handler missing.", {parse_mode: 'HTML'});
+                    }
+                    break;
+                // case GAME_IDS.COINFLIP_PVP:
+                //     if (typeof startCoinflipPvPGame === 'function') {
+                //         await startCoinflipPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
+                //     } else { console.error... }
+                //     break;
+                // case GAME_IDS.RPS_PVP:
+                //     if (typeof startRPSPvPGame === 'function') {
+                //         await startRPSPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
+                //     } else { console.error... }
+                //     break;
+                // ... Add cases for DICE_21_PVP, DUEL_PVP as you implement them ...
+                default:
+                    console.error(`${logPrefix} Unknown gameTypeForAccept in offerData: ${offerData.gameToStart}. Cannot start game.`);
+                    await safeSendMessage(originalChatIdFromGroup, `⚙️ Error: Cannot start game type "<code>${escapeHTML(offerData.gameToStart)}</code>". Bets were deducted. Admin notified.`, {parse_mode: 'HTML'});
+                    if (typeof notifyAdmin === 'function') {
+                        notifyAdmin(`🚨 CRITICAL: Direct Challenge for ${offerData.gameToStart} accepted, bets deducted, but no game starter function found. OfferID: ${offerId}. Players ${offerData.initiatorId} & ${offerData.targetUserId} may need manual game start or refund.`, {parse_mode: 'HTML'});
+                    }
+            }
+            break;
 
-        case 'dcd': // direct_challenge_decline
-            if (clickerId !== String(offerData.targetUserId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you to decline.", show_alert: true }).catch(() => {});
-                return;
-            }
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." }).catch(() => {});
-            console.log(`${logPrefix} Challenge declined by ${targetMentionHTML}.`);
-            const gameNameForDecline = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
-            const declineMsgHTML = `❌ ${targetMentionHTML} has declined the ${gameNameForDecline} challenge from ${initiatorMentionHTML} for <b>${betDisplayUSD_HTML}</b>.`;
-            if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgHTML, {parse_mode: 'HTML'})});
-            else await safeSendMessage(originalChatIdFromGroup, declineMsgHTML, {parse_mode: 'HTML'});
-            
-            await safeSendMessage(offerData.initiatorId, `${targetMentionHTML} has declined your ${gameNameForDecline} challenge for <b>${betDisplayUSD_HTML}</b> in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
-            
-            activeGames.delete(offerId);
-            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-            break;
+        case 'dcd': // direct_challenge_decline
+            if (clickerId !== String(offerData.targetUserId)) {
+                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you to decline.", show_alert: true }).catch(() => {});
+                return;
+            }
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." }).catch(() => {});
+            console.log(`${logPrefix} Challenge declined by ${targetMentionHTML}.`);
+            const gameNameForDecline = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
+            const declineMsgHTML = `❌ ${targetMentionHTML} has declined the ${gameNameForDecline} challenge from ${initiatorMentionHTML} for <b>${betDisplayUSD_HTML}</b>.`;
+            if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgHTML, {parse_mode: 'HTML'})});
+            else await safeSendMessage(originalChatIdFromGroup, declineMsgHTML, {parse_mode: 'HTML'});
+            
+            await safeSendMessage(offerData.initiatorId, `${targetMentionHTML} has declined your ${gameNameForDecline} challenge for <b>${betDisplayUSD_HTML}</b> in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
+            
+            activeGames.delete(offerId);
+            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+            break;
 
-        case 'cdc': // cancel_initiator_direct_challenge
-            if (clickerId !== String(offerData.initiatorId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can withdraw this challenge.", show_alert: true }).catch(() => {});
-                return;
-            }
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." }).catch(() => {});
-            console.log(`${logPrefix} Challenge withdrawn by initiator ${initiatorMentionHTML}.`);
-            const gameNameForWithdraw = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
-            const withdrawMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${gameNameForWithdraw} challenge to ${targetMentionHTML}.`;
-             if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(withdrawMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, withdrawMsgHTML, {parse_mode: 'HTML'})});
-             else await safeSendMessage(originalChatIdFromGroup, withdrawMsgHTML, {parse_mode: 'HTML'});
-            
-            if (offerData.status === 'pending_direct_challenge_response') { 
-                 await safeSendMessage(offerData.targetUserId, `${initiatorMentionHTML} has withdrawn their ${gameNameForWithdraw} challenge to you in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
-            }
-            
-            activeGames.delete(offerId);
-            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
-            break;
+        case 'cdc': // cancel_initiator_direct_challenge
+            if (clickerId !== String(offerData.initiatorId)) {
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can withdraw this challenge.", show_alert: true }).catch(() => {});
+                return;
+            }
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." }).catch(() => {});
+            console.log(`${logPrefix} Challenge withdrawn by initiator ${initiatorMentionHTML}.`);
+            const gameNameForWithdraw = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
+            const withdrawMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${gameNameForWithdraw} challenge to ${targetMentionHTML}.`;
+             if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(withdrawMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, withdrawMsgHTML, {parse_mode: 'HTML'})});
+             else await safeSendMessage(originalChatIdFromGroup, withdrawMsgHTML, {parse_mode: 'HTML'});
+            
+            if (offerData.status === 'pending_direct_challenge_response') { 
+                 await safeSendMessage(offerData.targetUserId, `${initiatorMentionHTML} has withdrawn their ${gameNameForWithdraw} challenge to you in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
+            }
+            
+            activeGames.delete(offerId);
+            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
+            break;
 
-        default:
-            console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false }).catch(() => {});
-    }
+        default:
+            console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false }).catch(() => {});
+    }
 }
 // --- End of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator & Full Routing for Jackpot Choice + OU7 Fix) ---
 // index.js - Part 6: Main Application Logic (Initialization, Error Handling, Graceful Shutdown)
