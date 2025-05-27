@@ -8485,92 +8485,128 @@ async function handleHelpCommand(msg) {
 }
 
 async function handleRulesCommand(invokedInChatIdStr, userObj, msgIdInInvokedChatStr = null, isEditAttempt = false, invokedChatType = 'private') {
-    const invokedInChatId = String(invokedInChatIdStr);
+    const invokedInChatId = String(invokedInChatIdStr);
     const msgIdInInvokedChat = msgIdInInvokedChatStr ? Number(msgIdInInvokedChatStr) : null;
-    const userIdAsDmChatId = String(userObj.telegram_id);
-    const LOG_PREFIX_RULES = `[RulesCmd UID:${userIdAsDmChatId} InvokedInChat:${invokedInChatId}]`;
-    
-    const userMention = getPlayerDisplayReference(userObj);
-    let botUsername = BOT_NAME || "our bot";
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { console.error(`${LOG_PREFIX_RULES} Could not fetch bot username: ${e.message}`);}
+    const userIdAsDmChatId = String(userObj.telegram_id); // Ensures we're using the string ID for DM
+    const LOG_PREFIX_RULES_V2 = `[RulesCmd_V2 UID:${userIdAsDmChatId} InvokedInChat:${invokedInChatId}]`; // V2 for HTML update
+    
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj)); // Use HTML version
+    let botUsername = BOT_NAME || "our bot";
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) { console.error(`${LOG_PREFIX_RULES_V2} Could not fetch bot username: ${e.message}`);}
 
-    if (invokedChatType !== 'private') {
-      const redirectMsg = `${userMention}, I've sent the Game Rules menu to our private chat: @${escapeMarkdownV2(botUsername)} 📖 Please check your DMs.`;
-        if (isEditAttempt && msgIdInInvokedChat) { 
+    // If command was in group, guide to DM and send the rules menu there.
+    if (invokedChatType !== 'private') {
+        const redirectMsgHTML = `${playerRefHTML}, I've sent the Game Rules menu to our private chat: @${escapeHTML(botUsername)} 📖 Please check your DMs.`;
+        if (isEditAttempt && msgIdInInvokedChat) { 
             try {
-                await bot.editMessageText(redirectMsg, {
+                await bot.editMessageText(redirectMsgHTML, {
                     chat_id: invokedInChatId,
                     message_id: msgIdInInvokedChat,
-                    parse_mode: 'MarkdownV2',
-                    reply_markup: { inline_keyboard: [[{ text: `📬 Open DM @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=show_rules_menu` }]]} // Using a generic start param for DM
+                    parse_mode: 'HTML', // Changed to HTML
+                    reply_markup: { inline_keyboard: [[{ text: `📬 Open DM @${escapeHTML(botUsername)}`, url: `https://t.me/${botUsername}?start=menu_rules_list` }]]} 
                 });
             } catch (e) { 
-                 if (!e.message?.toLowerCase().includes("message is not modified")) {
-                    console.warn(`${LOG_PREFIX_RULES} Failed to edit group msg for rules redirect (ID: ${msgIdInInvokedChat}): ${e.message}. Sending new.`);
-                    await safeSendMessage(invokedInChatId, redirectMsg, { parse_mode: 'MarkdownV2' });
-                 }
+                if (!e.message?.toLowerCase().includes("message is not modified")) {
+                    console.warn(`${LOG_PREFIX_RULES_V2} Failed to edit group msg for rules redirect (ID: ${msgIdInInvokedChat}): ${e.message}. Sending new.`);
+                    await safeSendMessage(invokedInChatId, redirectMsgHTML, { parse_mode: 'HTML' });
+                }
             }
         } else { 
-            if(msgIdInInvokedChat) await bot.deleteMessage(invokedInChatId, msgIdInInvokedChat).catch(()=>{});
-            await safeSendMessage(invokedInChatId, redirectMsg, { parse_mode: 'MarkdownV2' });
+            if(msgIdInInvokedChat) await bot.deleteMessage(invokedInChatId, msgIdInInvokedChat).catch(()=>{}); // Delete original /rules command
+            await safeSendMessage(invokedInChatId, redirectMsgHTML, { parse_mode: 'HTML' });
         }
-    }
+    }
 
-    const rulesIntroText = `📚 **${escapeMarkdownV2(BOT_NAME)} Gamepedia Central** 📚\n\nHey ${userMention}, welcome to our casino's hall of knowledge! Select any game below to learn its rules, strategies, and payout secrets. Master them all! 👇`;
+    // Construct and send/edit the rules menu in DM
+    const rulesIntroTextHTML = `📚 <b>${escapeHTML(BOT_NAME)} Gamepedia Central</b> 📚\n\n` +
+                             `Hey ${playerRefHTML}, welcome to our casino's hall of knowledge! Select any game below to learn its rules, strategies, and payout secrets. 👇`;
+    
     const gameRuleButtons = Object.values(GAME_IDS)
-        .filter(gameCode =>
+        .filter(gameCode => // Filter to show primary game rules, not every single variant if covered by a unified rule
             ![
-                GAME_IDS.DICE_21_PVP, GAME_IDS.DUEL_PVB, GAME_IDS.DUEL_PVP, 
-                GAME_IDS.DICE_ESCALATOR_PVB, GAME_IDS.DICE_ESCALATOR_PVP, GAME_IDS.MINES_OFFER 
-            ].includes(gameCode)
+                GAME_IDS.DICE_21_PVP, // Covered by DICE_21_UNIFIED_OFFER rules
+                GAME_IDS.DUEL_PVB,    // Covered by DUEL_UNIFIED_OFFER rules
+                GAME_IDS.DUEL_PVP,    // Covered by DUEL_UNIFIED_OFFER rules
+                GAME_IDS.DICE_ESCALATOR_PVB, // Covered by DICE_ESCALATOR_UNIFIED_OFFER rules
+                GAME_IDS.DICE_ESCALATOR_PVP, // Covered by DICE_ESCALATOR_UNIFIED_OFFER rules
+                GAME_IDS.COINFLIP_PVB, // Covered by COINFLIP (or COINFLIP_UNIFIED_OFFER) rules
+                GAME_IDS.COINFLIP_PVP, // Covered by COINFLIP (or COINFLIP_UNIFIED_OFFER) rules
+                GAME_IDS.RPS_PVB,      // Covered by RPS (or RPS_UNIFIED_OFFER) rules
+                GAME_IDS.RPS_PVP,      // Covered by RPS (or RPS_UNIFIED_OFFER) rules
+                GAME_IDS.MINES_OFFER  // Actual game is MINES
+            ].includes(gameCode) && 
+            // Only include base or unified offer IDs for the menu
+            (gameCode === GAME_IDS.COINFLIP || gameCode === GAME_IDS.COINFLIP_UNIFIED_OFFER ||
+             gameCode === GAME_IDS.RPS || gameCode === GAME_IDS.RPS_UNIFIED_OFFER ||
+             gameCode === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER ||
+             gameCode === GAME_IDS.DICE_21 || gameCode === GAME_IDS.DICE_21_UNIFIED_OFFER ||
+             gameCode === GAME_IDS.OVER_UNDER_7 ||
+             gameCode === GAME_IDS.DUEL_UNIFIED_OFFER ||
+             gameCode === GAME_IDS.LADDER ||
+             gameCode === GAME_IDS.SEVEN_OUT ||
+             gameCode === GAME_IDS.SLOT_FRENZY ||
+             gameCode === GAME_IDS.MINES 
+            )
         )
         .map(gameCode => {
             let gameName = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
             let ruleCallbackKey = gameCode; 
-            if (gameCode === GAME_IDS.DICE_21_UNIFIED_OFFER) { gameName = "Dice 21 (Blackjack)"; ruleCallbackKey = GAME_IDS.DICE_21_UNIFIED_OFFER; }
-            if (gameCode === GAME_IDS.DUEL_UNIFIED_OFFER) { gameName = "Duel / Highroller"; ruleCallbackKey = GAME_IDS.DUEL_UNIFIED_OFFER; } 
-            if (gameCode === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) { gameName = "Dice Escalator"; ruleCallbackKey = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER; }
-            if (gameCode === GAME_IDS.MINES) { gameName = "Mines"; ruleCallbackKey = GAME_IDS.MINES; }
             let emoji = '❓';
-            switch (ruleCallbackKey) { 
-                case GAME_IDS.COINFLIP: emoji = '🪙'; break; case GAME_IDS.RPS: emoji = '✂️'; break;
-                case GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER: emoji = '🎲'; break; case GAME_IDS.DICE_21_UNIFIED_OFFER: emoji = '🃏'; break; 
-                case GAME_IDS.DUEL_UNIFIED_OFFER: emoji = '⚔️'; break; case GAME_IDS.OVER_UNDER_7: emoji = '🎲'; break;
-                case GAME_IDS.LADDER: emoji = '🪜'; break; case GAME_IDS.SEVEN_OUT: emoji = '🎲'; break;
-                case GAME_IDS.SLOT_FRENZY: emoji = '🎰'; break; case GAME_IDS.MINES: emoji = '💣'; break; 
-            }
-            return { text: `${emoji} ${escapeMarkdownV2(gameName)} Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${ruleCallbackKey}` };
-        }).filter((button, index, self) => index === self.findIndex((b) => b.text === button.text));
-    const rows = [];
-    for (let i = 0; i < gameRuleButtons.length; i += 2) { rows.push(gameRuleButtons.slice(i, i + 2)); }
-    rows.push([{ text: '🏛️ Back to Main Help', callback_data: 'menu:main' }]);
-    rows.push([{ text: '💳 Wallet Dashboard', callback_data: 'menu:wallet' }]);
-    const keyboard = { inline_keyboard: rows };
-    const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true };
 
-    let messageIdToEditInDm = null;
+            // Standardize names and emojis for buttons
+            if (gameCode === GAME_IDS.COINFLIP || gameCode === GAME_IDS.COINFLIP_UNIFIED_OFFER) { gameName = "Coinflip"; emoji = '🪙'; ruleCallbackKey = GAME_IDS.COINFLIP; } // Point to one rule key
+            else if (gameCode === GAME_IDS.RPS || gameCode === GAME_IDS.RPS_UNIFIED_OFFER) { gameName = "Rock Paper Scissors"; emoji = '✂️'; ruleCallbackKey = GAME_IDS.RPS; }
+            else if (gameCode === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) { gameName = "Dice Escalator"; emoji = '🎲'; }
+            else if (gameCode === GAME_IDS.DICE_21 || gameCode === GAME_IDS.DICE_21_UNIFIED_OFFER) { gameName = "Dice 21 (Blackjack)"; emoji = '🃏'; ruleCallbackKey = GAME_IDS.DICE_21; }
+            else if (gameCode === GAME_IDS.OVER_UNDER_7) { gameName = "Over/Under 7"; emoji = '🎲'; }
+            else if (gameCode === GAME_IDS.DUEL_UNIFIED_OFFER) { gameName = "Duel / Highroller"; emoji = '⚔️'; }
+            else if (gameCode === GAME_IDS.LADDER) { gameName = "Greed's Ladder"; emoji = '🪜'; }
+            else if (gameCode === GAME_IDS.SEVEN_OUT) { gameName = "Lucky Sum (Sevens Out)"; emoji = '🎲'; }
+            else if (gameCode === GAME_IDS.SLOT_FRENZY) { gameName = "Slot Frenzy"; emoji = '🎰'; }
+            else if (gameCode === GAME_IDS.MINES) { gameName = "Mines"; emoji = '💣'; }
+            
+            return { text: `${emoji} ${escapeHTML(gameName)}`, callback_data: `${RULES_CALLBACK_PREFIX}${ruleCallbackKey}` };
+        })
+        .filter((button, index, self) => index === self.findIndex((b) => b.callback_data === button.callback_data)); // Ensure unique callback_data for buttons
+
+    const rows = [];
+    for (let i = 0; i < gameRuleButtons.length; i += 2) { // Max 2 buttons per row
+        rows.push(gameRuleButtons.slice(i, i + 2));
+    }
+    rows.push([{ text: '⬅️ Back to Main Menu', callback_data: 'menu:main' }]);
+    
+    const keyboard = { inline_keyboard: rows };
+    const options = { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true }; // Changed to HTML
+
+    // Determine if we are editing an existing message in DM or sending a new one
+    let messageIdToOperateOn = null;
     if (invokedChatType === 'private' && isEditAttempt && msgIdInInvokedChat) {
-        messageIdToEditInDm = msgIdInInvokedChat;
-    }
-    if (invokedChatType === 'private' && !isEditAttempt && msgIdInInvokedChat) { // e.g. /rules typed in DM
+        messageIdToOperateOn = msgIdInInvokedChat;
+    } else if (invokedChatType === 'private' && !isEditAttempt && msgIdInInvokedChat) {
+        // This means /rules was typed in DM, delete user's command and send new menu
         await bot.deleteMessage(userIdAsDmChatId, msgIdInInvokedChat).catch(()=>{});
-        messageIdToEditInDm = null; 
     }
+    // If redirected from group, msgIdInInvokedChat was for the group message, so we send new to DM.
 
-    if (messageIdToEditInDm) {
-        try {
-            await bot.editMessageText(rulesIntroText, { chat_id: userIdAsDmChatId, message_id: messageIdToEditInDm, ...options });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(userIdAsDmChatId, rulesIntroText, options); 
-            }
-        }
-    } else { 
-        await safeSendMessage(userIdAsDmChatId, rulesIntroText, options);
-    }
+    if (messageIdToOperateOn) {
+        try {
+            await bot.editMessageText(rulesIntroTextHTML, { chat_id: userIdAsDmChatId, message_id: messageIdToOperateOn, ...options });
+            console.log(`${LOG_PREFIX_RULES_V2} Rules menu edited successfully on message ${messageIdToOperateOn}.`);
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`${LOG_PREFIX_RULES_V2} Failed to edit rules menu message ${messageIdToOperateOn}, sending new. Error: ${e.message}`);
+                await safeSendMessage(userIdAsDmChatId, rulesIntroTextHTML, options); 
+            } else {
+                console.log(`${LOG_PREFIX_RULES_V2} Rules menu message content was not modified.`);
+            }
+        }
+    } else { 
+        console.log(`${LOG_PREFIX_RULES_V2} Sending new rules menu to DM for user ${userIdAsDmChatId}.`);
+        await safeSendMessage(userIdAsDmChatId, rulesIntroTextHTML, options);
+    }
 }
 
 async function handleGamesOverviewMenu(msg) { // msg here is the actionMsgContext from handleMenuAction
@@ -8633,195 +8669,262 @@ async function handleGamesOverviewMenu(msg) { // msg here is the actionMsgContex
 }
 
 async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageIdStr, gameCode, userObj, originalInvokedChatType = 'private') {
-    const originalInvokedChatId = String(originalInvokedChatIdStr);
+    const originalInvokedChatId = String(originalInvokedChatIdStr);
     const originalMessageId = originalMessageIdStr ? Number(originalMessageIdStr) : null;
     const userIdAsDmChatId = String(userObj.telegram_id);
-    const LOG_PREFIX_RULES_DISP = `[RulesDisplay UID:${userIdAsDmChatId} Game:${gameCode} InvokedInChat:${originalInvokedChatId}]`;
-    
-    const playerRef = getPlayerDisplayReference(userObj);
-    let botUsername = BOT_NAME || "our bot";
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { console.error(`${LOG_PREFIX_RULES_DISP} Could not fetch bot username: ${e.message}`); }
+    const LOG_PREFIX_RULES_DISP = `[RulesDisplay_V2_USDOnly UID:${userIdAsDmChatId} Game:${gameCode} InvokedInChat:${originalInvokedChatId}]`; // V2_USDOnly
 
-    if (originalInvokedChatType !== 'private') {
-        const gameNameDisplayUpper = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
-        const redirectText = `${playerRef}, I've sent the detailed rules for *${escapeMarkdownV2(gameNameDisplayUpper)}* to our private chat: @${escapeMarkdownV2(botUsername)} 📖 Check your DMs!`;
-        
-        if (originalMessageId && originalInvokedChatId !== userIdAsDmChatId) { 
-            try {
-                await bot.editMessageText(redirectText, {
-                    chat_id: originalInvokedChatId, message_id: originalMessageId, parse_mode: 'MarkdownV2',
-                    reply_markup: { inline_keyboard: [[{ text: `📬 Open DM @${escapeMarkdownV2(botUsername)}`, url: `https://t.me/${botUsername}?start=showRules_${gameCode}` }]] }
-                });
-            } catch(e) {
-                 if (!e.message?.toLowerCase().includes("message is not modified")) {
-                     console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit group msg for rule redirect (ID: ${originalMessageId}): ${e.message}. Sending new.`);
-                     await safeSendMessage(originalInvokedChatId, redirectText, { parse_mode: 'MarkdownV2' });
-                 }
-            }
-        } else { 
-             await safeSendMessage(originalInvokedChatId, redirectText, { parse_mode: 'MarkdownV2' });
-        }
-    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    let botUsername = BOT_NAME || "our bot";
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) { console.error(`${LOG_PREFIX_RULES_DISP} Could not fetch bot username: ${e.message}`); }
 
-    // --- Construct the specific rulesText for the gameCode (Copied from your existing function) ---
-    let rulesTitle = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
-    if (gameCode === GAME_IDS.DICE_21_UNIFIED_OFFER) rulesTitle = "Dice 21 (Blackjack)"; 
-    let gameEmoji = '📜';
-    let rulesText = "";
-    let solPrice = 100; try { solPrice = await getSolUsdPrice(); } catch (priceErr) { /* ignore */ }
-    const minBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(convertUSDToLamports(MIN_BET_USD_val, solPrice), solPrice));
-    const maxBetDisplay = escapeMarkdownV2(convertLamportsToUSDString(convertUSDToLamports(MAX_BET_USD_val, solPrice), solPrice));
-    const defaultBetDisplay = minBetDisplay;
-    const generalBettingInfo = `*💰 General Betting Info:*\n` +
-        `▫️ Place bets in USD (e.g., \`5\`, \`10.50\`) or SOL (e.g., \`0.1 sol\`, \`0.05\`).\n`+ 
-        `▫️ Current Limits (USD Equiv.): *${minBetDisplay}* to *${maxBetDisplay}*.\n` + 
-        `▫️ No bet specified? Defaults to *${defaultBetDisplay}* USD approx.\n\n`; 
-    switch (gameCode) {
-        case GAME_IDS.COINFLIP: gameEmoji = '🪙'; rulesTitle = "Coinflip Challenge"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\nHey ${playerRef}!\n\nTwo players, one coin, one winner! Choose Heads or Tails. If the Helper Bot's coin flip matches your call against an opponent, you win the pot (2x your bet).\n\n${generalBettingInfo}*How to Play:*\n1. Use \`/coinflip <bet>\` in a group.\n2. Another player accepts.\n3. The coin is flipped! Good luck!`;
-            break;
-        case GAME_IDS.RPS: gameEmoji = '✂️'; rulesTitle = "Rock Paper Scissors Showdown"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\nHey ${playerRef}!\n\nRock crushes Scissors, Scissors cuts Paper, Paper covers Rock. Outwit your opponent in this classic duel!\n\n${generalBettingInfo}*How to Play:*\n1. Use \`/rps <bet>\` in a group.\n2. An opponent accepts.\n3. Both secretly choose Rock, Paper, or Scissors via DM with me.\n4. The choices are revealed, and the winner takes the pot (2x bet)!`;
-            break;
-        case GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER:
-            gameEmoji = '🎲'; rulesTitle = "Dice Escalator";
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? This is a strategic dice scoring game available in two modes after an initial offer in a group chat:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:*\n` +
-                         ` ▫️ *Player vs. Bot (PvB):* Achieve a higher score than the Bot Dealer. Win the jackpot by achieving a score of *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}* or higher and beating the Bot!\n` + 
-                         ` ▫️ *Player vs. Player (PvP):* Achieve a higher score than your opponent. The player with the highest score wins the pot.\n\n` + 
-                         `*🎮 How to Play (General):*\n` +
-                         ` 1. Start with \`/de <bet>\` in a group to make an offer. You can then choose to play vs. the Bot, or another player can accept your challenge for PvP.\n` + 
-                         ` 2. **Player's Turn (PvB & PvP):** When it's your turn, you will be prompted to roll dice by sending the 🎲 emoji to the chat. The bot will read the value of your dice roll. You can typically roll multiple times to accumulate your score.\n` + 
-                         ` 3. **Busting (Player):** Rolling a *${escapeMarkdownV2(String(DICE_ESCALATOR_BUST_ON))}* means that die scores 0 for that roll (it doesn't necessarily end your turn immediately in all game modes unless stated).\n`+ 
-                         ` 4. **Standing:** When you are satisfied with your score, you can press the "Stand" button.\n\n` + 
-                         `*🤖 Player vs. Bot (PvB) Specifics:*\n` +
-                         ` ▫️ After you stand, the Bot Dealer (via the Helper Bot) will roll exactly **three dice**. The sum of these three dice is the Bot's score.\n` + 
-                         ` ▫️ *PvB Jackpot:* If you win against the Bot AND your score is *${escapeMarkdownV2(String(TARGET_JACKPOT_SCORE))}* or higher, you also win the current Super Jackpot! A portion of each PvB bet contributes (\`${escapeMarkdownV2(String(JACKPOT_CONTRIBUTION_PERCENT * 100))}%\`)!\n` + 
-                        ` ▫️ *Jackpot Run (PvB):* If your score reaches 18 or more, you can choose to "Go for Jackpot". If you do, you can no longer "Stand" and must continue rolling until you hit the Jackpot Target or Bust (roll a ${escapeMarkdownV2(String(DICE_ESCALATOR_BUST_ON))}).\n\n` +
-                         `*⚔️ Player vs. Player (PvP) Specifics:*\n` +
-                         ` ▫️ Player 1 (Initiator) rolls first, accumulating a score and then stands or busts.\n` + 
-                         ` ▫️ Then, Player 2 rolls, trying to beat Player 1's score.\n` + 
-                         ` ▫️ PvP games do not contribute to or win the Super Jackpot.`; 
-            break; 
-        case GAME_IDS.DICE_21_UNIFIED_OFFER: 
-            gameEmoji = '🃏'; rulesTitle = "Dice 21 (Casino Blackjack)"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:* Get your dice sum closer to *${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}* than your opponent (Bot or another Player), without busting (> ${escapeMarkdownV2(String(DICE_21_TARGET_SCORE))}).\n` + 
-                         `*🎮 How to Play (General):*\n` +
-                         ` ▫️ Use \`/d21 <bet>\` in a group chat to create an offer. You can then choose to play vs. the Bot or wait for a PvP challenger.\n` + 
-                         ` ▫️ Players (and Bot in PvB) receive two initial dice via the Helper Bot (player rolls by sending 🎲 emoji when prompted).\n` + 
-                         ` ▫️ "Hit" (send 🎲 emoji) for more dice, or "Stand" to keep your score.\n` + 
-                         `*🤖 Bot Dealer (PvB):* Stands on *${escapeMarkdownV2(String(DICE_21_BOT_STAND_SCORE))}* or more.\n`+ 
-                         `*🏆 Payouts:* Win: 2x bet. Blackjack (target on first 2 dice): 2.5x bet. Push (tie): Bet returned.`; 
-            break;
-        case GAME_IDS.DUEL_UNIFIED_OFFER:
-            gameEmoji = '⚔️'; rulesTitle = "Duel / Highroller"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:* Achieve a higher sum with two dice rolls than your opponent (another Player or the Bot Dealer).\n` + 
-                         `*🎮 How to Play:*\n` +
-                         ` ▫️ Start with \`/duel <bet>\` in a group chat. This creates an offer.\n` + 
-                         ` ▫️ From the offer, you (the initiator) can choose to play against the Bot Dealer (PvB), or another player can accept your challenge for PvP.\n` + 
-                         ` ▫️ **Player's Turn:** When instructed, send two separate 🎲 dice emojis. The Helper Bot determines the value.\n` + 
-                         ` ▫️ **Bot Dealer's Turn (PvB):** After you roll twice, the Bot Dealer also gets two dice from the Helper Bot.\n` + 
-                         ` ▫️ **PvP Turns:** Player 1 rolls twice (2 emojis), then Player 2 rolls twice (2 emojis).\n` + 
-                         `*🏆 Winning:* Highest sum wins 2x bet. Ties are a Push (bet returned).`; 
-            break;
-        case GAME_IDS.OVER_UNDER_7:
-            gameEmoji = '🎲'; rulesTitle = "Over Under 7 Thrills"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:* Predict if *${escapeMarkdownV2(String(OU7_DICE_COUNT))} dice* sum (rolled by Helper Bot) is Over 7, Under 7, or Exactly 7.\n` + 
-                         `*🎮 How to Play:* Use \`/ou7 <bet>\`. Choose your prediction via buttons.\n` + 
-                         `*🏆 Payouts:* Under 7 (2-6) or Over 7 (8-12): *${escapeMarkdownV2(String(OU7_PAYOUT_NORMAL + 1))}x* bet. Exactly 7: *${escapeMarkdownV2(String(OU7_PAYOUT_SEVEN + 1))}x* bet! (Payouts include stake back)`; 
-            break;
-        case GAME_IDS.LADDER:
-            gameEmoji = '🪜'; rulesTitle = "Greed's Ladder Challenge"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:* Get a high sum with *${escapeMarkdownV2(String(LADDER_ROLL_COUNT))} dice* (rolled by Helper Bot). Rolling a *${escapeMarkdownV2(String(LADDER_BUST_ON))}* on ANY die means you bust!\n` + 
-                         `*🎮 How to Play:* Use \`/ladder <bet>\`. All dice rolled at once by the Helper Bot.\n` + 
-                         `*🏆 Payouts (Based on Sum, No Bust - Payouts include stake back):*\n`;
-            LADDER_PAYOUTS.forEach(p => { rulesText += `   ▫️ Sum *${escapeMarkdownV2(String(p.min))}-${escapeMarkdownV2(String(p.max))}*: *${escapeMarkdownV2(String(p.multiplier + 1))}x* bet (${escapeMarkdownV2(p.label)})\n`; }); 
-            break;
-        case GAME_IDS.SEVEN_OUT:
-            gameEmoji = '🎲'; rulesTitle = "Sevens Out (Fast Craps)"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:* Simplified Craps. Win on Come Out (7/11), or roll Point before a 7. Lose on Come Out (2/3/12) or rolling 7 before Point. Uses 2 dice (rolled via animated dice/Helper Bot). \n` + 
-                         `*🎲 Come Out Roll:* Auto-rolled after \`/s7 <bet>\`. Win on 7/11 (2x bet). Lose on 2/3/12. Other sums (4,5,6,8,9,10) become your "Point".\n` + 
-                         `*🎲 Point Phase:* Click "Roll for Point". Win if you roll Point (2x bet). Lose if you roll 7 ("Seven Out").`; 
-            break;
-        case GAME_IDS.SLOT_FRENZY:
-            gameEmoji = '🎰'; rulesTitle = "Slot Fruit Frenzy Spins"; 
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:* Match symbols on Telegram's animated slot machine (value 1-64, provided by Helper Bot).\n` + 
-                         `*🎮 How to Play:* Use \`/slot <bet>\`. Helper Bot determines the slot outcome.\n` + 
-                         `*🏆 Payouts (based on dice value from slot animation - Payouts include stake back):\n`;
-            for (const key in SLOT_PAYOUTS) { if (SLOT_PAYOUTS[key].multiplier >= 1) { rulesText += `   ▫️ ${SLOT_PAYOUTS[key].symbols} (${escapeMarkdownV2(SLOT_PAYOUTS[key].label)}): *${escapeMarkdownV2(String(SLOT_PAYOUTS[key].multiplier + 1))}x* bet (Value: ${key})\n`;}} 
-            rulesText += `   ▫️ Other rolls may result in a loss.`; 
-            break;
-        case GAME_IDS.MINES: 
-            gameEmoji = '💣'; rulesTitle = "Mines Field";
-            rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-            rulesText += `Hey ${playerRef}! Navigate the treacherous *${escapeMarkdownV2(rulesTitle)}* and uncover riches!\n\n`; 
-            rulesText += generalBettingInfo;
-            rulesText += `*🎯 Objective:*\n` +
-                         `Reveal safe tiles (gems 💎) while avoiding hidden mines 💣. The more gems you find before hitting a mine or cashing out, the higher your payout multiplier!\n\n` + 
-                         `*🎮 How to Play:*\n` +
-                         ` 1. Start a game with \`/mines <bet_amount>\`.\n` + 
-                         ` 2. You will then be prompted to select a difficulty (e.g., Easy, Medium, Hard), which determines grid size and number of mines.\n` + 
-                         ` 3. Click on the grid buttons to reveal tiles.\n` + 
-                         ` 4. If you reveal a Mine 💣, the game ends, and you lose your bet.\n` + 
-                         ` 5. If you reveal a Gem 💎, your potential winnings increase!\n` + 
-                         ` 6. You can choose to **"Cash Out"** your current winnings at any point after finding at least one gem.\n\n` + 
-                         `*💰 Payouts:*\n` +
-                         ` ▫️ Payouts increase with each gem found. The specific multiplier depends on the chosen difficulty and gems uncovered.\n` + 
-                         `*⚠️ Warning:*\n` +
-                         ` ▫️ The more gems you try to find, the higher the risk of hitting a mine! Play strategically!`; 
-            break;
-        default:
-            if (!rulesText) { 
-                rulesText = `${gameEmoji} *${escapeMarkdownV2(rulesTitle)} Rules* ${gameEmoji}\n\n`;
-                rulesText += `Hey ${playerRef}! Ready to master *${escapeMarkdownV2(rulesTitle)}*? Here’s the lowdown:\n\n`;
-                rulesText += generalBettingInfo;
-                rulesText += `📜 Rules for *"${escapeMarkdownV2(rulesTitle)}"* are currently being polished. Check back soon!`; 
-            }
-    }
-    rulesText += `\n\nPlay smart, play responsibly, and may the odds be ever in your favor! 🍀`; 
+    const targetDmChatId = userIdAsDmChatId;
+    let messageIdToEditInDm = (originalInvokedChatType === 'private' && originalMessageId) ? originalMessageId : null;
 
-    const keyboard = { inline_keyboard: [[{ text: "📚 Back to Games List", callback_data: "show_rules_menu" }]] };
-    const options = { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true };
+    let generalBettingInfoHTML = "<i>General betting information is currently unavailable.</i>\n\n";
+    try {
+        const solPrice = await getSolUsdPrice(); 
+        const minBetInLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice);
+        const minBetDisplayHTML = escapeHTML(await formatBalanceForDisplay(minBetInLamports, 'USD'));
+        const maxBetDisplayHTML = escapeHTML(`$${MAX_BET_USD_val.toFixed(2)}`); 
+        const defaultBetDisplayHTML = minBetDisplayHTML;
 
-    let messageToEditInDm = null;
-    if (originalInvokedChatType === 'private' && originalMessageId) {
-        messageToEditInDm = originalMessageId;
+        generalBettingInfoHTML = `<b>💰 General Betting Info:</b>\n` +
+            ` • Place bets in USD (e.g., <code>5</code>, <code>10.50</code>).\n` + // MODIFIED LINE HERE
+            ` • Current Bet Limits (USD Equivalent): <b>${minBetDisplayHTML}</b> to <b>${maxBetDisplayHTML}</b>.\n` +
+            ` • If no bet amount is specified when starting a game, it often defaults to the minimum bet (approx. <b>${defaultBetDisplayHTML}</b>).\n\n`;
+    } catch (priceError) {
+        console.error(`${LOG_PREFIX_RULES_DISP} Error fetching SOL price for generalBettingInfoHTML: ${priceError.message}`);
+        generalBettingInfoHTML = "Error loading current bet limit information. Please assume standard casino limits.\n\n";
     }
 
-    if (messageToEditInDm) {
-        try {
-            await bot.editMessageText(rulesText, { chat_id: userIdAsDmChatId, message_id: Number(messageToEditInDm), ...options });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(userIdAsDmChatId, rulesText, options); 
-            }
-        }
-    } else { 
-        await safeSendMessage(userIdAsDmChatId, rulesText, options);
-    }
+    let rulesTitle = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
+    let gameEmoji = '📜';
+    let rulesTextHTML = "";
+
+    switch (gameCode) {
+        case GAME_IDS.COINFLIP: 
+            gameEmoji = '🪙'; rulesTitle = "Coinflip Challenge";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Correctly predict the outcome of a coin flip (Heads or Tails) to win against an opponent or the Bot Dealer.</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/coinflip &lt;bet&gt;</code> in a group chat to make an offer.\n` +
+                `• You can then choose to play against the Bot Dealer, or another player can accept your challenge for a PvP match.\n` +
+                `• A choice (Heads/Tails) is made by the designated caller (you in PvB, or a randomly chosen player in PvP).\n` +
+                `• Our secure system (via the Helper Bot) flips the coin.\n\n` +
+                `<b>Winning:</b>\n` +
+                `• If the call matches the coin flip outcome, the caller (or their side) wins!\n\n` +
+                `<b>Payouts:</b>\n` +
+                `• Winning typically pays 2x your bet (your stake + an equal amount in profit).\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.RPS: 
+            gameEmoji = '✂️'; rulesTitle = "Rock Paper Scissors";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Outsmart your opponent by choosing Rock, Paper, or Scissors. Rock crushes Scissors, Scissors cuts Paper, and Paper covers Rock.</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Initiate with <code>/rps &lt;bet&gt;</code> in a group chat.\n` +
+                `• You can play vs. the Bot or wait for a PvP opponent to accept.\n` +
+                `• In PvP, both players secretly submit their choice (Rock, Paper, or Scissors) via DM with me.\n` +
+                `• In PvB, you make your choice, and the Bot makes its move.\n` +
+                `• Choices are revealed, and the winner is determined!\n\n` +
+                `<b>Winning:</b>\n` +
+                `• Defeat your opponent's choice based on the classic rules.\n\n` +
+                `<b>Payouts:</b>\n` +
+                `• Winner takes the pot (2x your bet in PvP, or 2x bet from Bot in PvB).\n` +
+                `• A draw (both choose the same) results in bets being returned (Push).\n\n`+
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER: 
+            gameEmoji = '🎲'; rulesTitle = "Dice Escalator";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}! Ready for a strategic dice scoring game?\n\n` +
+                `<b>Objective:</b>\n` +
+                `<i>Achieve a higher score by rolling dice than your opponent (Bot Dealer or another Player) without busting.</i>\n\n` +
+                `<b>How to Play (General):</b>\n` +
+                `• Start with <code>/de &lt;bet&gt;</code> in a group chat. You can then choose to play vs. the Bot or await a PvP challenger.\n` +
+                `• When it's your turn, send the 🎲 emoji to roll a die (value from Helper Bot).\n` +
+                `• Accumulate your score over multiple rolls.\n` +
+                `• <b>Busting (Player):</b> Rolling a <b>${escapeHTML(String(DICE_ESCALATOR_BUST_ON))}</b> on any die means that specific die scores 0. In PvP, a bust roll ends your turn. In PvB, it might end your turn or game depending on context.\n` +
+                `• <b>Standing:</b> If satisfied with your score, press the "Stand Firm!" button (PvB/PvP when available).\n\n` +
+                `<b>Player vs. Bot (PvB) Specifics:</b>\n` +
+                `• After you stand, the Bot Dealer rolls exactly three dice; their sum is the Bot's score.\n` +
+                `• If your score is higher, you win 2x your bet.\n` +
+                `• If scores are tied, it's a Push (bet returned).\n` +
+                `• 💎 <b>Jackpot:</b> Win against the Bot with a score of <b>${escapeHTML(String(TARGET_JACKPOT_SCORE))}+</b> to also win the current Super Jackpot! (${escapeHTML(String(JACKPOT_CONTRIBUTION_PERCENT * 100))}% of PvB bets contribute).\n` +
+                `• 🔥 <b>Jackpot Run (PvB):</b> If your score reaches 18+, you can "Go for Jackpot!" You must then keep rolling (no standing) until you hit ${escapeHTML(String(TARGET_JACKPOT_SCORE))}+ or bust.\n\n` +
+                `<b>Player vs. Player (PvP) Specifics:</b>\n` +
+                `• Player 1 rolls, then stands or busts. Player 2 then rolls to beat P1's score.\n` +
+                `• Highest score wins the pot (2x their bet). Ties are a Push.\n` +
+                `• PvP does not involve the Super Jackpot.\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.DICE_21: 
+            gameEmoji = '🃏'; rulesTitle = "Dice 21 (Blackjack)";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Get your dice sum closer to <b>${escapeHTML(String(DICE_21_TARGET_SCORE))}</b> than your opponent (Bot or Player) without going over (busting).</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/d21 &lt;bet&gt;</code> in a group. Choose to play vs. Bot or await a PvP challenger.\n` +
+                `• Players receive two initial dice (you send 🎲 emoji when prompted for each).\n` +
+                `• <b>Hit:</b> Send another 🎲 emoji to get an additional die.\n` +
+                `• <b>Stand:</b> Click "Stand" to keep your current score and end your turn.\n` +
+                `• <b>Bust:</b> If your score exceeds ${escapeHTML(String(DICE_21_TARGET_SCORE))}, you bust and lose.\n\n` +
+                `<b>Bot Dealer (PvB):</b>\n` +
+                `• The Bot Dealer will typically stand on a score of <b>${escapeHTML(String(DICE_21_BOT_STAND_SCORE))}</b> or more.\n\n` +
+                `<b>Payouts:</b>\n` +
+                `• Win (higher score than opponent, no bust): 2x bet (stake + profit).\n` +
+                `• Blackjack (score of ${escapeHTML(String(DICE_21_TARGET_SCORE))} on your first two dice): Typically pays 2.5x bet.\n` +
+                `• Push (tie with opponent, no bust): Bet returned.\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.OVER_UNDER_7:
+            gameEmoji = '🎲'; rulesTitle = "Over/Under 7";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Predict if the sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b> (rolled by the Helper Bot) will be Over 7, Under 7, or Exactly 7.</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/ou7 &lt;bet&gt;</code>.\n` +
+                `• Choose your prediction: Under 7 (sums 2-6), Exactly 7, or Over 7 (sums 8-12) using the buttons.\n\n` +
+                `<b>Payouts (Total Return, includes your stake):</b>\n` +
+                `• Under 7 or Over 7: <b>${escapeHTML(String(OU7_PAYOUT_NORMAL + 1))}x</b> your bet.\n` +
+                `• Exactly 7: A whopping <b>${escapeHTML(String(OU7_PAYOUT_SEVEN + 1))}x</b> your bet!\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.DUEL_UNIFIED_OFFER: 
+            gameEmoji = '⚔️'; rulesTitle = "Duel / Highroller";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Achieve a higher sum with <b>${escapeHTML(String(DUEL_DICE_COUNT))} dice</b> rolls than your opponent (another Player or the Bot Dealer).</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/duel &lt;bet&gt;</code> in a group chat to make an offer.\n` +
+                `• You can then play vs. Bot, or another player can accept for PvP.\n` +
+                `• <b>Your Turn:</b> When prompted, send 🎲 emoji for each of your ${escapeHTML(String(DUEL_DICE_COUNT))} dice.\n` +
+                `• <b>Bot's Turn (PvB):</b> After your rolls, the Bot Dealer gets ${escapeHTML(String(DUEL_DICE_COUNT))} dice.\n` +
+                `• <b>PvP:</b> Player 1 rolls ${escapeHTML(String(DUEL_DICE_COUNT))} dice, then Player 2 rolls ${escapeHTML(String(DUEL_DICE_COUNT))} dice.\n\n` +
+                `<b>Winning:</b>\n` +
+                `• The player with the highest sum from their ${escapeHTML(String(DUEL_DICE_COUNT))} dice wins.\n\n` +
+                `<b>Payouts:</b>\n` +
+                `• Winner receives 2x their bet (stake + profit).\n` +
+                `• Ties are a Push (bet returned).\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.LADDER:
+            gameEmoji = '🪜'; rulesTitle = "Greed's Ladder";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Climb the ladder by achieving a high sum with <b>${escapeHTML(String(LADDER_ROLL_COUNT))} dice</b> (rolled by Helper Bot). But beware the bust!</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/ladder &lt;bet&gt;</code>. All dice are rolled at once by the Helper Bot.\n` +
+                `• <b>Busting:</b> Rolling a <b>${escapeHTML(String(LADDER_BUST_ON))}</b> on ANY of the ${escapeHTML(String(LADDER_ROLL_COUNT))} dice means you bust and lose your wager immediately!\n\n` +
+                `<b>Payouts (Based on Total Sum if NO Bust - Payouts are total return including stake):</b>\n`;
+            LADDER_PAYOUTS.forEach(p => {
+                rulesTextHTML += ` • Sum <b>${escapeHTML(String(p.min))}-${escapeHTML(String(p.max))}</b>: <b>${escapeHTML(String(p.multiplier + 1))}x</b> bet <i>(${escapeHTML(p.label)})</i>\n`;
+            });
+            rulesTextHTML += `\n` + generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.SEVEN_OUT: 
+            gameEmoji = '🎲'; rulesTitle = "Lucky Sum (Fast Sevens)";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Roll two dice. Certain sums win, others lose instantly! It's a quick thrill.</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/s7 &lt;bet&gt;</code> (or <code>/sevenout</code>, <code>/craps</code>).\n` +
+                `• Two dice are rolled for you by the casino (via animated dice).\n\n` +
+                `<b>Outcomes & Payouts (Total Return, includes your stake):</b>\n`;
+            for (const sumKey in LUCKY_SUM_PAYOUTS) { // Assuming LUCKY_SUM_PAYOUTS is defined
+                const payoutInfo = LUCKY_SUM_PAYOUTS[sumKey];
+                rulesTextHTML += ` • Roll a sum of <b>${escapeHTML(sumKey)}</b> (${escapeHTML(payoutInfo.label)}): <b>${escapeHTML(String(payoutInfo.multiplier + 1))}x</b> bet\n`;
+            }
+            // Assuming LUCKY_SUM_LOSING_NUMBERS is defined
+            rulesTextHTML += ` • Rolling a sum of <b>${LUCKY_SUM_LOSING_NUMBERS.map(n => escapeHTML(String(n))).join(', ')}</b> results in a loss.\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        case GAME_IDS.SLOT_FRENZY:
+            gameEmoji = '🎰'; rulesTitle = "Slot Frenzy";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}!\n\n` +
+                `<b>Objective:</b>\n<i>Spin the reels and match symbols for big wins! The outcome is determined by a single value (1-64) from our Helper Bot, mapped to slot combinations.</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/slot &lt;bet&gt;</code>.\n` +
+                `• The Helper Bot provides a spin value, and your win is determined by the payout table.\n\n` +
+                `<b>Payouts (Based on current configuration; total return including stake):</b>\n`;
+            for (const key in SLOT_PAYOUTS) { // Assumes SLOT_PAYOUTS is defined
+                if (SLOT_PAYOUTS[key].multiplier >= 0) { 
+                    rulesTextHTML += ` • ${escapeHTML(SLOT_PAYOUTS[key].symbols)} (${escapeHTML(SLOT_PAYOUTS[key].label)}): <b>${escapeHTML(String(SLOT_PAYOUTS[key].multiplier + 1))}x</b> bet\n`;
+                }
+            }
+            rulesTextHTML += ` • Other combinations result in a loss.\n\n` +
+                generalBettingInfoHTML;
+            break;
+            
+        case GAME_IDS.MINES:
+            gameEmoji = '💣'; rulesTitle = "Mines Field Sweeper";
+            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+                `Hey ${playerRefHTML}! Navigate the treacherous Mines Field and uncover hidden gems!\n\n`+
+                `<b>Objective:</b>\n<i>Reveal safe tiles (gems 💎) while avoiding hidden mines 💣. Each gem found increases your potential payout multiplier. Cash out at any time after finding at least one gem, or try to find all gems for the max prize!</i>\n\n` +
+                `<b>How to Play:</b>\n` +
+                `• Start with <code>/mines &lt;bet&gt;</code> in a group chat.\n` +
+                `• You'll be prompted to select a difficulty (e.g., Easy, Medium, Hard), which sets the grid size and number of mines.\n` +
+                `• Click on the grid buttons to reveal tiles.\n` +
+                `• If you reveal a Mine 💣, the game ends, and your bet is lost.\n` +
+                `• If you reveal a Gem 💎, your potential winnings increase based on the multiplier for that number of gems at your chosen difficulty.\n` +
+                `• You can <b>"Cash Out"</b> your current winnings at any point after finding at least one gem by clicking the button.\n\n` +
+                `<b>Payouts:</b>\n` +
+                `• Multipliers increase with each gem found and vary by difficulty. Check the game screen for current multiplier and potential payout.\n` +
+                `• Max Payout: Find all gems without hitting a mine!\n\n` +
+                `<b>Example Difficulty (Easy - ${escapeHTML(MINES_DIFFICULTY_CONFIG.easy.rows + "x" + MINES_DIFFICULTY_CONFIG.easy.cols)}, ${escapeHTML(String(MINES_DIFFICULTY_CONFIG.easy.mines))} Mines):</b>\n`+
+                ` • 1 Gem: x${escapeHTML(MINES_DIFFICULTY_CONFIG.easy.multipliers[1].toFixed(2))}\n` +
+                ` • 5 Gems: x${escapeHTML(MINES_DIFFICULTY_CONFIG.easy.multipliers[5].toFixed(2))}\n` +
+                ` • 10 Gems: x${escapeHTML(MINES_DIFFICULTY_CONFIG.easy.multipliers[10].toFixed(2))}\n` +
+                `   (...multipliers continue to increase...)\n\n` +
+                `<b>Warning:</b> The more gems you uncover, the higher the risk! Play strategically!\n\n` +
+                generalBettingInfoHTML;
+            break;
+
+        default:
+            if (!rulesTextHTML) { 
+                rulesTitle = "Unknown Game";
+                rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} Rules</b> ${emoji}\n\n` +
+                                `Hey ${playerRefHTML}!\n\n` +
+                                `📜 Rules for "<code>${escapeHTML(gameCode)}</code>" are currently under construction or this is not a primary game entry.\n` +
+                                `Please select a game from the main rules list.`;
+            }
+    }
+    rulesTextHTML += `\n\nPlay smart, play responsibly, and may fortune favor your spin! 🍀`; 
+
+    const keyboard = { inline_keyboard: [[{ text: "📚 Back to Rules List", callback_data: "menu:rules_list" }]] }; 
+    const options = { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true };
+
+    if (messageIdToEditInDm) {
+        try {
+            await bot.editMessageText(rulesTextHTML, { chat_id: userIdAsDmChatId, message_id: Number(messageIdToEditInDm), ...options });
+            console.log(`${LOG_PREFIX_RULES_DISP} Rules for ${gameCode} edited successfully on message ${messageIdToEditInDm}.`);
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`${LOG_PREFIX_RULES_DISP} Failed to edit rules message ${messageIdToEditInDm} for ${gameCode}, sending new. Error: ${e.message}`);
+                await safeSendMessage(userIdAsDmChatId, rulesTextHTML, options); 
+            } else {
+                console.log(`${LOG_PREFIX_RULES_DISP} Rules message content for ${gameCode} was not modified.`);
+            }
+        }
+    } else { 
+        console.log(`${LOG_PREFIX_RULES_DISP} Sending new rules message to DM for ${gameCode} for user ${userIdAsDmChatId}.`);
+        await safeSendMessage(userIdAsDmChatId, rulesTextHTML, options);
+    }
 }
 
 // --- Other command handlers from Part 5a, Section 2 (handleStartMinesCommand, handleBalanceCommand, etc.) ---
