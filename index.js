@@ -3838,21 +3838,21 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
 
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (HTML Revamp) ---
 async function startDiceEscalatorPvPGame_New(
-    initiatorUserObj, // User object for the initiator (balance already updated)
-    opponentUserObj,  // User object for the opponent (balance already updated)
+    initiatorUserObj, // User object for the initiator (balance assumed to be already updated by caller)
+    opponentUserObj,  // User object for the opponent (balance assumed to be already updated by caller)
     betAmountLamports,
-    groupChatId,      // String: ID of the group chat
+    groupChatId,      // String: ID of the group chat where the game will be played
     groupChatType,    // String: Type of the group chat (e.g., 'group', 'supergroup')
-    messageIdToDeleteAfterAccept = null // Optional: ID of the "Challenge Accepted!" message in the group
+    messageIdToDeleteAfterAccept = null // Optional: ID of a previous message (e.g., "Challenge Accepted!") to delete
 ) {
     const logPrefix = `[DE_PvP_Start_V2 UID1:${initiatorUserObj.telegram_id} UID2:${opponentUserObj.telegram_id} CH:${groupChatId}]`;
-    console.log(`${logPrefix} Starting new DE PvP game. Bet: ${betAmountLamports}. ChatType: ${groupChatType}. Initial message to potentially delete: ${messageIdToDeleteAfterAccept}`);
+    console.log(`${logPrefix} Starting new DE PvP game. Bet: ${betAmountLamports}. ChatType: ${groupChatType}. Message to delete (optional): ${messageIdToDeleteAfterAccept}`);
 
-    // 1. Optional: Delete the "Challenge Accepted!" message if its ID was passed
-    //    (The game will post its own initial board message)
+    // 1. Optional: Delete the "Challenge Accepted!" message if its ID was passed,
+    //    as the game will now post its own initial board message.
     if (messageIdToDeleteAfterAccept && bot) {
         await bot.deleteMessage(groupChatId, Number(messageIdToDeleteAfterAccept))
-            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete previous 'Accepted' message ${messageIdToDeleteAfterAccept}: ${e.message}`));
+            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete previous message ${messageIdToDeleteAfterAccept}: ${e.message}`));
     }
 
     // 2. Generate new PvP Game ID for this specific game instance
@@ -3860,19 +3860,23 @@ async function startDiceEscalatorPvPGame_New(
     console.log(`${logPrefix} Generated new PvP Game ID: ${pvpGameId}`);
     
     // 3. Prepare player data for the game state using the passed-in user objects
-    //    getPlayerDisplayReference should return plain text or text that escapeHTML can handle.
+    //    getPlayerDisplayReference should return plain text or text that escapeHTML can handle if not already HTML safe.
+    //    For consistency, ensure the displayName stored is what updateDiceEscalatorPvPMessage_New expects (likely HTML-escaped).
+    const initiatorPlayerDisplayName = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const opponentPlayerDisplayName = escapeHTML(getPlayerDisplayReference(opponentUserObj));
+    
     const initiatorPlayerData = { 
         userId: String(initiatorUserObj.telegram_id), 
-        displayName: getPlayerDisplayReference(initiatorUserObj),
-        userObj: initiatorUserObj, // Keep the full object if needed by other functions
+        displayName: initiatorPlayerDisplayName,
+        userObj: initiatorUserObj, // Store the full object if other functions need more than just ID/display name
         score: 0, rolls: [], 
         isTurn: true, // Typically, initiator (Player 1) starts
         busted: false, stood: false, 
-        status: 'awaiting_roll_emoji' 
+        status: 'awaiting_roll_emoji' // Player needs to send dice emoji
     };
     const opponentPlayerData = { 
         userId: String(opponentUserObj.telegram_id), 
-        displayName: getPlayerDisplayReference(opponentUserObj),
+        displayName: opponentPlayerDisplayName,
         userObj: opponentUserObj,
         score: 0, rolls: [], 
         isTurn: false, 
@@ -3885,33 +3889,36 @@ async function startDiceEscalatorPvPGame_New(
         type: GAME_IDS.DICE_ESCALATOR_PVP, 
         chatId: String(groupChatId), 
         chatType: groupChatType,
-        // Store players in a way that `updateDiceEscalatorPvPMessage_New` expects
-        // (It expects gameData.initiator and gameData.opponent)
+        // The updateDiceEscalatorPvPMessage_New function expects gameData.initiator and gameData.opponent
         initiator: initiatorPlayerData, // Player 1
         opponent: opponentPlayerData,   // Player 2
         betAmount: betAmountLamports, 
         status: 'p1_awaiting_roll_emoji', // Game status reflects initiator's (P1) turn
-        currentMessageId: null, // For the new game board message
+        currentMessageId: null, // For the new game board message that will be sent
         createdAt: Date.now(), 
-        lastRollValue: null,
+        lastRollValue: null, // To store the value of the most recent dice roll
     };
     activeGames.set(pvpGameId, gameData);
-    console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} New DE PvP game object (${pvpGameId}) created and stored in activeGames. Status: '${gameData.status}'`);
+    console.log(`${logPrefix} New DE PvP game object (${pvpGameId}) created and stored in activeGames. Initial Game Status: '${gameData.status}', P1 turn: ${gameData.initiator.isTurn}`);
 
     // Update the group game session to reflect this new active PvP game
     await updateGroupGameDetails(groupChatId, pvpGameId, GAME_IDS.DICE_ESCALATOR_PVP, betAmountLamports);
-    console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Group game details updated for chat ${groupChatId} to DE PvP game ${pvpGameId}.`);
+    console.log(`${logPrefix} Group game details updated for chat ${groupChatId} to DE PvP game ${pvpGameId}.`);
     
     // 4. Call the function to send/update the initial game board message
-    //    updateDiceEscalatorPvPMessage_New is designed to handle sending the game UI
+    //    updateDiceEscalatorPvPMessage_New is designed to handle sending/editing the game UI
     if (typeof updateDiceEscalatorPvPMessage_New === 'function') {
         await updateDiceEscalatorPvPMessage_New(gameData); 
-        console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Initial DE PvP game message/board sent/updated for GID: ${pvpGameId}.`);
+        console.log(`${logPrefix} Initial DE PvP game message/board potentially sent/updated for GID: ${pvpGameId}.`);
     } else {
         console.error(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} CRITICAL ERROR: updateDiceEscalatorPvPMessage_New function is not defined! Cannot display game board for ${pvpGameId}.`);
-        // Consider how to handle this - maybe send a simple text message
         await safeSendMessage(groupChatId, "⚙️ Critical error: Could not display the game board. Please contact support.", {parse_mode: 'HTML'});
+        // If game board can't be displayed, this game instance is problematic.
+        // Depending on desired behavior, might want to clean up activeGames and groupGameSessions here
+        // or attempt to refund if bets were confirmed to be taken by a higher level function that proves problematic.
+        // For now, assuming if this function is called, bets WERE successfully handled by the caller.
     }
+    console.log(`${logPrefix} Dice Escalator PvP game ${pvpGameId} setup process complete.`);
 }
 
 async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userIdWhoRolled) {
