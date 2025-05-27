@@ -10030,16 +10030,22 @@ bot.on('message', async (msg) => {
                     break;
                 case 'de': 
             case 'diceescalator':
+                // --- ADDED: Block game initiation in private chat ---
+                if (chatType === 'private') {
+                    const playerRefForDMBlock_DE = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
+                    await safeSendMessage(chatId, `🎲 Greetings, ${playerRefForDMBlock_DE}!<br><br>The Dice Escalator game, including direct challenges, must be initiated in a <b>group chat</b>.<br>Please use <code>/de &lt;bet&gt; [@username]</code> there to start the action!`, { parse_mode: 'HTML' });
+                    break; // Important: Exit this case block
+                }
+                // --- END OF ADDED BLOCK ---
+
                 if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
                     let betArg = null;
                     let targetUsernameRaw = null;
 
-                    // Try to intelligently parse bet and @username regardless of order
-                    // Assumes bet is unlikely to start with '@' and username always does.
+                    // Argument parsing logic (as previously discussed)
                     if (commandArgs.length === 1) {
                         if (commandArgs[0].startsWith('@')) {
                             targetUsernameRaw = commandArgs[0];
-                            // betArg remains null, parseBetAmount will use default
                         } else {
                             betArg = commandArgs[0];
                         }
@@ -10051,39 +10057,33 @@ bot.on('message', async (msg) => {
                             targetUsernameRaw = commandArgs[1];
                             betArg = commandArgs[0];
                         } else {
-                            // Neither is a username, assume first is bet, ignore others for now
-                            // or handle as an error if a specific format like /de <bet> @user is required
                             betArg = commandArgs[0];
-                             // console.log(`[DE Route] Multiple args but no @username found, using first as bet: ${betArg}`);
                         }
                     }
-                    // If no betArg is found after parsing (e.g., only @username was provided),
-                    // parseBetAmount will handle it by using the default minimum bet.
-
+                    
                     const betDE = await parseBetAmount(betArg, chatId, chatType, userId);
 
                     if (betDE && typeof betDE === 'bigint' && betDE > 0n) {
                         let targetUserObject = null;
                         if (targetUsernameRaw) {
-                            console.log(`[DE Route] Attempting to find target user for challenge: ${targetUsernameRaw}`);
-                            targetUserObject = await findRecipientUser(targetUsernameRaw); // findRecipientUser handles the '@' prefix
+                            // console.log(`[DE Route] Attempting to find target user for challenge: ${targetUsernameRaw}`); // Log from previous version
+                            targetUserObject = await findRecipientUser(targetUsernameRaw); 
 
                             if (!targetUserObject) {
                                 await safeSendMessage(chatId, `😕 User ${escapeHTML(targetUsernameRaw)} not found. They might need to interact with me first. Challenge cancelled.`, { parse_mode: 'HTML' });
-                                break; // Exit this case, effectively cancelling the command
+                                break; 
                             }
                             if (String(targetUserObject.telegram_id) === String(userId)) {
-                                const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from)); // userForCommandProcessing from outer scope
+                                const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
                                 await safeSendMessage(chatId, `😅 You can't challenge yourself to a Dice Escalator duel, ${initiatorRefHTML}!`, { parse_mode: 'HTML' });
-                                break; // Exit this case
+                                break; 
                             }
-                             console.log(`[DE Route] Target user found: ${targetUserObject.username || targetUserObject.telegram_id}. Initiator: ${userId}`);
+                            // console.log(`[DE Route] Target user found: ${targetUserObject.username || targetUserObject.telegram_id}. Initiator: ${userId}`); // Log from previous version
                         }
                         
-                        // Call the handler, passing targetUserObject (which will be null if no @username was found/valid)
                         await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetUserObject);
                     }
-                    // If parseBetAmount returned invalid/null, it should have sent its own message.
+                    // parseBetAmount handles its own error messaging if betDE is invalid
                 } else {
                     console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`);
                     await safeSendMessage(chatId, "⚙️ The Dice Escalator game is temporarily unavailable. Please try again later.", { parse_mode: 'HTML' });
@@ -10142,14 +10142,19 @@ bot.on('message', async (msg) => {
 
                     case 'direct_challenge_accept':
             case 'direct_challenge_decline':
-            // Note: 'de_cancel_direct_challenge' is specific to Dice Escalator for now.
-            // If we make a truly generic cancel, it might also go here.
-            // For now, let's assume 'de_cancel_direct_challenge' will also be handled by handleDirectChallengeResponse or a similar specific handler.
-                console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}`);
+            // Using 'cancel_direct_challenge' as a standardized action name for the handler.
+            // The button 'de_cancel_direct_challenge' will map to this.
+            case 'de_cancel_direct_challenge': 
+                console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
                 if (typeof handleDirectChallengeResponse === 'function') {
                     const offerIdFromParams = params[0];
+                    let effectiveAction = action;
+                    if (action === 'de_cancel_direct_challenge') {
+                        effectiveAction = 'cancel_direct_challenge'; // Map specific cancel to generic action name
+                    }
+
                     await handleDirectChallengeResponse(
-                        action, // 'direct_challenge_accept' or 'direct_challenge_decline'
+                        effectiveAction, 
                         offerIdFromParams,
                         userObjectForCallback, // This is the user who clicked the button
                         originalMessageId,     // ID of the message in the group chat with the buttons
@@ -10159,44 +10164,30 @@ bot.on('message', async (msg) => {
                     );
                 } else {
                     console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: Action handler is missing.", show_alert: true}).catch(()=>{});
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This action is currently unavailable.", show_alert: true}).catch(()=>{});
                 }
                 break;
-
-            case 'de_cancel_direct_challenge': // Initiator cancels their direct DE challenge
-                 console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse (as cancel) for action: ${action}`);
-                 if (typeof handleDirectChallengeResponse === 'function') {
-                    const offerIdForCancel = params[0];
-                    // We pass 'cancel_direct_challenge' as the effective action to the handler
-                    await handleDirectChallengeResponse( 
-                        'cancel_direct_challenge', // Unified action name for cancellation by initiator
-                        offerIdForCancel,
-                        userObjectForCallback,
-                        originalMessageId,
-                        originalChatId,
-                        originalChatType,
-                        callbackQueryId
-                    );
-                 } else {
-                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: Action handler is missing.", show_alert: true}).catch(()=>{});
-                 }
-                break;
             // --- END OF NEW CASES FOR DIRECT PvP CHALLENGES ---
-
-            // Make sure this is after the specific 'de_cancel_direct_challenge' if it was grouped with other DE callbacks before
+            
+            // Ensure your existing Dice Escalator unified offer callbacks are distinct
+            // and come AFTER the new direct challenge cases if there's any overlap in prefixes,
+            // or ensure their callback_data strings are unique.
+            // The 'de_cancel_unified_offer' is different from 'de_cancel_direct_challenge'.
             case 'de_accept_bot_game':
             case 'de_accept_pvp_challenge': // This is for general unified DE offers
-            case 'de_cancel_unified_offer': // This is for general unified DE offers
+            case 'de_cancel_unified_offer': 
             case 'de_stand_pvb':
             case 'de_stand_pvp':
             case 'play_again_de_pvb':
             case 'play_again_de_pvp':
             case 'de_pvb_go_for_jackpot':
-                // This still routes to your existing Dice Escalator forwarder
+                console.log(`${LOG_PREFIX_CBQ} Routing to forwardDiceEscalatorCallback_New for action: ${action}`);
                 if (typeof forwardDiceEscalatorCallback_New === 'function') {
                     await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                } else { /* error */ }
+                } else { 
+                    console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for DE action: ${action}`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This Dice Escalator action is currently unavailable.", show_alert: true}).catch(()=>{});
+                }
                 break;
             }
         } catch (commandError) {
