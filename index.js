@@ -3323,87 +3323,143 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
     await startDiceEscalatorPvBGame_New({ id: originalChatId, type: originalChatType }, initiatorObjFull, offerData.betAmount, offerData.offerMessageId, false);
 }
 
-async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, userWhoClicked, originalMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
-    const LOG_PREFIX_DE_ACCEPT_PVP_DEBUG = `[DE_AcceptPvP_Debug UID:${userWhoClicked.telegram_id} Offer:${offerId}]`;
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Entered function. CBQ ID: ${callbackQueryIdPassed}`);
+async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjFull, originalMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
+    const joinerId = String(joinerUserObjFull.id || joinerUserObjFull.telegram_id);
+    const LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED = `[DE_AcceptUnifiedPvP_V2 Offer:${offerId} Joiner:${joinerId}]`; // V2 for new flow
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} Entered. CallbackQueryID: ${callbackQueryIdPassed}`);
 
-    const offerData = activeGames.get(offerId);
-    const callbackQueryId = callbackQueryIdPassed; // Use the passed ID consistently
+    const offerData = activeGames.get(offerId);
+    const callbackQueryId = callbackQueryIdPassed;
 
-    if (!offerData) {
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} No offerData found for offerId: ${offerId}.`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer seems to have vanished!", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (no offerData): ${e.message}`));
-        return;
-    }
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} OfferData found. Type: ${offerData.type}, Status: ${offerData.status}`);
+    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has expired or is invalid!", show_alert: true }).catch(()=>{});
+        if (originalMessageId && bot) { // Clean up buttons from potentially stale message
+            bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(originalMessageId) }).catch(() => {});
+        }
+        return;
+    }
 
-    if (offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Offer type is not DICE_ESCALATOR_UNIFIED_OFFER. Type: ${offerData.type}`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Offer type mismatch. Please try again.", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (type mismatch): ${e.message}`));
-        return;
-    }
-    if (offerData.status !== 'pending_offer') {
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Offer status is not 'pending_offer'. Status: ${offerData.status}`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This offer is no longer available or has expired.", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (status not pending): ${e.message}`));
-        return;
-    }
-    if (offerData.initiator.userId === userWhoClicked.telegram_id) {
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initiator tried to accept their own PvP challenge.`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "You can't accept your own challenge!", show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (self-accept): ${e.message}`));
-        return;
-    }
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initial offer validations passed. Fetching opponent details.`);
+    if (offerData.initiator.userId === joinerId) {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "You can't accept your own Dice Escalator challenge!", show_alert: true }).catch(()=>{});
+        return;
+    }
 
-    const opponentUserObjFull = await getOrCreateUser(userWhoClicked.telegram_id, userWhoClicked.username, userWhoClicked.first_name);
-    if(!opponentUserObjFull){
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Failed to get/create opponentUserObjFull for ID: ${userWhoClicked.telegram_id}`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Error fetching your player profile. Try /start.", show_alert:true}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (no opponent obj): ${e.message}`));
-        return;
-    }
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Opponent details fetched. Balance: ${opponentUserObjFull.balance}`);
-    
-    const opponentBalance = BigInt(opponentUserObjFull.balance);
-    if (opponentBalance < offerData.betAmount) {
-        const neededDisplay = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD')); // Corrected: show offerData.betAmount
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Opponent has insufficient funds. Needs: ${offerData.betAmount}, Has: ${opponentBalance}`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: `Your funds are too low! Need ${neededDisplay} more.`, show_alert: true }).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (opponent low funds): ${e.message}`));
-        await safeSendMessage(originalChatId, `💰 <b>Funds Check for ${escapeHTML(getPlayerDisplayReference(opponentUserObjFull))}</b>!<br>To accept this Dice Escalator PvP for <b>${neededDisplay}</b>, your balance is short. Top up?`, 
-            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] } });
-        return;
-    }
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Opponent has sufficient funds. Fetching initiator details.`);
+    const betAmountLamports = offerData.betAmount;
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const joinerPlayerRefHTML = escapeHTML(getPlayerDisplayReference(joinerUserObjFull));
+    const initiatorPlayerRefHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(offerData.initiatorUserObj || offerData.initiator));
 
-    const initiatorUserObjFull = offerData.initiatorUserObj || await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
-    if(!initiatorUserObjFull){
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Failed to get/create initiatorUserObjFull for ID: ${offerData.initiator.userId}`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Error with initiator's profile. Offer cancelled.", show_alert:true}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (no initiator obj): ${e.message}`));
-        await safeSendMessage(originalChatId, "⚙️ <b>Initiator Profile Issue</b><br>Couldn't fetch initiator's details. Game cancelled.", {parse_mode:'HTML'});
-        activeGames.delete(offerId);
-        if (offerData.offerMessageId && bot) bot.editMessageText("⚙️ Offer Cancelled: Initiator profile issue.", { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
-        return;
-    }
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initiator details fetched. Balance: ${initiatorUserObjFull.balance}`);
 
-    if (BigInt(initiatorUserObjFull.balance) < offerData.betAmount) { // Re-check initiator balance
-        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Initiator has insufficient funds. Needs: ${offerData.betAmount}, Has: ${initiatorUserObjFull.balance}. Cancelling offer.`);
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Initiator can't cover bet. Offer auto-cancelled.", show_alert:true}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (initiator low funds): ${e.message}`));
-        if (offerData.offerMessageId && bot) {
-            await bot.editMessageText(`⚠️ <b>Offer Auto-Cancelled</b><br>The offer by ${escapeHTML(offerData.initiator.displayName)} for <b>${escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'))}</b> was cancelled as their balance is no longer sufficient.`, {
-                chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {inline_keyboard:[]}
-            }).catch(()=>{});
-        }
-        activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, null, null, null);
-        return;
-    }
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} All checks passed. Answering callback and proceeding to start PvP game.`);
+    // Fetch fresh details for initiator and joiner for balance checks
+    let currentInitiatorUserObj = await getOrCreateUser(offerData.initiator.userId); // Ensure we get latest balance
+    let currentJoinerUserObj = await getOrCreateUser(joinerId, joinerUserObjFull.username, joinerUserObjFull.first_name, joinerUserObjFull.last_name); // Re-fetch joiner too
 
-    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Challenge Accepted! Preparing PvP..."}).catch(e => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} Error answering CBQ (final accept): ${e.message}`));
-    
-    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_DEBUG} User ${userWhoClicked.telegram_id} accepted PvP challenge for offer ${offerId}. Deleting offer and calling startDiceEscalatorPvPGame_New.`);
-    
-    activeGames.delete(offerId); // Delete the offer
-    await startDiceEscalatorPvPGame_New(offerData, opponentUserObjFull, offerData.offerMessageId); // Start the actual PvP game
+    if (!currentInitiatorUserObj || !currentJoinerUserObj) {
+        console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} Failed to fetch full user details for initiator or joiner.`);
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Error fetching player details.", show_alert: true }).catch(()=>{});
+        // Edit original offer message to indicate an error
+        if (offerData.offerMessageId && bot) {
+            bot.editMessageText(`⚙️ Error processing PvP acceptance for DE offer by ${initiatorPlayerRefHTML}. Player details missing.`, { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {}}).catch(()=>{});
+        }
+        activeGames.delete(offerId);
+        await updateGroupGameDetails(originalChatId, null, null, null);
+        return;
+    }
+
+
+    if (BigInt(currentJoinerUserObj.balance) < betAmountLamports) {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: `Your funds are too low for this ${betDisplayUSD_HTML} duel!`, show_alert: true }).catch(()=>{});
+        const needed = betAmountLamports - BigInt(currentJoinerUserObj.balance);
+        await safeSendMessage(originalChatId, `💰 ${joinerPlayerRefHTML}, your balance is short by approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> to join this <b>${betDisplayUSD_HTML}</b> Dice Escalator PvP game.`, {
+            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
+        });
+        return;
+    }
+    
+    if (BigInt(currentInitiatorUserObj.balance) < betAmountLamports) {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Initiator can't cover bet. Offer auto-cancelled.", show_alert:true}).catch(()=>{});
+        if (offerData.offerMessageId && bot) {
+            await bot.editMessageText(`⚠️ <b>Offer Auto-Cancelled</b><br>The Dice Escalator offer by ${initiatorPlayerRefHTML} for <b>${betDisplayUSD_HTML}</b> was cancelled as their balance is no longer sufficient.`, {
+                chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {inline_keyboard:[]}
+            }).catch(()=>{});
+        }
+        activeGames.delete(offerId);
+        await updateGroupGameDetails(originalChatId, null, null, null);
+        return;
+    }
+
+    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Challenge Accepted! Deducting bets and preparing Dice Escalator PvP..."}).catch(()=>{});
+    
+    // --- NEW: Bet Deduction Logic ---
+    let client = null;
+    try {
+        client = await pool.connect(); 
+        await client.query('BEGIN');
+        
+        const gameNameForLedger = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER.replace('_UNIFIED_OFFER','').toLowerCase(); // e.g. 'dice_escalator'
+
+        const initBetRes = await updateUserBalanceAndLedger(client, currentInitiatorUserObj.telegram_id, BigInt(-betAmountLamports), 
+                                                          `bet_placed_${gameNameForLedger}_unified_pvp_init`, 
+                                                          { game_id_custom_field: offerId, opponent_id_custom_field: currentJoinerUserObj.telegram_id }, 
+                                                          `Unified DE PvP bet vs ${joinerPlayerRefHTML}`);
+        if (!initBetRes.success) throw new Error(`Initiator (${initiatorPlayerRefHTML}) bet placement failed: ${initBetRes.error || 'DB error'}`);
+        currentInitiatorUserObj.balance = initBetRes.newBalanceLamports; // Update local object
+
+        const joinBetRes = await updateUserBalanceAndLedger(client, currentJoinerUserObj.telegram_id, BigInt(-betAmountLamports), 
+                                                          `bet_placed_${gameNameForLedger}_unified_pvp_join`, 
+                                                          { game_id_custom_field: offerId, opponent_id_custom_field: currentInitiatorUserObj.telegram_id }, 
+                                                          `Unified DE PvP bet vs ${initiatorPlayerRefHTML}`);
+        if (!joinBetRes.success) throw new Error(`Joiner (${joinerPlayerRefHTML}) bet placement failed: ${joinBetRes.error || 'DB error'}`);
+        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports; // Update local object
+        
+        await client.query('COMMIT');
+        console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} Bets deducted successfully for offer ${offerId}.`);
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} DB Rollback Error on bet deduction: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} DB error placing PvP bets for unified offer ${offerId}: ${error.message}`, error.stack);
+        
+        const dbErrorMsgHTML = `⚙️ A database error occurred processing bets for the Dice Escalator PvP game between ${initiatorPlayerRefHTML} and ${joinerPlayerRefHTML} (Offer: ${offerId.slice(-5)}). The game cannot start. Please try creating a new offer.`;
+        if (offerData.offerMessageId && bot) {
+            await bot.editMessageText(dbErrorMsgHTML, { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatId, dbErrorMsgHTML, {parse_mode: 'HTML'})});
+        } else {
+            await safeSendMessage(originalChatId, dbErrorMsgHTML, {parse_mode: 'HTML'});
+        }
+        activeGames.delete(offerId); // Ensure offer is cleaned up
+        await updateGroupGameDetails(originalChatId, null, null, null);
+        return;
+    } finally {
+        if (client) client.release();
+    }
+    // --- END OF NEW Bet Deduction Logic ---
+
+    console.log(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} User ${joinerId} accepted unified PvP challenge for offer ${offerId}. Deleting offer and calling startDiceEscalatorPvPGame_New.`);
+    
+    // Edit the original offer message to show it's accepted
+    const acceptedUnifiedOfferMsgHTML = `✅ PvP Challenge Accepted by ${joinerPlayerRefHTML}!\n\nA Dice Escalator duel between ${initiatorPlayerRefHTML} and ${joinerPlayerRefHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
+    if (offerData.offerMessageId && bot) {
+        await bot.editMessageText(acceptedUnifiedOfferMsgHTML, {
+            chat_id: originalChatId,
+            message_id: Number(offerData.offerMessageId),
+            parse_mode: 'HTML',
+            reply_markup: {} // Remove buttons
+        }).catch(e => console.warn(`${LOG_PREFIX_DE_ACCEPT_PVP_UNIFIED} Failed to edit unified offer message to 'accepted': ${e.message}`));
+    } else {
+        await safeSendMessage(originalChatId, acceptedUnifiedOfferMsgHTML, {parse_mode: 'HTML'});
+    }
+    
+    activeGames.delete(offerId); // Delete the unified offer
+    await updateGroupGameDetails(originalChatId, null, null, null); // Clear unified offer from group session
+
+    // Call the refactored PvP game starter with the new signature
+    await startDiceEscalatorPvPGame_New(
+        currentInitiatorUserObj, // Initiator user object with updated balance
+        currentJoinerUserObj,    // Opponent (joiner) user object with updated balance
+        betAmountLamports,
+        originalChatId,
+        originalChatType,
+        null // The original offer message is already edited to "Accepted", no need for game starter to delete it again
+    ); 
 }
 
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalMessageId, originalChatId, callbackQueryIdPassed = null) {
@@ -3781,112 +3837,81 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
 
 
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (HTML Revamp) ---
-async function startDiceEscalatorPvPGame_New(offerData, opponentUserObj, originalOfferMessageIdToDelete) {
-    const chatId = offerData.chatId;
-    const logPrefix = `[DE_PvP_Start_Debug Offer:${offerData.gameId} CH:${chatId}]`; // This is the correct prefix
-    console.log(`${logPrefix} Entered function. Opponent: ${opponentUserObj.telegram_id}, Initiator (from offer): ${offerData.initiator.userId}`);
+async function startDiceEscalatorPvPGame_New(
+    initiatorUserObj, // User object for the initiator (balance already updated)
+    opponentUserObj,  // User object for the opponent (balance already updated)
+    betAmountLamports,
+    groupChatId,      // String: ID of the group chat
+    groupChatType,    // String: Type of the group chat (e.g., 'group', 'supergroup')
+    messageIdToDeleteAfterAccept = null // Optional: ID of the "Challenge Accepted!" message in the group
+) {
+    const logPrefix = `[DE_PvP_Start_V2 UID1:${initiatorUserObj.telegram_id} UID2:${opponentUserObj.telegram_id} CH:${groupChatId}]`;
+    console.log(`${logPrefix} Starting new DE PvP game. Bet: ${betAmountLamports}. ChatType: ${groupChatType}. Initial message to potentially delete: ${messageIdToDeleteAfterAccept}`);
 
-    const initiatorUserObjFull = offerData.initiatorUserObj || await getOrCreateUser(offerData.initiator.userId, offerData.initiator.username, offerData.initiator.firstName);
-    
-    if (!initiatorUserObjFull) {
-        console.error(`${logPrefix} CRITICAL: Failed to get/create initiatorUserObjFull for ID: ${offerData.initiator.userId}. Aborting game start.`);
-        await safeSendMessage(chatId, "⚙️ Critical error: Could not retrieve initiator's profile to start the PvP game. The offer may be bugged.", {parse_mode: 'HTML'});
-        activeGames.delete(offerData.gameId); 
-        return;
-    }
-    if (!opponentUserObj) { 
-        console.error(`${logPrefix} CRITICAL: opponentUserObj is null/undefined. Aborting game start.`);
-        await safeSendMessage(chatId, "⚙️ Critical error: Opponent profile missing. Cannot start PvP game.", {parse_mode: 'HTML'});
-        return;
-    }
-    console.log(`${logPrefix} Initiator: ${initiatorUserObjFull.telegram_id}, Opponent: ${opponentUserObj.telegram_id}`);
+    // 1. Optional: Delete the "Challenge Accepted!" message if its ID was passed
+    //    (The game will post its own initial board message)
+    if (messageIdToDeleteAfterAccept && bot) {
+        await bot.deleteMessage(groupChatId, Number(messageIdToDeleteAfterAccept))
+            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete previous 'Accepted' message ${messageIdToDeleteAfterAccept}: ${e.message}`));
+    }
 
-    const betAmountLamports = offerData.betAmount;
-    let client = null;
-    console.log(`${logPrefix} Attempting DB operations for bet deductions.`);
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        
-        console.log(`${logPrefix} Deducting bet for initiator ${initiatorUserObjFull.telegram_id}. Amount: ${betAmountLamports}`);
-        const initiatorBetResult = await updateUserBalanceAndLedger(client, initiatorUserObjFull.telegram_id, BigInt(-betAmountLamports), 'bet_placed_de_pvp_init', { game_id_custom_field: `offer_${offerData.gameId}_to_pvp`, opponent_id_custom_field: opponentUserObj.telegram_id }, `Initiator DE PvP from offer ${offerData.gameId}`);
-        if (!initiatorBetResult.success) {
-            await client.query('ROLLBACK'); 
-            throw new Error(`Initiator bet placement failed: ${initiatorBetResult.error}`);
-        }
-        initiatorUserObjFull.balance = initiatorBetResult.newBalanceLamports;
-        console.log(`${logPrefix} Initiator bet success. New balance: ${initiatorUserObjFull.balance}`);
+    // 2. Generate new PvP Game ID for this specific game instance
+    const pvpGameId = generateGameId(GAME_IDS.DICE_ESCALATOR_PVP);
+    console.log(`${logPrefix} Generated new PvP Game ID: ${pvpGameId}`);
+    
+    // 3. Prepare player data for the game state using the passed-in user objects
+    //    getPlayerDisplayReference should return plain text or text that escapeHTML can handle.
+    const initiatorPlayerData = { 
+        userId: String(initiatorUserObj.telegram_id), 
+        displayName: getPlayerDisplayReference(initiatorUserObj),
+        userObj: initiatorUserObj, // Keep the full object if needed by other functions
+        score: 0, rolls: [], 
+        isTurn: true, // Typically, initiator (Player 1) starts
+        busted: false, stood: false, 
+        status: 'awaiting_roll_emoji' 
+    };
+    const opponentPlayerData = { 
+        userId: String(opponentUserObj.telegram_id), 
+        displayName: getPlayerDisplayReference(opponentUserObj),
+        userObj: opponentUserObj,
+        score: 0, rolls: [], 
+        isTurn: false, 
+        busted: false, stood: false, 
+        status: 'waiting_turn' 
+    };
+    
+    const gameData = {
+        gameId: pvpGameId, 
+        type: GAME_IDS.DICE_ESCALATOR_PVP, 
+        chatId: String(groupChatId), 
+        chatType: groupChatType,
+        // Store players in a way that `updateDiceEscalatorPvPMessage_New` expects
+        // (It expects gameData.initiator and gameData.opponent)
+        initiator: initiatorPlayerData, // Player 1
+        opponent: opponentPlayerData,   // Player 2
+        betAmount: betAmountLamports, 
+        status: 'p1_awaiting_roll_emoji', // Game status reflects initiator's (P1) turn
+        currentMessageId: null, // For the new game board message
+        createdAt: Date.now(), 
+        lastRollValue: null,
+    };
+    activeGames.set(pvpGameId, gameData);
+    console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} New DE PvP game object (${pvpGameId}) created and stored in activeGames. Status: '${gameData.status}'`);
 
-        console.log(`${logPrefix} Deducting bet for opponent ${opponentUserObj.telegram_id}. Amount: ${betAmountLamports}`);
-        const opponentBetResult = await updateUserBalanceAndLedger(client, opponentUserObj.telegram_id, BigInt(-betAmountLamports), 'bet_placed_de_pvp_join', { game_id_custom_field: `offer_${offerData.gameId}_to_pvp`, opponent_id_custom_field: initiatorUserObjFull.telegram_id }, `Opponent DE PvP from offer ${offerData.gameId}`);
-        if (!opponentBetResult.success) {
-            await client.query('ROLLBACK'); 
-            throw new Error(`Opponent bet placement failed: ${opponentBetResult.error}`);
-        }
-        opponentUserObj.balance = opponentBetResult.newBalanceLamports; 
-        console.log(`${logPrefix} Opponent bet success. New balance: ${opponentUserObj.balance}`);
-        
-        await client.query('COMMIT');
-        console.log(`${logPrefix} Bet deductions committed to DB.`);
-    } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(()=>{});
-        console.error(`${logPrefix} DB error placing PvP bets: ${error.message}`, error.stack);
-        await safeSendMessage(chatId, `⚙️ Database error placing bets for PvP Dice Escalator: ${escapeHTML(error.message)}. Game cannot start.`, {parse_mode: 'HTML'});
-        return;
-    } finally { if(client) client.release(); }
-
-    if (originalOfferMessageIdToDelete && bot) {
-        console.log(`${logPrefix} Deleting original offer message ID: ${originalOfferMessageIdToDelete}`);
-        await bot.deleteMessage(chatId, Number(originalOfferMessageIdToDelete)).catch(e => {
-            console.warn(`${logPrefix} Non-critical: Could not delete unified DE offer message ${originalOfferMessageIdToDelete}: ${e.message}`);
-        });
-    }
-
-    const pvpGameId = generateGameId(GAME_IDS.DICE_ESCALATOR_PVP);
-    console.log(`${logPrefix} Generated new PvP Game ID: ${pvpGameId}`);
-    
-    const gameData = {
-        gameId: pvpGameId, 
-        type: GAME_IDS.DICE_ESCALATOR_PVP, 
-        chatId: String(chatId), 
-        initiator: { 
-            userId: initiatorUserObjFull.telegram_id, 
-            displayName: getPlayerDisplayReference(initiatorUserObjFull), 
-            score: 0, 
-            rolls: [], 
-            isTurn: true, 
-            busted: false, 
-            stood: false, 
-            status: 'awaiting_roll_emoji' 
-        },
-        opponent: { 
-            userId: opponentUserObj.telegram_id, 
-            displayName: getPlayerDisplayReference(opponentUserObj), 
-            score: 0, 
-            rolls: [], 
-            isTurn: false, 
-            busted: false, 
-            stood: false, 
-            status: 'waiting_turn' 
-        },
-        betAmount: betAmountLamports, 
-        status: 'p1_awaiting_roll_emoji', 
-        currentMessageId: null, 
-        createdAt: Date.now(), 
-        lastRollValue: null, 
-        chatType: offerData.chatType,
-    };
-    activeGames.set(pvpGameId, gameData);
-    console.log(`${logPrefix} New PvP game object created and stored in activeGames. Game Status: '${gameData.status}', P1 isTurn: ${gameData.initiator.isTurn}, P1 status: '${gameData.initiator.status}'`);
-
-    if (offerData.chatType !== 'private') {
-        await updateGroupGameDetails(offerData.chatId, pvpGameId, GAME_IDS.DICE_ESCALATOR_PVP, offerData.betAmount);
-        console.log(`${logPrefix} Group game details updated for chat: ${offerData.chatId}`);
-    }
-    
-    console.log(`${logPrefix} Calling updateDiceEscalatorPvPMessage_New to send initial game board.`);
-    await updateDiceEscalatorPvPMessage_New(gameData); 
-    // CORRECTED LOG LINE:
-    console.log(`${logPrefix} startDiceEscalatorPvPGame_New finished for GID: ${pvpGameId}.`);
+    // Update the group game session to reflect this new active PvP game
+    await updateGroupGameDetails(groupChatId, pvpGameId, GAME_IDS.DICE_ESCALATOR_PVP, betAmountLamports);
+    console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Group game details updated for chat ${groupChatId} to DE PvP game ${pvpGameId}.`);
+    
+    // 4. Call the function to send/update the initial game board message
+    //    updateDiceEscalatorPvPMessage_New is designed to handle sending the game UI
+    if (typeof updateDiceEscalatorPvPMessage_New === 'function') {
+        await updateDiceEscalatorPvPMessage_New(gameData); 
+        console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Initial DE PvP game message/board sent/updated for GID: ${pvpGameId}.`);
+    } else {
+        console.error(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} CRITICAL ERROR: updateDiceEscalatorPvPMessage_New function is not defined! Cannot display game board for ${pvpGameId}.`);
+        // Consider how to handle this - maybe send a simple text message
+        await safeSendMessage(groupChatId, "⚙️ Critical error: Could not display the game board. Please contact support.", {parse_mode: 'HTML'});
+    }
 }
 
 async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userIdWhoRolled) {
