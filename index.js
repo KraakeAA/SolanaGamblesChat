@@ -3166,16 +3166,16 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> duel for <b>${betDisplayUSD_HTML}</b>!`;
         
         const groupChallengeKeyboard = {
-            inline_keyboard: [
-                [
-                    { text: "✅ Accept Challenge", callback_data: `dca:${offerId}` }, 
-                    { text: "❌ Decline Challenge", callback_data: `dcd:${offerId}` }  
-                ],
-                [ 
-                    { text: "🚫 Withdraw My Challenge", callback_data: `cdc:${offerId}` } 
-                ]
-            ]
-        };
+            inline_keyboard: [
+                [
+                    { text: "✅ Accept Challenge", callback_data: `dir_chal_acc:${offerId}` }, 
+                    { text: "❌ Decline Challenge", callback_data: `dir_chal_dec:${offerId}` }  
+                ],
+                [ 
+                    { text: "🚫 Withdraw My Challenge", callback_data: `dir_chal_can:${offerId}` } 
+                ]
+            ]
+        };
 
         const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
 
@@ -10173,29 +10173,30 @@ bot.on('message', async (msg) => {
                         await safeSendMessage(chatId, `🤔 Hmmm, I don't recognize the command \`/${escapeMarkdownV2(commandName || "")}\`. Try \`/help\` for a list of my amazing games and features!!`, { parse_mode: 'MarkdownV2' });
                     }
                     break;
+                    case 'dir_chal_acc': // Formerly 'dca'
+                case 'dir_chal_dec': // Formerly 'dcd'
+                case 'dir_chal_can': // Formerly 'cdc'
+                    console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
+                    
+                    if (typeof handleDirectChallengeResponse === 'function') {
+                        const offerIdFromParams = params[0];
+                        // The 'action' itself (now 'dir_chal_acc', etc.) is passed directly to the handler
+                        await handleDirectChallengeResponse(
+                            action, 
+                            offerIdFromParams,
+                            userObjectForCallback,    // User who clicked
+                            originalMessageId,        // ID of the message with buttons (in the group)
+                            originalChatId,           // ID of the group chat
+                            originalChatType,         // Should be 'group' or 'supergroup'
+                            callbackQueryId
+                        );
+                    } else {
+                        console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                    case 'dca': // Standardized: direct_challenge_accept
-            case 'dcd': // Standardized: direct_challenge_decline
-            case 'cdc': // Standardized: cancel_initiator_direct_challenge
-                console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
-                
-                if (typeof handleDirectChallengeResponse === 'function') {
-                    const offerIdFromParams = params[0];
-                    // The 'action' itself ('dca', 'dcd', 'cdc') is passed directly to the handler
-                    await handleDirectChallengeResponse(
-                        action, 
-                        offerIdFromParams,
-                        userObjectForCallback,    // User who clicked
-                        originalMessageId,        // ID of the message with buttons (in the group)
-                        originalChatId,           // ID of the group chat
-                        originalChatType,         // Should be 'group' or 'supergroup'
-                        callbackQueryId
-                    );
-                } else {
-                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
-                }
-                break;
+                    
             // --- END OF NEW CASES FOR DIRECT PvP CHALLENGES ---
             
             // Ensure your existing Dice Escalator unified offer callbacks are distinct
