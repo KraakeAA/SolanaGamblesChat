@@ -11060,7 +11060,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
     }
 
     switch (actionName) {
-        case 'dca': // direct_challenge_accept
+        case 'dir_chal_acc': // Formerly 'dca'
             if (clickerId !== String(offerData.targetUserId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
                 return;
@@ -11169,32 +11169,19 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             switch (offerData.gameToStart) {
                 case GAME_IDS.DICE_ESCALATOR_PVP:
                     if (typeof startDiceEscalatorPvPGame_New === 'function') {
-                        // Assuming startDiceEscalatorPvPGame_New is refactored or can handle:
-                        // (initiatorUserObj, opponentUserObj, betAmount, groupChatId, groupChatType, messageIdToDeleteFromOffer)
                         await startDiceEscalatorPvPGame_New(
                             pvpGameSetupData.initiatorUserObj, 
                             pvpGameSetupData.opponentUserObj, 
                             pvpGameSetupData.betAmount, 
                             pvpGameSetupData.chatId,
                             pvpGameSetupData.chatType, 
-                            null // The offer message is already edited to "Accepted", no need for game starter to delete it.
+                            null 
                         );
                     } else { 
                         console.error(`${logPrefix} Missing handler: startDiceEscalatorPvPGame_New`);
                         await safeSendMessage(originalChatIdFromGroup, "⚙️ Error starting Dice Escalator PvP: Handler missing.", {parse_mode: 'HTML'});
                     }
                     break;
-                // case GAME_IDS.COINFLIP_PVP:
-                //     if (typeof startCoinflipPvPGame === 'function') {
-                //         await startCoinflipPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
-                //     } else { console.error... }
-                //     break;
-                // case GAME_IDS.RPS_PVP:
-                //     if (typeof startRPSPvPGame === 'function') {
-                //         await startRPSPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
-                //     } else { console.error... }
-                //     break;
-                // ... Add cases for DICE_21_PVP, DUEL_PVP as you implement them ...
                 default:
                     console.error(`${logPrefix} Unknown gameTypeForAccept in offerData: ${offerData.gameToStart}. Cannot start game.`);
                     await safeSendMessage(originalChatIdFromGroup, `⚙️ Error: Cannot start game type "<code>${escapeHTML(offerData.gameToStart)}</code>". Bets were deducted. Admin notified.`, {parse_mode: 'HTML'});
@@ -11204,7 +11191,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             break;
 
-        case 'dcd': // direct_challenge_decline
+        case 'dir_chal_dec': // Formerly 'dcd'
             if (clickerId !== String(offerData.targetUserId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you to decline.", show_alert: true }).catch(() => {});
                 return;
@@ -11222,7 +11209,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
             break;
 
-        case 'cdc': // cancel_initiator_direct_challenge
+        case 'dir_chal_can': // Formerly 'cdc'
             if (clickerId !== String(offerData.initiatorId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can withdraw this challenge.", show_alert: true }).catch(() => {});
                 return;
@@ -11243,8 +11230,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             break;
 
         default:
-            console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false }).catch(() => {});
+            console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`); // This was in your log for the "dir_chal_acc" etc. actions
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action details.", show_alert: false }).catch(() => {}); // Modified this slightly to differentiate if it's hit
     }
 }
 // --- End of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator & Full Routing for Jackpot Choice + OU7 Fix) ---
