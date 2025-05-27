@@ -195,6 +195,7 @@ const GAME_IDS = {
     SLOT_FRENZY: 'slotfrenzy',
     MINES: 'mines',
     MINES_OFFER: 'mines_offer',
+    DICE_ESCALATOR_DIRECT_CHALLENGE: 'de_direct_challenge',
 };
 
 // Game Specific Constants
@@ -3113,79 +3114,180 @@ async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogConte
     return rolls;
 }
 
-async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const logPrefix = `[DE_Offer_HTML_V3 UID:${userId} CH:${chatId}]`;
+async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports, targetUserObject = null) {
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id); // This is the group chat ID
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_DE_OFFER_V3 = `[DE_Offer_V3 UID:${userId} CH:${chatId}]`; // V3 for full direct challenge
 
-    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!initiatorUserObj) {
-        await safeSendMessage(chatId, "Apologies, your player profile couldn't be accessed. Please use <code>/start</code> and try again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    console.log(`${LOG_PREFIX_DE_OFFER_V3} Called. Bet: ${betAmountLamports}. Target User Object: ${targetUserObject ? targetUserObject.telegram_id : 'None'}`);
 
-    if (chatType === 'private') {
-        await safeSendMessage(chatId, `📣 <b>Group Action Required, ${playerRefHTML}!</b><br>Dice Escalator is a social game! Please use <code>/de &lt;bet&gt;</code> in a group chat.`, { parse_mode: 'HTML' });
-        return;
-    }
-    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
-        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
-        const betDisp = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-        await safeSendMessage(chatId, `💰 <b>Funds Alert, ${playerRefHTML}!</b><br>To offer a <b>${betDisp}</b> Dice Escalator game, you need approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
-            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
-        });
-        return;
-    }
+    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!initiatorUserObj) {
+        await safeSendMessage(chatId, "Apologies, your player profile couldn't be accessed. Please use <code>/start</code> and try again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
 
-    const offerId = `deo_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
-    const offerData = {
-        gameId: offerId, type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER,
-        initiator: { userId: initiatorUserObj.telegram_id, username: initiatorUserObj.username, firstName: initiatorUserObj.first_name, displayName: getPlayerDisplayReference(initiatorUserObj) },
-        initiatorUserObj,
-        betAmount: betAmountLamports, chatId: chatId, chatType: chatType, status: 'pending_offer', createdAt: Date.now(), offerMessageId: null
-    };
-    const betDisplaySol_HTML = escapeHTML(formatCurrency(betAmountLamports, 'SOL'));
-    const betUsdDisplay_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
+        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
+        const betDispHTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+        await safeSendMessage(chatId, `💰 <b>Funds Alert, ${initiatorPlayerRefHTML}!</b><br>To start a Dice Escalator game for <b>${betDispHTML}</b>, you need approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
+            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
+        });
+        return;
+    }
+    
+    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
+    if (gameSession.currentGameId && activeGames.has(gameSession.currentGameId)) {
+        const existingGame = activeGames.get(gameSession.currentGameId);
+        if ( (existingGame.type.includes('_offer') && existingGame.status === 'pending_offer') || 
+             (existingGame.type.includes('_direct_challenge') && existingGame.status === 'pending_direct_challenge_response') || // Check for our new type
+             (existingGame.type.includes('_pvp') && !existingGame.status?.startsWith('game_over_')) ||
+             (existingGame.type === GAME_IDS.MINES && existingGame.status !== 'game_over_mine_hit' && existingGame.status !== 'game_over_cashed_out')
+           ) { 
+            await safeSendMessage(chatId, `⏳ Hold your dice, ${initiatorPlayerRefHTML}! An interactive game or challenge (<code>${escapeHTML(existingGame.type.replace(/_/g, " "))}</code>) is already active in this group. Please wait.`, { parse_mode: 'HTML' });
+            return;
+        }
+    }
 
-    const offerTextHTML = `✨🎲 <b>New Dice Escalator Challenge!</b> 🎲✨\n\n` +
-                          `Challenger: <b>${playerRefHTML}</b>\n` +
-                          `Wager: <b>${betUsdDisplay_HTML}</b> (<i>${betDisplaySol_HTML}</i>) per player\n\n` +
-                          `<b>Who will dare to escalate the stakes?</b>\n` +
-                          `▫️ Initiator can battle the 🤖 <b>Bot Dealer</b>!\n` +
-                          `▫️ Or another player can accept for an epic ⚔️ <b>PvP Duel</b>!\n\n` +
-                          `<i>Challenge expires in ${JOIN_GAME_TIMEOUT_MS / 1000 / 60} min!</i>`;
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "🤖 Play vs Bot", callback_data: `de_accept_bot_game:${offerId}` }, { text: "⚔️ Accept PvP", callback_data: `de_accept_pvp_challenge:${offerId}` }],
-            [{ text: "❌ Cancel Offer", callback_data: `de_cancel_unified_offer:${offerId}` }]
-        ]
-    };
-    const sentMessage = await safeSendMessage(chatId, offerTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    if (sentMessage?.message_id) {
-        offerData.offerMessageId = String(sentMessage.message_id);
-        activeGames.set(offerId, offerData);
-        setTimeout(async () => {
-            const currentOffer = activeGames.get(offerId);
-            if (currentOffer && currentOffer.status === 'pending_offer') {
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(chatId, null, null, null);
-                if (currentOffer.offerMessageId && bot) {
-                    const expiredBetDisplay = escapeHTML(await formatBalanceForDisplay(currentOffer.betAmount, 'USD'));
-                    await bot.editMessageText(`⏳ <b>Offer Expired</b>\nThe Dice Escalator challenge from ${escapeHTML(currentOffer.initiator.displayName)} for <b>${expiredBetDisplay}</b> has timed out.`, {
-                        chat_id: currentOffer.chatId, message_id: Number(currentOffer.offerMessageId), parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-                    }).catch(e => console.warn(`${logPrefix} Failed to edit expired DE offer message: ${e.message}`));
-                }
-            }
-        }, JOIN_GAME_TIMEOUT_MS);
-    } else {
-        console.error(`${logPrefix} Failed to send Dice Escalator offer message.`);
-        activeGames.delete(offerId);
-        await updateGroupGameDetails(chatId, null, null, null);
-        await safeSendMessage(chatId, "⚙️ <b>Oops!</b> Couldn't create your Dice Escalator offer. Please try again.", { parse_mode: 'HTML' });
-    }
+    if (targetUserObject) {
+        // --- DIRECT PvP CHALLENGE FLOW ---
+        const targetUserId = String(targetUserObject.telegram_id);
+        const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObject));
+        const offerId = generateGameId(`de_direct_${userId.slice(-4)}_${targetUserId.slice(-4)}`);
+        
+        console.log(`${LOG_PREFIX_DE_OFFER_V3} Processing DIRECT challenge from ${initiatorPlayerRefHTML} (${userId}) to ${targetPlayerRefHTML} (${targetUserId}) with offer ID ${offerId}.`);
+
+        const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> duel for <b>${betDisplayUSD_HTML}</b>!`;
+        
+        const groupChallengeKeyboard = {
+            inline_keyboard: [
+                [
+                    { text: "✅ Accept Challenge", callback_data: `direct_challenge_accept:${offerId}` },
+                    { text: "❌ Decline Challenge", callback_data: `direct_challenge_decline:${offerId}` }
+                ],
+                [
+                    { text: "🚫 Withdraw My Challenge", callback_data: `de_cancel_direct_challenge:${offerId}` }
+                ]
+            ]
+        };
+
+        const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
+
+        if (!sentGroupMessage || !sentGroupMessage.message_id) {
+            console.error(`${LOG_PREFIX_DE_OFFER_V3} Failed to send direct challenge message to group for offer ${offerId}.`);
+            await safeSendMessage(chatId, `⚙️ Oops! Couldn't send your direct challenge to ${targetPlayerRefHTML}. Please try again.`, { parse_mode: 'HTML' });
+            return;
+        }
+        const offerMessageIdInGroup = String(sentGroupMessage.message_id);
+
+        // Send DM to target user
+        const groupNameHTML = escapeHTML(msg.chat.title || "the group");
+        const dmNotificationTextHTML = `🔔 Challenge Alert!\n\nHi ${targetPlayerRefHTML},\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> game for <b>${betDisplayUSD_HTML}</b> in the group "<b>${groupNameHTML}</b>".\n\nPlease head to that group to accept or decline the challenge.`;
+        await safeSendMessage(targetUserId, dmNotificationTextHTML, { parse_mode: 'HTML' });
+
+        const offerData = {
+            type: GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE, // New specific type
+            gameId: offerId, // This is the offerId
+            initiatorId: userId,
+            initiatorUserObj: initiatorUserObj, // Store the full object for later use
+            initiatorMentionHTML: initiatorPlayerRefHTML,
+            targetUserId: targetUserId,
+            targetUserObj: targetUserObject, // Store the full object
+            targetUserMentionHTML: targetPlayerRefHTML,
+            betAmount: betAmountLamports,
+            originalGroupId: chatId,
+            offerMessageIdInGroup: offerMessageIdInGroup,
+            status: 'pending_direct_challenge_response',
+            gameTypeForAccept: GAME_IDS.DICE_ESCALATOR_PVP, // What game to start on accept
+            creationTime: Date.now()
+        };
+        activeGames.set(offerId, offerData);
+        await updateGroupGameDetails(chatId, offerId, GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE, betAmountLamports);
+        console.log(`${LOG_PREFIX_DE_OFFER_V3} Direct challenge offer ${offerId} created and stored.`);
+
+        // Timeout for the direct challenge
+        setTimeout(async () => {
+            const timedOutOffer = activeGames.get(offerId);
+            if (timedOutOffer && timedOutOffer.status === 'pending_direct_challenge_response' && timedOutOffer.type === GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE) {
+                activeGames.delete(offerId);
+                await updateGroupGameDetails(chatId, null, null, null);
+                const timeoutMsgHTML = `⏳ The Dice Escalator challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has expired unanswered.`;
+                if (bot && timedOutOffer.offerMessageIdInGroup) {
+                    await bot.editMessageText(timeoutMsgHTML, {
+                        chat_id: timedOutOffer.originalGroupId,
+                        message_id: Number(timedOutOffer.offerMessageIdInGroup),
+                        parse_mode: 'HTML',
+                        reply_markup: {} // Remove buttons
+                    }).catch(e => {
+                        console.warn(`${LOG_PREFIX_DE_OFFER_V3} Failed to edit expired direct challenge message ${timedOutOffer.offerMessageIdInGroup}: ${e.message}. Sending new.`);
+                        safeSendMessage(timedOutOffer.originalGroupId, timeoutMsgHTML, { parse_mode: 'HTML' });
+                    });
+                } else {
+                    safeSendMessage(timedOutOffer.originalGroupId, timeoutMsgHTML, { parse_mode: 'HTML' });
+                }
+                // Notify initiator via DM
+                await safeSendMessage(timedOutOffer.initiatorId, `⏳ Your Dice Escalator challenge to ${timedOutOffer.targetUserMentionHTML} in group "${escapeHTML(msg.chat.title || 'N/A')}" has expired.`, { parse_mode: 'HTML' });
+                console.log(`${LOG_PREFIX_DE_OFFER_V3} Direct challenge ${offerId} timed out.`);
+            }
+        }, JOIN_GAME_TIMEOUT_MS);
+
+    } else {
+        // --- EXISTING UNIFIED OFFER FLOW (No targetUserObject) ---
+        console.log(`${LOG_PREFIX_DE_OFFER_V3} Processing UNIFIED offer (no target user specified).`);
+        const offerId = `deo_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
+        const offerData = {
+            gameId: offerId, type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER,
+            initiator: { userId: initiatorUserObj.telegram_id, username: initiatorUserObj.username, firstName: initiatorUserObj.first_name, displayName: getPlayerDisplayReference(initiatorUserObj) },
+            initiatorUserObj, 
+            initiatorMentionHTML: initiatorPlayerRefHTML, 
+            betAmount: betAmountLamports, chatId: chatId, chatType: chatType, status: 'pending_offer', createdAt: Date.now(), offerMessageId: null
+        };
+        
+        const betDisplaySol_HTML = escapeHTML(formatCurrency(betAmountLamports, 'SOL'));
+
+        const offerTextHTML = `✨🎲 <b>New Dice Escalator Challenge!</b> 🎲✨\n\n` +
+                              `Challenger: <b>${initiatorPlayerRefHTML}</b>\n` +
+                              `Wager: <b>${betDisplayUSD_HTML}</b> (<i>${betDisplaySol_HTML}</i>) per player\n\n` +
+                              `<b>Who will dare to escalate the stakes?</b>\n` +
+                              `▫️ Initiator can battle the 🤖 <b>Bot Dealer</b>!\n` +
+                              `▫️ Or another player can accept for an epic ⚔️ <b>PvP Duel</b>!\n\n` +
+                              `<i>Challenge expires in ${JOIN_GAME_TIMEOUT_MS / 1000 / 60} min!</i>`;
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "🤖 Play vs Bot", callback_data: `de_accept_bot_game:${offerId}` }, { text: "⚔️ Accept PvP", callback_data: `de_accept_pvp_challenge:${offerId}` }],
+                [{ text: "❌ Cancel Offer", callback_data: `de_cancel_unified_offer:${offerId}` }]
+            ]
+        };
+        const sentMessage = await safeSendMessage(chatId, offerTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
+
+        if (sentMessage?.message_id) {
+            offerData.offerMessageId = String(sentMessage.message_id);
+            activeGames.set(offerId, offerData); 
+            await updateGroupGameDetails(chatId, offerId, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, betAmountLamports);
+
+            setTimeout(async () => { /* ... existing timeout logic for unified offer ... */ 
+                const currentOffer = activeGames.get(offerId);
+                if (currentOffer && currentOffer.status === 'pending_offer' && currentOffer.type === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
+                    activeGames.delete(offerId);
+                    await updateGroupGameDetails(chatId, null, null, null);
+                    if (currentOffer.offerMessageId && bot) {
+                        const expiredBetDisplayHTML = escapeHTML(await formatBalanceForDisplay(currentOffer.betAmount, 'USD'));
+                        await bot.editMessageText(`⏳ <b>Offer Expired</b><br>The Dice Escalator challenge from ${currentOffer.initiatorMentionHTML} for <b>${expiredBetDisplayHTML}</b> has timed out.`, {
+                            chat_id: currentOffer.chatId, message_id: Number(currentOffer.offerMessageId), parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
+                        }).catch(e => console.warn(`${LOG_PREFIX_DE_OFFER_V3} Failed to edit expired DE unified offer message: ${e.message}`));
+                    }
+                }
+            }, JOIN_GAME_TIMEOUT_MS);
+        } else {
+            console.error(`${LOG_PREFIX_DE_OFFER_V3} Failed to send Dice Escalator unified offer message.`);
+            await updateGroupGameDetails(chatId, null, null, null); 
+            await safeSendMessage(chatId, "⚙️ <b>Oops!</b> Couldn't create your Dice Escalator offer. Please try again.", { parse_mode: 'HTML' });
+        }
+    }
 }
 
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
@@ -9926,15 +10028,67 @@ bot.on('message', async (msg) => {
                         if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS); // Pass full msg object
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartRPSUnifiedOfferCommand`);
                     break;
-                case 'de': case 'diceescalator':
-                    if (chatType === 'private') {
-                        await safeSendMessage(chatId, `🎲 The Dice Escalator game, offering both Player vs Bot and Player vs Player modes, must be initiated in a **group chat**. Please use the \`/de <bet>\` command there to start the action!`, { parse_mode: 'MarkdownV2' });
-                        break;
+                case 'de': 
+            case 'diceescalator':
+                if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
+                    let betArg = null;
+                    let targetUsernameRaw = null;
+
+                    // Try to intelligently parse bet and @username regardless of order
+                    // Assumes bet is unlikely to start with '@' and username always does.
+                    if (commandArgs.length === 1) {
+                        if (commandArgs[0].startsWith('@')) {
+                            targetUsernameRaw = commandArgs[0];
+                            // betArg remains null, parseBetAmount will use default
+                        } else {
+                            betArg = commandArgs[0];
+                        }
+                    } else if (commandArgs.length >= 2) {
+                        if (commandArgs[0].startsWith('@')) {
+                            targetUsernameRaw = commandArgs[0];
+                            betArg = commandArgs[1];
+                        } else if (commandArgs[1].startsWith('@')) {
+                            targetUsernameRaw = commandArgs[1];
+                            betArg = commandArgs[0];
+                        } else {
+                            // Neither is a username, assume first is bet, ignore others for now
+                            // or handle as an error if a specific format like /de <bet> @user is required
+                            betArg = commandArgs[0];
+                             // console.log(`[DE Route] Multiple args but no @username found, using first as bet: ${betArg}`);
+                        }
                     }
-                    if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
-                        const betDE = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                        if(betDE) await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE);
-                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`); break;
+                    // If no betArg is found after parsing (e.g., only @username was provided),
+                    // parseBetAmount will handle it by using the default minimum bet.
+
+                    const betDE = await parseBetAmount(betArg, chatId, chatType, userId);
+
+                    if (betDE && typeof betDE === 'bigint' && betDE > 0n) {
+                        let targetUserObject = null;
+                        if (targetUsernameRaw) {
+                            console.log(`[DE Route] Attempting to find target user for challenge: ${targetUsernameRaw}`);
+                            targetUserObject = await findRecipientUser(targetUsernameRaw); // findRecipientUser handles the '@' prefix
+
+                            if (!targetUserObject) {
+                                await safeSendMessage(chatId, `😕 User ${escapeHTML(targetUsernameRaw)} not found. They might need to interact with me first. Challenge cancelled.`, { parse_mode: 'HTML' });
+                                break; // Exit this case, effectively cancelling the command
+                            }
+                            if (String(targetUserObject.telegram_id) === String(userId)) {
+                                const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from)); // userForCommandProcessing from outer scope
+                                await safeSendMessage(chatId, `😅 You can't challenge yourself to a Dice Escalator duel, ${initiatorRefHTML}!`, { parse_mode: 'HTML' });
+                                break; // Exit this case
+                            }
+                             console.log(`[DE Route] Target user found: ${targetUserObject.username || targetUserObject.telegram_id}. Initiator: ${userId}`);
+                        }
+                        
+                        // Call the handler, passing targetUserObject (which will be null if no @username was found/valid)
+                        await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetUserObject);
+                    }
+                    // If parseBetAmount returned invalid/null, it should have sent its own message.
+                } else {
+                    console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`);
+                    await safeSendMessage(chatId, "⚙️ The Dice Escalator game is temporarily unavailable. Please try again later.", { parse_mode: 'HTML' });
+                }
+                break;
                 case 'd21': case 'blackjack':
                     if (typeof handleStartDice21Command === 'function') {
                         const betD21 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
@@ -9985,6 +10139,65 @@ bot.on('message', async (msg) => {
                         await safeSendMessage(chatId, `🤔 Hmmm, I don't recognize the command \`/${escapeMarkdownV2(commandName || "")}\`. Try \`/help\` for a list of my amazing games and features!!`, { parse_mode: 'MarkdownV2' });
                     }
                     break;
+
+                    case 'direct_challenge_accept':
+            case 'direct_challenge_decline':
+            // Note: 'de_cancel_direct_challenge' is specific to Dice Escalator for now.
+            // If we make a truly generic cancel, it might also go here.
+            // For now, let's assume 'de_cancel_direct_challenge' will also be handled by handleDirectChallengeResponse or a similar specific handler.
+                console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}`);
+                if (typeof handleDirectChallengeResponse === 'function') {
+                    const offerIdFromParams = params[0];
+                    await handleDirectChallengeResponse(
+                        action, // 'direct_challenge_accept' or 'direct_challenge_decline'
+                        offerIdFromParams,
+                        userObjectForCallback, // This is the user who clicked the button
+                        originalMessageId,     // ID of the message in the group chat with the buttons
+                        originalChatId,        // ID of the group chat
+                        originalChatType,
+                        callbackQueryId
+                    );
+                } else {
+                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: Action handler is missing.", show_alert: true}).catch(()=>{});
+                }
+                break;
+
+            case 'de_cancel_direct_challenge': // Initiator cancels their direct DE challenge
+                 console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse (as cancel) for action: ${action}`);
+                 if (typeof handleDirectChallengeResponse === 'function') {
+                    const offerIdForCancel = params[0];
+                    // We pass 'cancel_direct_challenge' as the effective action to the handler
+                    await handleDirectChallengeResponse( 
+                        'cancel_direct_challenge', // Unified action name for cancellation by initiator
+                        offerIdForCancel,
+                        userObjectForCallback,
+                        originalMessageId,
+                        originalChatId,
+                        originalChatType,
+                        callbackQueryId
+                    );
+                 } else {
+                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: Action handler is missing.", show_alert: true}).catch(()=>{});
+                 }
+                break;
+            // --- END OF NEW CASES FOR DIRECT PvP CHALLENGES ---
+
+            // Make sure this is after the specific 'de_cancel_direct_challenge' if it was grouped with other DE callbacks before
+            case 'de_accept_bot_game':
+            case 'de_accept_pvp_challenge': // This is for general unified DE offers
+            case 'de_cancel_unified_offer': // This is for general unified DE offers
+            case 'de_stand_pvb':
+            case 'de_stand_pvp':
+            case 'play_again_de_pvb':
+            case 'play_again_de_pvp':
+            case 'de_pvb_go_for_jackpot':
+                // This still routes to your existing Dice Escalator forwarder
+                if (typeof forwardDiceEscalatorCallback_New === 'function') {
+                    await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                } else { /* error */ }
+                break;
             }
         } catch (commandError) {
             console.error(`${LOG_PREFIX_MSG_HANDLER} 🚨 UNHANDLED ERROR IN COMMAND ROUTER for /${commandName}: ${commandError.message}`, commandError.stack?.substring(0, 700));
