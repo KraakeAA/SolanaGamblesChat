@@ -10329,7 +10329,6 @@ bot.on('message', async (msg) => {
         let isDiceEscalatorEmoji = false;
         let isDice21Emoji = false;
         let isDuelGameEmoji = false;
-        // let matchedGameTypeForDice = null; // Was unused
 
         for (const [gId, gData] of activeGames.entries()) { 
             if (String(gData.chatId) === chatId) {
@@ -10388,10 +10387,10 @@ bot.on('message', async (msg) => {
                 }
             } else if (isDice21Emoji) {
                 console.log(`${LOG_PREFIX_MSG_HANDLER} [DiceEmoji] Routing to Dice 21 processor.`);
-                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) { // PvB
+                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) { 
                     if (typeof processDice21PvBRollByEmoji === 'function') await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg); 
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvBRollByEmoji for PvB`);
-                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) { // PvP
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) { 
                     if (typeof processDice21PvPRollByEmoji === 'function') await processDice21PvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId); 
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: processDice21PvPRollByEmoji for PvP`);
                 }
@@ -10463,6 +10462,66 @@ bot.on('message', async (msg) => {
 
         console.log(`${LOG_PREFIX_MSG_HANDLER} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${userId} (${userForCommandProcessing.username || 'NoUsername'}) in Chat ${chatId} (${chatType})`);
 
+        // --- ARGUMENT PARSING HELPER (Moved here, outside switch) ---
+        const parseGameArgs = (args) => {
+            let betArg = null;
+            let targetRaw = null;
+            let otherArgs = []; // To capture additional arguments like gameMode
+
+            if (args.length === 0) {
+                // No arguments provided, betArg and targetRaw remain null.
+                // parseBetAmount will use the default minimum bet if betArg is null.
+            } else if (args.length === 1) {
+                // Handles commands like: /game <bet> OR /game @user_or_id
+                if (args[0].startsWith('@') || /^\d+$/.test(args[0])) { // If the single argument looks like a user identifier
+                    targetRaw = args[0];
+                    // betArg remains null, parseBetAmount will use default minimum
+                } else { // Otherwise, assume the single argument is a bet
+                    betArg = args[0];
+                }
+            } else { // args.length >= 2
+                // Handles commands like: /game <bet> @user_or_id [other_args...] OR /game @user_or_id <bet> [other_args...]
+                const arg0IsUser = args[0].startsWith('@') || /^\d+$/.test(args[0]);
+                const arg1IsUser = args[1].startsWith('@') || /^\d+$/.test(args[1]);
+
+                if (arg0IsUser && !arg1IsUser) {
+                    // Format: @user_or_id <bet> [otherArgs...]
+                    targetRaw = args[0];
+                    betArg = args[1];
+                    otherArgs = args.slice(2);
+                } else if (!arg0IsUser && arg1IsUser) {
+                    // Format: <bet> @user_or_id [otherArgs...]
+                    betArg = args[0];
+                    targetRaw = args[1];
+                    otherArgs = args.slice(2);
+                } else if (!arg0IsUser && !arg1IsUser) {
+                    // Format: <bet> [other_arg_assumed_not_user] [otherArgs...]
+                    // Example: /d21 10 classic (bet is 10, otherArg is classic)
+                    betArg = args[0];
+                    otherArgs = args.slice(1); 
+                } else { 
+                    // Ambiguous case e.g., /game @user1 @user2 or /game 123 456 (both numbers)
+                    // Defaulting: treat first as bet, no specific target if second also looks like user/number not intended as bet.
+                    // This part might need more specific error handling or clarification for such ambiguous inputs.
+                    console.warn(`${LOG_PREFIX_MSG_HANDLER} Ambiguous arguments for game command: ${args.join(' ')}. Assuming first is bet if valid, no specific target, or first non-user arg as bet.`);
+                    betArg = args[0]; // Default to first as bet
+                    if (args.length > 1 && !(args[1].startsWith('@') || /^\d+$/.test(args[1]))) {
+                        // If second arg also doesn't look like a user, it might be another parameter (e.g. gameMode for D21)
+                        otherArgs = args.slice(1);
+                    } else if (args.length > 1 && (args[1].startsWith('@') || /^\d+$/.test(args[1]))){
+                        // If first is bet and second is user, this was covered by (!arg0IsUser && arg1IsUser)
+                        // This path means arg0 was not user, arg1 was user, so this block is complex
+                        // Let's assume if first is not user, it's bet. If second is user, it's target.
+                        // The parseGameArgs has already handled the clear cases.
+                        // This fallback handles if arg0 is not user, and arg1 is also not user.
+                        // If it's /game bet other_text, otherArgs captures other_text.
+                    }
+                }
+            }
+            return { betArg, targetRaw, otherArgs };
+        };
+        // --- END OF parseGameArgs DEFINITION ---
+
         try {
             switch (commandName) {
                 case 'start': await handleStartCommand(msg, commandArgs); break;
@@ -10488,35 +10547,6 @@ bot.on('message', async (msg) => {
                     break;
                     
                     // --- MODIFIED GAME COMMAND ROUTING START ---
-                    // Argument parsing helper function
-                    const parseGameArgs = (args) => {
-                        let betArg = null;
-                        let targetRaw = null;
-                        let otherArgs = [];
-
-                        if (args.length === 1) {
-                            if (args[0].startsWith('@') || /^\d+$/.test(args[0])) targetRaw = args[0];
-                            else betArg = args[0];
-                        } else if (args.length >= 1) { // Changed to >= 1 to allow /game @user
-                            const potentialUserArg0 = args[0].startsWith('@') || /^\d+$/.test(args[0]);
-                            const potentialUserArg1 = args.length > 1 && (args[1].startsWith('@') || /^\d+$/.test(args[1]));
-
-                            if (potentialUserArg0 && (args.length === 1 || (args.length > 1 && !potentialUserArg1 && isNaN(parseFloat(args[1]))))) { // e.g. /game @user OR /game @user text_gamemode
-                                targetRaw = args[0];
-                                betArg = args.length > 1 ? args[1] : null; // betArg could be gameMode if not a number, parseBetAmount will handle
-                                otherArgs = args.slice(2);
-                            } else if (potentialUserArg1) { // e.g. /game <bet> @user
-                                betArg = args[0];
-                                targetRaw = args[1];
-                                otherArgs = args.slice(2);
-                            } else { // e.g. /game <bet> [other_arg]
-                                betArg = args[0];
-                                otherArgs = args.slice(1);
-                            }
-                        }
-                        return { betArg, targetRaw, otherArgs };
-                    };
-
                 case 'coinflip': case 'cf': {
                     if (chatType === 'private') {
                         await safeSendMessage(chatId, `🪙 The Coinflip arena awaits in <b>group chats</b>! Please use <code>/coinflip &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
@@ -10552,8 +10582,7 @@ bot.on('message', async (msg) => {
                         const { betArg, targetRaw } = parseGameArgs(commandArgs);
                         const betDE = await parseBetAmount(betArg, chatId, chatType, userId);
                         if (betDE && typeof betDE === 'bigint' && betDE > 0n) {
-                            // handleStartDiceEscalatorUnifiedOfferCommand_New will do findRecipientUser internally based on targetRaw
-                            await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetRaw);
+                            await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetRaw); 
                         }
                     } else { 
                             console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`);
@@ -10569,7 +10598,7 @@ bot.on('message', async (msg) => {
                     }
                     if (typeof handleStartDice21Command === 'function') {
                         const { betArg, targetRaw, otherArgs } = parseGameArgs(commandArgs);
-                            const gameModeArgD21 = otherArgs[0] || null; // Assuming gameMode is the first "other" arg
+                            const gameModeArgD21 = otherArgs[0] || null; 
                         const betD21 = await parseBetAmount(betArg, chatId, chatType, userId);
                         if(betD21) await handleStartDice21Command(msg, betD21, targetRaw, gameModeArgD21);
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDice21Command`); 
