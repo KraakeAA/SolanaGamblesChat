@@ -3118,9 +3118,9 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id); // This is the group chat ID
     const chatType = msg.chat.type;
-    const LOG_PREFIX_DE_OFFER_V4_GENERIC = `[DE_Offer_V4_Generic UID:${userId} CH:${chatId}]`; 
+    const LOG_PREFIX_DE_OFFER_V5_SHORTCB = `[DE_Offer_V5_ShortCB UID:${userId} CH:${chatId}]`; 
 
-    console.log(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Called. Bet: ${betAmountLamports}. Target User Object: ${targetUserObject ? targetUserObject.telegram_id : 'None'}`);
+    console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Called. Bet: ${betAmountLamports}. Target User Object: ${targetUserObject ? targetUserObject.telegram_id : 'None'}`);
 
     let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!initiatorUserObj) {
@@ -3128,11 +3128,12 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         return;
     }
     const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD')); 
 
     if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
         const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
-        const betDispHTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-        await safeSendMessage(chatId, `💰 <b>Funds Alert, ${initiatorPlayerRefHTML}!</b><br>To start a Dice Escalator game for <b>${betDispHTML}</b>, you need approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
+        const betDispHTML_for_funds_check = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD')); // Use a distinct variable name if needed
+        await safeSendMessage(chatId, `💰 <b>Funds Alert, ${initiatorPlayerRefHTML}!</b><br>To start a Dice Escalator game for <b>${betDispHTML_for_funds_check}</b>, you need approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
             parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
         });
         return;
@@ -3151,26 +3152,27 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         }
     }
 
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    // betDisplayUSD_HTML is already defined above
 
     if (targetUserObject) {
-        // --- GENERIC DIRECT PvP CHALLENGE FLOW ---
+        // --- GENERIC DIRECT PvP CHALLENGE FLOW for Dice Escalator ---
         const targetUserId = String(targetUserObject.telegram_id);
         const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObject));
-        const offerId = generateGameId(`direct_${userId.slice(-4)}_${targetUserId.slice(-4)}`); // Generic prefix
+        // Using a slightly shorter offerId prefix for direct challenges
+        const offerId = generateGameId(`dco_${userId.slice(-3)}_${targetUserId.slice(-3)}`); 
         
-        console.log(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Processing DIRECT challenge from ${initiatorPlayerRefHTML} (${userId}) to ${targetPlayerRefHTML} (${targetUserId}) with offer ID ${offerId} for Dice Escalator.`);
+        console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Processing DIRECT challenge from ${initiatorPlayerRefHTML} (${userId}) to ${targetPlayerRefHTML} (${targetUserId}) with offer ID ${offerId} for Dice Escalator.`);
 
         const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> duel for <b>${betDisplayUSD_HTML}</b>!`;
         
         const groupChallengeKeyboard = {
             inline_keyboard: [
                 [
-                    { text: "✅ Accept Challenge", callback_data: `direct_challenge_accept:${offerId}` },
-                    { text: "❌ Decline Challenge", callback_data: `direct_challenge_decline:${offerId}` }
+                    { text: "✅ Accept Challenge", callback_data: `dca:${offerId}` }, 
+                    { text: "❌ Decline Challenge", callback_data: `dcd:${offerId}` }  
                 ],
-                [ // Initiator's cancel button uses the generic cancel action
-                    { text: "🚫 Withdraw My Challenge", callback_data: `cancel_initiator_direct_challenge:${offerId}` }
+                [ 
+                    { text: "🚫 Withdraw My Challenge", callback_data: `cdc:${offerId}` } 
                 ]
             ]
         };
@@ -3178,21 +3180,20 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
 
         if (!sentGroupMessage || !sentGroupMessage.message_id) {
-            console.error(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Failed to send direct challenge message to group for offer ${offerId}.`);
+            console.error(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Failed to send direct challenge message to group for offer ${offerId}.`);
             await safeSendMessage(chatId, `⚙️ Oops! Couldn't send your direct challenge to ${targetPlayerRefHTML}. Please try again.`, { parse_mode: 'HTML' });
             return;
         }
         const offerMessageIdInGroup = String(sentGroupMessage.message_id);
         const groupNameHTML = escapeHTML(msg.chat.title || "the group");
 
-        // Send DM to target user
         const dmNotificationTextHTML = `🔔 Challenge Alert!\n\nHi ${targetPlayerRefHTML},\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> game for <b>${betDisplayUSD_HTML}</b> in the group "<b>${groupNameHTML}</b>".\n\nPlease head to that group to accept or decline the challenge.`;
         await safeSendMessage(targetUserId, dmNotificationTextHTML, { parse_mode: 'HTML' });
 
         const offerData = {
-            type: GAME_IDS.DIRECT_PVP_CHALLENGE, // Use the new generic type
-            offerId: offerId, // Using offerId consistently as the primary ID for the offer itself
-            gameId: offerId,  // For contexts that might still expect a 'gameId' field for an offer
+            type: GAME_IDS.DIRECT_PVP_CHALLENGE, 
+            offerId: offerId, 
+            gameId: offerId,  // Keep gameId same as offerId for consistency if some logic expects it
             initiatorId: userId,
             initiatorUserObj: initiatorUserObj, 
             initiatorMentionHTML: initiatorPlayerRefHTML,
@@ -3202,89 +3203,89 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
             betAmount: betAmountLamports,
             originalGroupId: chatId,
             offerMessageIdInGroup: offerMessageIdInGroup,
-            chatTitle: msg.chat.title || `Group Chat ${chatId}`, // For DM notifications during timeout/decline
+            chatTitle: msg.chat.title || `Group Chat ${chatId}`, 
             status: 'pending_direct_challenge_response',
             gameToStart: GAME_IDS.DICE_ESCALATOR_PVP, // Specific PvP game to launch
             creationTime: Date.now()
         };
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, GAME_IDS.DIRECT_PVP_CHALLENGE, betAmountLamports);
-        console.log(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Direct challenge offer ${offerId} for Dice Escalator created and stored.`);
+        console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Direct challenge offer ${offerId} for Dice Escalator created and stored.`);
 
         setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
             if (timedOutOffer && timedOutOffer.status === 'pending_direct_challenge_response' && timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE) {
                 activeGames.delete(offerId);
                 await updateGroupGameDetails(chatId, null, null, null);
-                const timeoutMsgHTML = `⏳ The ${escapeHTML(timedOutOffer.gameToStart.replace('_PVP','').replace(/_/g,' '))} challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has expired unanswered.`;
+                const gameNameForTimeout = escapeHTML(timedOutOffer.gameToStart.replace('_PVP','').replace(/_/g,' ') || "Game");
+                const timeoutMsgHTML = `⏳ The ${gameNameForTimeout} challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has expired unanswered.`;
                 if (bot && timedOutOffer.offerMessageIdInGroup) {
                     await bot.editMessageText(timeoutMsgHTML, {
-                        chat_id: timedOutOffer.originalGroupId,
-                        message_id: Number(timedOutOffer.offerMessageIdInGroup),
-                        parse_mode: 'HTML',
-                        reply_markup: {} 
-                    }).catch(e => {
-                        console.warn(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Failed to edit expired direct challenge message ${timedOutOffer.offerMessageIdInGroup}: ${e.message}. Sending new.`);
+                        chat_id: timedOutOffer.originalGroupId, message_id: Number(timedOutOffer.offerMessageIdInGroup),
+                        parse_mode: 'HTML', reply_markup: {} 
+                    }).catch(e => { 
+                        console.warn(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Failed to edit expired direct challenge message ${timedOutOffer.offerMessageIdInGroup}: ${e.message}. Sending new.`);
                         safeSendMessage(timedOutOffer.originalGroupId, timeoutMsgHTML, { parse_mode: 'HTML' });
-                    });
-                } else {
+                     });
+                } else { 
                     safeSendMessage(timedOutOffer.originalGroupId, timeoutMsgHTML, { parse_mode: 'HTML' });
                 }
-                await safeSendMessage(timedOutOffer.initiatorId, `⏳ Your ${escapeHTML(timedOutOffer.gameToStart.replace('_PVP','').replace(/_/g,' '))} challenge to ${timedOutOffer.targetUserMentionHTML} in group "${escapeHTML(timedOutOffer.chatTitle)}" has expired.`, { parse_mode: 'HTML' });
-                console.log(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Direct challenge ${offerId} timed out.`);
+                await safeSendMessage(timedOutOffer.initiatorId, `⏳ Your ${gameNameForTimeout} challenge to ${timedOutOffer.targetUserMentionHTML} in group "${escapeHTML(timedOutOffer.chatTitle)}" has expired.`, { parse_mode: 'HTML' });
+                console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Direct challenge ${offerId} timed out.`);
             }
         }, JOIN_GAME_TIMEOUT_MS);
 
     } else {
         // --- EXISTING UNIFIED OFFER FLOW (No targetUserObject) ---
-        // This part remains largely the same, using GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER
-        console.log(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Processing UNIFIED Dice Escalator offer (no target user specified).`);
-        const offerId = `deo_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
-        const offerData = {
-            gameId: offerId, type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER,
-            initiator: { userId: initiatorUserObj.telegram_id, username: initiatorUserObj.username, firstName: initiatorUserObj.first_name, displayName: getPlayerDisplayReference(initiatorUserObj) },
+        console.log(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Processing UNIFIED Dice Escalator offer (no target user specified).`);
+        const offerId_unified = `deo_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
+        // Storing initiatorMentionHTML for unified offer timeout message consistency
+        const offerData_unified = { 
+            gameId: offerId_unified, type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER,
+            initiator: { userId: initiatorUserObj.telegram_id, username: initiatorUserObj.username, firstName: initiatorUserObj.first_name, displayName: getPlayerDisplayReference(initiatorUserObj) }, // Keep plain display name for any older logic
             initiatorUserObj, 
-            initiatorMentionHTML: initiatorPlayerRefHTML, 
+            initiatorMentionHTML: initiatorPlayerRefHTML, // Store HTML safe version
             betAmount: betAmountLamports, chatId: chatId, chatType: chatType, status: 'pending_offer', createdAt: Date.now(), offerMessageId: null
         };
         
         const betDisplaySol_HTML = escapeHTML(formatCurrency(betAmountLamports, 'SOL'));
 
-        const offerTextHTML = `✨🎲 <b>New Dice Escalator Challenge!</b> 🎲✨\n\n` +
-                              `Challenger: <b>${initiatorPlayerRefHTML}</b>\n` +
-                              `Wager: <b>${betDisplayUSD_HTML}</b> (<i>${betDisplaySol_HTML}</i>) per player\n\n` +
-                              `<b>Who will dare to escalate the stakes?</b>\n` +
-                              `▫️ Initiator can battle the 🤖 <b>Bot Dealer</b>!\n` +
-                              `▫️ Or another player can accept for an epic ⚔️ <b>PvP Duel</b>!\n\n` +
-                              `<i>Challenge expires in ${JOIN_GAME_TIMEOUT_MS / 1000 / 60} min!</i>`;
-        const keyboard = {
+        const offerTextHTML_unified = `✨🎲 <b>New Dice Escalator Challenge!</b> 🎲✨\n\n` +
+                                      `Challenger: <b>${initiatorPlayerRefHTML}</b>\n` +
+                                      `Wager: <b>${betDisplayUSD_HTML}</b> (<i>${betDisplaySol_HTML}</i>) per player\n\n` +
+                                      `<b>Who will dare to escalate the stakes?</b>\n` +
+                                      `▫️ Initiator can battle the 🤖 <b>Bot Dealer</b>!\n` +
+                                      `▫️ Or another player can accept for an epic ⚔️ <b>PvP Duel</b>!\n\n` +
+                                      `<i>Challenge expires in ${JOIN_GAME_TIMEOUT_MS / 1000 / 60} min!</i>`;
+        const keyboard_unified = {
             inline_keyboard: [
-                [{ text: "🤖 Play vs Bot", callback_data: `de_accept_bot_game:${offerId}` }, { text: "⚔️ Accept PvP", callback_data: `de_accept_pvp_challenge:${offerId}` }],
-                [{ text: "❌ Cancel Offer", callback_data: `de_cancel_unified_offer:${offerId}` }]
+                [{ text: "🤖 Play vs Bot", callback_data: `de_accept_bot_game:${offerId_unified}` }, { text: "⚔️ Accept PvP", callback_data: `de_accept_pvp_challenge:${offerId_unified}` }],
+                [{ text: "❌ Cancel Offer", callback_data: `de_cancel_unified_offer:${offerId_unified}` }]
             ]
         };
-        const sentMessage = await safeSendMessage(chatId, offerTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
+        const sentMessage_unified = await safeSendMessage(chatId, offerTextHTML_unified, { parse_mode: 'HTML', reply_markup: keyboard_unified });
 
-        if (sentMessage?.message_id) {
-            offerData.offerMessageId = String(sentMessage.message_id);
-            activeGames.set(offerId, offerData); 
-            await updateGroupGameDetails(chatId, offerId, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, betAmountLamports);
+        if (sentMessage_unified?.message_id) {
+            offerData_unified.offerMessageId = String(sentMessage_unified.message_id);
+            activeGames.set(offerId_unified, offerData_unified); 
+            await updateGroupGameDetails(chatId, offerId_unified, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, betAmountLamports);
 
-            setTimeout(async () => { /* ... existing timeout logic for unified DE offer ... */ 
-                const currentOffer = activeGames.get(offerId);
+            setTimeout(async () => { 
+                const currentOffer = activeGames.get(offerId_unified);
                 if (currentOffer && currentOffer.status === 'pending_offer' && currentOffer.type === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
-                    activeGames.delete(offerId);
+                    activeGames.delete(offerId_unified);
                     await updateGroupGameDetails(chatId, null, null, null);
                     if (currentOffer.offerMessageId && bot) {
-                        const expiredBetDisplayHTML = escapeHTML(await formatBalanceForDisplay(currentOffer.betAmount, 'USD'));
-                        await bot.editMessageText(`⏳ <b>Offer Expired</b><br>The Dice Escalator challenge from ${currentOffer.initiatorMentionHTML} for <b>${expiredBetDisplayHTML}</b> has timed out.`, {
+                        const expiredBetDisplayHTML_unified = escapeHTML(await formatBalanceForDisplay(currentOffer.betAmount, 'USD'));
+                        // Use initiatorMentionHTML from currentOffer for consistency
+                        await bot.editMessageText(`⏳ <b>Offer Expired</b><br>The Dice Escalator challenge from ${currentOffer.initiatorMentionHTML || 'the initiator'} for <b>${expiredBetDisplayHTML_unified}</b> has timed out.`, {
                             chat_id: currentOffer.chatId, message_id: Number(currentOffer.offerMessageId), parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-                        }).catch(e => console.warn(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Failed to edit expired DE unified offer message: ${e.message}`));
+                        }).catch(e => console.warn(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Failed to edit expired DE unified offer message: ${e.message}`));
                     }
                 }
             }, JOIN_GAME_TIMEOUT_MS);
-        } else {
-            console.error(`${LOG_PREFIX_DE_OFFER_V4_GENERIC} Failed to send Dice Escalator unified offer message.`);
+        } else { 
+            console.error(`${LOG_PREFIX_DE_OFFER_V5_SHORTCB} Failed to send Dice Escalator unified offer message.`);
             await updateGroupGameDetails(chatId, null, null, null); 
             await safeSendMessage(chatId, "⚙️ <b>Oops!</b> Couldn't create your Dice Escalator offer. Please try again.", { parse_mode: 'HTML' });
         }
@@ -10141,23 +10142,16 @@ bot.on('message', async (msg) => {
                     }
                     break;
 
-                    case 'direct_challenge_accept':
-            case 'direct_challenge_decline':
-            case 'de_cancel_direct_challenge': // Initiator cancels their Dice Escalator direct challenge
+                    case 'dca': // Standardized: direct_challenge_accept
+            case 'dcd': // Standardized: direct_challenge_decline
+            case 'cdc': // Standardized: cancel_initiator_direct_challenge
                 console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
                 
-                // We will define handleDirectChallengeResponse in the next code block I send.
                 if (typeof handleDirectChallengeResponse === 'function') {
                     const offerIdFromParams = params[0];
-                    let effectiveActionForHandler = action;
-
-                    // Standardize the cancel action name if needed for the generic handler
-                    if (action === 'de_cancel_direct_challenge') {
-                        effectiveActionForHandler = 'cancel_initiator_direct_challenge'; 
-                    }
-
+                    // The 'action' itself ('dca', 'dcd', 'cdc') is passed directly to the handler
                     await handleDirectChallengeResponse(
-                        effectiveActionForHandler, 
+                        action, 
                         offerIdFromParams,
                         userObjectForCallback,    // User who clicked
                         originalMessageId,        // ID of the message with buttons (in the group)
@@ -10166,8 +10160,8 @@ bot.on('message', async (msg) => {
                         callbackQueryId
                     );
                 } else {
-                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Handler function 'handleDirectChallengeResponse' is not yet defined. Action: ${action}`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently under construction.", show_alert: true}).catch(()=>{});
+                    console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
                 }
                 break;
             // --- END OF NEW CASES FOR DIRECT PvP CHALLENGES ---
@@ -10985,9 +10979,9 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
 
     const initiatorUserObj = offerData.initiatorUserObj; 
     const targetUserObj = offerData.targetUserObj;   
-    const initiatorMentionHTML = offerData.initiatorMentionHTML;
-    const targetMentionHTML = offerData.targetUserMentionHTML;
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD')); // For messages
+    const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
 
     if (!initiatorUserObj || !targetUserObj) {
         console.error(`${logPrefix} Critical: Missing full initiator or target user object in offerData for ${offerId}.`);
@@ -10995,14 +10989,13 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         activeGames.delete(offerId);
         await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
          if (bot && offerData.offerMessageIdInGroup) {
-             bot.editMessageText("Error processing challenge: Player details missing from offer.", { chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup, parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
+             bot.editMessageText("Error processing challenge: Player details missing from offer.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
         }
         return;
     }
 
-
     switch (actionName) {
-        case 'direct_challenge_accept':
+        case 'dca': // direct_challenge_accept
             if (clickerId !== String(offerData.targetUserId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
                 return;
@@ -11010,24 +11003,23 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
 
             await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting challenge from ${initiatorMentionHTML}... Verifying details...` }).catch(() => {});
 
-            // Fetch fresh balances for final checks
             const freshInitiator = await getOrCreateUser(offerData.initiatorId);
-            const freshTarget = await getOrCreateUser(offerData.targetUserId); // clickerUserObj is the target
+            const freshTarget = await getOrCreateUser(offerData.targetUserId); 
 
             if (!freshInitiator || !freshTarget) {
                  console.error(`${logPrefix} Failed to fetch fresh user details for balance check on accept.`);
                  await safeSendMessage(originalChatIdFromGroup, `⚙️ An error occurred fetching player details. Challenge cannot proceed.`, { parse_mode: 'HTML' });
                  if (bot && offerData.offerMessageIdInGroup) {
-                    bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup }).catch(() => {});
+                    bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
                  }
-                 activeGames.delete(offerId); // Don't leave a broken offer
+                 activeGames.delete(offerId); 
                  await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
                  return;
             }
 
             if (BigInt(freshTarget.balance) < offerData.betAmount) {
                 const declineMsgTargetNoFunds = `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the challenge from ${initiatorMentionHTML}. Challenge cancelled.`;
-                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgTargetNoFunds, { chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup, parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'})});
+                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgTargetNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'})});
                 else await safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'});
                 activeGames.delete(offerId);
                 await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
@@ -11035,7 +11027,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             if (BigInt(freshInitiator.balance) < offerData.betAmount) {
                 const declineMsgInitiatorNoFunds = `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds.`;
-                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgInitiatorNoFunds, { chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup, parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'})});
+                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgInitiatorNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'})});
                 else await safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'});
                 activeGames.delete(offerId);
                 await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
@@ -11045,39 +11037,36 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             console.log(`${logPrefix} Challenge accepted by ${targetMentionHTML}. Balances OK. Proceeding to deduct bets and start ${offerData.gameToStart}.`);
             
             let client = null;
-            let pvpGameDataForStarter; // Will hold data needed by the specific game starter
+            let pvpGameSetupData; 
             try {
-                client = await pool.connect();
+                client = await pool.connect(); 
                 await client.query('BEGIN');
                 
+                const gameNameForLedger = offerData.gameToStart.replace('_PVP','').toLowerCase();
                 const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-offerData.betAmount), 
-                                                                  `bet_placed_${offerData.gameToStart.replace('_PVP','').toLowerCase()}_direct_init`, 
+                                                                  `bet_placed_${gameNameForLedger}_direct_init`, 
                                                                   { game_id_custom_field: offerId, opponent_id_custom_field: offerData.targetUserId }, 
                                                                   `Direct PvP bet vs ${targetMentionHTML} for ${offerData.gameToStart}`);
                 if (!initBetRes.success) throw new Error(`Initiator bet placement failed: ${initBetRes.error}`);
-                freshInitiator.balance = initBetRes.newBalanceLamports; // Update local object
+                freshInitiator.balance = initBetRes.newBalanceLamports; 
                 
                 const targetBetRes = await updateUserBalanceAndLedger(client, offerData.targetUserId, BigInt(-offerData.betAmount), 
-                                                                    `bet_placed_${offerData.gameToStart.replace('_PVP','').toLowerCase()}_direct_join`, 
+                                                                    `bet_placed_${gameNameForLedger}_direct_join`, 
                                                                     { game_id_custom_field: offerId, opponent_id_custom_field: offerData.initiatorId }, 
                                                                     `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
                 if (!targetBetRes.success) throw new Error(`Target player bet placement failed: ${targetBetRes.error}`);
-                freshTarget.balance = targetBetRes.newBalanceLamports; // Update local object
+                freshTarget.balance = targetBetRes.newBalanceLamports; 
                 
                 await client.query('COMMIT');
-                console.log(`${logPrefix} Bets successfully deducted for both players.`);
+                console.log(`${logPrefix} Bets successfully deducted for both players for ${offerData.gameToStart}.`);
 
-                // Prepare data for the specific game starter
-                // This object structure should be what the game-specific PvP starters expect
-                // or the starters need to be adapted.
-                pvpGameDataForStarter = {
+                pvpGameSetupData = {
                     chatId: offerData.originalGroupId,
-                    chatType: originalChatTypeFromGroup, // Pass this along
+                    chatType: originalChatTypeFromGroup, 
                     betAmount: offerData.betAmount,
-                    initiatorUserObj: freshInitiator, // Contains updated balance
-                    opponentUserObj: freshTarget,   // Contains updated balance (this is the clicker)
-                    offerMessageIdInGroup: offerData.offerMessageIdInGroup // For potential deletion by game starter
-                    // Add any other fields specific game starters might need from the original offer
+                    initiatorUserObj: freshInitiator, 
+                    opponentUserObj: freshTarget,   
+                    offerMessageIdInGroup: offerData.offerMessageIdInGroup 
                 };
 
             } catch (e) {
@@ -11085,106 +11074,103 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 console.error(`${logPrefix} DB error during bet deductions for direct challenge ${offerId}: ${e.message}`);
                 const dbErrorMsg = `⚙️ A database error occurred while processing bets for the challenge between ${initiatorMentionHTML} and ${targetMentionHTML}. The game cannot start. Please try again.`;
                 if (bot && offerData.offerMessageIdInGroup) {
-                    await bot.editMessageText(dbErrorMsg, { chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup, parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'})});
+                    await bot.editMessageText(dbErrorMsg, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'})});
                 } else {
                     await safeSendMessage(originalChatIdFromGroup, dbErrorMsg, {parse_mode: 'HTML'});
                 }
-                activeGames.delete(offerId); // Ensure offer is cleaned up
+                activeGames.delete(offerId); 
                 await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
                 return;
             } finally {
                 if (client) client.release();
             }
             
-            // Bets deducted. Now, start the specific PvP game.
             activeGames.delete(offerId); 
             await updateGroupGameDetails(originalChatIdFromGroup, null, null, null); 
 
-            const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\n\nA <b>${escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '))}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting now...`;
-            if (bot && offerData.offerMessageIdInGroup) { // Edit the original challenge message
+            const gameDisplayName = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
+            const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\n\nA <b>${gameDisplayName}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting now...`;
+            if (bot && offerData.offerMessageIdInGroup) { 
                 await bot.editMessageText(acceptedMsgHTML, {
-                    chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup,
+                    chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup),
                     parse_mode: 'HTML', reply_markup: {}
                 }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge accepted (will proceed anyway): ${e.message}`));
-            } else { // Fallback if no message to edit
+            } else { 
                 await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' });
             }
 
+            // Call the appropriate game starter based on offerData.gameToStart
+            // IMPORTANT: Each game starter needs to be able to handle these parameters.
             switch (offerData.gameToStart) {
                 case GAME_IDS.DICE_ESCALATOR_PVP:
                     if (typeof startDiceEscalatorPvPGame_New === 'function') {
-                        // startDiceEscalatorPvPGame_New expects (offerDataForInitiator, opponentUserObj, originalMessageIdToDelete)
-                        // We need to ensure pvpGameDataForStarter.initiatorUserObj has all details that offerDataForInitiator would have.
-                        // The 'offerData' like object for startDiceEscalatorPvPGame_New typically includes:
-                        // { chatId, initiatorId, initiatorMentionHTML, initiatorUserObj, betAmount }
-                        // Let's pass the essentials directly.
+                        // Assuming startDiceEscalatorPvPGame_New is refactored or can handle:
+                        // (initiatorUserObj, opponentUserObj, betAmount, groupChatId, groupChatType, messageIdToDeleteFromOffer)
                         await startDiceEscalatorPvPGame_New(
-                            pvpGameDataForStarter.initiatorUserObj, 
-                            pvpGameDataForStarter.opponentUserObj, 
-                            pvpGameDataForStarter.betAmount, 
-                            pvpGameDataForStarter.chatId,
-                            pvpGameDataForStarter.chatType, // Pass chatType
-                            pvpGameDataForStarter.offerMessageIdInGroup // This message is now an "accepted" message, maybe don't delete
+                            pvpGameSetupData.initiatorUserObj, 
+                            pvpGameSetupData.opponentUserObj, 
+                            pvpGameSetupData.betAmount, 
+                            pvpGameSetupData.chatId,
+                            pvpGameSetupData.chatType, 
+                            null // The offer message is already edited to "Accepted", no need for game starter to delete it.
                         );
                     } else { 
                         console.error(`${logPrefix} Missing handler: startDiceEscalatorPvPGame_New`);
                         await safeSendMessage(originalChatIdFromGroup, "⚙️ Error starting Dice Escalator PvP: Handler missing.", {parse_mode: 'HTML'});
                     }
                     break;
-                // TODO: Add cases for GAME_IDS.COINFLIP_PVP, RPS_PVP, DICE_21_PVP, DUEL_PVP
-                // Each will call its respective PvP game starting function, e.g.:
                 // case GAME_IDS.COINFLIP_PVP:
-                //     await startCoinflipPvPGame(pvpGameDataForStarter.initiatorUserObj, pvpGameDataForStarter.opponentUserObj, pvpGameDataForStarter.betAmount, pvpGameDataForStarter.chatId, pvpGameDataForStarter.offerMessageIdInGroup);
+                //     if (typeof startCoinflipPvPGame === 'function') {
+                //         await startCoinflipPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
+                //     } else { console.error... }
                 //     break;
+                // case GAME_IDS.RPS_PVP:
+                //     if (typeof startRPSPvPGame === 'function') {
+                //         await startRPSPvPGame(pvpGameSetupData.initiatorUserObj, pvpGameSetupData.opponentUserObj, pvpGameSetupData.betAmount, pvpGameSetupData.chatId, pvpGameSetupData.chatType, null);
+                //     } else { console.error... }
+                //     break;
+                // ... Add cases for DICE_21_PVP, DUEL_PVP as you implement them ...
                 default:
                     console.error(`${logPrefix} Unknown gameTypeForAccept in offerData: ${offerData.gameToStart}. Cannot start game.`);
-                    await safeSendMessage(originalChatIdFromGroup, `⚙️ Error: Cannot start game type "<code>${escapeHTML(offerData.gameToStart)}</code>". Bets have been deducted but game cannot start. Admin notified.`, {parse_mode: 'HTML'});
+                    await safeSendMessage(originalChatIdFromGroup, `⚙️ Error: Cannot start game type "<code>${escapeHTML(offerData.gameToStart)}</code>". Bets were deducted. Admin notified.`, {parse_mode: 'HTML'});
                     if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`🚨 CRITICAL: Direct Challenge for ${offerData.gameToStart} accepted, bets deducted, but no game starter function found. OfferID: ${offerId}`, {parse_mode: 'HTML'});
+                        notifyAdmin(`🚨 CRITICAL: Direct Challenge for ${offerData.gameToStart} accepted, bets deducted, but no game starter function found. OfferID: ${offerId}. Players ${offerData.initiatorId} & ${offerData.targetUserId} may need manual game start or refund.`, {parse_mode: 'HTML'});
                     }
             }
             break;
 
-        case 'direct_challenge_decline':
+        case 'dcd': // direct_challenge_decline
             if (clickerId !== String(offerData.targetUserId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you to decline.", show_alert: true }).catch(() => {});
                 return;
             }
             await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." }).catch(() => {});
             console.log(`${logPrefix} Challenge declined by ${targetMentionHTML}.`);
-
-            const declineMsgHTML = `❌ ${targetMentionHTML} has declined the ${escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '))} challenge from ${initiatorMentionHTML} for <b>${betDisplayUSD_HTML}</b>.`;
-            if (bot && offerData.offerMessageIdInGroup) {
-                await bot.editMessageText(declineMsgHTML, {
-                    chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup,
-                    parse_mode: 'HTML', reply_markup: {} 
-                }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge declined: ${e.message}`));
-            }
+            const gameNameForDecline = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
+            const declineMsgHTML = `❌ ${targetMentionHTML} has declined the ${gameNameForDecline} challenge from ${initiatorMentionHTML} for <b>${betDisplayUSD_HTML}</b>.`;
+            if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgHTML, {parse_mode: 'HTML'})});
+            else await safeSendMessage(originalChatIdFromGroup, declineMsgHTML, {parse_mode: 'HTML'});
             
-            await safeSendMessage(offerData.initiatorId, `${targetMentionHTML} has declined your ${escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '))} challenge for <b>${betDisplayUSD_HTML}</b> in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
+            await safeSendMessage(offerData.initiatorId, `${targetMentionHTML} has declined your ${gameNameForDecline} challenge for <b>${betDisplayUSD_HTML}</b> in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
             
             activeGames.delete(offerId);
             await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
             break;
 
-        case 'cancel_initiator_direct_challenge': 
+        case 'cdc': // cancel_initiator_direct_challenge
             if (clickerId !== String(offerData.initiatorId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can withdraw this challenge.", show_alert: true }).catch(() => {});
                 return;
             }
             await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." }).catch(() => {});
             console.log(`${logPrefix} Challenge withdrawn by initiator ${initiatorMentionHTML}.`);
-
-            const withdrawMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '))} challenge to ${targetMentionHTML}.`;
-             if (bot && offerData.offerMessageIdInGroup) {
-                await bot.editMessageText(withdrawMsgHTML, {
-                    chat_id: originalChatIdFromGroup, message_id: offerData.offerMessageIdInGroup,
-                    parse_mode: 'HTML', reply_markup: {} 
-                }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge withdrawn: ${e.message}`));
-            }
+            const gameNameForWithdraw = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
+            const withdrawMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${gameNameForWithdraw} challenge to ${targetMentionHTML}.`;
+             if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(withdrawMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, withdrawMsgHTML, {parse_mode: 'HTML'})});
+             else await safeSendMessage(originalChatIdFromGroup, withdrawMsgHTML, {parse_mode: 'HTML'});
             
             if (offerData.status === 'pending_direct_challenge_response') { 
-                 await safeSendMessage(offerData.targetUserId, `${initiatorMentionHTML} has withdrawn their ${escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '))} challenge to you in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
+                 await safeSendMessage(offerData.targetUserId, `${initiatorMentionHTML} has withdrawn their ${gameNameForWithdraw} challenge to you in the group "${escapeHTML(offerData.chatTitle)}".`, { parse_mode: 'HTML' });
             }
             
             activeGames.delete(offerId);
