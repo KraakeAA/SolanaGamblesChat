@@ -10342,180 +10342,212 @@ bot.on('callback_query', async (callbackQuery) => {
             const effectiveMessageId = isCallbackRedirectedToDm ? null : originalMessageId; // If redirected, don't try to edit the group message with action result
 
             switch (action) {
-                case 'show_rules_menu':
-                    if (typeof handleRulesCommand === 'function') await handleRulesCommand(effectiveChatId, userObjectForCallback, effectiveMessageId, true, isCallbackRedirectedToDm ? 'private' : originalChatType);
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleRulesCommand`);
-                    break;
-                case DEPOSIT_CALLBACK_ACTION:
-                case QUICK_DEPOSIT_CALLBACK_ACTION:
-                case 'quick_deposit':
-                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler which has correct context
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDepositCommand`);
-                    break;
-                case WITHDRAW_CALLBACK_ACTION:
-                    if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawCommand`);
-                    break;
-                case 'menu':
-                    console.log(`${LOG_PREFIX_CBQ} Routing to handleMenuAction for action: ${action}:${params[0]}`);
-                    if (typeof handleMenuAction === 'function') await handleMenuAction(userId, originalChatId, originalMessageId, params[0], params.slice(1), true, originalChatType); // handleMenuAction handles its own DM redirection logic internally
-                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
-                    break;
-                case 'process_withdrawal_confirm':
-                // --- ADDED/MODIFIED DIAGNOSTIC LOGS ---
-                console.log(`${LOG_PREFIX_CBQ} Entered 'process_withdrawal_confirm' case. Raw Params: [${params.join(',')}]`);
-                // Ensure LOG_PREFIX_CBQ, userId, originalMessageId, etc. are defined in the scope of your callback handler
+                case 'show_rules_menu':
+                    if (typeof handleRulesCommand === 'function') await handleRulesCommand(effectiveChatId, userObjectForCallback, effectiveMessageId, true, isCallbackRedirectedToDm ? 'private' : originalChatType);
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleRulesCommand`);
+                    break;
+                case DEPOSIT_CALLBACK_ACTION:
+                case QUICK_DEPOSIT_CALLBACK_ACTION:
+                case 'quick_deposit':
+                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler which has correct context
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDepositCommand`);
+                    break;
+                case WITHDRAW_CALLBACK_ACTION:
+                    if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(mockMsgObjectForHandler, params, userId); // Pass mockMsgObjectForHandler
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawCommand`);
+                    break;
+                case 'menu':
+                    console.log(`${LOG_PREFIX_CBQ} Routing to handleMenuAction for action: ${action}:${params[0]}`);
+                    if (typeof handleMenuAction === 'function') await handleMenuAction(userId, originalChatId, originalMessageId, params[0], params.slice(1), true, originalChatType); // handleMenuAction handles its own DM redirection logic internally
+                    else console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
+                    break;
+                case 'process_withdrawal_confirm':
+                    console.log(`${LOG_PREFIX_CBQ} Entered 'process_withdrawal_confirm' case. Raw Params: [${params.join(',')}]`);
+                    if (typeof handleWithdrawalConfirmation === 'function') { 
+                        const decision = params[0];
+                        const currentState = userStateCache.get(userId); 
+                        console.log(`${LOG_PREFIX_CBQ} Retrieved state for 'process_withdrawal_confirm'. Decision: '${decision}'. State content: ${stringifyWithBigInt(currentState)}`);
+                        const messageIdToEditInDm = currentState?.messageId || originalMessageId; 
+                        const effectiveDmChatIdForWithdraw = currentState?.chatId || userId; 
+                        if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === String(userId)) {
+                            console.log(`${LOG_PREFIX_CBQ} 'yes' decision, state is valid and for correct user/chat. Calling handleWithdrawalConfirmation. Message ID to edit/use: ${currentState.messageId}`);
+                            await handleWithdrawalConfirmation(userId, currentState.chatId, currentState.messageId, currentState.data.linkedWallet, currentState.data.amountLamportsStr, currentState.data.feeLamportsStr, currentState.data.originalGroupChatId, currentState.data.originalGroupMessageId);
+                        } else if (decision === 'no') {
+                            console.log(`${LOG_PREFIX_CBQ} 'no' decision. Cancelling withdrawal. State was: ${currentState?.state}`);
+                            if (bot && messageIdToEditInDm) {
+                                await bot.editMessageText("Withdrawal cancelled by user.", { chat_id: effectiveDmChatIdForWithdraw, message_id: Number(messageIdToEditInDm), parse_mode:'HTML', reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]} }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'no' decision message: ${e.message}`));
+                            }
+                            clearUserState(userId);
+                        } else {
+                            console.warn(`${LOG_PREFIX_CBQ} Invalid confirmation decision ('${decision}') or state invalid/expired. Current state name: '${currentState?.state}'. Current state chatId: '${currentState?.chatId}' vs userId: '${String(userId)}'.`);
+                            if (bot && messageIdToEditInDm) {
+                                await bot.editMessageText("Invalid confirmation or your session expired. Withdrawal cancelled.", { chat_id: effectiveDmChatIdForWithdraw, message_id: Number(messageIdToEditInDm), parse_mode:'HTML', reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]} }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'invalid state' message: ${e.message}`));
+                            }
+                            clearUserState(userId);
+                        }
+                    } else {
+                        console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation. Cannot process confirmation.`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation: Handler missing.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                if (typeof handleWithdrawalConfirmation === 'function') { // Assuming you've corrected this to handleWithdrawalConfirmation
-                    const decision = params[0];
-                    const currentState = userStateCache.get(userId); // userId from the callbackQuery.from.id
+                // COINFLIP & RPS NEW ROUTING
+                case 'cf_accept_bot': case 'cf_accept_pvp': case 'cf_cancel_offer':
+                case 'cf_pvb_choice': case 'cf_pvp_call':
+                case 'rps_accept_bot': case 'rps_accept_pvp': case 'rps_cancel_offer':
+                case 'rps_pvb_choice': case 'rps_pvp_choice':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardCoinflipRPSCallback for action: ${action}`);
+                    if (typeof forwardCoinflipRPSCallback === 'function') {
+                        await forwardCoinflipRPSCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardCoinflipRPSCallback for Coinflip/RPS action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Action handler not found.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                    console.log(`${LOG_PREFIX_CBQ} Retrieved state for 'process_withdrawal_confirm'. Decision: '${decision}'. State content: ${stringifyWithBigInt(currentState)}`);
+                case 'join_game':
+                case 'cancel_game':
+                case 'rps_choose': 
+                case 'play_again_coinflip': 
+                case 'play_again_rps': 
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardGameCallback for action: ${action}`);
+                    if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    else console.warn(`${LOG_PREFIX_CBQ} forwardGameCallback not defined for ${action}`);
+                    break;
 
-                    // Determine which message to edit (the Yes/No prompt)
-                    const messageIdToEditInDm = currentState?.messageId || originalMessageId; // originalMessageId is from callbackQuery.message.message_id
-                    const effectiveDmChatId = currentState?.chatId || userId; // Should be userId for this state
+                case 'de_accept_bot_game':
+                case 'de_accept_pvp_challenge':
+                case 'de_cancel_unified_offer':
+                case 'de_stand_pvb':
+                case 'de_stand_pvp':
+                case 'play_again_de_pvb':
+                case 'play_again_de_pvp':
+                case 'de_pvb_go_for_jackpot':
+                    console.log(`${LOG_PREFIX_CBQ} Routing to forwardDiceEscalatorCallback_New for action: ${action}`);
+                    if (typeof forwardDiceEscalatorCallback_New === 'function') {
+                        await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else { 
+                        console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for DE action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This Dice Escalator action is currently unavailable.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                    if (decision === 'yes' && currentState && currentState.state === 'awaiting_withdrawal_confirmation' && currentState.chatId === String(userId)) {
-                        console.log(`${LOG_PREFIX_CBQ} 'yes' decision, state is valid and for correct user/chat. Calling handleWithdrawalConfirmation. Message ID to edit/use: ${currentState.messageId}`);
-                        await handleWithdrawalConfirmation(
-                            userId, 
-                            currentState.chatId, // Should be the DM chat ID (same as userId)
-                            currentState.messageId, // The ID of the Yes/No prompt message
-                            currentState.data.linkedWallet, 
-                            currentState.data.amountLamportsStr, 
-                            currentState.data.feeLamportsStr, 
-                            currentState.data.originalGroupChatId, 
-                            currentState.data.originalGroupMessageId
-                        );
-                    } else if (decision === 'no') {
-                        console.log(`${LOG_PREFIX_CBQ} 'no' decision. Cancelling withdrawal. State was: ${currentState?.state}`);
-                        if (bot && messageIdToEditInDm) {
-                            await bot.editMessageText("Withdrawal cancelled by user.", {
-                                chat_id: effectiveDmChatId, 
-                                message_id: Number(messageIdToEditInDm), 
-                                parse_mode:'HTML', 
-                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
-                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'no' decision message: ${e.message}`));
-                        }
-                        clearUserState(userId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} Invalid confirmation decision ('${decision}') or state invalid/expired. Current state name: '${currentState?.state}'. Current state chatId: '${currentState?.chatId}' vs userId: '${String(userId)}'.`);
-                        if (bot && messageIdToEditInDm) {
-                            await bot.editMessageText("Invalid confirmation or your session expired. Withdrawal cancelled.", {
-                                chat_id: effectiveDmChatId, 
-                                message_id: Number(messageIdToEditInDm), 
-                                parse_mode:'HTML', 
-                                reply_markup: {inline_keyboard:[[{text:"💳 Back to Wallet", callback_data:"menu:wallet"}]]}
-                            }).catch(e => console.error(`${LOG_PREFIX_CBQ} Error editing 'invalid state' message: ${e.message}`));
-                        }
-                        clearUserState(userId);
-                    }
-                } else {
-                    console.error(`${LOG_PREFIX_CBQ} Missing handler: handleWithdrawalConfirmation. Cannot process confirmation.`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Error processing confirmation: Handler missing.", show_alert: true}).catch(()=>{});
-                }
-                break;
+                case 'd21_accept_bot_game': case 'd21_accept_pvp_challenge': case 'd21_cancel_unified_offer':
+                case 'd21_stand': case 'play_again_d21': case 'd21_pvb_cancel':
+                case 'd21_pvp_stand': case 'play_again_d21_pvp':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDice21Callback for action: ${action}`);
+                    if (typeof forwardDice21Callback === 'function') {
+                        await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDice21Callback not defined for D21 action: ${action}`);
+                    break;
 
-                // COINFLIP & RPS NEW ROUTING
-                case 'cf_accept_bot': case 'cf_accept_pvp': case 'cf_cancel_offer':
-                case 'cf_pvb_choice': case 'cf_pvp_call':
-                case 'rps_accept_bot': case 'rps_accept_pvp': case 'rps_cancel_offer':
-                case 'rps_pvb_choice': case 'rps_pvp_choice':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardCoinflipRPSCallback for action: ${action}`);
-                    if (typeof forwardCoinflipRPSCallback === 'function') {
-                        await forwardCoinflipRPSCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardCoinflipRPSCallback for Coinflip/RPS action: ${action}`);
-                        await bot.answerCallbackQuery(callbackQueryId, {text: "Action handler not found.", show_alert: true}).catch(()=>{});
-                    }
-                    break;
+                case 'duel_accept_bot_game': case 'duel_accept_pvp_challenge': case 'duel_cancel_unified_offer':
+                case 'play_again_duel':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDuelCallback for action: ${action}`);
+                    if (typeof forwardDuelCallback === 'function') {
+                        await forwardDuelCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDuelCallback not defined for Duel action: ${action}`);
+                    break;
 
-                case 'join_game':       // This case should be for OLDER games if any still use it.
-                case 'cancel_game':     // This case should be for OLDER games if any still use it.
-                // case 'rps_choose':   // Now handled by rps_pvb_choice or rps_pvp_choice above
-                case 'play_again_coinflip': // Updated to new flow below
-                case 'play_again_rps':      // Updated to new flow below
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardGameCallback for action: ${action}`);
-                    if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    else console.warn(`${LOG_PREFIX_CBQ} forwardGameCallback not defined for ${action}`);
-                    break;
+                case 'mines_difficulty_select':
+                case 'mines_cancel_offer':
+                case 'mines_tile':
+                case 'mines_cashout':
+                case 'play_again_mines':
+                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardMinesCallback for action: ${action}`);
+                    if (typeof forwardMinesCallback === 'function') {
+                        await forwardMinesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} forwardMinesCallback not defined or direct handler missing for Mines action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Mines action handler not found.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
 
-                case 'de_accept_bot_game':
-                case 'de_accept_pvp_challenge':
-                case 'de_cancel_unified_offer':
-                case 'de_stand_pvb':
-                case 'de_stand_pvp':
-                case 'play_again_de_pvb':
-                case 'play_again_de_pvp':
-                case 'de_pvb_go_for_jackpot':
-                    console.log(`${LOG_PREFIX_CBQ} Routing to forwardDiceEscalatorCallback_New for action: ${action}`);
-                    if (typeof forwardDiceEscalatorCallback_New === 'function') {
-                        await forwardDiceEscalatorCallback_New(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.error(`${LOG_PREFIX_CBQ} Missing handler: forwardDiceEscalatorCallback_New for Dice Escalator action: ${action}`);
-                    break;
+                case 'ou7_choice': case 'play_again_ou7':
+                case 'ladder_roll': case 'play_again_ladder':
+                case 's7_roll': case 'play_again_s7':
+                case 'play_again_slot':
+                case 'jackpot_display_noop': 
+                    if (action === 'jackpot_display_noop') {
+                        console.log(`${LOG_PREFIX_CBQ} Jackpot display no-op handled.`);
+                        await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); 
+                    } else if (typeof forwardAdditionalGamesCallback === 'function') {
+                        console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardAdditionalGamesCallback for action: ${action}`);
+                        await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
+                    } else {
+                        console.warn(`${LOG_PREFIX_CBQ} forwardAdditionalGamesCallback not defined or direct handler missing for general game action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Game action handler not found.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
+                
+                case 'noop_ok': case 'noop':
+                    console.log(`${LOG_PREFIX_CBQ} No-op action '${action}' handled. Deleting message if it exists and is not from group (or if it's a specific 'OK' type button).`);
+                    if (originalMessageId && bot && (originalChatType === 'private' || action === 'noop_ok')) {
+                        await bot.deleteMessage(originalChatId, Number(originalMessageId)).catch(() => {});
+                    }
+                    await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); 
+                    break;
 
-                case 'd21_accept_bot_game': case 'd21_accept_pvp_challenge': case 'd21_cancel_unified_offer':
-                case 'd21_stand': case 'play_again_d21': case 'd21_pvb_cancel':
-                case 'd21_pvp_stand': case 'play_again_d21_pvp':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDice21Callback for action: ${action}`);
-                    if (typeof forwardDice21Callback === 'function') {
-                        await forwardDice21Callback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDice21Callback not defined for D21 action: ${action}`);
-                    break;
+                // --- MODIFICATION FOR TEST START ---
+                // The original 'dir_chal_acc', 'dir_chal_dec', 'dir_chal_can' cases (formerly dca, dcd, cdc)
+                // should be COMMENTED OUT or REMOVED from their original position if you paste this default block.
+                // If they were here, they would look like:
+                /*
+                case 'dir_chal_acc': 
+                case 'dir_chal_dec': 
+                case 'dir_chal_can': 
+                    console.log(`${LOG_PREFIX_CBQ} Routing to handleDirectChallengeResponse for action: ${action}. Params: ${params.join(',')}`);
+                    if (typeof handleDirectChallengeResponse === 'function') {
+                        const offerIdFromParams = params[0];
+                        await handleDirectChallengeResponse(
+                            action, 
+                            offerIdFromParams,
+                            userObjectForCallback,
+                            originalMessageId,
+                            originalChatId,
+                            originalChatType,
+                            callbackQueryId
+                        );
+                    } else {
+                        console.error(`${LOG_PREFIX_CBQ} CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
+                    }
+                    break;
+                */
+                // --- END OF ORIGINAL CASES TO BE COMMENTED OUT ---
 
-                case 'duel_accept_bot_game': case 'duel_accept_pvp_challenge': case 'duel_cancel_unified_offer':
-                case 'play_again_duel':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardDuelCallback for action: ${action}`);
-                    if (typeof forwardDuelCallback === 'function') {
-                        await forwardDuelCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else console.warn(`${LOG_PREFIX_CBQ} forwardDuelCallback not defined for Duel action: ${action}`);
-                    break;
-
-                case 'mines_difficulty_select':
-                case 'mines_cancel_offer':
-                case 'mines_tile':
-                case 'mines_cashout':
-                case 'play_again_mines':
-                    console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardMinesCallback for action: ${action}`);
-                    if (typeof forwardMinesCallback === 'function') {
-                        await forwardMinesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} forwardMinesCallback not defined or direct handler missing for Mines action: ${action}`);
-                         await bot.answerCallbackQuery(callbackQueryId, {text: "Mines action handler not found.", show_alert: true}).catch(()=>{});
-                    }
-                    break;
-
-                case 'ou7_choice': case 'play_again_ou7':
-                case 'ladder_roll': case 'play_again_ladder': // Assuming ladder_roll is a valid action
-                case 's7_roll': case 'play_again_s7':
-                case 'play_again_slot':
-                case 'jackpot_display_noop': // Special case for no-op
-                    if (action === 'jackpot_display_noop') {
-                        console.log(`${LOG_PREFIX_CBQ} Jackpot display no-op handled.`);
-                        await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); // Ensure it's answered
-                    } else if (typeof forwardAdditionalGamesCallback === 'function') {
-                        console.log(`${LOG_PREFIX_CBQ} Forwarding to forwardAdditionalGamesCallback for action: ${action}`);
-                        await forwardAdditionalGamesCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                    } else {
-                        console.warn(`${LOG_PREFIX_CBQ} forwardAdditionalGamesCallback not defined or direct handler missing for general game action: ${action}`);
-                        await bot.answerCallbackQuery(callbackQueryId, {text: "Game action handler not found.", show_alert: true}).catch(()=>{});
-                    }
-                    break;
-                case 'noop_ok': case 'noop':
-                    console.log(`${LOG_PREFIX_CBQ} No-op action '${action}' handled. Deleting message if it exists and is not from group (or if it's a specific 'OK' type button).`);
-                    if (originalMessageId && bot && (originalChatType === 'private' || action === 'noop_ok')) {
-                         await bot.deleteMessage(originalChatId, Number(originalMessageId)).catch(() => {});
-                    }
-                    await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); // Already answered generally, but safe to call again
-                    break;
-
-                default:
-                    console.warn(`${LOG_PREFIX_CBQ} Unknown callback action encountered in main switch: "${action}" with params: [${params.join(', ')}]`);
-                    await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
-                    break;
-            }
-        }
+                default:
+                    // --- MANUAL DEBUG TEST START ---
+                    if (action === 'dir_chal_acc' || action === 'dir_chal_dec' || action === 'dir_chal_can') {
+                        console.log(`[MANUAL_DEBUG_TEST] Action IS '${action}' and it reached the modified default block. Attempting to route to handleDirectChallengeResponse.`);
+                        if (typeof handleDirectChallengeResponse === 'function') {
+                            const offerIdFromParams = params[0];
+                            // Answer the callback *before* awaiting the handler, so the user sees quick feedback
+                            await bot.answerCallbackQuery(callbackQueryId, {text: `DEBUG: Processing ${action}...`}).catch(()=>{});
+                            
+                            await handleDirectChallengeResponse(
+                                action, 
+                                offerIdFromParams,
+                                userObjectForCallback,
+                                originalMessageId,
+                                originalChatId,
+                                originalChatType,
+                                callbackQueryId // Note: answerCallbackQuery already called above, this might be for internal handler use or ignored by Telegram if it tries to answer again
+                            );
+                        } else {
+                             console.error(`${LOG_PREFIX_CBQ} [MANUAL_DEBUG_TEST] CRITICAL_ERROR: Missing handler function: handleDirectChallengeResponse for action: ${action}`);
+                             await bot.answerCallbackQuery(callbackQueryId, {text: "Error: DEBUG - Handler missing.", show_alert: true}).catch(()=>{});
+                        }
+                    } else {
+                        // Original default logic for other unknown actions
+                        console.warn(`${LOG_PREFIX_CBQ} Unknown callback action encountered in main switch (original default path): "${action}" with params: [${params.join(', ')}]`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
+                    }
+                    // --- MANUAL DEBUG TEST END ---
+                    break;
+                // --- MODIFICATION FOR TEST END ---
+            }
+        }
     } catch (callbackError) {
         console.error(`${LOG_PREFIX_CBQ} 🚨 UNHANDLED ERROR IN CALLBACK ROUTER for action ${action}: ${callbackError.message}`, callbackError.stack?.substring(0, 700));
         await safeSendMessage(userId, `⚙️ Oops! A critical error occurred while processing your action (\`${escapeMarkdownV2(action)}\`). My apologies! Please try again. If the problem persists, contacting support might be necessary.`, { parse_mode: 'MarkdownV2' });
