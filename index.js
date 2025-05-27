@@ -8672,7 +8672,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
     const originalInvokedChatId = String(originalInvokedChatIdStr);
     const originalMessageId = originalMessageIdStr ? Number(originalMessageIdStr) : null;
     const userIdAsDmChatId = String(userObj.telegram_id);
-    const LOG_PREFIX_RULES_DISP = `[RulesDisplay_V2_USDOnly UID:${userIdAsDmChatId} Game:${gameCode} InvokedInChat:${originalInvokedChatId}]`; // V2_USDOnly
+    const LOG_PREFIX_RULES_DISP = `[RulesDisplay_V3_EmojiFix UID:${userIdAsDmChatId} Game:${gameCode} InvokedInChat:${originalInvokedChatId}]`; // V3 for emoji fix
 
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
     let botUsername = BOT_NAME || "our bot";
@@ -8693,7 +8693,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
         const defaultBetDisplayHTML = minBetDisplayHTML;
 
         generalBettingInfoHTML = `<b>💰 General Betting Info:</b>\n` +
-            ` • Place bets in USD (e.g., <code>5</code>, <code>10.50</code>).\n` + // MODIFIED LINE HERE
+            ` • Place bets in USD (e.g., <code>5</code>, <code>10.50</code>).\n` +
             ` • Current Bet Limits (USD Equivalent): <b>${minBetDisplayHTML}</b> to <b>${maxBetDisplayHTML}</b>.\n` +
             ` • If no bet amount is specified when starting a game, it often defaults to the minimum bet (approx. <b>${defaultBetDisplayHTML}</b>).\n\n`;
     } catch (priceError) {
@@ -8702,13 +8702,13 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
     }
 
     let rulesTitle = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
-    let gameEmoji = '📜';
+    let gameEmoji = '📜'; // Default emoji
     let rulesTextHTML = "";
 
     switch (gameCode) {
         case GAME_IDS.COINFLIP: 
             gameEmoji = '🪙'; rulesTitle = "Coinflip Challenge";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Correctly predict the outcome of a coin flip (Heads or Tails) to win against an opponent or the Bot Dealer.</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8725,7 +8725,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 
         case GAME_IDS.RPS: 
             gameEmoji = '✂️'; rulesTitle = "Rock Paper Scissors";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Outsmart your opponent by choosing Rock, Paper, or Scissors. Rock crushes Scissors, Scissors cuts Paper, and Paper covers Rock.</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8744,7 +8744,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 
         case GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER: 
             gameEmoji = '🎲'; rulesTitle = "Dice Escalator";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}! Ready for a strategic dice scoring game?\n\n` +
                 `<b>Objective:</b>\n` +
                 `<i>Achieve a higher score by rolling dice than your opponent (Bot Dealer or another Player) without busting.</i>\n\n` +
@@ -8769,7 +8769,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 
         case GAME_IDS.DICE_21: 
             gameEmoji = '🃏'; rulesTitle = "Dice 21 (Blackjack)";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Get your dice sum closer to <b>${escapeHTML(String(DICE_21_TARGET_SCORE))}</b> than your opponent (Bot or Player) without going over (busting).</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8789,7 +8789,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 
         case GAME_IDS.OVER_UNDER_7:
             gameEmoji = '🎲'; rulesTitle = "Over/Under 7";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Predict if the sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b> (rolled by the Helper Bot) will be Over 7, Under 7, or Exactly 7.</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8803,7 +8803,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 
         case GAME_IDS.DUEL_UNIFIED_OFFER: 
             gameEmoji = '⚔️'; rulesTitle = "Duel / Highroller";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Achieve a higher sum with <b>${escapeHTML(String(DUEL_DICE_COUNT))} dice</b> rolls than your opponent (another Player or the Bot Dealer).</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8822,7 +8822,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 
         case GAME_IDS.LADDER:
             gameEmoji = '🪜'; rulesTitle = "Greed's Ladder";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Climb the ladder by achieving a high sum with <b>${escapeHTML(String(LADDER_ROLL_COUNT))} dice</b> (rolled by Helper Bot). But beware the bust!</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8836,33 +8836,32 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
             break;
 
         case GAME_IDS.SEVEN_OUT: 
-            gameEmoji = '🎲'; rulesTitle = "Lucky Sum (Fast Sevens)";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            gameEmoji = '🎲'; rulesTitle = "Lucky Sum (Fast Sevens)"; // Updated title
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Roll two dice. Certain sums win, others lose instantly! It's a quick thrill.</i>\n\n` +
                 `<b>How to Play:</b>\n` +
                 `• Start with <code>/s7 &lt;bet&gt;</code> (or <code>/sevenout</code>, <code>/craps</code>).\n` +
-                `• Two dice are rolled for you by the casino (via animated dice).\n\n` +
+                `• Two dice are rolled for you by the casino (via animated dice sent by the bot).\n\n` + // Clarified who sends animated dice
                 `<b>Outcomes & Payouts (Total Return, includes your stake):</b>\n`;
-            for (const sumKey in LUCKY_SUM_PAYOUTS) { // Assuming LUCKY_SUM_PAYOUTS is defined
+            for (const sumKey in LUCKY_SUM_PAYOUTS) { 
                 const payoutInfo = LUCKY_SUM_PAYOUTS[sumKey];
                 rulesTextHTML += ` • Roll a sum of <b>${escapeHTML(sumKey)}</b> (${escapeHTML(payoutInfo.label)}): <b>${escapeHTML(String(payoutInfo.multiplier + 1))}x</b> bet\n`;
             }
-            // Assuming LUCKY_SUM_LOSING_NUMBERS is defined
             rulesTextHTML += ` • Rolling a sum of <b>${LUCKY_SUM_LOSING_NUMBERS.map(n => escapeHTML(String(n))).join(', ')}</b> results in a loss.\n\n` +
                 generalBettingInfoHTML;
             break;
 
         case GAME_IDS.SLOT_FRENZY:
             gameEmoji = '🎰'; rulesTitle = "Slot Frenzy";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}!\n\n` +
                 `<b>Objective:</b>\n<i>Spin the reels and match symbols for big wins! The outcome is determined by a single value (1-64) from our Helper Bot, mapped to slot combinations.</i>\n\n` +
                 `<b>How to Play:</b>\n` +
                 `• Start with <code>/slot &lt;bet&gt;</code>.\n` +
                 `• The Helper Bot provides a spin value, and your win is determined by the payout table.\n\n` +
                 `<b>Payouts (Based on current configuration; total return including stake):</b>\n`;
-            for (const key in SLOT_PAYOUTS) { // Assumes SLOT_PAYOUTS is defined
+            for (const key in SLOT_PAYOUTS) { 
                 if (SLOT_PAYOUTS[key].multiplier >= 0) { 
                     rulesTextHTML += ` • ${escapeHTML(SLOT_PAYOUTS[key].symbols)} (${escapeHTML(SLOT_PAYOUTS[key].label)}): <b>${escapeHTML(String(SLOT_PAYOUTS[key].multiplier + 1))}x</b> bet\n`;
                 }
@@ -8873,7 +8872,7 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
             
         case GAME_IDS.MINES:
             gameEmoji = '💣'; rulesTitle = "Mines Field Sweeper";
-            rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${emoji}\n\n` +
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} - Rules & How to Play</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                 `Hey ${playerRefHTML}! Navigate the treacherous Mines Field and uncover hidden gems!\n\n`+
                 `<b>Objective:</b>\n<i>Reveal safe tiles (gems 💎) while avoiding hidden mines 💣. Each gem found increases your potential payout multiplier. Cash out at any time after finding at least one gem, or try to find all gems for the max prize!</i>\n\n` +
                 `<b>How to Play:</b>\n` +
@@ -8896,9 +8895,10 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
             break;
 
         default:
+            // Default case uses gameEmoji which is initialized to '📜'
             if (!rulesTextHTML) { 
                 rulesTitle = "Unknown Game";
-                rulesTextHTML = `${emoji} <b>${escapeHTML(rulesTitle)} Rules</b> ${emoji}\n\n` +
+                rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} Rules</b> ${gameEmoji}\n\n` + // Corrected to gameEmoji
                                 `Hey ${playerRefHTML}!\n\n` +
                                 `📜 Rules for "<code>${escapeHTML(gameCode)}</code>" are currently under construction or this is not a primary game entry.\n` +
                                 `Please select a game from the main rules list.`;
