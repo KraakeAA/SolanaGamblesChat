@@ -10259,16 +10259,6 @@ bot.on('callback_query', async (callbackQuery) => {
     const originalChatType = msg.chat.type;
     const originalMessageId = String(msg.message_id);
 
-    // Answer callback query quickly to stop loading animation on client for most actions.
-    // Some specific handlers might answer it themselves with custom text.
-    // For now, let's keep a general answer here. If specific handlers need to answer,
-    // they can, and a second answer will be ignored by Telegram.
-    // OR, we can remove this and ensure every specific handler answers.
-    // Let's lean towards specific handlers answering, or a default answer if not handled.
-    // For now, keep this initial answer, it's often good UX.
-    // await bot.answerCallbackQuery(callbackQueryId).catch(()=>{ console.warn(`${LOG_PREFIX_CBQ} Initial answerCallbackQuery failed for ID ${callbackQueryId}. Action: ${data.split(':')[0]}`); });
-
-
     let userObjectForCallback = await getOrCreateUser(userId, userFromCb.username, userFromCb.first_name, userFromCb.last_name);
     if (!userObjectForCallback) {
         console.error(`${LOG_PREFIX_CBQ} Failed to get/create user for callback processing. User ID: ${userId}. Callback Data: ${data}`);
@@ -10278,6 +10268,18 @@ bot.on('callback_query', async (callbackQuery) => {
 
     const [action, ...params] = data.split(':');
     console.log(`${LOG_PREFIX_CBQ} Parsed Action: "${action}", Params: [${params.join(', ')}] (Chat: ${originalChatId}, Type: ${originalChatType}, MsgID: ${originalMessageId})`);
+
+    // --- NEW DEBUGGING LINES START HERE ---
+    console.log(`[DEBUG_SWITCH] Action String for Switch: "${action}"`);
+    console.log(`[DEBUG_SWITCH] Action Length: ${action.length}`);
+    let charCodes = [];
+    for (let i = 0; i < action.length; i++) {
+        charCodes.push(action.charCodeAt(i));
+    }
+    console.log(`[DEBUG_SWITCH] Action Character Codes: [${charCodes.join(', ')}]`);
+    // Expected for "dca": [100, 99, 97] (length 3)
+    // Expected for "cdc": [99, 100, 99] (length 3)
+    // --- NEW DEBUGGING LINES END HERE ---
 
     if (action === 'menu' && (params[0] === 'main' || params[0] === 'wallet' || params[0] === 'game_selection' || params[0] === 'rules')) {
         console.log(`${LOG_PREFIX_CBQ} Clearing user state for ${userId} due to menu navigation: ${action}:${params[0]}`);
