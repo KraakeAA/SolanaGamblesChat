@@ -10069,7 +10069,7 @@ function createStandardTitle(titleText, emoji = '✨') {
 }
 
 // console.log("Part 5a, Section 4 (REVISED for Simplified Post-Game Keyboard) - Complete.");
-// --- End of Part 5a, Section // --- Start of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator Jackpot Choice & OU7 Fix) ---
+// --- End of Part 5a, Section // --- Start of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator Jackpot Choice & OU7 // --- Start of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator Jackpot Choice & OU7 Fix) ---
 // index.js - Part 5a, Section 1: Core Listeners Setup (Message & Callback) and Populated Routers
 // (This entire block should be placed LATE in your index.js, AFTER all game logic, general commands, and UI helpers, but BEFORE Part 6)
 //----------------------------------------------------------------------------------------------
@@ -10187,16 +10187,22 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
         const effectiveMinLamportsSystem = MIN_BET_AMOUNT_LAMPORTS_config;
         const effectiveMaxLamportsSystem = MAX_BET_AMOUNT_LAMPORTS_config;
 
-        if (betAmountLamports === minBetLamports) {
-            if (betAmountLamports > effectiveMaxLamportsSystem) {
+        if (betAmountLamports === minBetLamports) { // If it was adjusted to min USD-derived lamports
+            if (betAmountLamports > effectiveMaxLamportsSystem) { // Check if this min USD is somehow > absolute system max
                 const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
                 console.warn(`${LOG_PREFIX_PBA} minBetLamports (${formatCurrency(betAmountLamports)}) somehow exceeds effectiveMaxLamportsSystem (${formatCurrency(effectiveMaxLamportsSystem)}). Clamping to max.`);
-                await safeSendMessage(commandInitiationChatId, `ℹ️ Your $0.50 bet (converted to lamports) unusually exceeded the system's absolute maximum. Adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
+                await safeSendMessage(commandInitiationChatId, `ℹ️ Your $${MIN_BET_USD_val.toFixed(2)} bet (converted to lamports) unusually exceeded the system's absolute maximum. Adjusted to *${escapeMarkdownV2(adjustedMaxDisplaySystem)}*.`, { parse_mode: 'MarkdownV2' });
                 return effectiveMaxLamportsSystem;
             }
+            // Ensure even minBetLamports (derived from MIN_BET_USD_val) is not less than absolute MIN_BET_AMOUNT_LAMPORTS_config
+            if (betAmountLamports < effectiveMinLamportsSystem) {
+                console.warn(`${LOG_PREFIX_PBA} minBetLamports derived from USD (${formatCurrency(betAmountLamports)}) is less than absolute system min (${formatCurrency(effectiveMinLamportsSystem)}). Using system min.`);
+                return effectiveMinLamportsSystem;
+            }
             return betAmountLamports;
         }
 
+        // General checks against absolute system lamport limits
         if (betAmountLamports < effectiveMinLamportsSystem) {
             const adjustedMinDisplaySystem = await formatBalanceForDisplay(effectiveMinLamportsSystem, 'USD', solPrice);
             console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is BELOW absolute system lamport limit ${formatCurrency(effectiveMinLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMinDisplaySystem)}.`);
@@ -10204,8 +10210,13 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
             return effectiveMinLamportsSystem;
         }
         if (betAmountLamports > effectiveMaxLamportsSystem) {
-            if (betAmountLamports === maxBetLamports) {
-                // This IS the exact maximum lamport value from MAX_BET_USD_val. Accept it.
+            if (betAmountLamports === maxBetLamports) { // If it's the exact max USD-derived lamports
+                // Ensure maxBetLamports (derived from MAX_BET_USD_val) is not more than absolute MAX_BET_AMOUNT_LAMPORTS_config
+                if (betAmountLamports > effectiveMaxLamportsSystem) {
+                    console.warn(`${LOG_PREFIX_PBA} maxBetLamports derived from USD (${formatCurrency(betAmountLamports)}) is greater than absolute system max (${formatCurrency(effectiveMaxLamportsSystem)}). Using system max.`);
+                    return effectiveMaxLamportsSystem;
+                }
+                // This IS the exact maximum lamport value from MAX_BET_USD_val and within system limits. Accept it.
             } else {
                 const adjustedMaxDisplaySystem = await formatBalanceForDisplay(effectiveMaxLamportsSystem, 'USD', solPrice);
                 console.warn(`${LOG_PREFIX_PBA} Bet ${formatCurrency(betAmountLamports)} is ABOVE absolute system lamport limit ${formatCurrency(effectiveMaxLamportsSystem)}. Adjusting to ${escapeMarkdownV2(adjustedMaxDisplaySystem)}.`);
@@ -10221,26 +10232,26 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
         const message = `⚙️ Apologies, we couldn't determine current bet limits due to a price feed issue. Your bet has been set to the internal minimum of *${minLamportsFallbackDisplay}*.`;
         await safeSendMessage(commandInitiationChatId, message, { parse_mode: 'MarkdownV2' });
 
-        try {
+        try { // Fallback parsing without USD price, using absolute lamport limits
             if (!arg || String(arg).trim() === "") return MIN_BET_AMOUNT_LAMPORTS_config;
             let fallbackAmountLamports;
             const argStrFB = String(arg).trim().toLowerCase();
-            if (argStrFB.endsWith('sol') || argStrFB.includes('.')) {
-                const solValFB = parseFloat(argStrFB.replace('sol', '').replace('lamports','').trim());
+            if (argStrFB.endsWith('sol')) {
+                const solValFB = parseFloat(argStrFB.replace('sol', '').trim());
                 if (isNaN(solValFB) || solValFB <=0) return MIN_BET_AMOUNT_LAMPORTS_config;
                 fallbackAmountLamports = BigInt(Math.floor(solValFB * Number(LAMPORTS_PER_SOL)));
             } else if (argStrFB.endsWith('lamports')) {
                 const lampValFB = BigInt(argStrFB.replace('lamports','').trim());
                 if (lampValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
                 fallbackAmountLamports = lampValFB;
-            } else {
-                const intValFB = BigInt(argStrFB);
-                if (intValFB <= 0n) return MIN_BET_AMOUNT_LAMPORTS_config;
-                if (intValFB > 0n && intValFB < 10000n && !argStrFB.includes('.') && !argStrFB.endsWith('000000')) { // Heuristic for small numbers likely intended as USD
-                    fallbackAmountLamports = BigInt(Math.floor(Number(intValFB) * Number(LAMPORTS_PER_SOL)));
-                } else {
-                    fallbackAmountLamports = intValFB;
-                }
+            } else { // Assume it's lamports if no suffix and price feed is down
+                try {
+                    const numValFB = BigInt(argStrFB);
+                    if (numValFB <=0n) return MIN_BET_AMOUNT_LAMPORTS_config;
+                    fallbackAmountLamports = numValFB;
+                } catch (e) { // Not SOL, not lamports, not a plain integer for lamports
+                    return MIN_BET_AMOUNT_LAMPORTS_config; // Default to min lamports
+                }
             }
 
             if (fallbackAmountLamports < MIN_BET_AMOUNT_LAMPORTS_config) return MIN_BET_AMOUNT_LAMPORTS_config;
@@ -10301,75 +10312,48 @@ bot.on('message', async (msg) => {
         let isDiceEscalatorEmoji = false;
         let isDice21Emoji = false;
         let isDuelGameEmoji = false;
-        let matchedGameTypeForDice = null;
+        //let matchedGameTypeForDice = null; // This was declared but not used, removed
 
-
-        let iterationCount = 0;
-        for (const [gId, gData] of activeGames.entries()) {
-            iterationCount++;
+        for (const [gId, gData] of activeGames.entries()) { // Removed iterationCount as it wasn't used
             if (String(gData.chatId) === chatId) {
-                const isDEPvBRollExpected = gData.status === 'player_turn_awaiting_emoji';
-                if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && isDEPvBRollExpected) {
+                // Dice Escalator PvB
+                if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && 
+                    (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) { // Added 18+ choice status
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
                 }
+                // Dice Escalator PvP
                 if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
-                    const logCtx = `[DiceRouter DE_PVP GID:${gId} Roller:${rollerId}]`; 
-                    console.log(`${logCtx} Checking game. Game Status: '${gData.status}'`);
-                    console.log(`${logCtx} P1 (${gData.initiator?.userId}): isTurn=${gData.initiator?.isTurn}, status=${gData.initiator?.status}`);
-                    console.log(`${logCtx} P2 (${gData.opponent?.userId}): isTurn=${gData.opponent?.isTurn}, status=${gData.opponent?.status}`);
-
-                    const isInitiatorDE_PvP = (gData.initiator &&
-                        gData.initiator.userId === rollerId &&
-                        gData.initiator.isTurn &&
-                        gData.initiator.status === 'awaiting_roll_emoji' && // Player status check
-                        (gData.status === 'p1_awaiting_roll_emoji' || gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji') // Game status check
-                        );
-
-                    const isOpponentDE_PvP = (gData.opponent &&
-                        gData.opponent.userId === rollerId &&
-                        gData.opponent.isTurn &&
-                        gData.opponent.status === 'awaiting_roll_emoji' && // Player status check
-                        (gData.status === 'p2_awaiting_roll_emoji' || gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji') // Game status check
-                        );
-                        console.log(`${logCtx} isInitiatorDE_PvP: ${isInitiatorDE_PvP}, isOpponentDE_PvP: ${isOpponentDE_PvP}`);
-                    if (isInitiatorDE_PvP || isOpponentDE_PvP) {
-                        console.log(`${logCtx} MATCH FOUND for Dice Escalator PVP!`);
-                        gameIdForDiceRoll = gId;
-                        gameDataForDiceRoll = gData;
-                        isDiceEscalatorEmoji = true; 
-                        matchedGameTypeForDice = GAME_IDS.DICE_ESCALATOR_PVP; 
-                        break;
-                    } else {
-                        console.log(`${logCtx} NO MATCH for this DE_PVP game object.`);
+                    const isPlayerTurnInDEPvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') ||
+                                                (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji');
+                    if (isPlayerTurnInDEPvP) {
+                        gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
                     }
                 }
+                // Dice 21 PvB
                 if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId &&
                     (gData.status === 'player_turn_hit_stand_prompt' || 
-                        gData.status === 'player_initial_roll_1_prompted' ||
-                        gData.status === 'player_initial_roll_2_prompted'
-                    )
-                    ) {
+                     gData.status === 'player_initial_roll_1_prompted' ||
+                     gData.status === 'player_initial_roll_2_prompted')) {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
                 }
+                // Dice 21 PvP
                 if (gData.type === GAME_IDS.DICE_21_PVP) {
-                    const isInitiatorD21_PvP = (gData.initiator && gData.initiator.userId === rollerId && gData.initiator.isTurn && gData.status === 'initiator_turn' && gData.initiator.status === 'playing_turn');
-                    const isOpponentD21_PvP = (gData.opponent && gData.opponent.userId === rollerId && gData.opponent.isTurn && gData.status === 'opponent_turn' && gData.opponent.status === 'playing_turn');
-                    if (isInitiatorD21_PvP || isOpponentD21_PvP) {
+                    const isPlayerTurnInD21PvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'playing_turn') ||
+                                               (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'playing_turn');
+                    if (isPlayerTurnInD21PvP) {
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
                     }
                 }
-                if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && (gData.status === 'player_awaiting_roll1_emoji' || gData.status === 'player_awaiting_roll2_emoji')) {
+                // Duel PvB
+                if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && 
+                    (gData.status === 'player_awaiting_roll1_emoji' || gData.status === 'player_awaiting_roll2_emoji')) {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
                 }
+                // Duel PvP
                 if (gData.type === GAME_IDS.DUEL_PVP) {
-                    // Corrected logic for DUEL_PVP dice emoji routing
-                    const isInitiatorDuel_PvP = (gData.initiator && gData.initiator.userId === rollerId && gData.initiator.isTurn && 
-                                                 gData.initiator.status === 'awaiting_roll_emoji' && 
-                                                 (gData.status === 'p1_awaiting_roll1_emoji' || gData.status === 'p1_awaiting_roll2_emoji'));
-                    const isOpponentDuel_PvP = (gData.opponent && gData.opponent.userId === rollerId && gData.opponent.isTurn && 
-                                                gData.opponent.status === 'awaiting_roll_emoji' &&
-                                                (gData.status === 'p2_awaiting_roll1_emoji' || gData.status === 'p2_awaiting_roll2_emoji'));
-                    if (isInitiatorDuel_PvP || isOpponentDuel_PvP) {
+                    const isPlayerTurnInDuelPvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') ||
+                                                  (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji');
+                    if (isPlayerTurnInDuelPvP) {
                         gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
                     }
                 }
@@ -10492,7 +10476,7 @@ bot.on('message', async (msg) => {
                     }
                     break;
                     
-                    // MODIFIED GAME COMMANDS START HERE
+                    // --- MODIFIED GAME COMMAND ROUTING START ---
                 case 'coinflip': case 'cf':
                     if (chatType === 'private') {
                         await safeSendMessage(chatId, `🪙 The Coinflip arena awaits in <b>group chats</b>! Please use <code>/coinflip &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
@@ -10501,13 +10485,15 @@ bot.on('message', async (msg) => {
                     if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') {
                         let betArgCF = null;
                         let targetUsernameRawCF = null;
+                            // Arg parsing: /cf bet @user OR /cf @user bet OR /cf bet OR /cf @user
+                            // Also handles numeric IDs for targetUser
                             if (commandArgs.length === 1) {
-                                if (commandArgs[0].startsWith('@') || /^\d+$/.test(commandArgs[0])) targetUsernameRawCF = commandArgs[0]; // Allow ID or @username
+                                if (commandArgs[0].startsWith('@') || /^\d+$/.test(commandArgs[0])) targetUsernameRawCF = commandArgs[0];
                                 else betArgCF = commandArgs[0];
                             } else if (commandArgs.length >= 2) {
                                 if (commandArgs[0].startsWith('@') || /^\d+$/.test(commandArgs[0])) { targetUsernameRawCF = commandArgs[0]; betArgCF = commandArgs[1]; }
                                 else if (commandArgs[1].startsWith('@') || /^\d+$/.test(commandArgs[1])) { targetUsernameRawCF = commandArgs[1]; betArgCF = commandArgs[0]; }
-                                else betArgCF = commandArgs[0];
+                                else betArgCF = commandArgs[0]; // Default to first arg as bet if no @user or ID
                             }
                         const betCF = await parseBetAmount(betArgCF, chatId, chatType, userId);
                         if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF, targetUsernameRawCF);
@@ -10544,7 +10530,8 @@ bot.on('message', async (msg) => {
                     }
                     if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
                         let betArgDE = null;
-                        let targetUsernameRawDE = null;
+                        let targetUsernameRawDE = null; 
+                            // This parsing logic was already present and correct for Dice Escalator
                             if (commandArgs.length === 1) {
                                 if (commandArgs[0].startsWith('@') || /^\d+$/.test(commandArgs[0])) targetUsernameRawDE = commandArgs[0];
                                 else betArgDE = commandArgs[0];
@@ -10554,9 +10541,13 @@ bot.on('message', async (msg) => {
                                 else betArgDE = commandArgs[0];
                             }
                         const betDE = await parseBetAmount(betArgDE, chatId, chatType, userId);
-                        if (betDE && typeof betDE === 'bigint' && betDE > 0n) { // Check added from original DE handler
-                            // Target user object will be fetched inside handleStartDiceEscalatorUnifiedOfferCommand_New
-                            await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetUsernameRawDE);
+                        if (betDE && typeof betDE === 'bigint' && betDE > 0n) {
+                            let targetUserObjectDE = null; // Renamed to avoid conflict with other targetUserObject
+                            if (targetUsernameRawDE) {
+                                targetUserObjectDE = await findRecipientUser(targetUsernameRawDE); 
+                                    // Validation of targetUserObjectDE is now handled inside handleStartDiceEscalatorUnifiedOfferCommand_New
+                            }
+                            await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetUserObjectDE); // Pass the object
                         }
                     } else { 
                             console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New`);
@@ -10565,7 +10556,7 @@ bot.on('message', async (msg) => {
                     break;
 
                 case 'd21': case 'blackjack':
-                    if (chatType === 'private') { // Added private chat block for consistency
+                    if (chatType === 'private') { 
                         const playerRefForDMBlock_D21 = escapeHTML(getPlayerDisplayReference(userForCommandProcessing || msg.from));
                         await safeSendMessage(chatId, `🎲 Greetings, ${playerRefForDMBlock_D21}!<br><br>The Dice 21 game must be initiated in a <b>group chat</b>.<br>Please use <code>/d21 &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
                         break;
@@ -10573,14 +10564,15 @@ bot.on('message', async (msg) => {
                     if (typeof handleStartDice21Command === 'function') {
                         let betArgD21 = null;
                         let targetUsernameRawD21 = null;
-                            let gameModeArgD21 = null; // Keep original gameModeArg logic if it was used for something else
+                            let gameModeArgD21 = null; 
+                            // Parsing logic similar to other games
                             if (commandArgs.length === 1) {
                                 if (commandArgs[0].startsWith('@') || /^\d+$/.test(commandArgs[0])) targetUsernameRawD21 = commandArgs[0];
                                 else betArgD21 = commandArgs[0];
                             } else if (commandArgs.length >= 2) {
                                 if (commandArgs[0].startsWith('@') || /^\d+$/.test(commandArgs[0])) { targetUsernameRawD21 = commandArgs[0]; betArgD21 = commandArgs[1]; if(commandArgs[2]) gameModeArgD21 = commandArgs[2];}
                                 else if (commandArgs[1].startsWith('@') || /^\d+$/.test(commandArgs[1])) { targetUsernameRawD21 = commandArgs[1]; betArgD21 = commandArgs[0]; if(commandArgs[2]) gameModeArgD21 = commandArgs[2];}
-                                else { betArgD21 = commandArgs[0]; gameModeArgD21 = commandArgs[1];} // Assumes bet then gamemode if no @user
+                                else { betArgD21 = commandArgs[0]; gameModeArgD21 = commandArgs[1];}
                             }
                         const betD21 = await parseBetAmount(betArgD21, chatId, chatType, userId);
                         if(betD21) await handleStartDice21Command(msg, betD21, targetUsernameRawD21, gameModeArgD21);
@@ -10607,7 +10599,7 @@ bot.on('message', async (msg) => {
                         if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel, targetUsernameRawDuel);
                     } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDuelUnifiedOfferCommand`); 
                     break;
-                    // END OF MODIFIED GAME COMMANDS
+                    // --- END OF MODIFIED GAME COMMAND ROUTING ---
 
                 case 'ou7': case 'overunder7':
                     if (typeof handleStartOverUnder7Command === 'function') {
@@ -10696,7 +10688,7 @@ bot.on('callback_query', async (callbackQuery) => {
     const [action, ...params] = data.split(':');
     console.log(`${LOG_PREFIX_CBQ} Parsed Action: "${action}", Params: [${params.join(', ')}] (Chat: ${originalChatId}, Type: ${originalChatType}, MsgID: ${originalMessageId})`);
 
-    // --- DEBUGGING LINES (from previous steps, can be removed if issue is resolved) ---
+    // --- DEBUGGING LINES (kept from previous steps, can be removed if issue is resolved) ---
     console.log(`[DEBUG_SWITCH] Action String for Switch: "${action}"`);
     console.log(`[DEBUG_SWITCH] Action Length: ${action.length}`);
     let charCodes = [];
@@ -10825,8 +10817,8 @@ bot.on('callback_query', async (callbackQuery) => {
                         await bot.answerCallbackQuery(callbackQueryId, {text: "Action handler not found.", show_alert: true}).catch(()=>{});
                     }
                     break;
-                case 'join_game':
-                case 'cancel_game':
+                case 'join_game': 
+                case 'cancel_game': 
                 case 'rps_choose': 
                 case 'play_again_coinflip': 
                 case 'play_again_rps': 
@@ -10834,7 +10826,7 @@ bot.on('callback_query', async (callbackQuery) => {
                     if (typeof forwardGameCallback === 'function') await forwardGameCallback(action, params, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
                     else console.warn(`${LOG_PREFIX_CBQ} forwardGameCallback not defined for ${action}`);
                     break;
-                // --- MODIFIED/RESTORED Direct Challenge Cases ---
+                // --- RESTORED Direct Challenge Cases with new action names ---
                 case 'dir_chal_acc': 
                 case 'dir_chal_dec': 
                 case 'dir_chal_can': 
@@ -10855,7 +10847,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         await bot.answerCallbackQuery(callbackQueryId, {text: "Error: This challenge action is currently unavailable.", show_alert: true}).catch(()=>{});
                     }
                     break;
-                // --- END OF MODIFIED/RESTORED Direct Challenge Cases ---
+                // --- END OF RESTORED Direct Challenge Cases ---
                 case 'de_accept_bot_game':
                 case 'de_accept_pvp_challenge':
                 case 'de_cancel_unified_offer':
@@ -10924,23 +10916,10 @@ bot.on('callback_query', async (callbackQuery) => {
                     await bot.answerCallbackQuery(callbackQueryId).catch(()=>{}); 
                     break;
                 default:
-                        // If you had the MANUAL_DEBUG_TEST here, it would be removed, and the original default restored
-                        // IF AND ONLY IF you are certain the 'dir_chal_acc' etc. cases above are working correctly.
-                        // For now, assuming the test structure for dir_chal_acc etc. remains in the default:
-                        if (action === 'dir_chal_acc' || action === 'dir_chal_dec' || action === 'dir_chal_can') {
-                            console.log(`[MANUAL_DEBUG_TEST] Action IS '${action}' inside default. Attempting route to handleDirectChallengeResponse.`);
-                            if (typeof handleDirectChallengeResponse === 'function') {
-                                const offerIdFromParams = params[0];
-                                await bot.answerCallbackQuery(callbackQueryId, {text: `DEBUG: Processing ${action}...`}).catch(()=>{});
-                                await handleDirectChallengeResponse(action, offerIdFromParams, userObjectForCallback, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-                            } else {
-                                 console.error(`${LOG_PREFIX_CBQ} [MANUAL_DEBUG_TEST] CRITICAL_ERROR: Missing handler: handleDirectChallengeResponse for ${action}`);
-                                 await bot.answerCallbackQuery(callbackQueryId, {text: "Error: DEBUG - Handler missing.", show_alert: true}).catch(()=>{});
-                            }
-                        } else {
-                            console.warn(`${LOG_PREFIX_CBQ} Unknown callback action encountered in main switch (original default path): "${action}" with params: [${params.join(', ')}]`);
-                            await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
-                        }
+                        // If the MANUAL_DEBUG_TEST 'if' block was here, it's now removed, and dir_chal_... actions are handled by their restored cases above.
+                        // This is the original default logic for truly unknown actions.
+                        console.warn(`${LOG_PREFIX_CBQ} Unknown callback action encountered in main switch (original default path): "${action}" with params: [${params.join(', ')}]`);
+                        await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
                         break;
             }
         }
@@ -10966,6 +10945,7 @@ async function forwardCoinflipRPSCallback(action, params, userObject, originalMe
     const chatDataForHandler = { id: originalChatId, type: originalChatType }; 
 
     switch (action) {
+        // Coinflip Callbacks
         case 'cf_accept_bot':
             if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_bot.`); return; }
             if (typeof handleCoinflipAcceptBotGameCallback === 'function') await handleCoinflipAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
@@ -10994,6 +10974,8 @@ async function forwardCoinflipRPSCallback(action, params, userObject, originalMe
             if (typeof handleCoinflipPvPCallCallback === 'function') await handleCoinflipPvPCallCallback(offerIdOrGameId, callerIdCheckCF, callChoiceCF, userObject, originalMessageId, callbackQueryId);
             else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvPCallCallback`);
             break;
+
+        // RPS Callbacks
         case 'rps_accept_bot':
             if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_bot.`); return; }
             if (typeof handleRPSAcceptBotGameCallback === 'function') await handleRPSAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
@@ -11113,7 +11095,7 @@ async function forwardDice21Callback(action, params, userObject, originalMessage
                 const mockMsgForD21Replay = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
                 if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
                 if (typeof handleStartDice21Command === 'function') {
-                    await handleStartDice21Command(mockMsgForD21Replay, betAmountD21Replay);
+                    await handleStartDice21Command(mockMsgForD21Replay, betAmountD21Replay, null); // Pass null for targetUsernameRaw for unified offer replay
                 } else console.error(`${LOG_PREFIX_D21_CB_FWD} Missing handler: handleStartDice21Command for ${action} replay`);
             } catch (e) { console.error(`${LOG_PREFIX_D21_CB_FWD} Invalid bet amount for ${action}: '${gameIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true }); }
             break;
@@ -11171,7 +11153,7 @@ async function forwardDuelCallback(action, params, userObject, originalMessageId
                 const betAmountDuelReplay = BigInt(offerIdOrBetAmountStr);
                 if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
                 if (typeof handleStartDuelUnifiedOfferCommand === 'function') {
-                    await handleStartDuelUnifiedOfferCommand(mockMsgForHandler, betAmountDuelReplay);
+                    await handleStartDuelUnifiedOfferCommand(mockMsgForHandler, betAmountDuelReplay, null); // Pass null for targetUsernameRaw
                 } else console.error(`${LOG_PREFIX_DUEL_CB_FWD} Missing handler: handleStartDuelUnifiedOfferCommand for Duel replay`);
             } catch (e) { console.error(`${LOG_PREFIX_DUEL_CB_FWD} Invalid bet amount for play_again_duel: '${offerIdOrBetAmountStr}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
             break;
@@ -11247,7 +11229,8 @@ async function forwardDiceEscalatorCallback_New(action, params, userObject, orig
                 const betAmountPvP_DE = BigInt(betAmountPvPStr_DE);
                 if (bot && originalMessageId) await bot.editMessageReplyMarkup({}, { chat_id: String(originalChatId), message_id: Number(originalMessageId) }).catch(() => {});
                 if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
-                    await handleStartDiceEscalatorUnifiedOfferCommand_New(mockMsgForPlayAgain, betAmountPvP_DE);
+                    // For PvP play again, we create a new unified offer, not a direct challenge.
+                    await handleStartDiceEscalatorUnifiedOfferCommand_New(mockMsgForPlayAgain, betAmountPvP_DE, null); // Pass null for targetUserObject
                 } else console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Missing handler: handleStartDiceEscalatorUnifiedOfferCommand_New for DE PvP replay`);
             } catch (e) { console.error(`${LOG_PREFIX_DE_CB_FWD_NEW} Invalid bet amount for play_again_de_pvp: '${betAmountPvPStr_DE}'`); await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid bet amount for replay.", show_alert: true });}
             break;
@@ -11375,11 +11358,11 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
                 if (typeof handleStartLadderCommand === 'function') await handleStartLadderCommand(mockMsgForReplay, betAmount);
                 else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartLadderCommand`);
                 break;
-            case 's7_roll': // This was 'sevenout_roll' previously. Assuming s7_roll is the callback.
+            case 's7_roll': 
                 if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing gameId for s7_roll.`); return; }
-                if (typeof processSevenOutRoll === 'function') { // Assuming processSevenOutRoll handles a gameId/gameData object
+                if (typeof processSevenOutRoll === 'function') { 
                      const gameDataS7 = activeGames.get(gameIdOrBetAmountStr);
-                     if(gameDataS7) await processSevenOutRoll(gameDataS7); // Pass the gameData object
+                     if(gameDataS7) await processSevenOutRoll(gameDataS7); 
                           else console.error(`${LOG_PREFIX_ADD_GAME_CB} GameData not found for s7_roll ID: ${gameIdOrBetAmountStr}`);
                 } else {
                     console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: processSevenOutRoll`);
@@ -11431,7 +11414,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         return;
     }
 
-    const initiatorUserObjFull = offerData.initiatorUserObj; // Renamed for clarity
+    const initiatorUserObjFull = offerData.initiatorUserObj; 
     const targetUserObjFull = offerData.targetUserObj; 
     const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObjFull));
     const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObjFull));
@@ -11448,8 +11431,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         return;
     }
 
-    switch (actionName) { // This switch uses the new action names passed from the main router
-        case 'dir_chal_acc': // Formerly 'dca'
+    switch (actionName) { 
+        case 'dir_chal_acc': 
             if (clickerId !== String(offerData.targetUserId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
                 return;
@@ -11457,7 +11440,6 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
 
             await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting challenge from ${initiatorMentionHTML}... Verifying details...` }).catch(() => {});
 
-            // Re-fetch users to get latest balance before deduction
             const freshInitiator = await getOrCreateUser(offerData.initiatorId);
             const freshTarget = await getOrCreateUser(offerData.targetUserId); 
 
@@ -11516,12 +11498,12 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 console.log(`${logPrefix} Bets successfully deducted for both players for ${offerData.gameToStart}.`);
 
                 pvpGameSetupData = {
-                    chatId: offerData.originalGroupId, // This is the group chat where game will be played
+                    chatId: offerData.originalGroupId, 
                     chatType: originalChatTypeFromGroup, 
                     betAmount: offerData.betAmount,
-                    initiatorUserObj: freshInitiator, // Has updated balance
-                    opponentUserObj: freshTarget,   // Has updated balance
-                    offerMessageIdInGroup: offerData.offerMessageIdInGroup // ID of the direct challenge msg in group
+                    initiatorUserObj: freshInitiator, 
+                    opponentUserObj: freshTarget,   
+                    offerMessageIdInGroup: offerData.offerMessageIdInGroup 
                 };
 
             } catch (e) {
@@ -11540,23 +11522,21 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 if (client) client.release();
             }
             
-            activeGames.delete(offerId); // Delete the DIRECT_PVP_CHALLENGE offer
-            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null); // Clear from group session as new game will be tracked
+            activeGames.delete(offerId); 
+            await updateGroupGameDetails(originalChatIdFromGroup, null, null, null); 
 
             const gameDisplayName = escapeHTML(offerData.gameToStart.replace('_PVP','').replace(/_/g,' '));
             const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\n\nA <b>${gameDisplayName}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting now...`;
-            // Edit the original direct challenge message in the group to show it's accepted.
             if (bot && pvpGameSetupData.offerMessageIdInGroup) { 
                 await bot.editMessageText(acceptedMsgHTML, {
-                    chat_id: pvpGameSetupData.chatId, // This is originalChatIdFromGroup
+                    chat_id: pvpGameSetupData.chatId, 
                     message_id: Number(pvpGameSetupData.offerMessageIdInGroup),
                     parse_mode: 'HTML', reply_markup: {}
                 }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge accepted: ${e.message}`));
-            } else { // Fallback if message ID was lost or edit failed
+            } else { 
                 await safeSendMessage(pvpGameSetupData.chatId, acceptedMsgHTML, { parse_mode: 'HTML' });
             }
 
-                // --- MODIFIED: Switch to call appropriate PvP game starters ---
             switch (offerData.gameToStart) {
                 case GAME_IDS.DICE_ESCALATOR_PVP:
                     if (typeof startDiceEscalatorPvPGame_New === 'function') {
@@ -11566,7 +11546,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                             pvpGameSetupData.betAmount, 
                             pvpGameSetupData.chatId,
                             pvpGameSetupData.chatType, 
-                            null // Original offer message is already handled (edited to "Accepted")
+                            null 
                         );
                     } else { 
                         console.error(`${logPrefix} Missing handler: startDiceEscalatorPvPGame_New`);
@@ -11584,7 +11564,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                             await startCoinflipPvPGame(
                                 coinflipInitiatorData,
                                 pvpGameSetupData.opponentUserObj,
-                                null, // No unified offer message ID to delete from this flow
+                                null, 
                                 true  // Bets already deducted
                             );
                         } else { 
@@ -11613,8 +11593,6 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                         break;
                     case GAME_IDS.DICE_21_PVP:
                         if (typeof startDice21PvPInitialDeal === 'function') {
-                            // startDice21PvPInitialDeal expects a gameId of a pre-created game object in activeGames.
-                            // This object must contain initiator and opponent user objects with updated balances.
                             const pvpGameIdD21 = generateGameId(GAME_IDS.DICE_21_PVP);
                             const pvpGameDataD21 = {
                                 type: GAME_IDS.DICE_21_PVP, gameId: pvpGameIdD21,
@@ -11622,14 +11600,14 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                                 betAmount: pvpGameSetupData.betAmount,
                                 initiator: { 
                                     userId: pvpGameSetupData.initiatorUserObj.telegram_id, 
-                                    mention: getPlayerDisplayReference(pvpGameSetupData.initiatorUserObj), // Use plain text ref here
-                                    userObj: pvpGameSetupData.initiatorUserObj, // Contains updated balance
+                                    mention: getPlayerDisplayReference(pvpGameSetupData.initiatorUserObj), 
+                                    userObj: pvpGameSetupData.initiatorUserObj, 
                                     hand: [], score: 0, status: 'waiting_for_hand', isTurn: false 
                                 },
                                 opponent: { 
                                     userId: pvpGameSetupData.opponentUserObj.telegram_id, 
-                                    mention: getPlayerDisplayReference(pvpGameSetupData.opponentUserObj), // Use plain text ref here
-                                    userObj: pvpGameSetupData.opponentUserObj, // Contains updated balance
+                                    mention: getPlayerDisplayReference(pvpGameSetupData.opponentUserObj), 
+                                    userObj: pvpGameSetupData.opponentUserObj, 
                                     hand: [], score: 0, status: 'waiting_for_hand', isTurn: false 
                                 },
                                 status: 'dealing_initial_hands', creationTime: Date.now(), currentMessageId: null
@@ -11644,7 +11622,6 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                         break;
                     case GAME_IDS.DUEL_PVP:
                         if (typeof startDuelPvPGameSequence === 'function') {
-                            // startDuelPvPGameSequence also expects a gameId of a pre-created game object.
                             const pvpGameIdDuel = generateGameId(GAME_IDS.DUEL_PVP);
                             const pvpGameDataDuel = {
                                 type: GAME_IDS.DUEL_PVP, gameId: pvpGameIdDuel,
@@ -11652,8 +11629,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                                 betAmount: pvpGameSetupData.betAmount,
                                 initiator: { 
                                     userId: pvpGameSetupData.initiatorUserObj.telegram_id, 
-                                    displayName: getPlayerDisplayReference(pvpGameSetupData.initiatorUserObj), // For formatDuelPvPMessage
-                                    mention: getPlayerDisplayReference(pvpGameSetupData.initiatorUserObj), // Keep for consistency
+                                    displayName: getPlayerDisplayReference(pvpGameSetupData.initiatorUserObj),
+                                    mention: getPlayerDisplayReference(pvpGameSetupData.initiatorUserObj),
                                     userObj: pvpGameSetupData.initiatorUserObj, 
                                     rolls: [], score: 0, isTurn: false, status: 'waiting_turn' 
                                 },
@@ -11664,7 +11641,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                                     userObj: pvpGameSetupData.opponentUserObj, 
                                     rolls: [], score: 0, isTurn: false, status: 'waiting_turn' 
                                 },
-                                status: 'p1_awaiting_roll1_emoji', // Will be set by startDuelPvPGameSequence
+                                status: 'p1_awaiting_roll1_emoji', 
                                 currentMessageId: null, createdAt: Date.now(), lastRollValue: null
                             };
                             activeGames.set(pvpGameIdDuel, pvpGameDataDuel);
@@ -11684,7 +11661,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             break;
 
-        case 'dir_chal_dec': // Formerly 'dcd'
+        case 'dir_chal_dec': 
             if (clickerId !== String(offerData.targetUserId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you to decline.", show_alert: true }).catch(() => {});
                 return;
@@ -11702,7 +11679,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
             break;
 
-        case 'dir_chal_can': // Formerly 'cdc'
+        case 'dir_chal_can': 
             if (clickerId !== String(offerData.initiatorId)) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can withdraw this challenge.", show_alert: true }).catch(() => {});
                 return;
@@ -11722,7 +11699,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             await updateGroupGameDetails(originalChatIdFromGroup, null, null, null);
             break;
 
-        default:
+        default: // This default is for the switch inside handleDirectChallengeResponse
             console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`); 
             await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action details.", show_alert: false }).catch(() => {}); 
     }
