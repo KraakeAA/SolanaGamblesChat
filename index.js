@@ -227,6 +227,13 @@ const MINES_FALLBACK_DEFAULT_MINES = parseInt(process.env.MINES_FALLBACK_DEFAULT
 const MINES_MIN_MINES = parseInt(process.env.MINES_MIN_MINES, 10);
 const MINES_MAX_MINES_PERCENT = parseFloat(process.env.MINES_MAX_MINES_PERCENT);
 
+// MINES GAME CONSTANTS (<<<<< ADD/ENSURE THESE ARE HERE AND CORRECT >>>>>)
+const TILE_EMOJI_HIDDEN = '❓';
+const TILE_EMOJI_GEM = '💎';
+const TILE_EMOJI_MINE = '💣';
+const TILE_EMOJI_EXPLOSION = '💥'; // For when a mine is hit
+
+
 const MINES_DIFFICULTY_CONFIG = {
     easy: {
         rows: 5, cols: 5, mines: 3, label: "Easy (5x5, 3 Mines)",
