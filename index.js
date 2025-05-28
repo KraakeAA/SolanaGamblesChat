@@ -3519,7 +3519,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     } else {
         // --- EXISTING DICE ESCALATOR UNIFIED OFFER FLOW ---
         console.log(`${logPrefix} Initiating UNIFIED Dice Escalator offer (no valid target user specified).`);
-        const offerId = generateGameId(GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER);
+        const offerId = generateGameId("de_uo"); // "de_uo" stands for Dice Escalator Unified Offer
         const offerMessageTextHTML =
             `🎲 <b>Dice Escalator Challenge by ${initiatorPlayerRefHTML}!</b> 🎲\n\n` +
             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
