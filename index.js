@@ -3625,7 +3625,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
 }
 
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const logPrefix = `[DE_AcceptBot UID:${userWhoClicked.id} OfferID:"${offerId}" CH:${originalChatId}]`;
+    const logPrefix = `[DE_AcceptBot UID:${userWhoClicked.telegram_id} OfferID:"${offerId}" CH:${originalChatId}]`;
     console.log(`${logPrefix} User attempting to accept Dice Escalator PvB game from unified offer.`);
 
     const offerData = activeGames.get(offerId);
@@ -3650,7 +3650,7 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
     }
 
     // Only the initiator of the offer can choose to play against the bot from their own unified offer
-    if (String(userWhoClicked.id) !== String(offerData.initiatorId)) {
+    if (String(userWhoClicked.telegram_id) !== String(offerData.initiatorId)) {
         console.log(`${logPrefix} Clicker ${userWhoClicked.id} is not initiator ${offerData.initiatorId}. Ignoring PvB accept.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Only the player who made the offer can choose to play against the bot.", show_alert: true });
         return;
@@ -3829,7 +3829,7 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj,
 }
 
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, callbackQueryId) {
-    const logPrefix = `[DE_CancelUnified UID:${userWhoClicked.id} OfferID:"${offerId}" CH:${originalChatId}]`;
+    const logPrefix = `[DE_CancelUnified UID:${userWhoClicked.telegram_id} OfferID:"${offerId}" CH:${originalChatId}]`;
     console.log(`${logPrefix} User attempting to cancel Dice Escalator unified offer.`);
     
     const offerData = activeGames.get(offerId);
@@ -3854,8 +3854,8 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
         return;
     }
 
-    if (String(userWhoClicked.id) !== String(offerData.initiatorId)) {
-        console.log(`${logPrefix} Clicker ${userWhoClicked.id} is not initiator ${offerData.initiatorId}.`);
+    if (String(userWhoClicked.telegram_id) !== String(offerData.initiatorId)) {
+        console.log(`${logPrefix} Clicker ${userWhoClicked.telegram_id} is not initiator ${offerData.initiatorId}.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Only the player who made the offer can cancel it.", show_alert: true });
         return;
     }
