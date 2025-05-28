@@ -3794,19 +3794,33 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
     ); 
 }
 
-async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalMessageId, originalChatId, callbackQueryIdPassed = null) {
-    const LOG_PREFIX_DE_CANCEL_OFFER = `[DE_CancelOffer_HTML_V3 UID:${userWhoClicked.telegram_id} OfferID:${offerId}]`;
-    const offerData = activeGames.get(offerId);
-    const callbackQueryId = callbackQueryIdPassed;
+async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, callbackQueryId) {
+    const logPrefix = `[DE_CancelUnified UID:${userWhoClicked.id} OfferID_Received:"${offerId}" CH:${originalChatId}]`; // Note OfferID_Received
+    console.log(`${logPrefix} User attempting to cancel. ActiveGames size: ${activeGames.size}`);
+    
+    // Log some keys from activeGames for comparison
+    if (activeGames.size > 0 && activeGames.size < 20) {
+        console.log(`${logPrefix} Some keys in activeGames before get: ${JSON.stringify(Array.from(activeGames.keys()))}`);
+    }
 
-    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Offer already gone!", show_alert: false }).catch(()=>{});
-        return;
-    }
-    if (offerData.initiator.userId !== userWhoClicked.telegram_id && String(userWhoClicked.telegram_id) !== ADMIN_USER_ID) {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Only the offer initiator can retract it.", show_alert: true }).catch(()=>{});
-        return;
-    }
+    const offerData = activeGames.get(offerId); 
+    
+    console.log(`${logPrefix} activeGames.get("${offerId}") result: ${offerData ? 'FOUND Offer' : 'NOT FOUND (null)'}`);
+    if (offerData) {
+        console.log(`${logPrefix} Details of found offerData: type="${offerData.type}", status="${offerData.status}", gameId="${offerData.gameId}", initiatorId="${offerData.initiatorId}"`);
+        console.log(`${logPrefix} Comparing offerData.type ("${offerData.type}") with GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER ("${GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER}")`);
+        console.log(`${logPrefix} Comparing offerData.status ("${offerData.status}") with 'pending_unified_offer'`);
+    }
+
+
+    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
+        console.warn(`${logPrefix} Condition FAILED: Offer ${offerId} not found, or type/status mismatch. OfferData was: ${offerData ? `Type: ${offerData.type}, Status: ${offerData.status}` : 'Not Found in activeGames'}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has expired, is not valid, or already actioned.", show_alert: true });
+        if (bot && originalOfferMessageId) { 
+            bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(originalOfferMessageId) }).catch(() => {});
+        }
+        return;
+    }
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Retracting Dice Escalator challenge..."}).catch(()=>{});
 
     activeGames.delete(offerId);
