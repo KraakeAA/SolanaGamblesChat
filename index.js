@@ -3390,7 +3390,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     const chatType = msg.chat.type;
     const logPrefix = `[DE_OfferOrDirect_V2 UID:${userId} CH:${chatId}]`;
 
-    console.log(`${logPrefix} Initiating with targetUsernameRaw: '${targetUsernameRaw}'`); // Log entry with target info
+    console.log(`${logPrefix} Initiating with targetUsernameRaw: '${targetUsernameRaw}'`);
 
     if (chatType === 'private') {
         await safeSendMessage(chatId, `🎲 The Dice Escalator arena is in <b>group chats</b>! Use <code>/de &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
@@ -3431,26 +3431,26 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     if (targetUsernameRaw) {
         console.log(`${logPrefix} targetUsernameRaw is '${targetUsernameRaw}'. Attempting findRecipientUser.`);
         targetUserObjectForChallenge = await findRecipientUser(targetUsernameRaw);
+        console.log(`${logPrefix} findRecipientUser returned: ${targetUserObjectForChallenge ? `User ID: ${targetUserObjectForChallenge.telegram_id}` : 'null'}`);
         
         if (!targetUserObjectForChallenge || !targetUserObjectForChallenge.telegram_id) { 
             await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found or has an invalid ID. Cannot create a Dice Escalator direct challenge. Creating a general offer instead.`, { parse_mode: 'HTML' });
-            targetUserObjectForChallenge = null; // Ensure this is nulled to force unified offer
+            targetUserObjectForChallenge = null; 
             console.log(`${logPrefix} Target invalid or no telegram_id. Forcing unified offer.`);
         } else if (String(targetUserObjectForChallenge.telegram_id) === userId) {
             await safeSendMessage(chatId, `😅 You can't directly challenge yourself to Dice Escalator, ${initiatorPlayerRefHTML}! Creating a general offer.`, { parse_mode: 'HTML' });
-            targetUserObjectForChallenge = null; // Ensure this is nulled to force unified offer
+            targetUserObjectForChallenge = null; 
             console.log(`${logPrefix} Self-challenge attempted. Forcing unified offer.`);
         } else {
-            console.log(`${logPrefix} Valid target found: ${targetUserObjectForChallenge.telegram_id}`);
+            console.log(`${logPrefix} Valid target found for direct challenge: ${targetUserObjectForChallenge.telegram_id}`);
         }
     } else {
-        console.log(`${logPrefix} No targetUsernameRaw provided. Proceeding to unified offer.`);
+        console.log(`${logPrefix} No targetUsernameRaw provided. Will proceed to unified offer if not already returned.`);
     }
-
 
     if (targetUserObjectForChallenge && targetUserObjectForChallenge.telegram_id) { 
         // --- DIRECT PvP CHALLENGE FLOW for Dice Escalator ---
-        console.log(`${logPrefix} Initiating DIRECT Dice Escalator challenge to User ID: ${targetUserObjectForChallenge.telegram_id} (@${targetUserObjectForChallenge.username || 'N/A'})`);
+        console.log(`${logPrefix} Entering DIRECT PvP Challenge Flow for target User ID: ${targetUserObjectForChallenge.telegram_id}`);
         const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObjectForChallenge));
         const offerId = generateGameId(`dco_${userId.slice(-3)}_${String(targetUserObjectForChallenge.telegram_id).slice(-3)}`); 
 
@@ -3489,7 +3489,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
             initiatorId: userId,
             initiatorUserObj: initiatorUserObj, 
             initiatorMentionHTML: initiatorPlayerRefHTML,
-            targetUserId: String(targetUserObjectForChallenge.telegram_id), 
+            targetUserId: String(targetUserObjectForChallenge.telegram_id),
             targetUserObj: targetUserObjectForChallenge, 
             targetUserMentionHTML: targetPlayerRefHTML,
             betAmount: betAmountLamports,
@@ -3506,9 +3506,15 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
 
         setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
-            console.log(`[DE_DirectChallengeTimeout] Timeout for ${offerId}. Found: ${!!timedOutOffer}. Status: ${timedOutOffer?.status}`);
+            const currentTimeForTimeout = new Date().toISOString();
+            console.log(`[DE_DirectChallengeTimeout @ ${currentTimeForTimeout}] Timeout for Offer ID: ${offerId}. JOIN_GAME_TIMEOUT_MS: ${JOIN_GAME_TIMEOUT_MS}.`);
+            console.log(`[DE_DirectChallengeTimeout] Offer found in activeGames: ${!!timedOutOffer}.`);
+            if (timedOutOffer) {
+                console.log(`[DE_DirectChallengeTimeout] Offer Details: type=${timedOutOffer.type}, status=${timedOutOffer.status}`);
+            }
+
             if (timedOutOffer && timedOutOffer.status === 'pending_direct_challenge_response' && timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE) {
-                console.log(`[DE_DirectChallengeTimeout] Deleting expired direct challenge ${offerId}.`);
+                console.log(`[DE_DirectChallengeTimeout OfferID:${offerId}] Conditions MET. Deleting expired direct challenge.`);
                 activeGames.delete(offerId);
                 await updateGroupGameDetails(chatId, null, null, null);
                 const gameNameForTimeout = "Dice Escalator"; 
@@ -3525,16 +3531,20 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                 } else { 
                     safeSendMessage(timedOutOffer.originalGroupId, timeoutMsgHTML, { parse_mode: 'HTML' });
                 }
-                if (timedOutOffer.initiatorId) { // Check if initiatorId exists before sending DM
+                if (timedOutOffer.initiatorId) { 
                     await safeSendMessage(timedOutOffer.initiatorId, `⏳ Your Dice Escalator challenge to ${timedOutOffer.targetUserMentionHTML} in group "${escapeHTML(timedOutOffer.chatTitle)}" has expired.`, { parse_mode: 'HTML' });
                 }
+            } else if (timedOutOffer) {
+                console.log(`[DE_DirectChallengeTimeout OfferID:${offerId}] Conditions NOT MET for deletion. Status: ${timedOutOffer.status}, Type: ${timedOutOffer.type}`);
+            } else {
+                console.log(`[DE_DirectChallengeTimeout OfferID:${offerId}] Timeout fired but offer no longer in activeGames.`);
             }
         }, JOIN_GAME_TIMEOUT_MS);
 
     } else {
-        // --- EXISTING DICE ESCALATOR UNIFIED OFFER FLOW ---
+        // --- DICE ESCALATOR UNIFIED OFFER FLOW ---
         console.log(`${logPrefix} Initiating UNIFIED Dice Escalator offer.`);
-        const offerId = generateGameId("de_uo"); // Using corrected short prefix
+        const offerId = generateGameId("de_uo"); 
         const offerMessageTextHTML =
             `🎲 <b>Dice Escalator Challenge by ${initiatorPlayerRefHTML}!</b> 🎲\n\n` +
             `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
@@ -3557,9 +3567,9 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
             initiatorMentionHTML: initiatorPlayerRefHTML,
             initiatorUserObj: initiatorUserObj,
             betAmount: betAmountLamports,
-            status: 'pending_unified_offer', // Consistent status name
+            status: 'pending_unified_offer', 
             creationTime: Date.now(),
-            gameSetupMessageId: null, // For the unified offer message
+            gameSetupMessageId: null, 
         };
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, betAmountLamports);
@@ -3571,17 +3581,24 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
             if (currentOffer) {
                 currentOffer.gameSetupMessageId = String(sentOfferMessage.message_id);
                 activeGames.set(offerId, currentOffer);
-                console.log(`${logPrefix} Unified offer message ID ${currentOffer.gameSetupMessageId} stored for offer ${offerId}. Setting timeout.`);
+                console.log(`${logPrefix} Unified offer message ID ${currentOffer.gameSetupMessageId} stored for offer ${offerId}. Setting timeout. JOIN_GAME_TIMEOUT_MS: ${JOIN_GAME_TIMEOUT_MS}`);
             } else {
-                console.warn(`${logPrefix} Unified offer ${offerId} was not found in activeGames immediately after setting. Message may have been sent but offer data lost.`);
-                if(bot) await bot.deleteMessage(chatId, sentOfferMessage.message_id).catch(()=>{});
+                console.warn(`${logPrefix} Unified offer ${offerId} was not found in activeGames immediately after setting and sending message. Message: ${sentOfferMessage.message_id}`);
+                if(bot && sentOfferMessage.message_id) await bot.deleteMessage(chatId, sentOfferMessage.message_id).catch(()=>{});
+                return; 
             }
 
             setTimeout(async () => {
                 const timedOutOffer = activeGames.get(offerId);
-                console.log(`[DE_UnifiedOfferTimeout] Timeout for ${offerId}. JOIN_GAME_TIMEOUT_MS: ${JOIN_GAME_TIMEOUT_MS}. Found Offer: ${!!timedOutOffer}. Status: ${timedOutOffer?.status}, Type: ${timedOutOffer?.type}`);
+                const currentTimeForTimeout = new Date().toISOString();
+                console.log(`[DE_UNIFIED_TIMEOUT @ ${currentTimeForTimeout}] Timeout for Offer ID: ${offerId}. JOIN_GAME_TIMEOUT_MS: ${JOIN_GAME_TIMEOUT_MS}.`);
+                console.log(`[DE_UNIFIED_TIMEOUT] Offer found in activeGames: ${!!timedOutOffer}.`);
+                if (timedOutOffer) {
+                    console.log(`[DE_UNIFIED_TIMEOUT] Offer Details: type=${timedOutOffer.type}, status=${timedOutOffer.status}, initiatorId=${timedOutOffer.initiatorId}`);
+                }
+                
                 if (timedOutOffer && timedOutOffer.status === 'pending_unified_offer' && timedOutOffer.type === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER) {
-                    console.log(`[DE_UnifiedOfferTimeout OfferID:${offerId}] Unified offer expired. Deleting.`);
+                    console.log(`[DE_UNIFIED_TIMEOUT OfferID:${offerId}] Conditions MET. Deleting offer.`);
                     activeGames.delete(offerId);
                     await updateGroupGameDetails(chatId, null, null, null);
                     if (timedOutOffer.gameSetupMessageId && bot) {
@@ -3592,9 +3609,9 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                         ).catch(e => { console.warn(`${logPrefix} Failed to edit expired unified DE offer ${timedOutOffer.gameSetupMessageId}: ${e.message}`); });
                     }
                 } else if (timedOutOffer) {
-                    console.log(`[DE_UnifiedOfferTimeout OfferID:${offerId}] Timeout fired but conditions not met for deletion. Status: ${timedOutOffer.status}, Type: ${timedOutOffer.type}`);
+                    console.log(`[DE_UNIFIED_TIMEOUT OfferID:${offerId}] Conditions NOT MET for deletion. Offer Status: ${timedOutOffer.status}, Offer Type: ${timedOutOffer.type}`);
                 } else {
-                    console.log(`[DE_UnifiedOfferTimeout OfferID:${offerId}] Timeout fired but offer no longer in activeGames.`);
+                    console.log(`[DE_UNIFIED_TIMEOUT OfferID:${offerId}] Timeout fired but offer no longer in activeGames.`);
                 }
             }, JOIN_GAME_TIMEOUT_MS);
         } else {
@@ -11202,8 +11219,21 @@ async function forwardDuelCallback(action, params, userObject, originalMessageId
 // --- Helper function to forward Dice Escalator callbacks (New Structure with Jackpot Choice) ---
 async function forwardDiceEscalatorCallback_New(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
     const LOG_PREFIX_DE_CB_FWD_NEW = `[DE_CB_Fwd_New UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
-    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Processing action. Action: ${action}, Params: ${params.join(',')}`);
-    const gameIdOrOfferIdOrBet = params[0];
+    const offerIdFromParams = params[0]; // This is the offerId extracted from the callback_data
+
+    // --- ADDED DIAGNOSTIC LOGS ---
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Entry. Action: "${action}"`);
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Raw callback_query.data received by main router (for context): ${callbackQuery.data}`); // Assuming callbackQuery is available or passed if needed for full data
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Extracted offerIdFromParams: "${offerIdFromParams}" (Type: ${typeof offerIdFromParams})`);
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Current activeGames map size: ${activeGames.size}`);
+    // Optionally log a few keys from activeGames to see their format, if feasible without too much noise
+    if (activeGames.size > 0 && activeGames.size < 10) { // Only if small number of active games
+        console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Some keys in activeGames: ${JSON.stringify(Array.from(activeGames.keys()))}`);
+    }
+    // --- END OF ADDED DIAGNOSTIC LOGS ---
+
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Processing action. Action: ${action}, Params: ${params.join(',')}`); // Your existing log
+    const gameIdOrOfferIdOrBet = offerIdFromParams; // Use the clearly extracted variable
     const mockMsgForPlayAgain = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
 
     switch (action) {
