@@ -3709,24 +3709,31 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
     // updateGroupGameDetails will be handled by startDiceEscalatorPvBGame_New for the new PvB game
 }
 
-async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const logPrefix = `[DE_AcceptPvP UID:${joinerUserObj.id} OfferID:"${offerId}" CH:${originalChatId}]`;
+async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjFromCallback, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
+    // Use telegram_id consistently for the clicker/joiner
+    const joinerId = String(joinerUserObjFromCallback.telegram_id || joinerUserObjFromCallback.id); 
+    const logPrefix = `[DE_AcceptPvP UID:${joinerId} OfferID:"${offerId}" CH:${originalChatId}]`;
     console.log(`${logPrefix} User attempting to accept Dice Escalator PvP challenge from unified offer.`);
+
+    if (!joinerId || joinerId === "undefined") {
+        console.error(`${logPrefix} CRITICAL: Joiner ID is undefined. Cannot proceed.`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Could not identify you to accept the challenge.", show_alert: true });
+        return;
+    }
 
     const offerData = activeGames.get(offerId);
 
-    console.log(`${logPrefix} Trying to get offerId "${offerId}" from activeGames. activeGames keys (sample): ${JSON.stringify(Array.from(activeGames.keys()).slice(0, 5))}... (Total: ${activeGames.size})`);
+    // Add detailed logging for offerData retrieval
+    console.log(`${logPrefix} Trying to get offerId "${offerId}" from activeGames.`);
     if (offerData) {
-        console.log(`${logPrefix} Details of found offerData: type="${offerData.type}", status="${offerData.status}", gameId="${offerData.gameId}", initiatorId="${offerData.initiatorId}"`);
-        console.log(`${logPrefix} Comparing offerData.type ("${offerData.type}") with GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER ("${GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER}")`);
-        console.log(`${logPrefix} Comparing offerData.status ("${offerData.status}") with 'pending_unified_offer'`);
+        console.log(`${logPrefix} Details of found offerData: type="${offerData.type}", status="${offerData.status}", initiatorId="${offerData.initiatorId}"`);
     } else {
         console.log(`${logPrefix} OfferData NOT FOUND in activeGames for offerId "${offerId}"`);
     }
     
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
         console.warn(`${logPrefix} Offer ${offerId} not found, not a unified DE offer, or not pending. OfferData was: ${offerData ? `Type: ${offerData.type}, Status: ${offerData.status}` : 'Not Found'}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has expired or is no longer valid.", show_alert: true });
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has expired, is not valid, or has already been actioned.", show_alert: true });
         const messageIdToEdit = originalOfferMessageId || offerData?.gameSetupMessageId;
         if (bot && messageIdToEdit) {
             bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(messageIdToEdit) }).catch(() => {});
@@ -3734,31 +3741,38 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj,
         return;
     }
 
-    if (String(joinerUserObj.id) === String(offerData.initiatorId)) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "You cannot accept your own Dice Escalator challenge for PvP.", show_alert: true });
+    const initiatorIdFromOffer = String(offerData.initiatorId);
+    if (joinerId === initiatorIdFromOffer) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "You cannot accept your own Dice Escalator challenge for PvP via this button. Ask another player or play vs Bot.", show_alert: true });
         return;
     }
 
-    // Fetch current details for both players for balance check and bet deduction
-    let currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId);
-    let currentJoinerUserObj = await getOrCreateUser(joinerUserObj.id, joinerUserObj.username, joinerUserObj.first_name, joinerUserObj.last_name); // Ensure joiner's details are fresh
+    // Fetch current details for BOTH players for balance check and bet deduction
+    // offerData.initiatorUserObj should contain the initiator's details as of offer creation.
+    // We re-fetch to get the latest balance.
+    let currentInitiatorUserObj = await getOrCreateUser(initiatorIdFromOffer); 
+    // joinerUserObjFromCallback is the user who clicked, get their latest details too.
+    let currentJoinerUserObj = await getOrCreateUser(joinerId, joinerUserObjFromCallback.username, joinerUserObjFromCallback.first_name, joinerUserObjFromCallback.last_name); 
 
-    if (!currentInitiatorUserObj || !currentJoinerUserObj) {
-        console.error(`${logPrefix} Failed to fetch full user details for initiator or joiner.`);
+    console.log(`${logPrefix} Fetched currentInitiatorUserObj: ${currentInitiatorUserObj ? `ID: ${currentInitiatorUserObj.telegram_id}` : 'null'}`);
+    console.log(`${logPrefix} Fetched currentJoinerUserObj: ${currentJoinerUserObj ? `ID: ${currentJoinerUserObj.telegram_id}` : 'null'}`);
+
+    if (!currentInitiatorUserObj || !currentInitiatorUserObj.telegram_id || !currentJoinerUserObj || !currentJoinerUserObj.telegram_id) {
+        console.error(`${logPrefix} Failed to fetch full user details for initiator (${initiatorIdFromOffer}) or joiner (${joinerId}).`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Error fetching player details. Cannot start game.", show_alert: true });
-        return;
+        return; 
     }
 
-    const betAmount = offerData.betAmount;
-    const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
+    const betAmount = BigInt(offerData.betAmount);
+    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD')); // Use HTML for consistency
 
     if (BigInt(currentInitiatorUserObj.balance) < betAmount) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `The offer initiator, ${offerData.initiatorMentionHTML}, no longer has sufficient funds for this ${betDisplay} bet. Offer cancelled.`, show_alert: true });
+        await bot.answerCallbackQuery(callbackQueryId, { text: `The offer initiator, ${offerData.initiatorMentionHTML}, no longer has sufficient funds for this ${betDisplayHTML} bet. Offer cancelled.`, show_alert: true });
         activeGames.delete(offerId);
         await updateGroupGameDetails(originalChatId, null, null, null);
         const messageIdToEdit = originalOfferMessageId || offerData.gameSetupMessageId;
         if (bot && messageIdToEdit) {
-            await bot.editMessageText(`🎲 Offer by ${offerData.initiatorMentionHTML} for <b>${betDisplay}</b> cancelled. Initiator has insufficient funds.`, {
+            await bot.editMessageText(`🎲 Offer by ${offerData.initiatorMentionHTML} for <b>${betDisplayHTML}</b> was cancelled. Initiator has insufficient funds.`, {
                 chat_id: originalChatId, message_id: Number(messageIdToEdit), parse_mode: 'HTML', reply_markup: {}
             }).catch(() => {});
         }
@@ -3766,13 +3780,13 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj,
     }
 
     if (BigInt(currentJoinerUserObj.balance) < betAmount) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Your balance is too low to accept this ${betDisplay} challenge.`, show_alert: true });
+        await bot.answerCallbackQuery(callbackQueryId, { text: `Your balance is too low to accept this ${betDisplayHTML} challenge.`, show_alert: true });
         return;
     }
 
-    // Update offer status to prevent multiple acceptances
-    offerData.status = 'pvp_accepted'; 
-    activeGames.set(offerId, offerData); // Update the offer
+    // All checks passed, proceed to deduct bets and start game
+    offerData.status = 'pvp_accepted'; // Mark unified offer as accepted to prevent further interactions
+    activeGames.set(offerId, offerData); 
 
     await bot.answerCallbackQuery(callbackQueryId, { text: `Joining Dice Escalator PvP game against ${offerData.initiatorMentionHTML}... Deducting bets...`});
 
@@ -3781,15 +3795,15 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj,
         client = await pool.connect();
         await client.query('BEGIN');
 
-        const ledgerNoteInitiator = `Unified DE PvP bet vs ${escapeHTML(getPlayerDisplayReference(currentJoinerUserObj))}`;
+        const ledgerNoteInitiator = `Unified DE PvP bet (initiated) vs ${escapeHTML(getPlayerDisplayReference(currentJoinerUserObj))}`;
         const initBetRes = await updateUserBalanceAndLedger(client, currentInitiatorUserObj.telegram_id, BigInt(-betAmount), 'bet_placed_dice_escalator_pvp_init', {game_id_custom_field: offerId, opponent_id_custom_field: currentJoinerUserObj.telegram_id}, ledgerNoteInitiator);
         if (!initBetRes.success) throw new Error(`Failed to debit initiator ${currentInitiatorUserObj.telegram_id}: ${initBetRes.error}`);
-        currentInitiatorUserObj.balance = initBetRes.newBalanceLamports; // Update local object
+        currentInitiatorUserObj.balance = initBetRes.newBalanceLamports; 
 
-        const ledgerNoteJoiner = `Unified DE PvP bet vs ${escapeHTML(getPlayerDisplayReference(currentInitiatorUserObj))}`;
+        const ledgerNoteJoiner = `Unified DE PvP bet (joined) vs ${escapeHTML(getPlayerDisplayReference(currentInitiatorUserObj))}`;
         const joinBetRes = await updateUserBalanceAndLedger(client, currentJoinerUserObj.telegram_id, BigInt(-betAmount), 'bet_placed_dice_escalator_pvp_join', {game_id_custom_field: offerId, opponent_id_custom_field: currentInitiatorUserObj.telegram_id}, ledgerNoteJoiner);
         if (!joinBetRes.success) throw new Error(`Failed to debit joiner ${currentJoinerUserObj.telegram_id}: ${joinBetRes.error}`);
-        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports; // Update local object
+        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports; 
         
         await client.query('COMMIT');
         console.log(`${logPrefix} Bets deducted successfully for initiator ${currentInitiatorUserObj.telegram_id} and joiner ${currentJoinerUserObj.telegram_id}.`);
@@ -3798,15 +3812,15 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj,
         // startDiceEscalatorPvPGame_New does NOT do bet deductions itself.
         if (typeof startDiceEscalatorPvPGame_New === 'function') {
             await startDiceEscalatorPvPGame_New(
-                currentInitiatorUserObj, 
-                currentJoinerUserObj, 
+                currentInitiatorUserObj, // Has updated balance
+                currentJoinerUserObj,    // Has updated balance
                 betAmount, 
                 originalChatId, 
                 originalChatType, 
                 originalOfferMessageId || offerData.gameSetupMessageId // Pass message ID to delete the unified offer message
             );
         } else {
-            throw new Error("startDiceEscalatorPvPGame_New function is missing.");
+            throw new Error("startDiceEscalatorPvPGame_New function is missing, cannot start PvP game.");
         }
         activeGames.delete(offerId); // Delete the original unified offer as the PvP game has been created
 
@@ -3815,12 +3829,14 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObj,
         console.error(`${logPrefix} Error processing PvP accept or starting game: ${error.message}`, error);
         await safeSendMessage(originalChatId, `⚙️ An error occurred setting up the Dice Escalator PvP game: ${escapeHTML(error.message)}. The offer may have been cancelled.`, { parse_mode: 'HTML' });
         
-        // Revert offer status if it was set to pvp_accepted but game failed to start
+        // Revert offer status if it was set to pvp_accepted but game failed to start due to error after bet deduction
         const offerToRevert = activeGames.get(offerId);
         if (offerToRevert && offerToRevert.status === 'pvp_accepted') {
-            offerToRevert.status = 'pending_unified_offer'; // Revert to allow others to try or bot to pick up
+            offerToRevert.status = 'pending_unified_offer'; 
             activeGames.set(offerId, offerToRevert);
-        } else if (!offerToRevert) { // If offer was somehow deleted during error
+            console.log(`${logPrefix} Reverted offer ${offerId} status to 'pending_unified_offer' due to game start error.`);
+        } else if (!offerToRevert && error.message.includes("Failed to debit")) { 
+             // If bet deduction failed and offer might have been deleted by other means, ensure group details are clear
              await updateGroupGameDetails(originalChatId, null, null, null);
         }
     } finally {
