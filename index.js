@@ -11221,17 +11221,19 @@ async function forwardDiceEscalatorCallback_New(action, params, userObject, orig
     const LOG_PREFIX_DE_CB_FWD_NEW = `[DE_CB_Fwd_New UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
     const offerIdFromParams = params[0]; // This is the offerId extracted from the callback_data
 
-    // --- ADDED DIAGNOSTIC LOGS ---
+    // --- REVISED DIAGNOSTIC LOGS ---
     console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Entry. Action: "${action}"`);
-    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Raw callback_query.data received by main router (for context): ${callbackQuery.data}`); // Assuming callbackQuery is available or passed if needed for full data
-    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Extracted offerIdFromParams: "${offerIdFromParams}" (Type: ${typeof offerIdFromParams})`);
+    // The raw 'data' string that was split into 'action' and 'params' is available from callbackQuery.data in the main handler.
+    // Here, we already have 'action' and 'params' separately.
+    // We can reconstruct the essence if needed, or rely on logs from the main router for the full raw data.
+    // For debugging the offerId specifically:
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Full params array (includes offerId as first element): [${params.join(',')}]`);
+    console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Extracted offerIdFromParams (which is params[0]): "${offerIdFromParams}" (Type: ${typeof offerIdFromParams})`);
     console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Current activeGames map size: ${activeGames.size}`);
-    // Optionally log a few keys from activeGames to see their format, if feasible without too much noise
-    if (activeGames.size > 0 && activeGames.size < 10) { // Only if small number of active games
+    if (activeGames.size > 0 && activeGames.size < 20) { // Increased limit slightly for better debug
         console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Some keys in activeGames: ${JSON.stringify(Array.from(activeGames.keys()))}`);
     }
-    // --- END OF ADDED DIAGNOSTIC LOGS ---
-
+    // --- END OF REVISED DIAGNOSTIC LOGS ---
     console.log(`${LOG_PREFIX_DE_CB_FWD_NEW} Processing action. Action: ${action}, Params: ${params.join(',')}`); // Your existing log
     const gameIdOrOfferIdOrBet = offerIdFromParams; // Use the clearly extracted variable
     const mockMsgForPlayAgain = { from: userObject, chat: { id: originalChatId, type: originalChatType }, message_id: originalMessageId };
