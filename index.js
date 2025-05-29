@@ -8562,24 +8562,29 @@ function calculateMinesMultiplier(gameData, revealedGemsCount) {
 async function formatAndGenerateMinesMessageComponents(gameData, isForFinalSummary = false) {
     const logPrefix = `[FormatMinesMsgComponents GID:${gameData.gameId}]`;
 
+    // Destructure all necessary properties from gameData at the beginning
     const { 
         betAmount, difficultyKey, difficultyLabel, rows, cols, numMines, 
-        gemsFound, status, grid, // removed revealedTiles as grid[r][c].isRevealed is source of truth
-        gameId, playerRef, 
+        gemsFound, status, grid, gameId, playerRef, 
         initiatorMentionHTML, initiatorUserObj, userId, 
-        currentMultiplier, potentialPayout, 
+        currentMultiplier, // This is gameData.currentMultiplier
+        potentialPayout,  // This is gameData.potentialPayout
         finalPayout, finalMultiplier 
     } = gameData;
 
     const actualPlayerRef = playerRef || initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObj || {telegram_id: userId, first_name: "Player"}));
+
     let titleTextStr = `Mines - ${escapeHTML(difficultyLabel || 'Custom Game')}`;
     let titleEmoji = TILE_EMOJI_MINE;
 
     if (status === 'game_over_mine_hit') titleEmoji = TILE_EMOJI_EXPLOSION;
     else if (status === 'game_over_cashed_out' || status === 'game_over_all_gems_found') titleEmoji = '🎉';
+    
     const titleText = `${titleEmoji} <b>${escapeHTML(titleTextStr)}</b> ${titleEmoji}`;
+
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
-    let messageTextHTML = `${titleText}\nPlayer: ${actualPlayerRef}\n`;
+    let messageTextHTML = `${titleText}\n`;
+    messageTextHTML += `Player: ${actualPlayerRef}\n`;
     messageTextHTML += `Wager: <b>${betDisplayHTML}</b> | Difficulty: <b>${escapeHTML(difficultyLabel || 'N/A')}</b> (${escapeHTML(String(numMines))} ${TILE_EMOJI_MINE})\n`;
     
     const totalSafeTiles = (rows * cols) - numMines;
@@ -8588,35 +8593,46 @@ async function formatAndGenerateMinesMessageComponents(gameData, isForFinalSumma
     }
 
     let outcomeAndPayoutLine = "";
-    if (status === 'game_over_mine_hit') { /* ... (outcome text as before) ... */ 
+    if (status === 'game_over_mine_hit') {
         outcomeAndPayoutLine = `<b>Outcome:</b> You hit a mine! 😥 Bet of <b>${betDisplayHTML}</b> lost.`;
-    } else if (status === 'game_over_cashed_out') { /* ... (outcome text as before) ... */ 
+    } else if (status === 'game_over_cashed_out') {
         const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayout || 0n, 'USD'));
-        const displayMultiplier = escapeHTML((finalMultiplier || currentMultiplier || 0).toFixed(2));
+        // Use gameData.currentMultiplier if finalMultiplier isn't set on cashout initially from gameData
+        const displayMultiplierVal = finalMultiplier || currentMultiplier || 0; 
+        const displayMultiplier = escapeHTML(displayMultiplierVal.toFixed(2));
         outcomeAndPayoutLine = `<b>Outcome:</b> Cashed out with <b>${escapeHTML(String(gemsFound))}</b> ${TILE_EMOJI_GEM}!\nFinal Payout: <b>${finalPayoutDisplay}</b> (x${displayMultiplier})`;
-    } else if (status === 'game_over_all_gems_found') { /* ... (outcome text as before) ... */ 
+    } else if (status === 'game_over_all_gems_found') {
         const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayout || 0n, 'USD'));
-        const displayMultiplier = escapeHTML((finalMultiplier || currentMultiplier || 0).toFixed(2));
+        const displayMultiplierVal = finalMultiplier || currentMultiplier || 0;
+        const displayMultiplier = escapeHTML(displayMultiplierVal.toFixed(2));
         outcomeAndPayoutLine = `<b>Outcome:</b> Found all <b>${escapeHTML(String(gemsFound))}</b> ${TILE_EMOJI_GEM}!\nMax Payout: <b>${finalPayoutDisplay}</b> (x${displayMultiplier})`;
     }
     
-    if (status === 'player_turn' && !isForFinalSummary) { /* ... (current/next prize text as before, using calculateMinesMultiplier(gameData, gemsFound)) ... */ 
+    if (status === 'player_turn' && !isForFinalSummary) {
         if (gemsFound > 0) {
             const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound); 
             const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
+            const currentPayoutUSD = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'));
             messageTextHTML += `Current Multiplier: <b>x${escapeHTML(currentCalcMultiplier.toFixed(2))}</b>\n`;
-            messageTextHTML += `Cash Out Value: <b>${escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'))}</b>\n`;
+            messageTextHTML += `Cash Out Value: <b>${currentPayoutUSD}</b>\n`;
         } else {
             messageTextHTML += `Current Payout: Find gems to increase! ✨\n`;
         }
         if (gemsFound < totalSafeTiles) {
              const nextGemCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound + 1); 
              const nextCalcPayout = BigInt(Math.floor(Number(betAmount) * nextGemCalcMultiplier));
-             messageTextHTML += `Next ${TILE_EMOJI_GEM} Prize: <b>x${escapeHTML(nextGemCalcMultiplier.toFixed(2))}</b> (${escapeHTML(await formatBalanceForDisplay(nextCalcPayout, 'USD'))})\n`;
+             const nextPayoutUSD = escapeHTML(await formatBalanceForDisplay(nextCalcPayout, 'USD'));
+             messageTextHTML += `Next ${TILE_EMOJI_GEM} Prize: <b>x${escapeHTML(nextGemCalcMultiplier.toFixed(2))}</b> (${nextPayoutUSD})\n`;
         }
-    } else if (isForFinalSummary && outcomeAndPayoutLine) { messageTextHTML += `\n${outcomeAndPayoutLine}\n`; }
+    } else if (isForFinalSummary && outcomeAndPayoutLine) { 
+        messageTextHTML += `\n${outcomeAndPayoutLine}\n`; 
+    }
+    
     messageTextHTML += "\n"; 
-    if (status === 'player_turn' && !isForFinalSummary) { messageTextHTML += `👇 Click a tile to reveal it. Good luck!`; }
+
+    if (status === 'player_turn' && !isForFinalSummary) {
+        messageTextHTML += `👇 Click a tile to reveal it. Good luck!`;
+    }
 
     const keyboardRows = [];
     for (let r_idx = 0; r_idx < rows; r_idx++) { 
@@ -8633,26 +8649,28 @@ async function formatAndGenerateMinesMessageComponents(gameData, isForFinalSumma
                 if (cellIsRevealed) { buttonText = cell.isMine ? TILE_EMOJI_EXPLOSION : TILE_EMOJI_GEM; } 
                 else { buttonText = cell.isMine ? TILE_EMOJI_MINE : TILE_EMOJI_GEM; }
             }
-            rowButtons.push({ text: buttonText, callback_data: (status === 'player_turn' && !isForFinalSummary && !cellIsRevealed) ? `mines_tile:${gameId}:${r_idx}:${c_idx}` : `mines_noop:${gameId}:${r_idx}:${c_idx}`});
+            rowButtons.push({
+                text: buttonText,
+                callback_data: (status === 'player_turn' && !isForFinalSummary && !cellIsRevealed) ? `mines_tile:${gameId}:${r_idx}:${c_idx}` : `mines_noop:${gameId}:${r_idx}:${c_idx}`
+            });
         }
         keyboardRows.push(rowButtons);
     }
 
     if (status === 'player_turn' && !isForFinalSummary) {
         if (gemsFound > 0) {
-            // ***** TEMPORARY DIAGNOSTIC CHANGE FOR CASH OUT BUTTON TEXT *****
-            // const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound); 
-            // const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
-            // const cashOutButtonAmountDisplay = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD')); 
-            // keyboardRows.push([{ text: `💰 Cash Out (${cashOutButtonAmountDisplay})`, callback_data: `mines_cashout:${gameId}` }]);
-            const cashOutText = `💰 Cash Out (Calculating...)`; // No await here for diagnosis
-            keyboardRows.push([{ text: cashOutText, callback_data: `mines_cashout:${gameId}` }]);
-            // ***** END OF TEMPORARY DIAGNOSTIC CHANGE *****
+            const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound); 
+            const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
+            // Pre-await the balance display for the button text
+            const cashOutButtonAmountDisplay = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'));
+            keyboardRows.push([{ text: `💰 Cash Out (${cashOutButtonAmountDisplay})`, callback_data: `mines_cashout:${gameId}` }]);
         }
     }
+    
     if (status === 'player_turn' && !isForFinalSummary && gemsFound === 0 && keyboardRows.length === rows) {
         keyboardRows.push([{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.MINES}`}]);
     }
+
     return { messageTextHTML, keyboard: { inline_keyboard: keyboardRows } };
 }
 
