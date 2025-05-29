@@ -8661,7 +8661,7 @@ async function updateMinesGameMessage(gameData, deleteOldMessage = true) {
 // --- Handle Mines Difficulty Selection & Game Start ---
 async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, difficultyKey, callbackQueryId, originalMessageId, originalChatId, originalChatType) {
     const clickerId = String(userWhoClicked.telegram_id || userWhoClicked.id); 
-    const logPrefix = `[MinesDiffSelect_DeleteNSend UID:${clickerId} OfferID:${offerId} Diff:${difficultyKey}]`;
+    const logPrefix = `[MinesDiffSelect_DeleteNSend_ReleaseFix UID:${clickerId} OfferID:${offerId} Diff:${difficultyKey}]`;
     console.log(`${logPrefix} Processing difficulty selection.`);
 
     const offerData = activeGames.get(offerId);
@@ -8677,65 +8677,121 @@ async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, d
     }
 
     const difficultyConfig = MINES_DIFFICULTY_CONFIG[difficultyKey];
-    if (!difficultyConfig) { /* ... (handle invalid difficulty) ... */ return; }
+    if (!difficultyConfig) { 
+        console.error(`${logPrefix} Invalid difficulty key: ${difficultyKey}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid difficulty selected.", show_alert: true }).catch(()=>{});
+        return; 
+    }
 
-    await bot.answerCallbackQuery(callbackQueryId, { text: `Selected ${difficultyConfig.label}. Starting game...`}).catch(()=>{});
-
-    const betAmountLamports = offerData.betAmount;
-    const playerRefHTML = offerData.initiatorMentionHTML; // Should be HTML escaped already
-    const actualGameId = generateGameId(GAME_IDS.MINES); // New ID for the actual game
-
-    let client = null;
+    let client = null; // Initialize client to null
     try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const currentUserForBet = await getOrCreateUser(clickerId, userWhoClicked.username, userWhoClicked.first_name, userWhoClicked.last_name, client);
-        if (!currentUserForBet || BigInt(currentUserForBet.balance) < betAmountLamports) {
-            await client.query('ROLLBACK');
-            const betDisplayErrorHTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-            const neededErrorDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports - BigInt(currentUserForBet?.balance || 0), 'USD'));
+        client = await pool.connect(); // Acquire client
+        await client.query('BEGIN');
+
+        // Pass the acquired client to getOrCreateUser if it accepts it for transactional consistency
+        const currentUserForBet = await getOrCreateUser(clickerId, userWhoClicked.username, userWhoClicked.first_name, userWhoClicked.last_name, client); 
+        
+        if (!currentUserForBet || BigInt(currentUserForBet.balance) < offerData.betAmount) {
+            await client.query('ROLLBACK'); // Rollback before releasing or returning
+            const betDisplayErrorHTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
+            const neededErrorDisplayHTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount - BigInt(currentUserForBet?.balance || 0), 'USD'));
+            await bot.answerCallbackQuery(callbackQueryId, { text: `Your balance is too low for a ${betDisplayErrorHTML} game. Need ${neededErrorDisplayHTML} more.`, show_alert: true });
+            
             if (bot && offerData.offerMessageId) {
-                 await bot.editMessageText( `💣 Offer by ${playerRefHTML} for <b>${betDisplayErrorHTML}</b> was cancelled. Insufficient funds to start game.`, { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {} } ).catch(()=>{});
-            } else { // Should not happen if offerMessageId was stored
-                await safeSendMessage(originalChatId, `💣 Offer by ${playerRefHTML} for <b>${betDisplayErrorHTML}</b> was cancelled. Insufficient funds.`, {parse_mode: 'HTML'});
+                 await bot.editMessageText( `💣 Offer by ${offerData.initiatorMentionHTML} for <b>${betDisplayErrorHTML}</b> was cancelled. Insufficient funds to start game.`, { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: {} } ).catch(()=>{});
             }
             activeGames.delete(offerId);
             await updateGroupGameDetails(originalChatId, null, null, null);
-            if (client) client.release(); return;
+            // client will be released in finally
+            return;
         }
-        const balanceUpdateResult = await updateUserBalanceAndLedger( client, clickerId, BigInt(-betAmountLamports), 'bet_placed_mines', { game_id_custom_field: actualGameId, difficulty_custom: difficultyKey, mines_custom: difficultyConfig.mines }, `Bet for Mines game ${actualGameId} (${difficultyConfig.label})`);
-        if (!balanceUpdateResult || !balanceUpdateResult.success) { /* ... (handle bet deduction failure) ... */ if (client) client.release(); return;}
+
+        const balanceUpdateResult = await updateUserBalanceAndLedger( 
+            client, // Pass the acquired client
+            clickerId, 
+            BigInt(-offerData.betAmount), 
+            'bet_placed_mines', 
+            { game_id_custom_field: offerId }, // Using offerId as a temporary game_id for this bet log
+            `Mines game started (${difficultyKey}). Bet: ${await formatBalanceForDisplay(offerData.betAmount, 'SOL')}`
+        );
+
+        if (!balanceUpdateResult.success) {
+            await client.query('ROLLBACK'); // Rollback before releasing
+            console.error(`${logPrefix} Failed to deduct bet for Mines game ${offerId}: ${balanceUpdateResult.error}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Error placing your bet. Please try again.", show_alert: true });
+            // client will be released in finally
+            return;
+        }
+        // Update user object in offerData with new balance *before* commit if needed elsewhere,
+        // or re-fetch after if gameData needs the absolute latest.
+        // For now, assuming initiatorUserObj in offerData is mainly for display name.
+        // The actual balance is in the DB.
         await client.query('COMMIT');
-        
-        const { grid, mineLocations } = await generateMinesGridAndData(difficultyConfig.rows, difficultyConfig.cols, difficultyConfig.mines);
-        const initialMultiplier = MINES_DIFFICULTY_CONFIG[difficultyKey].multipliers[0] || 0; 
-        const initialPotentialPayout = BigInt(Math.floor(Number(betAmountLamports) * initialMultiplier));
+        console.log(`${logPrefix} Bet of ${offerData.betAmount} lamports successfully deducted for user ${clickerId}.`);
 
-        const gameData = {
-            type: GAME_IDS.MINES, gameId: actualGameId, chatId: offerData.chatId,
-            userId: clickerId, playerRef: playerRefHTML, 
-            initiatorId: clickerId, // Keep for consistency with other gameData structures
-            initiatorMentionHTML: playerRefHTML,
-            initiatorUserObj: { ...currentUserForBet, balance: balanceUpdateResult.newBalanceLamports }, // Store updated user object
-            betAmount: betAmountLamports,
-            rows: difficultyConfig.rows, cols: difficultyConfig.cols, numMines: difficultyConfig.mines,
-            difficultyKey: difficultyKey, difficultyLabel: difficultyConfig.label,
-            grid: grid, mineLocations: mineLocations, revealedTiles: Array(difficultyConfig.rows).fill(null).map(() => Array(difficultyConfig.cols).fill(false)), // Changed to match cell object structure if generateMinesGridAndData was changed
-            gemsFound: 0, currentMultiplier: initialMultiplier, potentialPayout: initialPotentialPayout, 
-            status: 'player_turn', // Game starts with player's turn
-            gameMessageId: offerData.offerMessageId, // The old offer message ID
-            lastInteractionTime: Date.now()
-        };
-        
-        activeGames.set(actualGameId, gameData);
-        activeGames.delete(offerId); 
-        await updateGroupGameDetails(originalChatId, actualGameId, GAME_IDS.MINES, betAmountLamports);
+        // If we reach here, bet is placed. Now prepare the actual game.
+        await bot.answerCallbackQuery(callbackQueryId, { text: `Selected ${difficultyConfig.label}. Starting game...`}).catch(()=>{});
 
-        console.log(`${logPrefix} Mines game ${actualGameId} started by ${clickerId}. Grid: ${gameData.rows}x${gameData.cols}, Mines: ${gameData.numMines}. Bet: ${betAmountLamports}`);
-        // updateMinesGameMessage will delete the old offer message (gameData.gameMessageId) and send the new board
-        await updateMinesGameMessage(gameData, true); 
+        const actualGameId = generateGameId(GAME_IDS.MINES);
+        const { grid, mineLocations } = await generateMinesGridAndData(difficultyConfig.rows, difficultyConfig.cols, difficultyConfig.mines);
+        const initialMultiplier = MINES_DIFFICULTY_CONFIG[difficultyKey].multipliers[0] || 0; 
+        const initialPotentialPayout = BigInt(Math.floor(Number(offerData.betAmount) * initialMultiplier));
 
-    } catch (error) { /* ... (error handling as before) ... */ if (client) client.release(); return;
-    } finally { if (client) client.release(); }
+        // Fetch the latest user object again AFTER successful bet placement to reflect the new balance
+        const updatedUserObjAfterBet = await getOrCreateUser(clickerId); 
+
+        const gameData = {
+            type: GAME_IDS.MINES, gameId: actualGameId, chatId: offerData.chatId,
+            userId: clickerId, playerRef: offerData.initiatorMentionHTML, 
+            initiatorId: clickerId, 
+            initiatorMentionHTML: offerData.initiatorMentionHTML,
+            initiatorUserObj: updatedUserObjAfterBet, // Use updated user object
+            betAmount: offerData.betAmount,
+            rows: difficultyConfig.rows, cols: difficultyConfig.cols, numMines: difficultyConfig.mines,
+            difficultyKey: difficultyKey, difficultyLabel: difficultyConfig.label,
+            grid: grid, mineLocations: mineLocations, 
+            // revealedTiles for the object grid structure, initially all false
+            revealedTiles: Array(difficultyConfig.rows).fill(null).map(() => Array(difficultyConfig.cols).fill(false)),
+            gemsFound: 0, currentMultiplier: initialMultiplier, potentialPayout: initialPotentialPayout, 
+            status: 'player_turn', 
+            gameMessageId: offerData.offerMessageId, // Will be deleted by updateMinesGameMessage
+            lastInteractionTime: Date.now(),
+            lastBoardUpdateTimeMs: 0, isBoardUpdateScheduled: false, boardUpdateTimeoutId = null
+        };
+            
+        activeGames.set(actualGameId, gameData);
+        activeGames.delete(offerId); // Delete the original offer
+        await updateGroupGameDetails(originalChatId, actualGameId, GAME_IDS.MINES, offerData.betAmount);
+
+        console.log(`${logPrefix} Mines game ${actualGameId} started. Grid: ${gameData.rows}x${gameData.cols}, Mines: ${gameData.numMines}. Bet: ${offerData.betAmount}`);
+        await updateMinesGameMessage(gameData, true); // This will delete the old offer msg and send the new board
+
+    } catch (error) {
+        if (client) { // Check if client was acquired before trying to rollback
+           try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} DB Rollback Error: ${rbErr.message}`); }
+        }
+        console.error(`${logPrefix} Error starting Mines game after difficulty selection: ${error.message}`, error.stack?.substring(0,700));
+        const errorText = `⚙️ Oops! A critical error occurred while starting your Mines game: \`${escapeHTML(error.message)}\`.`; // Use escapeHTML for HTML parse mode
+        if (originalMessageId && bot && offerData.offerMessageId) { // Check offerData.offerMessageId exists
+            // Try to edit the original offer message to show error
+            await bot.editMessageText(errorText, { chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{text: "Dismiss", callback_data:"noop_ok"}]] } }).catch(async () => {
+                await safeSendMessage(originalChatId, errorText, { parse_mode: 'HTML'}); // Fallback to new message
+            });
+        } else {
+            await safeSendMessage(originalChatId, errorText, { parse_mode: 'HTML'});
+        }
+        activeGames.delete(offerId); // Clean up original offer
+        // If actualGameId was generated before error, clean it up too
+        if (typeof actualGameId !== 'undefined' && activeGames.has(actualGameId)) {
+            activeGames.delete(actualGameId);
+        }
+        await updateGroupGameDetails(originalChatId, null, null, null);
+    } finally {
+        if (client) { // Only release if client was successfully connected
+            console.log(`${logPrefix} Releasing DB client in finally block.`);
+            client.release();
+        }
+    }
 }
 
 // --- Handle Tile Click in Mines Game ---
