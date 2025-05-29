@@ -8496,11 +8496,6 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 //----------------------------------------------------------------------------------------------------
 // Assumed dependencies are available from other Parts.
 
-const TILE_EMOJI_HIDDEN = '❓'; 
-const TILE_EMOJI_GEM = '💎'; 
-const TILE_EMOJI_MINE = '💣'; 
-const TILE_EMOJI_EXPLOSION = '💥'; // Using this for when a mine is hit and revealed
-
 // --- Mines Grid Generation (Casino Style - from your version) ---
 // Returns { grid, mineLocations }; grid cells are { isMine, isRevealed, display }
 async function generateMinesGridAndData(rows, cols, numMines) { // Renamed slightly for clarity
