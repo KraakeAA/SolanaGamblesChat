@@ -8756,7 +8756,7 @@ async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, d
             status: 'player_turn', 
             gameMessageId: offerData.offerMessageId, // Will be deleted by updateMinesGameMessage
             lastInteractionTime: Date.now(),
-            lastBoardUpdateTimeMs: 0, isBoardUpdateScheduled: false, boardUpdateTimeoutId = null
+            lastBoardUpdateTimeMs: 0, isBoardUpdateScheduled: false, boardUpdateTimeoutId: null,
         };
             
         activeGames.set(actualGameId, gameData);
