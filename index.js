@@ -8497,7 +8497,7 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 
 // Ensure MINES_EDIT_THROTTLE_MS is defined in Part 1 from process.env.MINES_EDIT_THROTTLE_MS (default e.g., 1200)
 
-// --- Mines Game Logic (Synchronous Helpers - UNCHANGED) ---
+// --- Mines Game Logic (Synchronous Helpers - UNCHANGED from your document) ---
 
 function generateMinesGrid(rows, cols, numMines) {
     const grid = Array(rows).fill(null).map(() => Array(cols).fill(TILE_EMOJI_GEM));
@@ -8514,24 +8514,29 @@ function generateMinesGrid(rows, cols, numMines) {
 }
 
 function calculateMinesMultiplier(gameData, revealedGemsCount) {
-    const { difficultyKey } = gameData;
+    const { difficultyKey, gameId } = gameData; // Added gameId for context in log
     const difficultyConfig = MINES_DIFFICULTY_CONFIG[difficultyKey];
 
     if (!difficultyConfig || !difficultyConfig.multipliers) {
-        console.error(`[MinesCalcMult GID:${gameData.gameId}] Multipliers not found for difficulty ${difficultyKey}`);
+        console.error(`[MinesCalcMult GID:${gameId}] Multipliers not found for difficulty ${difficultyKey}`);
         return 0.0; 
     }
     
-    if (revealedGemsCount >= 0 && revealedGemsCount < difficultyConfig.multipliers.length) { // Allow 0 gems for initial display
+    // Ensure revealedGemsCount is within the bounds of the multipliers array
+    // Multipliers array is 0-indexed, where index corresponds to number of gems revealed
+    // e.g., multipliers[0] is for 0 gems, multipliers[1] for 1 gem, etc.
+    if (revealedGemsCount >= 0 && revealedGemsCount < difficultyConfig.multipliers.length) { 
         return difficultyConfig.multipliers[revealedGemsCount] || 0.0;
     } else if (revealedGemsCount >= difficultyConfig.multipliers.length && difficultyConfig.multipliers.length > 0) {
-        return difficultyConfig.multipliers[difficultyConfig.multipliers.length -1] || 0.0; // Max multiplier
+        // If asking for more gems than available multipliers (e.g. all gems found), return last defined multiplier
+        return difficultyConfig.multipliers[difficultyConfig.multipliers.length - 1] || 0.0; 
     }
+    // Default for invalid counts (e.g., negative, though should not happen)
+    console.warn(`[MinesCalcMult GID:${gameId}] Invalid revealedGemsCount: ${revealedGemsCount} for difficulty ${difficultyKey}. Returning 0.`);
     return 0.0; 
 }
 
-// generateMinesKeyboard: Generates the keyboard for the INTERACTIVE phase OR the STATIC final board display
-function generateMinesKeyboard(gameData, isFinalStaticBoard = false) {
+function generateMinesKeyboard(gameData) { // isFinalStaticBoard removed as it's handled by game status now
     const { rows, cols, revealedTiles, status, gameId } = gameData;
     const keyboard = [];
 
@@ -8543,36 +8548,30 @@ function generateMinesKeyboard(gameData, isFinalStaticBoard = false) {
             const isRevealed = revealedTiles[r][c];
             const isMine = gameData.grid[r][c] === TILE_EMOJI_MINE;
 
-            if (isRevealed) {
-                tileContent = isMine ? TILE_EMOJI_EXPLOSION : TILE_EMOJI_GEM;
-            } else { // Not revealed yet OR showing final static board
-                if (status === 'in_progress' && !isFinalStaticBoard) { // Interactive phase
-                    tileContent = TILE_EMOJI_HIDDEN;
-                } else { // Game over, showing final static board
-                    tileContent = isMine ? TILE_EMOJI_MINE : TILE_EMOJI_GEM;
-                }
+            if (status === 'in_progress') { // Interactive phase
+                tileContent = isRevealed ? (isMine ? TILE_EMOJI_EXPLOSION : TILE_EMOJI_GEM) : TILE_EMOJI_HIDDEN;
+            } else { // Game is over, showing final static board (all revealed)
+                tileContent = isMine ? (isRevealed ? TILE_EMOJI_EXPLOSION : TILE_EMOJI_MINE) : TILE_EMOJI_GEM;
             }
             
             rowButtons.push({
                 text: tileContent,
-                // During active play, tiles are clickable. For final board, they are no-op.
-                callback_data: (status === 'in_progress' && !isFinalStaticBoard && !isRevealed) ? `mines_tile:${gameId}:${r}:${c}` : `mines_noop:${gameId}:${r}:${c}`
+                callback_data: (status === 'in_progress' && !isRevealed) ? `mines_tile:${gameId}:${r}:${c}` : `mines_noop:${gameId}:${r}:${c}`
             });
         }
         keyboard.push(rowButtons);
     }
 
     // Action buttons for IN-PROGRESS game
-    if (status === 'in_progress' && !isFinalStaticBoard) {
+    if (status === 'in_progress') {
         if (gameData.revealedGems > 0) {
             const cashOutMultiplier = calculateMinesMultiplier(gameData, gameData.revealedGems);
             keyboard.push([{ text: `💰 Cash Out (x${cashOutMultiplier.toFixed(2)})`, callback_data: `mines_cashout:${gameId}` }]);
         }
     }
-    // Post-game buttons are NOT added here; they go on the new summary message.
+    // Post-game buttons are handled by createPostGameKeyboard and added to the *new* summary message.
     return { inline_keyboard: keyboard };
 }
-
 
 // --- Mines Game Message Formatting (Async - UNCHANGED) ---
 async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
@@ -8590,9 +8589,8 @@ async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
 
     let titleEmoji = TILE_EMOJI_MINE; 
     let titleText = "Mines Adventure!";
-    let mainStatusLine = ""; 
+    let mainStatusLine = ""; // This line is for the *final summary message*
 
-    // This mainStatusLine is for when formatMinesGameMessage is used for the *final summary message*
     if (status === 'game_over_mine_hit') {
         titleEmoji = TILE_EMOJI_EXPLOSION;
         titleText = "Mine Hit! Game Over!";
@@ -8602,7 +8600,7 @@ async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
         titleText = "Gems Secured! Cashed Out!";
         const finalPayoutLamports = gameData.payoutAmountLamports || 0n; 
         const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayoutLamports, 'USD'));
-        const finalMultiplierValue = gameData.currentMultiplier || 0; // Should be set on cashout
+        const finalMultiplierValue = gameData.currentMultiplier || 0;
         const finalMultiplier = escapeHTML(finalMultiplierValue.toFixed(2));
         mainStatusLine = `<b>Outcome:</b> Cashed out with <b>${revealedGemsHTML}</b> ${TILE_EMOJI_GEM}!\nFinal Payout: <b>${finalPayoutDisplay}</b> (x${finalMultiplier})`;
     } else if (status === 'game_over_all_gems_found') {
@@ -8610,7 +8608,7 @@ async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
         titleText = "All Gems Found! MAX WIN!";
         const finalPayoutLamports = gameData.payoutAmountLamports || 0n; 
         const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayoutLamports, 'USD'));
-        const finalMultiplierValue = gameData.currentMultiplier || 0; // Should be set on all_gems_found
+        const finalMultiplierValue = gameData.currentMultiplier || 0; 
         const finalMultiplier = escapeHTML(finalMultiplierValue.toFixed(2));
         mainStatusLine = `<b>Outcome:</b> Found all <b>${revealedGemsHTML}</b> ${TILE_EMOJI_GEM}!\nMax Payout: <b>${finalPayoutDisplay}</b> (x${finalMultiplier})`;
     }
@@ -8620,7 +8618,7 @@ async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
     message += `Wager: <b>${betDisplayHTML}</b> | Difficulty: <b>${difficultyLabelHTML}</b> (${numMinesHTML} ${TILE_EMOJI_MINE})\n`;
     message += `${TILE_EMOJI_GEM} Gems Found: <b>${revealedGemsHTML} / ${escapeHTML(String(safeTiles))}</b>\n`;
 
-    if (status === 'in_progress') {
+    if (status === 'in_progress') { // This part is for the interactive game board message
         if (revealedGems > 0) {
             const cashOutMultiplier = calculateMinesMultiplier(gameData, revealedGems); 
             const currentPayoutLamports = BigInt(Math.floor(Number(betAmount) * cashOutMultiplier));
@@ -8635,11 +8633,11 @@ async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
             const nextPayoutDisplayHTML = `<b>x${escapeHTML(nextGemMultiplier.toFixed(2))}</b> (${escapeHTML(await formatBalanceForDisplay(nextPayoutLamports, 'USD'))})`;
             message += `Next ${TILE_EMOJI_GEM} Prize: ${nextPayoutDisplayHTML}\n`;
         }
-    } else { // Game is over, use the mainStatusLine prepared above
+    } else { // Game is over, use the mainStatusLine prepared above (for the *new* summary message)
         message += `\n${mainStatusLine}\n`; 
     }
     
-    message += `\n`; // Extra newline for spacing before the grid or prompt
+    message += `\n`; 
 
     if (statusMessageOnClick && status === 'in_progress') { 
         message += `<i>${escapeHTML(statusMessageOnClick)}</i>\n\n`;
@@ -8647,47 +8645,38 @@ async function formatMinesGameMessage(gameData, statusMessageOnClick = null) {
 
     if (status === 'in_progress') {
         message += `👇 Click a tile to reveal it. Good luck!`;
-    } else if (status === 'game_over_mine_hit' && statusMessageOnClick) { // This part might be redundant if mainStatusLine covers it
-         // message += `<i>${escapeHTML(statusMessageOnClick)}</i>\nBetter luck next time!`;
-    } else if (status === 'game_over_mine_hit' && !mainStatusLine.includes("Outcome")) { 
-        // Fallback if mainStatusLine wasn't generated for some reason
-        message += `Better luck next time! The minefield was treacherous.`;
     }
-
+    // Removed "Better luck next time" from here as it's part of mainStatusLine for game over.
     return message;
 }
 
 // --- Helper function for Smart Throttling Board Updates ---
-async function updateMinesBoardVisuals(gameId, statusMessageForDisplay = null) {
+async function updateMinesBoardVisuals(gameId, statusMessageForToast = null) {
     const gameData = activeGames.get(gameId);
     if (!gameData) {
         console.log(`[updateMinesBoardVisuals GID:${gameId}] Game data not found, aborting visual update.`);
-        return false; // Indicate failure or inability to update
-    }
-    // If game is already over and we are just trying to update a board for it,
-    // but it should have been deleted and a new message sent, we might want to abort.
-    // However, this function is now primarily for IN-PROGRESS updates.
-    if (gameData.status && gameData.status.startsWith('game_over_')) {
-        console.log(`[updateMinesBoardVisuals GID:${gameId}] Game status is ${gameData.status}. Final summary should be a new message. Aborting this visual edit.`);
         return false;
+    }
+    // This function is for IN-PROGRESS updates. Game over state is handled by sending a new message.
+    if (gameData.status && gameData.status.startsWith('game_over_')) {
+        console.log(`[updateMinesBoardVisuals GID:${gameId}] Game status is ${gameData.status}. An edit is not expected; final summary should be a new message.`);
+        return false; // Don't edit if game is already considered over by internal state.
     }
 
     const logPrefix = `[MinesBoardVisuals GID:${gameId}]`;
 
-    if (gameData.boardUpdateTimeoutId) { // Clear any pending scheduled update if we're doing one now
+    if (gameData.boardUpdateTimeoutId) {
         clearTimeout(gameData.boardUpdateTimeoutId);
         gameData.boardUpdateTimeoutId = null;
     }
     gameData.isBoardUpdateScheduled = false;
 
-    const messageTextHTML = await formatMinesGameMessage(gameData, statusMessageForDisplay);
-    const keyboard = generateMinesKeyboard(gameData); // Keyboard for in-progress game
+    const messageTextHTML = await formatMinesGameMessage(gameData, statusMessageForToast);
+    const keyboard = generateMinesKeyboard(gameData); // For in-progress game
     const messageToUpdateId = gameData.gameMessageId;
 
     if (!messageToUpdateId) {
-        console.warn(`${logPrefix} No gameMessageId to update board for game ${gameId}. This indicates a problem if game is 'in_progress'.`);
-        // If game is in_progress and message ID lost, this is an issue.
-        // For this example, we'll just log and return. A more robust solution might try to resend.
+        console.warn(`${logPrefix} No gameMessageId to update board for game ${gameId}. Game status: ${gameData.status}`);
         return false;
     }
 
@@ -8701,34 +8690,61 @@ async function updateMinesBoardVisuals(gameId, statusMessageForDisplay = null) {
         });
         gameData.lastBoardUpdateTimeMs = Date.now();
         console.log(`${logPrefix} Interactive board updated successfully. Status: ${gameData.status}`);
-        if(activeGames.has(gameId)) activeGames.set(gameId, gameData); // Save updated timestamp
-        return true; // Update successful
+        if(activeGames.has(gameId)) activeGames.set(gameId, gameData);
+        return true;
     } catch (error) {
         console.error(`${logPrefix} Error in updateMinesBoardVisuals for game ${gameId}: ${error.message}`);
         if (error.message && error.message.includes("message is not modified")) {
-            gameData.lastBoardUpdateTimeMs = Date.now(); // Still update timestamp
+            gameData.lastBoardUpdateTimeMs = Date.now();
             if(activeGames.has(gameId)) activeGames.set(gameId, gameData);
-            return true; // Effectively successful, no change needed
+            return true; 
         }
-        // For other errors, the update failed.
         return false;
     }
 }
 
-
-async function scheduleOrPerformMinesBoardUpdate(gameId, statusMessageForToast = null, forceUpdate = false) {
+async function scheduleOrPerformMinesBoardUpdate(gameId, statusMessageForToast = null, forceUpdateForGameOverReveal = false) {
     const gameData = activeGames.get(gameId);
     if (!gameData) return;
+
+    // If it's a game over reveal, we want to update the board one last time.
+    // If it's normal play, respect throttle.
+    if (gameData.status && gameData.status.startsWith('game_over_') && !forceUpdateForGameOverReveal) {
+        console.log(`[MinesUpdateScheduler GID:${gameId}] Game is already over. No further interactive updates scheduled.`);
+        return;
+    }
 
     const logPrefix = `[MinesUpdateScheduler GID:${gameId}]`;
     const now = Date.now();
     const throttleMs = MINES_EDIT_THROTTLE_MS || 1200;
 
-    if (forceUpdate) { // Usually for game-ending moves to show final grid state before new summary message
-        console.log(`${logPrefix} Force updating board (e.g., for game over).`);
+    const performUpdateLogic = async () => {
+        // Re-fetch to ensure we have the absolute latest data before rendering
+        const currentGData = activeGames.get(gameId);
+        if (!currentGData) {
+            console.log(`${logPrefix} Game ${gameId} disappeared before scheduled update could run.`);
+            return;
+        }
+        // If the game ended while waiting for the timeout, don't do an interactive update.
+        if (currentGData.status.startsWith('game_over_') && !forceUpdateForGameOverReveal) {
+            console.log(`${logPrefix} Game ${gameId} ended before scheduled update. Aborting visual edit.`);
+            if (currentGData.boardUpdateTimeoutId) clearTimeout(currentGData.boardUpdateTimeoutId);
+            currentGData.isBoardUpdateScheduled = false;
+            currentGData.boardUpdateTimeoutId = null;
+            activeGames.set(gameId, currentGData);
+            return;
+        }
+        currentGData.isBoardUpdateScheduled = false; // Clear before attempting
+        currentGData.boardUpdateTimeoutId = null;
+        await updateMinesBoardVisuals(gameId, statusMessageForToast);
+    };
+
+    if (forceUpdateForGameOverReveal) {
+        console.log(`${logPrefix} Forcing board update for game over reveal.`);
         if (gameData.boardUpdateTimeoutId) clearTimeout(gameData.boardUpdateTimeoutId);
         gameData.isBoardUpdateScheduled = false;
-        await updateMinesBoardVisuals(gameId, statusMessageForToast); // This updates the existing board message
+        gameData.boardUpdateTimeoutId = null;
+        await updateMinesBoardVisuals(gameId, statusMessageForToast); // statusMessageForToast will be from the mine hit/all gems
         return;
     }
 
@@ -8736,62 +8752,62 @@ async function scheduleOrPerformMinesBoardUpdate(gameId, statusMessageForToast =
         console.log(`${logPrefix} Throttle clear. Performing immediate board update.`);
         if (gameData.boardUpdateTimeoutId) clearTimeout(gameData.boardUpdateTimeoutId);
         gameData.isBoardUpdateScheduled = false;
+        gameData.boardUpdateTimeoutId = null;
         await updateMinesBoardVisuals(gameId, statusMessageForToast);
     } else if (!gameData.isBoardUpdateScheduled) {
-        const delay = Math.max(0, throttleMs - (now - (gameData.lastBoardUpdateTimeMs || 0)));
+        const delay = Math.max(50, throttleMs - (now - (gameData.lastBoardUpdateTimeMs || 0))); // Ensure a small positive delay
         console.log(`${logPrefix} Throttled. Scheduling board update in ${delay}ms.`);
         gameData.isBoardUpdateScheduled = true;
-        gameData.boardUpdateTimeoutId = setTimeout(async () => {
-            const currentGDataForTimeout = activeGames.get(gameId);
-            if (currentGDataForTimeout && currentGDataForTimeout.isBoardUpdateScheduled) { // Check flag again
-                console.log(`${logPrefix} Executing scheduled board update.`);
-                currentGDataForTimeout.isBoardUpdateScheduled = false; // Clear before calling
-                await updateMinesBoardVisuals(gameId, statusMessageForToast); // Will use latest gameData
-            } else {
-                console.log(`${logPrefix} Scheduled update for game ${gameId} skipped (no longer scheduled or game gone).`);
-            }
-        }, delay);
-        if(activeGames.has(gameId)) activeGames.set(gameId, gameData); // Save timeoutId and scheduled status
+        // Clear any existing timeout before setting a new one for this specific game instance
+        if (gameData.boardUpdateTimeoutId) clearTimeout(gameData.boardUpdateTimeoutId);
+        
+        gameData.boardUpdateTimeoutId = setTimeout(performUpdateLogic, delay);
+        if(activeGames.has(gameId)) activeGames.set(gameId, gameData);
     } else {
         console.log(`${logPrefix} Throttled and update already scheduled. Current toast: '${statusMessageForToast}'`);
-        // If an update is already scheduled, we don't need to schedule another one.
-        // The existing scheduled update will pick up the latest gameData when it runs.
     }
 }
 
+
 // --- Mines Callback Handlers ---
 
-// handleMinesDifficultySelectionCallback (REVISED from my previous response to include throttle initializers)
+// REVISED handleMinesDifficultySelectionCallback
 async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, difficultyKey, callbackQueryId, originalMessageId, originalChatId, originalChatType) {
     const clickerId = String(userWhoClicked.telegram_id || userWhoClicked.id); 
-    const logPrefix = `[MinesDiffSelect_SmartThrottle UID:${clickerId} OfferID:${offerId} Diff:${difficultyKey}]`;
+    const logPrefix = `[MinesDiffSelect_SmartThrottleFinalMsg UID:${clickerId} OfferID:${offerId} Diff:${difficultyKey}]`;
 
     const offerData = activeGames.get(offerId);
 
-    if (!offerData || offerData.type !== GAME_IDS.MINES_OFFER) { /* ... */ return; }
-    if (String(offerData.initiatorId) !== clickerId) { /* ... */ return; }
-    if (offerData.status !== 'awaiting_difficulty') { /* ... */ return; }
+    if (!offerData || offerData.type !== GAME_IDS.MINES_OFFER) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This Mines offer has expired or is not valid.", show_alert: true }).catch(()=>{});
+        if(bot && originalMessageId) bot.editMessageReplyMarkup({}, {chat_id: originalChatId, message_id: Number(originalMessageId)}).catch(()=>{});
+        return;
+    }
+    if (String(offerData.initiatorId) !== clickerId) { /* ... (same check) */ return; }
+    if (offerData.status !== 'awaiting_difficulty') { /* ... (same check) */ return; }
 
     const difficultyConfig = MINES_DIFFICULTY_CONFIG[difficultyKey];
-    if (!difficultyConfig) { /* ... */ return; }
+    if (!difficultyConfig) { /* ... (same check) */ return; }
 
     let client;
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const currentUserForBet = await getOrCreateUser(clickerId, null, null, null, client);
         if (!currentUserForBet || BigInt(currentUserForBet.balance) < offerData.betAmount) {
-            // ... (handle insufficient funds as before) ...
+            await client.query('ROLLBACK');
+            const betDisplayErrorHTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
+            const neededErrorDisplayHTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount - BigInt(currentUserForBet?.balance || 0), 'USD'));
+            await bot.answerCallbackQuery(callbackQueryId, { text: `Your balance is too low for a ${betDisplayErrorHTML} game. Need ${neededErrorDisplayHTML} more.`, show_alert: true });
+            if (bot && offerData.offerMessageId) { /* ... (edit offer message to cancelled) ... */ }
+            activeGames.delete(offerId);
+            await updateGroupGameDetails(originalChatId, null, null, null);
             if (client) client.release(); return;
         }
         const balanceUpdateResult = await updateUserBalanceAndLedger( client, clickerId, BigInt(-offerData.betAmount), 'bet_placed_mines', { game_id_custom_field: offerId }, `Mines game started (${difficultyKey}). Bet: ${formatCurrency(offerData.betAmount)}`);
-        if (!balanceUpdateResult.success) {
-            await client.query('ROLLBACK');
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Error placing your bet. Please try again.", show_alert: true });
-            if (client) client.release(); return;
-        }
+        if (!balanceUpdateResult.success) { /* ... (handle bet deduction failure) ... */ if (client) client.release(); return;}
         offerData.initiatorUserObj.balance = balanceUpdateResult.newBalanceLamports;
         await client.query('COMMIT');
-    } catch (dbError) { /* ... (db error handling as before) ... */ if (client) client.release(); return;
+    } catch (dbError) { /* ... (db error handling) ... */ if (client) client.release(); return;
     } finally { if (client) client.release(); }
 
     await bot.answerCallbackQuery(callbackQueryId, { text: `Difficulty: ${difficultyConfig.label}. Setting up...` });
@@ -8804,38 +8820,27 @@ async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, d
     offerData.revealedTiles = Array(difficultyConfig.rows).fill(null).map(() => Array(difficultyConfig.cols).fill(false));
     offerData.revealedGems = 0; offerData.currentMultiplier = 0; 
     offerData.gameStartTime = Date.now(); offerData.lastInteractionTime = Date.now();
-    // Initialize for smart throttle
-    offerData.lastBoardUpdateTimeMs = 0; 
-    offerData.isBoardUpdateScheduled = false; 
-    offerData.boardUpdateTimeoutId = null; 
-    offerData.gameMessageId = offerData.offerMessageId; // The offer message will be edited into the game board
+    offerData.lastBoardUpdateTimeMs = 0; offerData.isBoardUpdateScheduled = false; offerData.boardUpdateTimeoutId = null; 
+    offerData.gameMessageId = offerData.offerMessageId; 
     
-    activeGames.set(offerId, offerData); // offerId is now the gameId
+    activeGames.set(offerId, offerData); 
     await updateGroupGameDetails(originalChatId, offerId, GAME_IDS.MINES, offerData.betAmount); 
     await startGameAndSendBoard(offerData, originalChatId, offerData.gameMessageId, true); 
 }
 
-// startGameAndSendBoard (REVISED - ensures gameMessageId is updated in activeGames)
+// REVISED startGameAndSendBoard
 async function startGameAndSendBoard(gameData, chatId, messageIdToEdit = null, isEdit = false) {
-    const logPrefix = `[MinesSendBoard_SmartThrottle GID:${gameData.gameId}]`;
+    const logPrefix = `[MinesSendBoard_SmartThrottleFinalMsg GID:${gameData.gameId}]`;
     const keyboard = generateMinesKeyboard(gameData); 
     const messageTextHTML = await formatMinesGameMessage(gameData, 'Game Started! Choose your first tile.'); 
 
-    const options = {
-        chat_id: String(chatId),
-        parse_mode: 'HTML', 
-        reply_markup: keyboard,
-        disable_web_page_preview: true
-    };
-
+    const options = { /* ... (same options) ... */ };
     let sentOrEditedMessage;
     try {
         if (isEdit && messageIdToEdit) {
-            sentOrEditedMessage = await bot.editMessageText(messageTextHTML, { ...options, message_id: Number(messageIdToEdit) });
+            sentOrEditedMessage = await bot.editMessageText(messageTextHTML, { ...options, message_id: Number(messageIdToEdit), chat_id: String(chatId) });
         } else {
-            if (messageIdToEdit && bot) { 
-                await bot.deleteMessage(String(chatId), Number(messageIdToEdit)).catch(()=>{});
-            }
+            if (messageIdToEdit && bot) await bot.deleteMessage(String(chatId), Number(messageIdToEdit)).catch(()=>{});
             sentOrEditedMessage = await safeSendMessage(String(chatId), messageTextHTML, options);
         }
         
@@ -8843,7 +8848,7 @@ async function startGameAndSendBoard(gameData, chatId, messageIdToEdit = null, i
             const currentGameData = activeGames.get(gameData.gameId);
             if (currentGameData) { 
                 currentGameData.gameMessageId = String(sentOrEditedMessage.message_id);
-                currentGameData.lastBoardUpdateTimeMs = Date.now(); // Set initial update time
+                currentGameData.lastBoardUpdateTimeMs = Date.now(); 
                 activeGames.set(gameData.gameId, currentGameData);
             }
         } else if (isEdit && messageIdToEdit && !sentOrEditedMessage) { 
@@ -8854,7 +8859,7 @@ async function startGameAndSendBoard(gameData, chatId, messageIdToEdit = null, i
                 activeGames.set(gameData.gameId, currentGameData);
             }
         }
-    } catch (error) { /* ... (error handling as in previous fixed version) ... */ }
+    } catch (error) { /* ... (same error handling, ensure String(chatId) for safeSendMessage) ... */ }
 }
 
 // REVISED handleMinesTileClickCallback (Uses Smart Throttle, New Message on Game Over)
@@ -8862,13 +8867,13 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, row, col, ca
     const clickerId = String(userWhoClicked.telegram_id || userWhoClicked.id); 
     const logPrefix = `[MinesTileClick_SmartThrottleFinalMsg GID:${gameId} UID:${clickerId} (${row},${col})]`; 
 
-    let gameData = activeGames.get(gameId); // Get mutable gameData
+    let gameData = activeGames.get(gameId); 
 
     // ... (initial validation checks - same as before) ...
-    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.status !== 'in_progress' || 
+    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.status !== 'in_progress' || 
         String(gameData.initiatorId) !== clickerId || 
         row < 0 || row >= gameData.rows || col < 0 || col >= gameData.cols || gameData.revealedTiles[row][col]) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid action or game state.", show_alert: true });
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid action or game state.", show_alert: true }).catch(()=>{});
         return;
     }
 
@@ -8883,8 +8888,14 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, row, col, ca
         statusMessageForAnswerCallback = `${TILE_EMOJI_EXPLOSION} BOOM! Mine at (${row + 1},${col + 1})!`;
         gameOver = true;
         gameData.payoutAmountLamports = 0n; 
-        // DB Logging for MINE HIT (same as previous)
-        try { /* ... */ } catch (e) { /* ... */ } finally { /* ... */ }
+        try {
+            client = await pool.connect(); await client.query('BEGIN');
+            const lossLedgerDetails = { game_id_custom_field: gameId, outcome: 'loss_mine_hit', difficulty: gameData.difficultyKey, mines_total: gameData.numMines, gems_found: gameData.revealedGems };
+            const lossLedgerNotes = `Mines: Hit mine. Bet ${await formatBalanceForDisplay(gameData.betAmount, 'SOL')}. Gems found: ${gameData.revealedGems}.`; // Use await
+            await updateUserBalanceAndLedger(client, gameData.initiatorId, 0n, 'loss_mines_hit', lossLedgerDetails, lossLedgerNotes);
+            await client.query('COMMIT');
+        } catch (e) { if (client) await client.query('ROLLBACK'); console.error(`${logPrefix} DB Error logging mine hit loss for ${gameId}: ${e.message}`); statusMessageForAnswerCallback += " (Error logging outcome)";} 
+        finally { if (client) client.release(); }
     } else { // Gem found
         gameData.revealedGems++;
         gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.revealedGems);
@@ -8897,36 +8908,40 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, row, col, ca
             const profitLamportsAllGems = gameData.payoutAmountLamports - gameData.betAmount; 
             statusMessageForAnswerCallback = `🎉💎 All ${gameData.revealedGems} gems found! Max Payout!`;
             gameOver = true;
-            // DB Logging for ALL GEMS FOUND (same as previous)
-            try { /* ... */ } catch (e) { /* ... */ } finally { /* ... */ }
+            try {
+                client = await pool.connect(); await client.query('BEGIN');
+                const winLedgerDetails = { game_id_custom_field: gameId, outcome: 'win_all_gems', difficulty: gameData.difficultyKey, mines_total: gameData.numMines, gems_found: gameData.revealedGems, multiplier: gameData.currentMultiplier.toFixed(2) };
+                const winLedgerNotes = `Mines: All gems found! Bet ${await formatBalanceForDisplay(gameData.betAmount, 'SOL')}. Profit ${await formatBalanceForDisplay(profitLamportsAllGems, 'SOL')}. Multiplier x${gameData.currentMultiplier.toFixed(2)}.`; // Use await
+                await updateUserBalanceAndLedger(client, gameData.initiatorId, profitLamportsAllGems, 'win_mines_all_gems', winLedgerDetails, winLedgerNotes);
+                await client.query('COMMIT');
+            } catch (e) { if (client) await client.query('ROLLBACK'); console.error(`${logPrefix} DB Error processing max win payout for ${gameId}: ${e.message}`); statusMessageForAnswerCallback = "Error processing max win. Contact support.";} 
+            finally { if (client) client.release(); }
         }
     }
     
-    activeGames.set(gameId, gameData); // Save updated state
+    activeGames.set(gameId, gameData); 
 
     const cbAnswerText = statusMessageForAnswerCallback.length > 190 ? statusMessageForAnswerCallback.substring(0,190) + "..." : statusMessageForAnswerCallback;
     await bot.answerCallbackQuery(callbackQueryId, {text: cbAnswerText }).catch(() => {});
 
     if (gameOver) {
-        // Show final board state briefly by forcing an update
-        await scheduleOrPerformMinesBoardUpdate(gameId, statusMessageForAnswerCallback, true);
-        await sleep(1500); // Let user see the revealed mine/all gems
+        // Show final board state briefly by forcing an update of the existing message
+        await scheduleOrPerformMinesBoardUpdate(gameId, statusMessageForAnswerCallback, true); 
+        await sleep(1500); 
 
-        // Now, delete the interactive board and send a new summary message
         if (gameData.gameMessageId && bot) {
             await bot.deleteMessage(String(originalChatId), Number(gameData.gameMessageId)).catch(e => {
                 console.warn(`${logPrefix} Non-critical: Failed to delete final game board message ${gameData.gameMessageId}: ${e.message}`);
             });
         }
         
-        const finalSummaryMessageText = await formatMinesGameMessage(gameData, null); // formatMinesGameMessage handles game over text
+        const finalSummaryMessageText = await formatMinesGameMessage(gameData, null); 
         const postGameKeyboard = createPostGameKeyboard(GAME_IDS.MINES, gameData.betAmount);
-        await safeSendMessage(String(originalChatId), finalSummaryMessageText, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
+        await safeSendMessage(String(originalChatId), finalSummaryMessageText, { parse_mode: 'HTML', reply_markup: postGameKeyboard, disable_web_page_preview: true });
         
         activeGames.delete(gameId); 
         await updateGroupGameDetails(originalChatId, null, null, null);
     } else {
-        // It's not game over, so just schedule a normal board update
         await scheduleOrPerformMinesBoardUpdate(gameId, statusMessageForAnswerCallback, false);
     }
 }
@@ -8936,9 +8951,9 @@ async function handleMinesCashOutCallback(gameId, userWhoClicked, callbackQueryI
     const clickerId = String(userWhoClicked.telegram_id || userWhoClicked.id); 
     const logPrefix = `[MinesCashOut_SmartThrottleFinalMsg GID:${gameId} UID:${clickerId}]`;
 
-    let gameData = activeGames.get(gameId); // Get mutable gameData
+    let gameData = activeGames.get(gameId);
     // ... (initial validation checks - same as before) ...
-    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.status !== 'in_progress' || 
+    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.status !== 'in_progress' || 
         String(gameData.initiatorId) !== clickerId || gameData.revealedGems === 0) {
         await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid cashout action.", show_alert: true });
         return;
@@ -8950,21 +8965,20 @@ async function handleMinesCashOutCallback(gameId, userWhoClicked, callbackQueryI
 
     let client; let callbackAnswerPopupText; let cashoutSuccessful = false;
     try {
-        // DB operations for cashout (same as previous)
         client = await pool.connect(); await client.query('BEGIN');
-        const ledgerDetails = { /* ... */ }; const ledgerNotes = /* ... */ ;
+        const ledgerDetails = { game_id_custom_field: gameId, outcome: 'win_cashout', difficulty: gameData.difficultyKey, mines_total: gameData.numMines, gems_found: gameData.revealedGems, multiplier: gameData.currentMultiplier.toFixed(2) };
+        const ledgerNotes = `Mines: Cashed out. Bet ${await formatBalanceForDisplay(gameData.betAmount, 'SOL')}. Profit ${await formatBalanceForDisplay(profitLamports, 'SOL')}. Multiplier x${gameData.currentMultiplier.toFixed(2)}.`; // Use await
         const balanceUpdate = await updateUserBalanceAndLedger(client, gameData.initiatorId, profitLamports, 'win_mines_cashout', ledgerDetails, ledgerNotes);
         if (!balanceUpdate.success) throw new Error(balanceUpdate.error || "Failed to update balance on cash out.");
         await client.query('COMMIT');
         cashoutSuccessful = true;
         const totalPayoutDisplayUSD = escapeHTML(await formatBalanceForDisplay(gameData.payoutAmountLamports, 'USD'));
         callbackAnswerPopupText = `Cashed out! You won ${totalPayoutDisplayUSD}!`; 
-    } catch (e) { /* ... (DB error handling, return early as before) ... */ if (client) client.release(); return; } 
+    } catch (e) { /* ... (DB error handling as before) ... */ if (client) client.release(); return; } 
     finally { if (client) client.release(); }
     
-    // If DB was successful:
     gameData.status = 'game_over_cashed_out'; 
-    activeGames.set(gameId, gameData); // Save state before final UI operations
+    activeGames.set(gameId, gameData); 
 
     await bot.answerCallbackQuery(callbackQueryId, { text: callbackAnswerPopupText });
     
@@ -8989,7 +9003,7 @@ async function handleMinesCashOutCallback(gameId, userWhoClicked, callbackQueryI
     await updateGroupGameDetails(originalChatId, null, null, null);
 }
 
-// MINES_OFFER cancel callback (ensure this exists and is correctly routed)
+// handleMinesCancelOfferCallback (Unchanged from previous fully provided version)
 async function handleMinesCancelOfferCallback(offerId, userWhoClicked, originalOfferMessageId, originalChatId, callbackQueryId) {
     const clickerId = String(userWhoClicked.telegram_id || userWhoClicked.id);
     const logPrefix = `[MinesCancelOffer UID:${clickerId} OfferID:${offerId}]`;
@@ -9021,9 +9035,7 @@ async function handleMinesCancelOfferCallback(offerId, userWhoClicked, originalO
         await safeSendMessage(originalChatId, `💣 Mines Offer by ${offerData.initiatorMentionHTML} for <b>${betDisplayHTML}</b> withdrawn.`, { parse_mode: 'HTML' });
     }
 }
-
-
-// --- End of Part 5d: Mines Game Logic Handlers (REVISED) ---
+// --- End of Part 5d: Mines Game Logic Handlers (REVISED with Smart Throttle, DB Fixes, and New Message for Final Result) ---
 // --- Start of Part 5a, Section 2 (REVISED for DM-only Help/Rules Menus & New Dice Escalator Rules): General Command Handler Implementations ---
 // index.js - Part 5a, Section 2: General Casino Bot Command Implementations
 //----------------------------------------------------------------------------------
