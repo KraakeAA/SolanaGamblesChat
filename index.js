@@ -98,9 +98,9 @@ const PAYMENT_ENV_DEFAULTS = {
   'DEPOSIT_CONFIRMATIONS': 'confirmed',
   'WITHDRAWAL_FEE_LAMPORTS': '10000',
   // 'MIN_WITHDRAWAL_LAMPORTS': '10000000', // This fixed SOL value is no longer the primary determinant for min withdrawal.
-                                            // The system will now primarily use MIN_WITHDRAWAL_USD.
-                                            // If you keep this in your .env, it will still be loaded into process.env below.
-  'MIN_WITHDRAWAL_USD': '50.00',         // NEW: Minimum withdrawal based on USD value.
+                                        // The system will now primarily use MIN_WITHDRAWAL_USD.
+                                        // If you keep this in your .env, it will still be loaded into process.env below.
+  'MIN_WITHDRAWAL_USD': '50.00',        // NEW: Minimum withdrawal based on USD value.
   'PAYOUT_BASE_PRIORITY_FEE_MICROLAMPORTS': '10000',
   'PAYOUT_MAX_PRIORITY_FEE_MICROLAMPORTS': '1000000',
   'PAYOUT_COMPUTE_UNIT_LIMIT': '30000',
@@ -173,11 +173,11 @@ const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY
 
 // --- GAME_IDS Constant (UPDATED for Coinflip & RPS) ---
 const GAME_IDS = {
-    COINFLIP: 'coinflip', 
+    COINFLIP: 'coinflip',
     COINFLIP_UNIFIED_OFFER: 'coinflip_unified_offer',
     COINFLIP_PVB: 'coinflip_pvb',
     COINFLIP_PVP: 'coinflip_pvp',
-    RPS: 'rps', 
+    RPS: 'rps',
     RPS_UNIFIED_OFFER: 'rps_unified_offer',
     RPS_PVB: 'rps_pvb',
     RPS_PVP: 'rps_pvp',
@@ -192,7 +192,7 @@ const GAME_IDS = {
     DUEL_PVB: 'duel_pvb',
     DUEL_PVP: 'duel_pvp',
     LADDER: 'ladder',
-    SEVEN_OUT: 'sevenout',
+    SEVEN_OUT: 'sevenout', // This ID is used for Lucky Sum
     SLOT_FRENZY: 'slotfrenzy',
     MINES: 'mines',
     MINES_OFFER: 'mines_offer',
@@ -240,17 +240,17 @@ const MINES_DIFFICULTY_CONFIG = {
     easy: {
         rows: 5, cols: 5, mines: 3, label: "Easy (5x5, 3 Mines)",
         multipliers: [ 0, 1.08, 1.18, 1.29, 1.42, 1.55, 1.70, 1.88, 2.08, 2.30, 2.55,
-                       2.85, 3.20, 3.60, 4.05, 4.50, 5.00, 6.00, 7.50, 10.00, 15.00, 25.00, 50.00 ]
+                        2.85, 3.20, 3.60, 4.05, 4.50, 5.00, 6.00, 7.50, 10.00, 15.00, 25.00, 50.00 ]
     },
     medium: {
         rows: 5, cols: 5, mines: 5, label: "Medium (5x5, 5 Mines)",
         multipliers: [ 0, 1.12, 1.28, 1.47, 1.70, 1.98, 2.30, 2.70, 3.15, 3.70, 4.35,
-                       5.10, 6.00, 7.10, 8.50, 10.50, 13.00, 16.50, 22.00, 30.00, 75.00 ]
+                        5.10, 6.00, 7.10, 8.50, 10.50, 13.00, 16.50, 22.00, 30.00, 75.00 ]
     },
     hard:   {
         rows: 5, cols: 5, mines: 7, label: "Hard (5x5, 7 Mines)",
         multipliers: [ 0, 1.18, 1.40, 1.68, 2.00, 2.40, 2.90, 3.50, 4.20, 5.10, 6.20,
-                       7.50, 9.20, 11.50, 14.50, 18.00, 23.00, 30.00, 100.00 ]
+                        7.50, 9.20, 11.50, 14.50, 18.00, 23.00, 30.00, 100.00 ]
     },
 };
 // --- END OF MINES GAME CONSTANTS ---
@@ -282,7 +282,7 @@ if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
-if (!REFERRAL_PAYOUT_KEYPAIR) { 
+if (!REFERRAL_PAYOUT_KEYPAIR) {
     REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
 }
 
@@ -299,7 +299,7 @@ let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
     combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
 }
-if (combinedRpcEndpointsForConnection.length === 0) { 
+if (combinedRpcEndpointsForConnection.length === 0) {
     console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). Using default public Solana RPC as a last resort.");
     combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
 }
@@ -319,7 +319,7 @@ const MIN_BET_USD_val = parseFloat(process.env.MIN_BET_USD);
 const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
-const PVP_TURN_TIMEOUT_MS = parseInt(process.env.PVP_TURN_TIMEOUT_MS, 10); 
+const PVP_TURN_TIMEOUT_MS = parseInt(process.env.PVP_TURN_TIMEOUT_MS, 10);
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
 const RULES_CALLBACK_PREFIX = process.env.RULES_CALLBACK_PREFIX;
 const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION;
@@ -513,17 +513,112 @@ if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
 const BOT_VERSION = process.env.BOT_VERSION || '3.4.0-de-rewrite';
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
 let isShuttingDown = false;
-let activeGames = new Map();
-let userCooldowns = new Map();
-let groupGameSessions = new Map();
-const walletCache = new Map();
-const activeDepositAddresses = new Map();
-const processedDepositTxSignatures = new Set();
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000;
-const pendingReferrals = new Map();
-const userStateCache = new Map();
+let activeGames = new Map(); // Global map to track active games
+let userCooldowns = new Map(); // Global map for user command cooldowns
+let groupGameSessions = new Map(); // Global map for group game sessions (will be modified by new getGroupSession)
+const walletCache = new Map(); // Cache for user linked wallets
+const activeDepositAddresses = new Map(); // Cache for active deposit addresses
+const processedDepositTxSignatures = new Set(); // Cache for processed deposit transaction signatures
+const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const pendingReferrals = new Map(); // For tracking pending referrals
+const userStateCache = new Map(); // For user stateful inputs (e.g., withdrawal amount)
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map();
+const solPriceCache = new Map(); // Cache for SOL/USD price
+
+// --- BEGIN NEW HELPER FUNCTION checkUserActiveGameLimit ---
+// Helper function to check if a user has reached their global active game limit.
+// Call this at the beginning of each game start handler.
+async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedType = null) {
+    const userIdStr = String(userIdToCheck);
+    let activePlayGameFound = null; // Store details of the first active game found
+
+    for (const [gameId, gameData] of activeGames.entries()) {
+        let isUserInThisGame = false;
+
+        // Check based on various common gameData structures for user involvement
+        if (gameData.userId === userIdStr || gameData.playerId === userIdStr || gameData.initiatorId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.player?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.initiator?.userId === userIdStr || gameData.opponent?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.p1?.userId === userIdStr || gameData.p2?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (Array.isArray(gameData.participants) && gameData.participants.some(p => String(p.userId) === userIdStr)) {
+             isUserInThisGame = true;
+        }
+        // For Mines offer, the initiatorId is the relevant user
+        else if (gameData.type === GAME_IDS.MINES_OFFER && gameData.initiatorId === userIdStr) {
+            isUserInThisGame = true;
+        }
+
+
+        if (isUserInThisGame) {
+            // Define states that are NOT considered "active play" for the purpose of this limit
+            const nonActivePlayStates = [
+                'pending_offer',
+                'pending_unified_offer',
+                'pending_direct_challenge_response',
+                'awaiting_difficulty',
+
+                'game_over_player_bust', 'game_over_bot_played', 'game_over_player_forfeit',
+                'game_over_error_ui_update', 'game_over_error_deal_initiator',
+                'game_over_error_deal_opponent', 'game_over_initiator_timeout_forfeit',
+                'game_over_opponent_timeout_forfeit', 'game_over_push_both_blackjack',
+                'game_over_initiator_blackjack', 'game_over_opponent_blackjack',
+                'game_over_pvp_resolved', 'game_over_mine_hit', 'game_over_cashed_out',
+                'game_over_all_gems_found', 'game_over_timeout', 'game_over_refunded',
+                'game_over_win', 'game_over_loss', 'game_over_draw', 'game_over_error',
+                'game_over_bot_error',
+                // 'bot_turn_pending_rolls', // This indicates active play is about to happen from bot
+                // 'bot_rolling', // Bot is actively playing
+                'cancelled', 'expired',
+                'bot_game_accepted', 'pvp_accepted', // These are often brief, leading to another state.
+                'resolved',
+                'player_busted', // Specific to DE PvB, effectively game over
+                'bot_turn_complete', // Specific to DE PvB, leads to finalize
+                // Note: player_stood leads to bot_turn, so it's active
+                // Statuses like 'player_turn_awaiting_emoji', 'pvp_p1_choosing', 'player_initial_roll_1_prompted' ARE active.
+            ];
+
+            const isGameTrulyOverOrPendingOffer = gameData.status && (gameData.status.startsWith('game_over_') || nonActivePlayStates.includes(gameData.status));
+
+            if (!isGameTrulyOverOrPendingOffer) {
+                // If the game is an offer type (unified or direct challenge) initiated by the user
+                // AND it's still in a pending state, it should NOT block them from starting a new (typically quick PvB) game.
+                const isUserInitiatedOfferStillPending = (
+                    (gameData.type === GAME_IDS.COINFLIP_UNIFIED_OFFER ||
+                     gameData.type === GAME_IDS.RPS_UNIFIED_OFFER ||
+                     gameData.type === GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER ||
+                     gameData.type === GAME_IDS.DICE_21_UNIFIED_OFFER ||
+                     gameData.type === GAME_IDS.DUEL_UNIFIED_OFFER ||
+                     gameData.type === GAME_IDS.MINES_OFFER) &&
+                    gameData.initiatorId === userIdStr &&
+                    (gameData.status === 'pending_offer' || gameData.status === 'pending_unified_offer' || gameData.status === 'awaiting_difficulty' || gameData.status === 'waiting_for_choice')
+                );
+
+                const isUserInitiatedDirectChallengeStillPending = (
+                    gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE &&
+                    gameData.initiatorId === userIdStr &&
+                    gameData.status === 'pending_direct_challenge_response'
+                );
+
+                if (!isUserInitiatedOfferStillPending && !isUserInitiatedDirectChallengeStillPending) {
+                    // If it's not a terminal/pending offer state, it's considered "active play" by this user.
+                    activePlayGameFound = { type: gameData.type, status: gameData.status, id: gameId.slice(-6) };
+                    break; // Found an active game, no need to check further
+                }
+            }
+        }
+    }
+
+    if (activePlayGameFound) {
+        return { limitReached: true, details: activePlayGameFound };
+    }
+    return { limitReached: false };
+}
+// --- END NEW HELPER FUNCTION checkUserActiveGameLimit ---
+
 
 const escapeMarkdownV2 = (text) => {
   if (text === null || typeof text === 'undefined') return '';
@@ -544,11 +639,11 @@ async function safeSendMessage(chatId, text, options = {}) {
         const ellipsisBase = ` \\.\\.\\. (_message truncated by ${escapeMarkdownV2(BOT_NAME)}_)`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
-    } else if (finalOptions.parse_mode !== 'HTML' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
+    } else if (finalOptions.parse_mode !== 'HTML' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
-        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length); 
+        const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) { 
+    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) {
         const ellipsisBase = ` ... (<i>message truncated by ${escapeHTML(BOT_NAME)}</i>)`; // Assuming escapeHTML is defined
         const truncateAt = Math.max(0, 4096 - ellipsisBase.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisBase;
@@ -572,8 +667,8 @@ async function safeSendMessage(chatId, text, options = {}) {
                     let plainTextFallbackOptions = { ...options };
                     delete plainTextFallbackOptions.parse_mode;
 
-                    let plainTextForFallback = text; 
-                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
+                    let plainTextForFallback = text;
+                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
                         const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME}, original was parse error)`;
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
                         plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
