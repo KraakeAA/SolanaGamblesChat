@@ -4578,201 +4578,195 @@ async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, r
 
 // --- Dice 21 Main Command Handler (Unchanged) ---
 async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRaw = null, gameModeArg = null) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_D21_START_HTML = `[D21_OfferOrDirect_UserCap_CanonLock_V2 UID:${userId} CH:${chatId} Type:${chatType}]`; // Updated log
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_D21_START_HTML = `[D21_OfferOrDirect_UserCap_CanonLock_V2 UID:${userId} CH:${chatId} Type:${chatType}]`;
 
-    // --- BEGIN MODIFICATION: Global User Game Cap ---
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId);
-    if (activeUserGameCheck.limitReached) {
-        const gameTypeDisplay = activeUserGameCheck.details.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-        await safeSendMessage(chatId, `${escapeHTML(getPlayerDisplayReference(msg.from))}, you already have an active game of "${escapeHTML(gameTypeDisplay)}" (Status: ${escapeHTML(activeUserGameCheck.details.status)}). Please finish it before starting Dice 21.`, { parse_mode: 'HTML' });
-        return;
-    }
-    // --- END MODIFICATION: Global User Game Cap ---
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId);
+    if (activeUserGameCheck.limitReached) {
+        const gameTypeDisplay = activeUserGameCheck.details.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        await safeSendMessage(chatId, `${escapeHTML(getPlayerDisplayReference(msg.from))}, you already have an active game of "${escapeHTML(gameTypeDisplay)}" (Status: ${escapeHTML(activeUserGameCheck.details.status)}). Please finish it before starting Dice 21.`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    console.log(`${LOG_PREFIX_D21_START_HTML} Command /d21 received. Bet: ${betAmountLamports}, TargetUser: ${targetUsernameRaw || 'None'}, GameModeArg: ${gameModeArg || 'None'}`);
+    console.log(`${LOG_PREFIX_D21_START_HTML} Command /d21 received. Bet: ${betAmountLamports}, TargetUser: ${targetUsernameRaw || 'None'}, GameModeArg: ${gameModeArg || 'None'}`);
 
-    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!initiatorUserObj) {
-        await safeSendMessage(chatId, "Apologies, your player profile couldn't be accessed right now.<br>Please use the <code>/start</code> command with me first, and then try initiating the Dice 21 game again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!initiatorUserObj) {
+        await safeSendMessage(chatId, "Apologies, your player profile couldn't be accessed right now.<br>Please use the <code>/start</code> command with me first, and then try initiating the Dice 21 game again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
 
-    if (chatType === 'private') {
-        await safeSendMessage(chatId, `🎲 Greetings, ${initiatorPlayerRefHTML}!<br><br>The Dice 21 game, including direct challenges, must be initiated in a <b>group chat</b>.<br>Please use <code>/d21 &lt;bet&gt; [@username]</code> there to start the action.`, { parse_mode: 'HTML' });
-        return;
-    }
+    if (chatType === 'private') {
+        await safeSendMessage(chatId, `🎲 Greetings, ${initiatorPlayerRefHTML}!<br><br>The Dice 21 game, including direct challenges, must be initiated in a <b>group chat</b>.<br>Please use <code>/d21 &lt;bet&gt; [@username]</code> there to start the action.`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
-        await safeSendMessage(chatId, `🃏 Salutations, ${initiatorPlayerRefHTML}! To begin a game of Dice 21, please specify a valid positive bet amount using USD or SOL.<br>For example: <code>/d21 10</code> or <code>/d21 0.2 sol</code>.`, { parse_mode: 'HTML' });
-        return;
-    }
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
+        await safeSendMessage(chatId, `🃏 Salutations, ${initiatorPlayerRefHTML}! To begin a game of Dice 21, please specify a valid positive bet amount using USD or SOL.<br>For example: <code>/d21 10</code> or <code>/d21 0.2 sol</code>.`, { parse_mode: 'HTML' });
+        return;
+    }
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
-        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
-        await safeSendMessage(chatId, `${initiatorPlayerRefHTML}, your casino balance is currently too low for a <b>${betDisplayUSD_HTML}</b> Dice 21 game.<br>You require approximately <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more for this particular wager.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Top Up Balance (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
-        });
-        return;
-    }
+    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
+        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
+        await safeSendMessage(chatId, `${initiatorPlayerRefHTML}, your casino balance is currently too low for a <b>${betDisplayUSD_HTML}</b> Dice 21 game.<br>You require approximately <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more for this particular wager.`, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: "💰 Top Up Balance (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
+        });
+        return;
+    }
 
-    let targetUserObject = null;
-    if (targetUsernameRaw) {
-        targetUserObject = await findRecipientUser(targetUsernameRaw);
-        if (!targetUserObject || !targetUserObject.telegram_id) {
-            await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found. To make a general Dice 21 offer, use <code>/d21 ${escapeHTML(args[0] || "<bet>")}</code>.`, { parse_mode: 'HTML' });
-            return; // For direct challenge, target must be valid.
-        } else if (String(targetUserObject.telegram_id) === userId) {
-            await safeSendMessage(chatId, `😅 You can't directly challenge yourself, ${initiatorPlayerRefHTML}! To make a general offer, use <code>/d21 ${escapeHTML(args[0] || "<bet>")}</code>.`, { parse_mode: 'HTML' });
-            return; // Prevent self-challenge for direct.
-        }
-    }
+    let targetUserObject = null;
+    if (targetUsernameRaw) {
+        targetUserObject = await findRecipientUser(targetUsernameRaw);
+        if (!targetUserObject || !targetUserObject.telegram_id) {
+            await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found. To make a general Dice 21 offer, use <code>/d21 ${escapeHTML(args[0] || "<bet>")}</code>.`, { parse_mode: 'HTML' });
+            return;
+        } else if (String(targetUserObject.telegram_id) === userId) {
+            await safeSendMessage(chatId, `😅 You can't directly challenge yourself, ${initiatorPlayerRefHTML}! To make a general offer, use <code>/d21 ${escapeHTML(args[0] || "<bet>")}</code>.`, { parse_mode: 'HTML' });
+            return;
+        }
+    }
 
-    // --- CORRECTED Per-Group, Per-Game-Family Lock Check ---
-    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER; // Canonical key for all D21 activities
+    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
+    const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER;
 
-    if (gameSession.activeGamesByTypeInGroup.has(DICE21_FAMILY_LOCK_KEY)) {
-        const existingGameIdInGroup = gameSession.activeGamesByTypeInGroup.get(DICE21_FAMILY_LOCK_KEY);
-        const existingGameInstance = activeGames.get(existingGameIdInGroup);
+    if (gameSession.activeGamesByTypeInGroup.has(DICE21_FAMILY_LOCK_KEY)) {
+        const existingGameIdInGroup = gameSession.activeGamesByTypeInGroup.get(DICE21_FAMILY_LOCK_KEY);
+        const existingGameInstance = activeGames.get(existingGameIdInGroup);
 
-        const nonTerminalStates = [ /* ... (comprehensive list of non-terminal game/offer states) ... */
-            'pending_offer', 'pending_unified_offer', 'pending_direct_challenge_response',
-            'awaiting_difficulty', 'player_turn_awaiting_emoji', 'player_score_18_plus_awaiting_choice',
-            'p1_awaiting_roll1_emoji', 'p2_awaiting_roll1_emoji', 'p1_awaiting_roll_emoji', 'p2_awaiting_roll_emoji',
-            'bot_rolling_internal', 'initiator_turn', 'opponent_turn', 'player_initial_roll_1_prompted',
-            'player_initial_roll_2_prompted', 'player_turn_hit_stand_prompt', 'dealing_initial_hands',
-            'pvp_p1_choosing', 'pvp_p2_choosing', 'pvb_waiting_player_choice', 'player_action_processing_stand',
-            'bot_turn_pending_rolls', 'bot_rolling', 'awaiting_single_roll', 'processing_roll',
-            'spinning_waiting_helper', 'player_turn', 'bot_turn', 'waiting_for_choice' // Added waiting_for_choice for D21 unified
-        ];
+        const nonTerminalStates = [
+            'pending_offer', 'pending_unified_offer', 'pending_direct_challenge_response',
+            'awaiting_difficulty', 'player_turn_awaiting_emoji', 'player_score_18_plus_awaiting_choice',
+            'p1_awaiting_roll1_emoji', 'p2_awaiting_roll1_emoji', 'p1_awaiting_roll_emoji', 'p2_awaiting_roll_emoji',
+            'bot_rolling_internal', 'initiator_turn', 'opponent_turn', 'player_initial_roll_1_prompted',
+            'player_initial_roll_2_prompted', 'player_turn_hit_stand_prompt', 'dealing_initial_hands',
+            'pvp_p1_choosing', 'pvp_p2_choosing', 'pvb_waiting_player_choice', 'player_action_processing_stand',
+            'bot_turn_pending_rolls', 'bot_rolling', 'awaiting_single_roll', 'processing_roll',
+            'spinning_waiting_helper', 'player_turn', 'bot_turn', 'waiting_for_choice'
+        ];
 
-        if (existingGameInstance && (nonTerminalStates.includes(existingGameInstance.status) || (existingGameInstance.status && !existingGameInstance.status.startsWith('game_over_')))) {
-            await safeSendMessage(chatId, `⏳ Please hold on, ${initiatorPlayerRefHTML}! A Dice 21 game or offer is already active in this group (Type: <code>${escapeHTML(existingGameInstance.type.replace(/_/g, " "))}</code>, Status: <code>${escapeHTML(existingGameInstance.status)}</code>).<br>Kindly wait for it to conclude.`, { parse_mode: 'HTML' });
-            return;
-        } else if (!existingGameInstance) {
-            console.warn(`${LOG_PREFIX_D21_START_HTML} Stale game ID ${existingGameIdInGroup} found in group session for Dice 21 family lock (${DICE21_FAMILY_LOCK_KEY}). Clearing.`);
-            await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
-        }
-    }
-    // --- END CORRECTED Lock Check ---
-
-    let offerId; // This will be the ID of the offer object (either direct or unified)
-    let offerData;
-
-    if (targetUserObject && targetUserObject.telegram_id) {
-        // --- DIRECT PvP CHALLENGE OFFER for Dice 21 ---
-        // The offer object in activeGames is type DIRECT_PVP_CHALLENGE
-        // The lock in gameSession.activeGamesByTypeInGroup uses DICE21_FAMILY_LOCK_KEY
-        offerId = generateGameId(`dd21_${userId.slice(-3)}_${String(targetUserObject.telegram_id).slice(-3)}`);
-        console.log(`${LOG_PREFIX_D21_START_HTML} Initiating DIRECT Dice 21 challenge (Offer ID: ${offerId}) to User ID: ${targetUserObject.telegram_id}`);
-        const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObject));
-
-        const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a game of <b>Dice 21 (Blackjack)</b> for <b>${betDisplayUSD_HTML}</b>!`;
-        const groupChallengeKeyboard = { /* ... existing keyboard ... */
-             inline_keyboard: [
-                [{ text: "✅ Accept Challenge", callback_data: `dir_chal_acc:${offerId}` }],
-                [{ text: "❌ Decline Challenge", callback_data: `dir_chal_dec:${offerId}` }],
-                [{ text: "🚫 Withdraw My Challenge", callback_data: `dir_chal_can:${offerId}` }]
-            ]
-        };
-        const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
-
-        if (!sentGroupMessage || !sentGroupMessage.message_id) { /* ... error handling ... */ return; }
-        const offerMessageIdInGroup = String(sentGroupMessage.message_id);
-        // ... (DM notification logic unchanged) ...
-        const groupNameHTML = escapeHTML(msg.chat.title || "the group");
-        const dmNotificationTextHTML = `🔔 Challenge Alert!\n\nHi ${targetPlayerRefHTML},\n${initiatorPlayerRefHTML} has challenged you to a game of <b>Dice 21 (Blackjack)</b> for <b>${betDisplayUSD_HTML}</b> in the group "<b>${groupNameHTML}</b>".\n\nPlease head to that group to accept or decline the challenge.`;
-        await safeSendMessage(targetUserObject.telegram_id, dmNotificationTextHTML, { parse_mode: 'HTML' });
-
-        offerData = {
-            type: GAME_IDS.DIRECT_PVP_CHALLENGE, offerId: offerId, gameId: offerId, initiatorId: userId,
-            initiatorUserObj: initiatorUserObj, initiatorMentionHTML: initiatorPlayerRefHTML,
-            targetUserId: String(targetUserObject.telegram_id), targetUserObj: targetUserObject, targetUserMentionHTML: targetPlayerRefHTML,
-            betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: offerMessageIdInGroup,
-            chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
-            gameToStart: GAME_IDS.DICE_21_PVP, creationTime: Date.now()
-        };
-    } else {
-        // --- DICE 21 UNIFIED OFFER ---
-        // The offer object in activeGames is type DICE_21_UNIFIED_OFFER
-        // The lock in gameSession.activeGamesByTypeInGroup uses DICE21_FAMILY_LOCK_KEY
-        offerId = generateGameId(GAME_IDS.DICE_21_UNIFIED_OFFER);
-        console.log(`${LOG_PREFIX_D21_START_HTML} Initiating UNIFIED Dice 21 offer (Offer ID: ${offerId}).`);
-        const offerMessageTextHTML = /* ... as before ... */
-            `🎲 <b>Dice 21 Challenge by ${initiatorPlayerRefHTML}!</b> 🎲\n\n` +
-            `${initiatorPlayerRefHTML} has thrown down the gauntlet for a thrilling game of Dice 21, with a hefty wager of <b>${betDisplayUSD_HTML}</b> on the line!\n\n` +
-            `Will any brave challengers step up for a Player vs Player showdown?\n` +
-            `Alternatively, ${initiatorPlayerRefHTML} can choose to battle wits with our expert Bot Dealer. The choice is yours!`;
-        const offerKeyboard = { /* ... as before ... */
-            inline_keyboard: [
-                [{ text: "⚔️ Accept PvP Challenge!", callback_data: `d21_accept_pvp_challenge:${offerId}` }],
-                [{ text: "🤖 Play Against the Bot Dealer", callback_data: `d21_accept_bot_game:${offerId}` }],
-                [{ text: "🚫 Cancel This Offer (Initiator Only)", callback_data: `d21_cancel_unified_offer:${offerId}` }]
-            ]
-        };
-        const sentOfferMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: offerKeyboard });
-
-        if (!sentOfferMessage?.message_id) { /* ... error handling ... */ return; }
-        offerData = {
-            type: GAME_IDS.DICE_21_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId), chatType,
-            initiatorId: userId, initiatorMention: initiatorPlayerRefHTML, // original code used initiatorMention
-            initiatorUserObj, betAmount: betAmountLamports, status: 'waiting_for_choice',
-            creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id)
-        };
-    }
-
-    // Store the offer object in activeGames
-    activeGames.set(offerId, offerData);
-    // Set the group lock using the CANONICAL FAMILY KEY, pointing to this new offer's ID
-    await updateGroupGameDetails(chatId, offerId, DICE21_FAMILY_LOCK_KEY, betAmountLamports);
-    console.log(`${LOG_PREFIX_D21_START_HTML} Offer ${offerId} (Type: ${offerData.type}) created. Group lock set for Dice 21 family (${DICE21_FAMILY_LOCK_KEY}) with ID: ${offerId}.`);
-
-    // Common timeout logic for the offer object (whether direct or unified)
-    setTimeout(async () => {
-        const timedOutOffer = activeGames.get(offerId);
-        // Check status based on the type of offerData that was created
-        if (timedOutOffer &&
-            ((timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE && timedOutOffer.status === 'pending_direct_challenge_response') ||
-             (timedOutOffer.type === GAME_IDS.DICE_21_UNIFIED_OFFER && timedOutOffer.status === 'waiting_for_choice'))) {
-
-            console.log(`[D21_OfferTimeout OfferID:${offerId}] Offer (Type: ${timedOutOffer.type}) has expired.`);
-            activeGames.delete(offerId);
-            // Clear the Dice 21 family lock for the group
-            await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
-
-            let timeoutMsgHTML;
-            let msgIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.gameSetupMessageId;
-
-            if (timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE) {
-                timeoutMsgHTML = `⏳ The Dice 21 challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has expired unanswered.`;
-                if (timedOutOffer.initiatorId) {
-                    await safeSendMessage(timedOutOffer.initiatorId, `⏳ Your Dice 21 challenge to ${timedOutOffer.targetUserMentionHTML} in group "${escapeHTML(timedOutOffer.chatTitle)}" has expired.`, { parse_mode: 'HTML' });
-                }
-            } else { // DICE_21_UNIFIED_OFFER
-                timeoutMsgHTML = `⏳ The Dice 21 game offer initiated by ${timedOutOffer.initiatorMention} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has timed out as no option was selected. This offer is now closed.`;
+        if (existingGameInstance && (nonTerminalStates.includes(existingGameInstance.status) || (existingGameInstance.status && !existingGameInstance.status.startsWith('game_over_')))) {
+            // *** MODIFIED MESSAGE BELOW ***
+            const gameNameDisplay = "Dice 21";
+            let activityDescription;
+            if (existingGameInstance.type === GAME_IDS.DICE_21_UNIFIED_OFFER ||
+                (existingGameInstance.type === GAME_IDS.DIRECT_PVP_CHALLENGE && existingGameInstance.gameToStart === GAME_IDS.DICE_21_PVP)) {
+                activityDescription = `an offer for a ${gameNameDisplay} game is currently active`;
+            } else { // Assumes it's an active game like GAME_IDS.DICE_21 or GAME_IDS.DICE_21_PVP
+                activityDescription = `a ${gameNameDisplay} game is currently in progress`;
             }
+            await safeSendMessage(chatId, `⏳ Please hold on, ${initiatorPlayerRefHTML}! It looks like ${activityDescription} in this group.<br>Kindly wait for it to conclude before starting a new one.`, { parse_mode: 'HTML' });
+            // *** END OF MODIFIED MESSAGE ***
+            return;
+        } else if (!existingGameInstance) {
+            console.warn(`${LOG_PREFIX_D21_START_HTML} Stale game ID ${existingGameIdInGroup} found in group session for Dice 21 family lock (${DICE21_FAMILY_LOCK_KEY}). Clearing.`);
+            await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
+        }
+    }
 
-            if (msgIdToEdit && bot) {
-                await bot.editMessageText(timeoutMsgHTML, {
-                    chat_id: String(chatId), message_id: Number(msgIdToEdit),
-                    parse_mode: 'HTML', reply_markup: {}
-                }).catch(e => {
-                    console.warn(`${LOG_PREFIX_D21_START_HTML} Failed to edit expired D21 offer message ${msgIdToEdit}: ${e.message}. Sending new if applicable.`);
-                    if(!msgIdToEdit && timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE) { // If it was direct and no msgId, send new to group
-                         safeSendMessage(String(chatId), timeoutMsgHTML, { parse_mode: 'HTML' });
-                    }
-                });
-            } else if (!msgIdToEdit && timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE){ // Fallback if no original message ID for direct challenge
-                 safeSendMessage(String(chatId), timeoutMsgHTML, { parse_mode: 'HTML' });
-            }
-        }
-    }, JOIN_GAME_TIMEOUT_MS);
+    let offerId;
+    let offerData;
+
+    if (targetUserObject && targetUserObject.telegram_id) {
+        offerId = generateGameId(`dd21_${userId.slice(-3)}_${String(targetUserObject.telegram_id).slice(-3)}`);
+        console.log(`${LOG_PREFIX_D21_START_HTML} Initiating DIRECT Dice 21 challenge (Offer ID: ${offerId}) to User ID: ${targetUserObject.telegram_id}`);
+        const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObject));
+
+        const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a game of <b>Dice 21 (Blackjack)</b> for <b>${betDisplayUSD_HTML}</b>!`;
+        const groupChallengeKeyboard = {
+             inline_keyboard: [
+                [{ text: "✅ Accept Challenge", callback_data: `dir_chal_acc:${offerId}` }],
+                [{ text: "❌ Decline Challenge", callback_data: `dir_chal_dec:${offerId}` }],
+                [{ text: "🚫 Withdraw My Challenge", callback_data: `dir_chal_can:${offerId}` }]
+            ]
+        };
+        const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
+
+        if (!sentGroupMessage || !sentGroupMessage.message_id) { /* ... error handling ... */ return; }
+        const offerMessageIdInGroup = String(sentGroupMessage.message_id);
+        const groupNameHTML = escapeHTML(msg.chat.title || "the group");
+        const dmNotificationTextHTML = `🔔 Challenge Alert!\n\nHi ${targetPlayerRefHTML},\n${initiatorPlayerRefHTML} has challenged you to a game of <b>Dice 21 (Blackjack)</b> for <b>${betDisplayUSD_HTML}</b> in the group "<b>${groupNameHTML}</b>".\n\nPlease head to that group to accept or decline the challenge.`;
+        await safeSendMessage(targetUserObject.telegram_id, dmNotificationTextHTML, { parse_mode: 'HTML' });
+
+        offerData = {
+            type: GAME_IDS.DIRECT_PVP_CHALLENGE, offerId: offerId, gameId: offerId, initiatorId: userId,
+            initiatorUserObj: initiatorUserObj, initiatorMentionHTML: initiatorPlayerRefHTML,
+            targetUserId: String(targetUserObject.telegram_id), targetUserObj: targetUserObject, targetUserMentionHTML: targetPlayerRefHTML,
+            betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: offerMessageIdInGroup,
+            chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
+            gameToStart: GAME_IDS.DICE_21_PVP, creationTime: Date.now()
+        };
+    } else {
+        offerId = generateGameId(GAME_IDS.DICE_21_UNIFIED_OFFER);
+        console.log(`${LOG_PREFIX_D21_START_HTML} Initiating UNIFIED Dice 21 offer (Offer ID: ${offerId}).`);
+        const offerMessageTextHTML =
+            `🎲 <b>Dice 21 Challenge by ${initiatorPlayerRefHTML}!</b> 🎲\n\n` +
+            `${initiatorPlayerRefHTML} has thrown down the gauntlet for a thrilling game of Dice 21, with a hefty wager of <b>${betDisplayUSD_HTML}</b> on the line!\n\n` +
+            `Will any brave challengers step up for a Player vs Player showdown?\n` +
+            `Alternatively, ${initiatorPlayerRefHTML} can choose to battle wits with our expert Bot Dealer. The choice is yours!`;
+        const offerKeyboard = {
+            inline_keyboard: [
+                [{ text: "⚔️ Accept PvP Challenge!", callback_data: `d21_accept_pvp_challenge:${offerId}` }],
+                [{ text: "🤖 Play Against the Bot Dealer", callback_data: `d21_accept_bot_game:${offerId}` }],
+                [{ text: "🚫 Cancel This Offer (Initiator Only)", callback_data: `d21_cancel_unified_offer:${offerId}` }]
+            ]
+        };
+        const sentOfferMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: offerKeyboard });
+
+        if (!sentOfferMessage?.message_id) { /* ... error handling ... */ return; }
+        offerData = {
+            type: GAME_IDS.DICE_21_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId), chatType,
+            initiatorId: userId, initiatorMention: initiatorPlayerRefHTML,
+            initiatorUserObj, betAmount: betAmountLamports, status: 'waiting_for_choice',
+            creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id)
+        };
+    }
+
+    activeGames.set(offerId, offerData);
+    await updateGroupGameDetails(chatId, offerId, DICE21_FAMILY_LOCK_KEY, betAmountLamports);
+    console.log(`${LOG_PREFIX_D21_START_HTML} Offer ${offerId} (Type: ${offerData.type}) created. Group lock set for Dice 21 family (${DICE21_FAMILY_LOCK_KEY}) with ID: ${offerId}.`);
+
+    setTimeout(async () => {
+        const timedOutOffer = activeGames.get(offerId);
+        if (timedOutOffer &&
+            ((timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE && timedOutOffer.status === 'pending_direct_challenge_response') ||
+             (timedOutOffer.type === GAME_IDS.DICE_21_UNIFIED_OFFER && timedOutOffer.status === 'waiting_for_choice'))) {
+
+            console.log(`[D21_OfferTimeout OfferID:${offerId}] Offer (Type: ${timedOutOffer.type}) has expired.`);
+            activeGames.delete(offerId);
+            await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
+
+            let timeoutMsgHTML;
+            let msgIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.gameSetupMessageId;
+
+            if (timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE) {
+                timeoutMsgHTML = `⏳ The Dice 21 challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has expired unanswered.`;
+                if (timedOutOffer.initiatorId) {
+                    await safeSendMessage(timedOutOffer.initiatorId, `⏳ Your Dice 21 challenge to ${timedOutOffer.targetUserMentionHTML} in group "${escapeHTML(timedOutOffer.chatTitle)}" has expired.`, { parse_mode: 'HTML' });
+                }
+            } else { // DICE_21_UNIFIED_OFFER
+                timeoutMsgHTML = `⏳ The Dice 21 game offer initiated by ${timedOutOffer.initiatorMention} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'))}</b> has timed out as no option was selected. This offer is now closed.`;
+            }
+
+            if (msgIdToEdit && bot) {
+                await bot.editMessageText(timeoutMsgHTML, {
+                    chat_id: String(chatId), message_id: Number(msgIdToEdit),
+                    parse_mode: 'HTML', reply_markup: {}
+                }).catch(e => {
+                    console.warn(`${LOG_PREFIX_D21_START_HTML} Failed to edit expired D21 offer message ${msgIdToEdit}: ${e.message}. Sending new if applicable.`);
+                    if(!msgIdToEdit && timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE) {
+                         safeSendMessage(String(chatId), timeoutMsgHTML, { parse_mode: 'HTML' });
+                    }
+                });
+            } else if (!msgIdToEdit && timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE){
+                 safeSendMessage(String(chatId), timeoutMsgHTML, { parse_mode: 'HTML' });
+            }
+        }
+    }, JOIN_GAME_TIMEOUT_MS);
 }
 
 // --- Callback Handlers for Unified Dice 21 Offer (Unchanged logic, PvB calls revised start) ---
