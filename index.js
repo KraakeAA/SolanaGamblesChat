@@ -4824,161 +4824,168 @@ async function handleDice21AcceptBotGame(offerId, initiatorUserObjFromCb, origin
 }
 
 async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId = null) {
-    // This PvP handler remains unchanged.
-    const joinerId = String(joinerUserObjFromCb.id || joinerUserObjFromCb.telegram_id);
-    const logPrefix = `[D21_AcceptPvPCallback GID:${offerId} JoinerID:${joinerId}]`;
-    let offerData = activeGames.get(offerId);
-    const joinerRef = getPlayerDisplayReference(joinerUserObjFromCb);
+    // This PvP handler remains unchanged.
+    const joinerId = String(joinerUserObjFromCb.id || joinerUserObjFromCb.telegram_id);
+    const logPrefix = `[D21_AcceptPvPCallback GID:${offerId} JoinerID:${joinerId}]`;
+    let offerData = activeGames.get(offerId);
+    const joinerRef = getPlayerDisplayReference(joinerUserObjFromCb);
 
-    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
+    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
 
-    if (!offerData || offerData.type !== GAME_IDS.DICE_21_UNIFIED_OFFER) {
-        console.warn(`${logPrefix} PvP challenge acceptance by ${joinerRef} for an invalid or non-existent offer (ID: ${offerId}). Offer data present: ${!!offerData}`);
-        const msgIdToClearOrUpdate = offerData?.gameSetupMessageId || originalOfferMessageId;
-        if (msgIdToClearOrUpdate && bot) {
-           await bot.editMessageText("This Dice 21 game offer has expired or is no longer available for a PvP match. Please ask for a new offer if you wish to play.", {
-               chat_id: originalChatId, message_id: Number(msgIdToClearOrUpdate),
-               parse_mode: 'MarkdownV2', reply_markup: {}
-           }).catch(e => console.warn(`${logPrefix} Failed to edit/clear old PvP offer message (ID: ${msgIdToClearOrUpdate}): ${e.message}`));
-        }
-        return;
-    }
+    if (!offerData || offerData.type !== GAME_IDS.DICE_21_UNIFIED_OFFER) {
+        console.warn(`${logPrefix} PvP challenge acceptance by ${joinerRef} for an invalid or non-existent offer (ID: ${offerId}). Offer data present: ${!!offerData}`);
+        const msgIdToClearOrUpdate = offerData?.gameSetupMessageId || originalOfferMessageId;
+        if (msgIdToClearOrUpdate && bot) {
+           await bot.editMessageText("This Dice 21 game offer has expired or is no longer available for a PvP match. Please ask for a new offer if you wish to play.", {
+               chat_id: originalChatId, message_id: Number(msgIdToClearOrUpdate),
+               parse_mode: 'MarkdownV2', reply_markup: {}
+           }).catch(e => console.warn(`${logPrefix} Failed to edit/clear old PvP offer message (ID: ${msgIdToClearOrUpdate}): ${e.message}`));
+        }
+        return;
+    }
 
-    if (offerData.initiatorId === joinerId) {
-        console.warn(`${logPrefix} Initiator ${joinerRef} attempted to accept their own PvP challenge for offer ${offerId}. Action denied.`);
-        return;
-    }
-    if (offerData.status !== 'waiting_for_choice') {
-        console.warn(`${logPrefix} Offer ${offerId} (initiator: ${offerData.initiatorMention}) is not in 'waiting_for_choice' state (current: ${offerData.status}). ${joinerRef} cannot join for PvP now.`);
-        if (offerData.gameSetupMessageId && bot) {
-            await bot.editMessageText(`This Dice 21 offer by ${offerData.initiatorMention} is no longer available to be joined for a PvP match. It may have been started as a Bot game, cancelled, or has already been accepted by another player.`, {
-                chat_id: originalChatId, message_id: Number(offerData.gameSetupMessageId),
-                parse_mode: 'MarkdownV2', reply_markup: {}
-            }).catch(e => console.warn(`${logPrefix} Minor error editing (not waiting for choice) PvP offer message ${offerData.gameSetupMessageId}: ${e.message}`));
-        }
-        return;
-    }
+    if (offerData.initiatorId === joinerId) {
+        console.warn(`${logPrefix} Initiator ${joinerRef} attempted to accept their own PvP challenge for offer ${offerId}. Action denied.`);
+        return;
+    }
+    if (offerData.status !== 'waiting_for_choice') {
+        console.warn(`${logPrefix} Offer ${offerId} (initiator: ${offerData.initiatorMention}) is not in 'waiting_for_choice' state (current: ${offerData.status}). ${joinerRef} cannot join for PvP now.`);
+        if (offerData.gameSetupMessageId && bot) {
+            await bot.editMessageText(`This Dice 21 offer by ${offerData.initiatorMention} is no longer available to be joined for a PvP match. It may have been started as a Bot game, cancelled, or has already been accepted by another player.`, {
+                chat_id: originalChatId, message_id: Number(offerData.gameSetupMessageId),
+                parse_mode: 'MarkdownV2', reply_markup: {}
+            }).catch(e => console.warn(`${logPrefix} Minor error editing (not waiting for choice) PvP offer message ${offerData.gameSetupMessageId}: ${e.message}`));
+        }
+        return;
+    }
 
-    console.log(`${logPrefix} Player ${joinerRef} is accepting the PvP challenge from ${offerData.initiatorMention} (Offer ID: ${offerId}). Verifying funds for both players.`);
-    const betAmount = offerData.betAmount;
-    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'));
+    console.log(`${logPrefix} Player ${joinerRef} is accepting the PvP challenge from ${offerData.initiatorMention} (Offer ID: ${offerId}). Verifying funds for both players.`);
+    const betAmount = offerData.betAmount;
+    const betDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    let currentJoinerUserObj = await getOrCreateUser(joinerId, joinerUserObjFromCb.username, joinerUserObjFromCb.first_name, joinerUserObjFromCb.last_name);
-    if (!currentJoinerUserObj) {
-        console.warn(`${logPrefix} Could not get/create user object for joiner ${joinerRef}.`);
-        await safeSendMessage(originalChatId, `An error occurred fetching the player profile for ${joinerRef} to join the Dice 21 PvP game. Please ensure they have used the \`/start\` command with me at least once before trying to join games.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    if (BigInt(currentJoinerUserObj.balance) < betAmount) {
-        console.log(`${logPrefix} Joiner ${joinerRef} has insufficient balance for PvP game. Needs ${betAmount}, has ${currentJoinerUserObj.balance}.`);
-        await safeSendMessage(originalChatId, `${joinerRef}, your current casino balance is insufficient to join this *${betDisplayUSD}* Dice 21 PvP game. Please top up your funds if you wish to accept the challenge.`, {
-            parse_mode: 'MarkdownV2',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Top Up Balance (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
-        });
-        return;
-    }
+    let currentJoinerUserObj = await getOrCreateUser(joinerId, joinerUserObjFromCb.username, joinerUserObjFromCb.first_name, joinerUserObjFromCb.last_name);
+    if (!currentJoinerUserObj) {
+        console.warn(`${logPrefix} Could not get/create user object for joiner ${joinerRef}.`);
+        await safeSendMessage(originalChatId, `An error occurred fetching the player profile for ${joinerRef} to join the Dice 21 PvP game. Please ensure they have used the \`/start\` command with me at least once before trying to join games.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    if (BigInt(currentJoinerUserObj.balance) < betAmount) {
+        console.log(`${logPrefix} Joiner ${joinerRef} has insufficient balance for PvP game. Needs ${betAmount}, has ${currentJoinerUserObj.balance}.`);
+        await safeSendMessage(originalChatId, `${joinerRef}, your current casino balance is insufficient to join this *${betDisplayUSD}* Dice 21 PvP game. Please top up your funds if you wish to accept the challenge.`, {
+            parse_mode: 'MarkdownV2',
+            reply_markup: { inline_keyboard: [[{ text: "💰 Top Up Balance (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }]] }
+        });
+        return;
+    }
 
-    let currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId);
-    if (!currentInitiatorUserObj || BigInt(currentInitiatorUserObj.balance) < betAmount) {
-        console.warn(`${logPrefix} Initiator ${offerData.initiatorMention} no longer has sufficient funds for the PvP wager (${betAmount}). Cancelling offer ${offerId}.`);
-        const offerMessageIdToUpdateOrDelete = offerData.gameSetupMessageId || originalOfferMessageId;
-        const cancelTextDueToInitiatorFunds = `The Dice 21 PvP offer from ${offerData.initiatorMention} (for *${betDisplayUSD}*) has been automatically cancelled. The initiator, ${offerData.initiatorMention}, no longer has sufficient funds to cover the wager. A new offer can be made once funds are available.`;
+    let currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId);
+    if (!currentInitiatorUserObj || BigInt(currentInitiatorUserObj.balance) < betAmount) {
+        console.warn(`${logPrefix} Initiator ${offerData.initiatorMention} no longer has sufficient funds for the PvP wager (${betAmount}). Cancelling offer ${offerId}.`);
+        const offerMessageIdToUpdateOrDelete = offerData.gameSetupMessageId || originalOfferMessageId;
+        const cancelTextDueToInitiatorFunds = `The Dice 21 PvP offer from ${offerData.initiatorMention} (for *${betDisplayUSD}*) has been automatically cancelled. The initiator, ${offerData.initiatorMention}, no longer has sufficient funds to cover the wager. A new offer can be made once funds are available.`;
 
-        if (offerMessageIdToUpdateOrDelete && bot) {
-           await bot.editMessageText(cancelTextDueToInitiatorFunds, {
-               chat_id: originalChatId, message_id: Number(offerMessageIdToUpdateOrDelete),
-               parse_mode: 'MarkdownV2', reply_markup: {}
-           }).catch(async (e) => {
-               console.warn(`${logPrefix} Failed to edit PvP offer cancellation msg (ID: ${offerMessageIdToUpdateOrDelete}) for initiator funds: ${e.message}. Sending new message.`);
-               await safeSendMessage(originalChatId, cancelTextDueToInitiatorFunds, {parse_mode: 'MarkdownV2'});
-           });
-        } else {
-             await safeSendMessage(originalChatId, cancelTextDueToInitiatorFunds, { parse_mode: 'MarkdownV2'});
-        }
-        activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, null, null, null);
-        return;
-    }
+        if (offerMessageIdToUpdateOrDelete && bot) {
+           await bot.editMessageText(cancelTextDueToInitiatorFunds, {
+               chat_id: originalChatId, message_id: Number(offerMessageIdToUpdateOrDelete),
+               parse_mode: 'MarkdownV2', reply_markup: {}
+           }).catch(async (e) => {
+               console.warn(`${logPrefix} Failed to edit PvP offer cancellation msg (ID: ${offerMessageIdToUpdateOrDelete}) for initiator funds: ${e.message}. Sending new message.`);
+               await safeSendMessage(originalChatId, cancelTextDueToInitiatorFunds, {parse_mode: 'MarkdownV2'});
+           });
+        } else {
+             await safeSendMessage(originalChatId, cancelTextDueToInitiatorFunds, { parse_mode: 'MarkdownV2'});
+        }
+        activeGames.delete(offerId);
+       // Ensure the correct family lock key is used for clearing if game offer is cancelled
+       const DICE21_FAMILY_LOCK_KEY_FOR_CANCEL = GAME_IDS.DICE_21_UNIFIED_OFFER;
+        await updateGroupGameDetails(originalChatId, null, DICE21_FAMILY_LOCK_KEY_FOR_CANCEL, null);
+        return;
+    }
 
-    const offerMessageIdToDelete = offerData.gameSetupMessageId || originalOfferMessageId;
-    if (offerMessageIdToDelete && bot) {
-        console.log(`${logPrefix} Deleting original offer message (ID: ${offerMessageIdToDelete}) as PvP game (new GID pending) is starting.`);
-        await bot.deleteMessage(originalChatId, Number(offerMessageIdToDelete))
-            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete unified offer message (ID: ${offerMessageIdToDelete}) when starting PvP game: ${e.message}`));
-    }
+    const offerMessageIdToDelete = offerData.gameSetupMessageId || originalOfferMessageId;
+    if (offerMessageIdToDelete && bot) {
+        console.log(`${logPrefix} Deleting original offer message (ID: ${offerMessageIdToDelete}) as PvP game (new GID pending) is starting.`);
+        await bot.deleteMessage(originalChatId, Number(offerMessageIdToDelete))
+            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete unified offer message (ID: ${offerMessageIdToDelete}) when starting PvP game: ${e.message}`));
+    }
 
-    let client;
-    const pvpGameId = generateGameId(GAME_IDS.DICE_21_PVP);
+    let client;
+    const pvpGameId = generateGameId(GAME_IDS.DICE_21_PVP);
 
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        console.log(`${logPrefix} Deducting bet ${betAmount} from initiator ${offerData.initiatorMention} for PvP game ${pvpGameId}.`);
-        const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-betAmount),
-            'bet_placed_dice21_pvp_init', { game_id_custom_field: pvpGameId, opponent_id: joinerId },
-            `Initiator bet for PvP Dice 21 game ${pvpGameId} against ${joinerRef}`);
-        if (!initBetRes.success) throw new Error(`Initiator (${offerData.initiatorMention}) bet placement failed: ${escapeMarkdownV2(initBetRes.error || 'Database transaction error during bet placement')}`);
-        currentInitiatorUserObj.balance = initBetRes.newBalanceLamports;
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        console.log(`${logPrefix} Deducting bet ${betAmount} from initiator ${offerData.initiatorMention} for PvP game ${pvpGameId}.`);
+        const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-betAmount),
+            'bet_placed_dice21_pvp_init', { game_id_custom_field: pvpGameId, opponent_id: joinerId },
+            `Initiator bet for PvP Dice 21 game ${pvpGameId} against ${joinerRef}`);
+        if (!initBetRes.success) throw new Error(`Initiator (${offerData.initiatorMention}) bet placement failed: ${escapeMarkdownV2(initBetRes.error || 'Database transaction error during bet placement')}`);
+        currentInitiatorUserObj.balance = initBetRes.newBalanceLamports;
 
-        console.log(`${logPrefix} Deducting bet ${betAmount} from joiner ${joinerRef} for PvP game ${pvpGameId}.`);
-        const joinBetRes = await updateUserBalanceAndLedger(client, joinerId, BigInt(-betAmount),
-            'bet_placed_dice21_pvp_join', { game_id_custom_field: pvpGameId, opponent_id: offerData.initiatorId },
-            `Joiner bet for PvP Dice 21 game ${pvpGameId} against ${offerData.initiatorMention}`);
-        if (!joinBetRes.success) throw new Error(`Joiner (${joinerRef}) bet placement failed: ${escapeMarkdownV2(joinBetRes.error || 'Database transaction error during bet placement')}`);
-        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports;
+        console.log(`${logPrefix} Deducting bet ${betAmount} from joiner ${joinerRef} for PvP game ${pvpGameId}.`);
+        const joinBetRes = await updateUserBalanceAndLedger(client, joinerId, BigInt(-betAmount),
+            'bet_placed_dice21_pvp_join', { game_id_custom_field: pvpGameId, opponent_id: offerData.initiatorId },
+            `Joiner bet for PvP Dice 21 game ${pvpGameId} against ${offerData.initiatorMention}`);
+        if (!joinBetRes.success) throw new Error(`Joiner (${joinerRef}) bet placement failed: ${escapeMarkdownV2(joinBetRes.error || 'Database transaction error during bet placement')}`);
+        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports;
 
-        await client.query('COMMIT');
-        console.log(`${logPrefix} Bets successfully placed for PvP game ${pvpGameId}. Initiator bal: ${currentInitiatorUserObj.balance}, Joiner bal: ${currentJoinerUserObj.balance}.`);
+        await client.query('COMMIT');
+        console.log(`${logPrefix} Bets successfully placed for PvP game ${pvpGameId}. Initiator bal: ${currentInitiatorUserObj.balance}, Joiner bal: ${currentJoinerUserObj.balance}.`);
 
-        const pvpGameData = {
-            type: GAME_IDS.DICE_21_PVP,
-            gameId: pvpGameId,
-            chatId: String(offerData.chatId),
-            chatType: offerData.chatType,
-            betAmount: offerData.betAmount,
-            initiator: {
-                userId: offerData.initiatorId, mention: offerData.initiatorMention, userObj: currentInitiatorUserObj,
-                hand: [], score: 0, status: 'waiting_for_hand', isTurn: false
-            },
-            opponent: {
-                userId: joinerId, mention: joinerRef, userObj: currentJoinerUserObj,
-                hand: [], score: 0, status: 'waiting_for_hand', isTurn: false
-            },
-            status: 'dealing_initial_hands',
-            creationTime: Date.now(),
-            currentMessageId: null
-        };
-        activeGames.set(pvpGameId, pvpGameData);
-        activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, pvpGameId, GAME_IDS.DICE_21_PVP, betAmount);
+        const pvpGameData = {
+            type: GAME_IDS.DICE_21_PVP,
+            gameId: pvpGameId,
+            chatId: String(offerData.chatId),
+            chatType: offerData.chatType,
+            betAmount: offerData.betAmount,
+            initiator: {
+                userId: offerData.initiatorId, mention: offerData.initiatorMention, userObj: currentInitiatorUserObj,
+                hand: [], score: 0, status: 'waiting_for_hand', isTurn: false
+            },
+            opponent: {
+                userId: joinerId, mention: joinerRef, userObj: currentJoinerUserObj,
+                hand: [], score: 0, status: 'waiting_for_hand', isTurn: false
+            },
+            status: 'dealing_initial_hands',
+            creationTime: Date.now(),
+            currentMessageId: null
+        };
+        activeGames.set(pvpGameId, pvpGameData);
+        activeGames.delete(offerId);
+        // *** MODIFIED LINE FOR CANONICAL FAMILY ID LOCK ***
+        const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER;
+        await updateGroupGameDetails(originalChatId, pvpGameId, DICE21_FAMILY_LOCK_KEY, betAmount);
+        // *** END OF MODIFICATION ***
 
-        console.log(`${logPrefix} PvP Dice 21 game ${pvpGameId} data object created. Initiating initial deal sequence.`);
-        await startDice21PvPInitialDeal(pvpGameId);
+        console.log(`${logPrefix} PvP Dice 21 game ${pvpGameId} data object created. Initiating initial deal sequence.`);
+        await startDice21PvPInitialDeal(pvpGameId);
 
-    } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} PvP Accept DB Rollback Exception (outer catch): ${rbErr.message}`));
-        console.error(`${logPrefix} CRITICAL error creating PvP game ${pvpGameId} from offer ${offerId}: ${e.message}. Stack: ${e.stack ? e.stack.substring(0,600) : 'No stack available'}`);
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} PvP Accept DB Rollback Exception (outer catch): ${rbErr.message}`));
+        console.error(`${logPrefix} CRITICAL error creating PvP game ${pvpGameId} from offer ${offerId}: ${e.message}. Stack: ${e.stack ? e.stack.substring(0,600) : 'No stack available'}`);
 
-        const displayErrorForUser = e.message.includes('\\') ? e.message : escapeMarkdownV2(e.message);
-        await safeSendMessage(originalChatId, `A critical server error occurred while starting the Dice 21 PvP game: \`${displayErrorForUser}\`. The game could not be created. Please try creating a new offer if you wish to play.`, { parse_mode: 'MarkdownV2'});
+        const displayErrorForUser = e.message.includes('\\') ? e.message : escapeMarkdownV2(e.message);
+        await safeSendMessage(originalChatId, `A critical server error occurred while starting the Dice 21 PvP game: \`${displayErrorForUser}\`. The game could not be created. Please try creating a new offer if you wish to play.`, { parse_mode: 'MarkdownV2'});
 
-        activeGames.delete(offerId);
-        if (activeGames.has(pvpGameId)) activeGames.delete(pvpGameId);
-        await updateGroupGameDetails(originalChatId, null, null, null);
+        activeGames.delete(offerId);
+        if (activeGames.has(pvpGameId)) activeGames.delete(pvpGameId);
+       // Ensure the correct family lock key is used for clearing if game creation fails after lock was potentially set
+       const DICE21_FAMILY_LOCK_KEY_FOR_ERROR_CLEAR = GAME_IDS.DICE_21_UNIFIED_OFFER;
+        await updateGroupGameDetails(originalChatId, null, DICE21_FAMILY_LOCK_KEY_FOR_ERROR_CLEAR, null);
 
-        if (typeof notifyAdmin === 'function') {
-            const adminErrorNotification =
-                `🚨 D21 PvP Game Start Failure - POTENTIAL FUNDING ISSUE 🚨\n` +
-                `Attempted Game ID: \`${pvpGameId}\` (from Offer ID: \`${offerId}\`)\n` +
-                `Error: \`${displayErrorForUser}\`\n` +
-                `Players: ${offerData.initiatorMention} & ${joinerRef}.\n` +
-                `This error occurred after bet placement was attempted. Bets might have been deducted without the game starting. ` +
-                `MANUAL VERIFICATION OF BALANCES AND POTENTIAL REFUNDS REQUIRED for both players.`;
-            notifyAdmin(adminErrorNotification, {parse_mode:'MarkdownV2'});
-        }
-        return;
-    } finally {
-        if (client) client.release();
-    }
+        if (typeof notifyAdmin === 'function') {
+            const adminErrorNotification =
+                `🚨 D21 PvP Game Start Failure - POTENTIAL FUNDING ISSUE 🚨\n` +
+                `Attempted Game ID: \`${pvpGameId}\` (from Offer ID: \`${offerId}\`)\n` +
+                `Error: \`${displayErrorForUser}\`\n` +
+                `Players: ${offerData.initiatorMention} & ${joinerRef}.\n` +
+                `This error occurred after bet placement was attempted. Bets might have been deducted without the game starting. ` +
+                `MANUAL VERIFICATION OF BALANCES AND POTENTIAL REFUNDS REQUIRED for both players.`;
+            notifyAdmin(adminErrorNotification, {parse_mode:'MarkdownV2'});
+        }
+        return;
+    } finally {
+        if (client) client.release();
+    }
 }
 
 async function handleDice21CancelUnifiedOffer(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, callbackQueryId = null) {
@@ -5014,89 +5021,96 @@ async function handleDice21CancelUnifiedOffer(offerId, initiatorUserObjFromCb, o
 
 // --- REVISED Player vs. Bot (PvB) Dice 21 Game Logic (V7: Refined Player Hit & Bot Turn Messaging) ---
 async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, originalCmdOrOfferMsgId, isPrivateChatStart = false, unifiedOfferIdIfAny = null, chatTypeFromCaller) {
-    const userId = String(initiatorUserObj.telegram_id);
-    const currentChatType = chatTypeFromCaller || (isPrivateChatStart ? 'private' : 'group'); // Determine chat type
-    const logPrefix = `[D21_PvB_Start_HTML_V8 UID:${userId} CH:${chatId}]`;
+    const userId = String(initiatorUserObj.telegram_id);
+    const currentChatType = chatTypeFromCaller || (isPrivateChatStart ? 'private' : 'group'); // Determine chat type
+    const logPrefix = `[D21_PvB_Start_HTML_V8 UID:${userId} CH:${chatId}]`;
 
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj)); // HTML Safe
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj)); // HTML Safe
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    // Delete original offer message if applicable
-    if (unifiedOfferIdIfAny && originalCmdOrOfferMsgId && bot && currentChatType !== 'private') {
-        await bot.deleteMessage(chatId, Number(originalCmdOrOfferMsgId))
-            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete unified D21 offer message ${originalCmdOrOfferMsgId}: ${e.message}`));
-    } else if (originalCmdOrOfferMsgId && bot && (isPrivateChatStart || chatId === userId) ) { // If /d21 command was in DM
-        await bot.deleteMessage(chatId, Number(originalCmdOrOfferMsgId)).catch(()=>{});
-    }
+    // Delete original offer message if applicable
+    if (unifiedOfferIdIfAny && originalCmdOrOfferMsgId && bot && currentChatType !== 'private') {
+        await bot.deleteMessage(chatId, Number(originalCmdOrOfferMsgId))
+            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete unified D21 offer message ${originalCmdOrOfferMsgId}: ${e.message}`));
+    } else if (originalCmdOrOfferMsgId && bot && (isPrivateChatStart || chatId === userId) ) { // If /d21 command was in DM
+        await bot.deleteMessage(chatId, Number(originalCmdOrOfferMsgId)).catch(()=>{});
+    }
 
-    let client = null;
-    const gameIdForActivePvB = generateGameId(GAME_IDS.DICE_21);
+    let client = null;
+    const gameIdForActivePvB = generateGameId(GAME_IDS.DICE_21);
 
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, BigInt(-betAmountLamports),
-            'bet_placed_dice21_pvb',
-            { game_id_custom_field: gameIdForActivePvB },
-            `Bet placed for PvB Dice 21 game ${gameIdForActivePvB}`
-        );
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, BigInt(-betAmountLamports),
+            'bet_placed_dice21_pvb',
+            { game_id_custom_field: gameIdForActivePvB },
+            `Bet placed for PvB Dice 21 game ${gameIdForActivePvB}`
+        );
 
-        if (!balanceUpdateResult.success) {
-            throw new Error(balanceUpdateResult.error || "Database error: PvB Dice 21 wager placement failed.");
+        if (!balanceUpdateResult.success) {
+            throw new Error(balanceUpdateResult.error || "Database error: PvB Dice 21 wager placement failed.");
+        }
+        initiatorUserObj.balance = balanceUpdateResult.newBalanceLamports; // Update local object
+        await client.query('COMMIT');
+
+        const gameDataPvB = {
+            type: GAME_IDS.DICE_21, gameId: gameIdForActivePvB, chatId: String(chatId),
+            chatType: currentChatType,
+            playerId: userId, playerRef: playerRefHTML, // Store HTML safe version
+            userObj: initiatorUserObj, betAmount: betAmountLamports,
+            playerScore: 0, botScore: 0, playerHandRolls: [], botHandRolls: [],
+            status: 'player_initial_roll_1_prompted', // Player needs to send first die
+            gameMessageId: null,
+            intermediateMessageIds: [], // To store IDs of messages to delete later
+            lastInteractionTime: Date.now()
+        };
+        activeGames.set(gameIdForActivePvB, gameDataPvB);
+
+        if (currentChatType !== 'private') {
+            // *** MODIFIED LINE FOR CANONICAL FAMILY ID LOCK ***
+            const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER;
+            await updateGroupGameDetails(chatId, gameIdForActivePvB, DICE21_FAMILY_LOCK_KEY, betAmountLamports);
+            // *** END OF MODIFICATION ***
+        }
+        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) {
+            activeGames.delete(unifiedOfferIdIfAny);
+        }
+
+        // Send the initial game message using HTML
+        const titleHTML = `🎲 <b>Dice 21 vs. Bot Dealer</b> 🎲`;
+        const initialPromptTextHTML = `${titleHTML}\n\n` +
+                                     `Player: ${playerRefHTML}\n` +
+                                     `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+                                     `It's your turn, ${playerRefHTML}!\n` +
+                                     `Please send your <b>first</b> 🎲 dice emoji to roll.`;
+
+        const initialPromptMsg = await safeSendMessage(chatId, initialPromptTextHTML, { parse_mode: 'HTML' });
+        if (initialPromptMsg?.message_id) {
+            const gd = activeGames.get(gameIdForActivePvB);
+            if(gd) gd.gameMessageId = initialPromptMsg.message_id; // This is the main game message now
+        } else {
+            throw new Error("Failed to send initial prompt message for Dice 21. Cannot track game UI.");
+        }
+        // console.log(`${logPrefix} Game ${gameIdForActivePvB} started. Player prompted for 1st die. Main prompt ID: ${gameDataPvB.gameMessageId}`);
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(()=>{});
+        console.error(`${logPrefix} Error starting Dice 21 PvB game: ${error.message}`);
+        const finalUserErrorMessageText = `⚙️ <b>Game Setup Error</b>\n${playerRefHTML}, we hit a snag setting up your Dice 21 game for <b>${betDisplayUSD_HTML}</b>.\nDetails: <code>${escapeHTML(error.message || "Unknown setup error")}</code>\nYour bet might not have been placed. Please try again or check your balance.`;
+        const targetErrorChatId = (currentChatType === 'private') ? chatId : userId; // Send error to DM if possible
+        await safeSendMessage(targetErrorChatId, finalUserErrorMessageText, { parse_mode: 'HTML' });
+
+        // Cleanup game state if error occurred after creation
+        activeGames.delete(gameIdForActivePvB);
+        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) activeGames.delete(unifiedOfferIdIfAny);
+        if (currentChatType !== 'private') {
+          // ***Ensure the correct family lock key is used for clearing if game setup fails after lock was potentially set***
+          const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER;
+          await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
         }
-        initiatorUserObj.balance = balanceUpdateResult.newBalanceLamports; // Update local object
-        await client.query('COMMIT');
-
-        const gameDataPvB = {
-            type: GAME_IDS.DICE_21, gameId: gameIdForActivePvB, chatId: String(chatId),
-            chatType: currentChatType,
-            playerId: userId, playerRef: playerRefHTML, // Store HTML safe version
-            userObj: initiatorUserObj, betAmount: betAmountLamports,
-            playerScore: 0, botScore: 0, playerHandRolls: [], botHandRolls: [],
-            status: 'player_initial_roll_1_prompted', // Player needs to send first die
-            gameMessageId: null,
-            intermediateMessageIds: [], // To store IDs of messages to delete later
-            lastInteractionTime: Date.now()
-        };
-        activeGames.set(gameIdForActivePvB, gameDataPvB);
-
-        if (currentChatType !== 'private') {
-            await updateGroupGameDetails(chatId, gameIdForActivePvB, GAME_IDS.DICE_21, betAmountLamports);
-        }
-        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) {
-            activeGames.delete(unifiedOfferIdIfAny);
-        }
-
-        // Send the initial game message using HTML
-        const titleHTML = `🎲 <b>Dice 21 vs. Bot Dealer</b> 🎲`;
-        const initialPromptTextHTML = `${titleHTML}\n\n` +
-                                     `Player: ${playerRefHTML}\n` +
-                                     `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                                     `It's your turn, ${playerRefHTML}!\n` +
-                                     `Please send your <b>first</b> 🎲 dice emoji to roll.`;
-
-        const initialPromptMsg = await safeSendMessage(chatId, initialPromptTextHTML, { parse_mode: 'HTML' });
-        if (initialPromptMsg?.message_id) {
-            const gd = activeGames.get(gameIdForActivePvB);
-            if(gd) gd.gameMessageId = initialPromptMsg.message_id; // This is the main game message now
-        } else {
-            throw new Error("Failed to send initial prompt message for Dice 21. Cannot track game UI.");
-        }
-        // console.log(`${logPrefix} Game ${gameIdForActivePvB} started. Player prompted for 1st die. Main prompt ID: ${gameDataPvB.gameMessageId}`);
-
-    } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(()=>{});
-        console.error(`${logPrefix} Error starting Dice 21 PvB game: ${error.message}`);
-        const finalUserErrorMessageText = `⚙️ <b>Game Setup Error</b>\n${playerRefHTML}, we hit a snag setting up your Dice 21 game for <b>${betDisplayUSD_HTML}</b>.\nDetails: <code>${escapeHTML(error.message || "Unknown setup error")}</code>\nYour bet might not have been placed. Please try again or check your balance.`;
-        const targetErrorChatId = (currentChatType === 'private') ? chatId : userId; // Send error to DM if possible
-        await safeSendMessage(targetErrorChatId, finalUserErrorMessageText, { parse_mode: 'HTML' });
-
-        // Cleanup game state if error occurred after creation
-        activeGames.delete(gameIdForActivePvB);
-        if (unifiedOfferIdIfAny && activeGames.has(unifiedOfferIdIfAny)) activeGames.delete(unifiedOfferIdIfAny);
-        if (currentChatType !== 'private') await updateGroupGameDetails(chatId, null, null, null);
-    } finally {
-        if (client) client.release();
-    }
+    } finally {
+        if (client) client.release();
+    }
 }
 // END OF SEGMENT 1 of 2 for "Part 5b, Section 2"
 // index.js - Part 5b, Section 2 (Dice 21 / Blackjack-style game logic)
@@ -11626,263 +11640,257 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
 
 // --- MODIFIED handleDirectChallengeResponse to include all PvP game types ---
 async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj, originalMessageIdInGroupStr, originalChatIdFromGroupStr, originalChatTypeFromGroup, callbackQueryId) {
-    const clickerId = String(clickerUserObj.id || clickerUserObj.telegram_id);
-    const originalMessageIdInGroup = Number(originalMessageIdInGroupStr);
-    const originalChatIdFromGroup = String(originalChatIdFromGroupStr);
+    const clickerId = String(clickerUserObj.id || clickerUserObj.telegram_id);
+    const originalMessageIdInGroup = Number(originalMessageIdInGroupStr);
+    const originalChatIdFromGroup = String(originalChatIdFromGroupStr);
 
-    const logPrefix = `[DirectChallengeResp_V3 GID:${offerId} Clicker:${clickerId} Act:${actionName} Chat:${originalChatIdFromGroup}]`;
-    console.log(`${logPrefix} Processing direct challenge response.`);
+    const logPrefix = `[DirectChallengeResp_V3 GID:${offerId} Clicker:${clickerId} Act:${actionName} Chat:${originalChatIdFromGroup}]`;
+    console.log(`${logPrefix} Processing direct challenge response.`);
 
-    const offerData = activeGames.get(offerId);
+    const offerData = activeGames.get(offerId);
 
-    if (!offerData) {
-        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge has expired or is no longer valid.", show_alert: true }).catch(() => {});
-        if (originalMessageIdInGroup && bot) {
-            bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: originalMessageIdInGroup }).catch(() => {});
-        }
-        return;
-    }
+    if (!offerData) {
+        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames.`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge has expired or is no longer valid.", show_alert: true }).catch(() => {});
+        if (originalMessageIdInGroup && bot) {
+            bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: originalMessageIdInGroup }).catch(() => {});
+        }
+        return;
+    }
 
-    if (offerData.type !== GAME_IDS.DIRECT_PVP_CHALLENGE || offerData.status !== 'pending_direct_challenge_response') {
-        console.warn(`${logPrefix} Offer ${offerId} is not a pending direct PvP challenge. Status: ${offerData.status}, Type: ${offerData.type}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge is not in a valid state to respond to.", show_alert: true }).catch(() => {});
-        return;
-    }
+    if (offerData.type !== GAME_IDS.DIRECT_PVP_CHALLENGE || offerData.status !== 'pending_direct_challenge_response') {
+        console.warn(`${logPrefix} Offer ${offerId} is not a pending direct PvP challenge. Status: ${offerData.status}, Type: ${offerData.type}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge is not in a valid state to respond to.", show_alert: true }).catch(() => {});
+        return;
+    }
 
-    // Determine the CANONICAL FAMILY LOCK KEY based on the game this direct challenge would start
-    let FAMILY_LOCK_KEY_FOR_THIS_GAME = null;
-    let gameDisplayNameForMessages = "Game"; // Generic default
+    // Determine the CANONICAL FAMILY LOCK KEY based on the game this direct challenge would start
+    let FAMILY_LOCK_KEY_FOR_THIS_GAME = null;
+    let gameDisplayNameForMessages = "Game"; // Generic default
 
-    switch (offerData.gameToStart) {
-        case GAME_IDS.DICE_ESCALATOR_PVP:
-            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER;
-            gameDisplayNameForMessages = "Dice Escalator";
-            break;
-        case GAME_IDS.DICE_21_PVP:
-            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.DICE_21_UNIFIED_OFFER;
-            gameDisplayNameForMessages = "Dice 21";
-            break;
-        case GAME_IDS.DUEL_PVP:
-            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.DUEL_UNIFIED_OFFER;
-            gameDisplayNameForMessages = "Duel";
-            break;
-        case GAME_IDS.COINFLIP_PVP:
-            // Coinflip direct challenges do not use a family group lock as per current design
-            gameDisplayNameForMessages = "Coinflip";
-            break;
-        case GAME_IDS.RPS_PVP:
-            // RPS direct challenges do not use a family group lock as per current design
-            gameDisplayNameForMessages = "Rock Paper Scissors";
-            break;
-        default:
-            console.warn(`${logPrefix} No specific family lock key or display name defined for gameToStart: ${offerData.gameToStart}`);
-            gameDisplayNameForMessages = offerData.gameToStart ? offerData.gameToStart.replace(/_/g, ' ').replace('Pvp', 'PvP') : "Game";
-    }
+    switch (offerData.gameToStart) {
+        case GAME_IDS.DICE_ESCALATOR_PVP:
+            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER;
+            gameDisplayNameForMessages = "Dice Escalator";
+            break;
+        case GAME_IDS.DICE_21_PVP:
+            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.DICE_21_UNIFIED_OFFER;
+            gameDisplayNameForMessages = "Dice 21";
+            break;
+        case GAME_IDS.DUEL_PVP:
+            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.DUEL_UNIFIED_OFFER;
+            gameDisplayNameForMessages = "Duel";
+            break;
+        case GAME_IDS.COINFLIP_PVP:
+            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.COINFLIP_UNIFIED_OFFER; // Assigning family lock key
+            gameDisplayNameForMessages = "Coinflip";
+            break;
+        case GAME_IDS.RPS_PVP:
+            FAMILY_LOCK_KEY_FOR_THIS_GAME = GAME_IDS.RPS_UNIFIED_OFFER; // Assigning family lock key
+            gameDisplayNameForMessages = "Rock Paper Scissors";
+            break;
+        default:
+            console.warn(`${logPrefix} No specific family lock key or display name defined for gameToStart: ${offerData.gameToStart}`);
+            gameDisplayNameForMessages = offerData.gameToStart ? offerData.gameToStart.replace(/_/g, ' ').replace('Pvp', 'PvP') : "Game";
+    }
 
-    const initiatorUserObjFull = offerData.initiatorUserObj;
-    const targetUserObjFull = offerData.targetUserObj;
-    const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObjFull));
-    const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObjFull));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
+    const initiatorUserObjFull = offerData.initiatorUserObj;
+    const targetUserObjFull = offerData.targetUserObj;
+    const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObjFull));
+    const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObjFull));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
 
-    if (!initiatorUserObjFull || !targetUserObjFull || !targetUserObjFull.telegram_id) {
-        console.error(`${logPrefix} Critical: Missing/invalid initiator or target user object in offerData for ${offerId}.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true }).catch(()=>{});
-        activeGames.delete(offerId);
-        if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // Clear lock if it was set
-            await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-        }
-        if (bot && offerData.offerMessageIdInGroup) {
-             bot.editMessageText("Error processing challenge: Player details missing. Offer cancelled.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
-        }
-        return;
-    }
+    if (!initiatorUserObjFull || !targetUserObjFull || !targetUserObjFull.telegram_id) {
+        console.error(`${logPrefix} Critical: Missing/invalid initiator or target user object in offerData for ${offerId}.`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true }).catch(()=>{});
+        activeGames.delete(offerId);
+        if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // Clear lock if it was set
+            await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+        }
+        if (bot && offerData.offerMessageIdInGroup) {
+             bot.editMessageText("Error processing challenge: Player details missing. Offer cancelled.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
+        }
+        return;
+    }
 
-    switch (actionName) {
-        case 'dir_chal_acc':
-            if (clickerId !== String(offerData.targetUserId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
-                return;
-            }
+    switch (actionName) {
+        case 'dir_chal_acc':
+            if (clickerId !== String(offerData.targetUserId)) {
+                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }).catch(() => {});
+                return;
+            }
 
-            await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}... Verifying details...` }).catch(() => {});
+            await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}... Verifying details...` }).catch(() => {});
 
-            const freshInitiator = await getOrCreateUser(offerData.initiatorId);
-            const freshTarget = await getOrCreateUser(offerData.targetUserId);
+            const freshInitiator = await getOrCreateUser(offerData.initiatorId);
+            const freshTarget = await getOrCreateUser(offerData.targetUserId);
 
-            if (!freshInitiator || !freshTarget) {
-                console.error(`${logPrefix} Failed to fetch fresh user details for balance check on accept.`);
-                await safeSendMessage(originalChatIdFromGroup, `⚙️ An error occurred fetching player details. Challenge cannot proceed.`, { parse_mode: 'HTML' });
-                if (bot && offerData.offerMessageIdInGroup) {
-                    bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
-                }
-                activeGames.delete(offerId);
-                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
-                    await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-                }
-                return;
-            }
+            if (!freshInitiator || !freshTarget) {
+                console.error(`${logPrefix} Failed to fetch fresh user details for balance check on accept.`);
+                await safeSendMessage(originalChatIdFromGroup, `⚙️ An error occurred fetching player details. Challenge cannot proceed.`, { parse_mode: 'HTML' });
+                if (bot && offerData.offerMessageIdInGroup) {
+                    bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
+                }
+                activeGames.delete(offerId);
+                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
+                    await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+                }
+                return;
+            }
 
-            if (BigInt(freshTarget.balance) < offerData.betAmount) {
-                const declineMsgTargetNoFunds = `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}. Challenge cancelled.`;
-                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgTargetNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'})});
-                else await safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'});
-                activeGames.delete(offerId);
-                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
-                    await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-                }
-                return;
-            }
-            if (BigInt(freshInitiator.balance) < offerData.betAmount) {
-                const declineMsgInitiatorNoFunds = `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds.`;
-                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgInitiatorNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'})});
-                else await safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'});
-                activeGames.delete(offerId);
-                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
-                    await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-                }
-                return;
-            }
+            if (BigInt(freshTarget.balance) < offerData.betAmount) {
+                const declineMsgTargetNoFunds = `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}. Challenge cancelled.`;
+                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgTargetNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'})});
+                else await safeSendMessage(originalChatIdFromGroup, declineMsgTargetNoFunds, {parse_mode: 'HTML'});
+                activeGames.delete(offerId);
+                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
+                    await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+                }
+                return;
+            }
+            if (BigInt(freshInitiator.balance) < offerData.betAmount) {
+                const declineMsgInitiatorNoFunds = `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds.`;
+                if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgInitiatorNoFunds, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'})});
+                else await safeSendMessage(originalChatIdFromGroup, declineMsgInitiatorNoFunds, {parse_mode: 'HTML'});
+                activeGames.delete(offerId);
+                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
+                    await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+                }
+                return;
+            }
 
-            console.log(`${logPrefix} Challenge accepted by ${targetMentionHTML}. Balances OK. Proceeding to deduct bets and start ${offerData.gameToStart}.`);
+            console.log(`${logPrefix} Challenge accepted by ${targetMentionHTML}. Balances OK. Proceeding to deduct bets and start ${offerData.gameToStart}.`);
 
-            let client = null;
-            try {
-                client = await pool.connect();
-                await client.query('BEGIN');
+            let client = null;
+            try {
+                client = await pool.connect();
+                await client.query('BEGIN');
 
-                const gameNameForLedger = offerData.gameToStart.replace('_PVP','').toLowerCase();
-                const ledgerGameIdRef = offerData.gameId || offerId; // Use the offer's ID as a reference in ledger for the bet
+                const gameNameForLedger = offerData.gameToStart.replace('_PVP','').toLowerCase();
+                const ledgerGameIdRef = offerData.gameId || offerId;
 
-                const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-offerData.betAmount),
-                    `bet_placed_${gameNameForLedger}_direct_init`, { game_id_custom_field: ledgerGameIdRef, opponent_id_custom_field: offerData.targetUserId },
-                    `Direct PvP bet vs ${targetMentionHTML} for ${offerData.gameToStart}`);
-                if (!initBetRes.success) throw new Error(`Initiator bet placement failed: ${initBetRes.error}`);
-                freshInitiator.balance = initBetRes.newBalanceLamports;
+                const initBetRes = await updateUserBalanceAndLedger(client, offerData.initiatorId, BigInt(-offerData.betAmount),
+                    `bet_placed_${gameNameForLedger}_direct_init`, { game_id_custom_field: ledgerGameIdRef, opponent_id_custom_field: offerData.targetUserId },
+                    `Direct PvP bet vs ${targetMentionHTML} for ${offerData.gameToStart}`);
+                if (!initBetRes.success) throw new Error(`Initiator bet placement failed: ${initBetRes.error}`);
+                freshInitiator.balance = initBetRes.newBalanceLamports;
 
-                const targetBetRes = await updateUserBalanceAndLedger(client, offerData.targetUserId, BigInt(-offerData.betAmount),
-                    `bet_placed_${gameNameForLedger}_direct_join`, { game_id_custom_field: ledgerGameIdRef, opponent_id_custom_field: offerData.initiatorId },
-                    `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
-                if (!targetBetRes.success) throw new Error(`Target player bet placement failed: ${targetBetRes.error}`);
-                freshTarget.balance = targetBetRes.newBalanceLamports;
+                const targetBetRes = await updateUserBalanceAndLedger(client, offerData.targetUserId, BigInt(-offerData.betAmount),
+                    `bet_placed_${gameNameForLedger}_direct_join`, { game_id_custom_field: ledgerGameIdRef, opponent_id_custom_field: offerData.initiatorId },
+                    `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
+                if (!targetBetRes.success) throw new Error(`Target player bet placement failed: ${targetBetRes.error}`);
+                freshTarget.balance = targetBetRes.newBalanceLamports;
 
-                await client.query('COMMIT');
-                console.log(`${logPrefix} Bets successfully deducted for both players for ${offerData.gameToStart}.`);
+                await client.query('COMMIT');
+                console.log(`${logPrefix} Bets successfully deducted for both players for ${offerData.gameToStart}.`);
 
-                // Delete the direct challenge offer object from activeGames.
-                // The FAMILY_LOCK_KEY is still set in gameSession (if applicable), pointing to this offerId.
-                // The specific game starter will update it to point to the new active gameId.
-                activeGames.delete(offerId);
+                activeGames.delete(offerId); // Delete the DIRECT_PVP_CHALLENGE offer object
 
-                const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\nA <b>${gameDisplayNameForMessages}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
-                if (bot && offerData.offerMessageIdInGroup) {
-                    await bot.editMessageText(acceptedMsgHTML, {
-                        chat_id: originalChatIdFromGroup,
-                        message_id: Number(offerData.offerMessageIdInGroup),
-                        parse_mode: 'HTML', reply_markup: {}
-                    }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge accepted: ${e.message}`));
-                } else {
-                    await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' });
-                }
+                const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\nA <b>${gameDisplayNameForMessages}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
+                if (bot && offerData.offerMessageIdInGroup) {
+                    await bot.editMessageText(acceptedMsgHTML, {
+                        chat_id: originalChatIdFromGroup,
+                        message_id: Number(offerData.offerMessageIdInGroup),
+                        parse_mode: 'HTML', reply_markup: {}
+                    }).catch(e => console.warn(`${logPrefix} Failed to edit group message for challenge accepted: ${e.message}`));
+                } else {
+                    await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' });
+                }
 
-                // Call the specific game starter function
-                // This function is responsible for creating the new active game object,
-                // adding it to activeGames, and calling updateGroupGameDetails with the FAMILY_LOCK_KEY
-                // and the NEW active game's ID to transfer the lock.
+                        // *** MODIFIED SECTION FOR CANONICAL FAMILY ID LOCK ***
+                        // Call the specific game starter function. The starter function will now be responsible
+                        // for creating the active game instance and updating the group lock with the FAMILY_LOCK_KEY.
+                        // However, for consistency with how unified offers are handled, we can update the lock here
+                        // immediately after creating the game object and *before* calling the game starter.
 
-                if (offerData.gameToStart === GAME_IDS.DICE_21_PVP) {
-                    const pvpGameIdD21 = generateGameId(GAME_IDS.DICE_21_PVP);
-                    const pvpGameDataD21 = {
-                        type: GAME_IDS.DICE_21_PVP, gameId: pvpGameIdD21,
-                        chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup,
-                        betAmount: offerData.betAmount,
-                        initiator: { userId: freshInitiator.telegram_id, mention: getPlayerDisplayReference(freshInitiator), userObj: freshInitiator, hand: [], score: 0, status: 'waiting_for_hand', isTurn: false },
-                        opponent: { userId: freshTarget.telegram_id, mention: getPlayerDisplayReference(freshTarget), userObj: freshTarget, hand: [], score: 0, status: 'waiting_for_hand', isTurn: false },
-                        status: 'dealing_initial_hands', creationTime: Date.now(), currentMessageId: null
-                    };
-                    activeGames.set(pvpGameIdD21, pvpGameDataD21);
-                    await startDice21PvPInitialDeal(pvpGameIdD21); // This will handle updating the family lock
-                } else if (offerData.gameToStart === GAME_IDS.DICE_ESCALATOR_PVP) {
-                    await startDiceEscalatorPvPGame_New(freshInitiator, freshTarget, offerData.betAmount, offerData.originalGroupId, originalChatTypeFromGroup, null);
-                } else if (offerData.gameToStart === GAME_IDS.DUEL_PVP) {
-                    const pvpGameIdDuel = generateGameId(GAME_IDS.DUEL_PVP);
-                    const pvpGameDataDuel = {
-                        type: GAME_IDS.DUEL_PVP, gameId: pvpGameIdDuel, chatId: offerData.originalGroupId,
-                        chatType: originalChatTypeFromGroup, betAmount: offerData.betAmount,
-                        initiator: { userId: freshInitiator.telegram_id, displayName: getPlayerDisplayReference(freshInitiator), mention: getPlayerDisplayReference(freshInitiator), userObj: freshInitiator, rolls:[], score:0, isTurn:false, status: 'waiting_turn'},
-                        opponent: { userId: freshTarget.telegram_id, displayName: getPlayerDisplayReference(freshTarget), mention: getPlayerDisplayReference(freshTarget), userObj: freshTarget, rolls:[], score:0, isTurn:false, status: 'waiting_turn'},
-                        status: 'p1_awaiting_roll1_emoji', creationTime: Date.now(), currentMessageId: null, lastRollValue: null
-                    };
-                    activeGames.set(pvpGameIdDuel, pvpGameDataDuel);
-                    await startDuelPvPGameSequence(pvpGameIdDuel);
-                } else if (offerData.gameToStart === GAME_IDS.COINFLIP_PVP) {
-                    // Coinflip direct challenges don't use family lock in group
-                    const coinflipInitiatorData = { initiatorUserObj: freshInitiator, betAmount: offerData.betAmount, chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup };
-                    await startCoinflipPvPGame(coinflipInitiatorData, freshTarget, null, true);
-                } else if (offerData.gameToStart === GAME_IDS.RPS_PVP) {
-                    // RPS direct challenges don't use family lock in group
-                    const rpsInitiatorData = { initiatorUserObj: freshInitiator, betAmount: offerData.betAmount, chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup };
-                    await startRPSPvPGame(rpsInitiatorData, freshTarget, null, true);
-                } else {
-                    console.error(`${logPrefix} Unknown gameToStart for direct challenge: ${offerData.gameToStart}`);
-                    // If no specific starter, the FAMILY_LOCK_KEY for this offer might linger if it was set.
-                    // However, Coinflip/RPS direct challenges don't set it.
-                    // For DE, D21, Duel, their start handlers set the family lock. If accept fails before PvP starter, that lock needs clearing.
-                    // This case should be rare if gameToStart is always valid.
-                    if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
-                        await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-                    }
-                }
+                if (offerData.gameToStart === GAME_IDS.DICE_21_PVP) {
+                    const pvpGameIdD21 = generateGameId(GAME_IDS.DICE_21_PVP);
+                    const pvpGameDataD21 = {
+                        type: GAME_IDS.DICE_21_PVP, gameId: pvpGameIdD21,
+                        chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup,
+                        betAmount: offerData.betAmount,
+                        initiator: { userId: freshInitiator.telegram_id, mention: getPlayerDisplayReference(freshInitiator), userObj: freshInitiator, hand: [], score: 0, status: 'waiting_for_hand', isTurn: false },
+                        opponent: { userId: freshTarget.telegram_id, mention: getPlayerDisplayReference(freshTarget), userObj: freshTarget, hand: [], score: 0, status: 'waiting_for_hand', isTurn: false },
+                        status: 'dealing_initial_hands', creationTime: Date.now(), currentMessageId: null
+                    };
+                    activeGames.set(pvpGameIdD21, pvpGameDataD21);
+                        if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // Which is GAME_IDS.DICE_21_UNIFIED_OFFER
+                           await updateGroupGameDetails(offerData.originalGroupId, pvpGameIdD21, FAMILY_LOCK_KEY_FOR_THIS_GAME, offerData.betAmount);
+                        }
+                    await startDice21PvPInitialDeal(pvpGameIdD21);
+                } else if (offerData.gameToStart === GAME_IDS.DICE_ESCALATOR_PVP) {
+                        // startDiceEscalatorPvPGame_New will handle the updateGroupGameDetails itself with the correct family key
+                    await startDiceEscalatorPvPGame_New(freshInitiator, freshTarget, offerData.betAmount, offerData.originalGroupId, originalChatTypeFromGroup, null);
+                } else if (offerData.gameToStart === GAME_IDS.DUEL_PVP) {
+                    // startDuelPvPGameSequence is called after activeGames.set and updateGroupGameDetails
+                        const pvpGameIdDuel = generateGameId(GAME_IDS.DUEL_PVP);
+                        const pvpGameDataDuel = { /* ... setup ... */ gameId: pvpGameIdDuel, type: GAME_IDS.DUEL_PVP, initiator:{userObj:freshInitiator, userId:freshInitiator.telegram_id, mention:getPlayerDisplayReference(freshInitiator)}, opponent:{userObj:freshTarget, userId:freshTarget.telegram_id, mention:getPlayerDisplayReference(freshTarget)}, chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup, betAmount: offerData.betAmount /* other fields */};
+                        activeGames.set(pvpGameIdDuel, pvpGameDataDuel);
+                        if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // Which is GAME_IDS.DUEL_UNIFIED_OFFER
+                            await updateGroupGameDetails(offerData.originalGroupId, pvpGameIdDuel, FAMILY_LOCK_KEY_FOR_THIS_GAME, offerData.betAmount);
+                        }
+                    await startDuelPvPGameSequence(pvpGameIdDuel);
+                } else if (offerData.gameToStart === GAME_IDS.COINFLIP_PVP) {
+                        // startCoinflipPvPGame will handle its own family lock update
+                    const coinflipInitiatorData = { initiatorUserObj: freshInitiator, betAmount: offerData.betAmount, chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup };
+                    await startCoinflipPvPGame(coinflipInitiatorData, freshTarget, null, true /* betsAlreadyDeducted */);
+                } else if (offerData.gameToStart === GAME_IDS.RPS_PVP) {
+                        // startRPSPvPGame will handle its own family lock update
+                    const rpsInitiatorData = { initiatorUserObj: freshInitiator, betAmount: offerData.betAmount, chatId: offerData.originalGroupId, chatType: originalChatTypeFromGroup };
+                    await startRPSPvPGame(rpsInitiatorData, freshTarget, null, true /* betsAlreadyDeducted */);
+                } else {
+                    console.error(`${logPrefix} Unknown gameToStart for direct challenge: ${offerData.gameToStart}`);
+                    if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // If a family lock was associated with this original offer
+                        await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+                    }
+                }
+                        // *** END OF MODIFIED SECTION FOR CANONICAL FAMILY ID LOCK ***
 
-            } catch (e) {
-                if (client) await client.query('ROLLBACK').catch(()=>{});
-                console.error(`${logPrefix} Error accepting challenge or starting game: ${e.message}`);
-                await safeSendMessage(originalChatIdFromGroup, `⚙️ Error processing challenge acceptance: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
-                activeGames.delete(offerId); // Ensure original offer is cleaned up
-                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // If a family lock was associated with this offer
-                     await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-                }
-            } finally {
-                if (client) client.release();
-            }
-            break;
+            } catch (e) {
+                if (client) await client.query('ROLLBACK').catch(()=>{});
+                console.error(`${logPrefix} Error accepting challenge or starting game: ${e.message}`);
+                await safeSendMessage(originalChatIdFromGroup, `⚙️ Error processing challenge acceptance: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+                activeGames.delete(offerId); // Ensure original offer is cleaned up
+                if (FAMILY_LOCK_KEY_FOR_THIS_GAME) { // If a family lock was associated with this offer
+                     await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+                }
+            } finally {
+                if (client) client.release();
+            }
+            break;
 
-        case 'dir_chal_dec':
-        case 'dir_chal_can':
-            const isCancel = actionName === 'dir_chal_can';
-            if (isCancel && clickerId !== String(offerData.initiatorId)) { /* ... only initiator can cancel ... */ return; }
-            if (!isCancel && clickerId !== String(offerData.targetUserId)) { /* ... not for you to decline ... */ return; }
+        case 'dir_chal_dec':
+        case 'dir_chal_can':
+            const isCancel = actionName === 'dir_chal_can';
+            if (isCancel && clickerId !== String(offerData.initiatorId)) { /* ... only initiator can cancel ... */ return; }
+            if (!isCancel && clickerId !== String(offerData.targetUserId)) { /* ... not for you to decline ... */ return; }
 
-            await bot.answerCallbackQuery(callbackQueryId, { text: isCancel ? "Challenge withdrawn." : "Challenge declined." }).catch(() => {});
-            // ... (message editing logic for decline/cancel as before) ...
-            const actionTakerHTML = isCancel ? initiatorMentionHTML : targetMentionHTML;
-            const actionVerb = isCancel ? "withdrawn their" : "declined the";
-            const otherPartyHTML = isCancel ? targetMentionHTML : initiatorMentionHTML;
-            const messageEnd = isCancel ? "." : ` from ${otherPartyHTML}.`;
-            const finalMsgHTML = `🚫 ${actionTakerHTML} has ${actionVerb} ${gameDisplayNameForMessages} challenge for <b>${betDisplayUSD_HTML}</b>${messageEnd}`;
+            await bot.answerCallbackQuery(callbackQueryId, { text: isCancel ? "Challenge withdrawn." : "Challenge declined." }).catch(() => {});
+            const actionTakerHTML = isCancel ? initiatorMentionHTML : targetMentionHTML;
+            const actionVerb = isCancel ? "withdrawn their" : "declined the";
+            const otherPartyHTML = isCancel ? targetMentionHTML : initiatorMentionHTML;
+            const messageEnd = isCancel ? "." : ` from ${otherPartyHTML}.`;
+            const finalMsgHTML = `🚫 ${actionTakerHTML} has ${actionVerb} ${gameDisplayNameForMessages} challenge for <b>${betDisplayUSD_HTML}</b>${messageEnd}`;
 
-            if (bot && offerData.offerMessageIdInGroup) {
-                await bot.editMessageText(finalMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, finalMsgHTML, {parse_mode: 'HTML'})});
-            } else {
-                await safeSendMessage(originalChatIdFromGroup, finalMsgHTML, {parse_mode: 'HTML'});
-            }
+            if (bot && offerData.offerMessageIdInGroup) {
+                await bot.editMessageText(finalMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{ safeSendMessage(originalChatIdFromGroup, finalMsgHTML, {parse_mode: 'HTML'})});
+            } else {
+                await safeSendMessage(originalChatIdFromGroup, finalMsgHTML, {parse_mode: 'HTML'});
+            }
 
-            activeGames.delete(offerId);
-            if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
-                await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
-                console.log(`${logPrefix} Cleared lock for ${FAMILY_LOCK_KEY_FOR_THIS_GAME} due to challenge ${isCancel ? 'cancellation' : 'declination'}.`);
-            } else {
-                // This case implies the direct challenge didn't use a family lock (e.g., Coinflip/RPS direct challenges)
-                // Or if gameToStart was unknown.
-                console.log(`${logPrefix} No specific family lock key to clear for ${offerData.gameToStart} on ${actionName}.`);
-            }
-            break;
-        default:
-            console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false }).catch(() => {});
-            break;
-    }
+            activeGames.delete(offerId);
+            if (FAMILY_LOCK_KEY_FOR_THIS_GAME) {
+                await updateGroupGameDetails(originalChatIdFromGroup, null, FAMILY_LOCK_KEY_FOR_THIS_GAME, null);
+                console.log(`${logPrefix} Cleared lock for ${FAMILY_LOCK_KEY_FOR_THIS_GAME} due to challenge ${isCancel ? 'cancellation' : 'declination'}.`);
+            } else {
+                console.log(`${logPrefix} No specific family lock key to clear for ${offerData.gameToStart} on ${actionName}.`);
+            }
+            break;
+        default:
+            console.warn(`${logPrefix} Unknown action in handleDirectChallengeResponse: ${actionName}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false }).catch(() => {});
+            break;
+    }
 }
 // --- End of Part 5a, Section 1 (REVISED for New Coinflip/RPS, Dice Escalator & Full Routing for Jackpot Choice + OU7 Fix) ---
 // index.js - Part 6: Main Application Logic (Initialization, Error Handling, Graceful Shutdown)
