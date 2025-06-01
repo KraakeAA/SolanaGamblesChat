@@ -1422,7 +1422,7 @@ async function deleteUserAccount(telegramId) {
 }
 
 // --- End of Part 2 ---
-// --- Start of Part 3 ---
+// --- Start of Part 3 (REVISED for new Group Session Lock Management) ---
 // index.js - Part 3: Telegram Helpers, Currency Formatting & Basic Game Utilities (with Group Session Management)
 //---------------------------------------------------------------------------
 // Assumed escapeMarkdownV2, LAMPORTS_PER_SOL, SOL_DECIMALS, getSolUsdPrice,
@@ -1484,7 +1484,7 @@ function getPlayerDisplayReference(userObject, preferUsernameTag = true) {
     if (preferUsernameTag && username) {
         return `@${escapeMarkdownV2(username)}`;
     }
-    return getEscapedUserDisplayName(userObject);
+    return getEscapedUserDisplayName(userObject); // This already escapes for MarkdownV2
 }
 
 // Helper function to escape characters for HTML content
@@ -1654,7 +1654,7 @@ function generateInternalPaymentTxId(type, userId = 'system') {
     return `${prefix}_${userPartCleaned}_${now}_${randomPart}`;
 }
 
-// --- NEW Group Game Session Management Functions ---
+// --- REVISED Group Game Session Management Functions ---
 
 /**
  * Retrieves or creates a game session for a specific group chat.
@@ -1667,54 +1667,71 @@ async function getGroupSession(chatId, chatTitle = null) {
     const stringChatId = String(chatId);
     if (groupGameSessions.has(stringChatId)) {
         const session = groupGameSessions.get(stringChatId);
-        if (chatTitle && !session.title) { // Update title if it was missing
+        if (chatTitle && (!session.title || session.title.startsWith("Group Chat"))) { // Update title if missing or default
             session.title = chatTitle;
-            groupGameSessions.set(stringChatId, session);
         }
+        // Ensure activeGamesByTypeInGroup exists (for the new per-game-type lock)
+        if (!session.activeGamesByTypeInGroup) {
+            session.activeGamesByTypeInGroup = new Map();
+        }
+        // No need to set it back into groupGameSessions if session is a direct reference and modified in place
         return session;
     } else {
         const newSession = {
             id: stringChatId,
-            title: chatTitle || `Group Chat ${stringChatId}`, // Default title if not provided
-            currentGameId: null,         // ID of the currently active game or offer in this chat
-            activeGameType: null,      // Type of the active game/offer (e.g., GAME_IDS.COINFLIP_UNIFIED_OFFER)
-            activeBetAmount: 0n,       // Bet amount of the current game/offer
-            lastActivity: Date.now(),  // Timestamp of the last relevant activity in this session
-            activePlayers: {},         // Object to store players involved in the current game if needed (e.g., { userId: playerData })
-            // You might add other session-specific fields here if needed later
+            title: chatTitle || `Group Chat ${stringChatId}`,
+            activeGamesByTypeInGroup: new Map(), // Key: gameType, Value: gameId (string)
+            lastActivity: Date.now(),
+            activePlayers: {}, // Kept for now, usage might need review based on game logic
+            // Old properties like currentGameId, activeGameType, activeBetAmount are now obsolete for locking
+            // if using activeGamesByTypeInGroup and should be removed from initialization or ignored.
         };
         groupGameSessions.set(stringChatId, newSession);
-        console.log(`[GetGroupSession] New session created for chat ID: ${stringChatId}`);
+        console.log(`[GetGroupSession] New session created for chat ID: ${stringChatId} with activeGamesByTypeInGroup`);
         return newSession;
     }
 }
 
 /**
- * Updates the details of the active game in a group session.
+ * Updates the details of an active game (of a specific type) in a group session.
  * @param {string} chatId - The ID of the Telegram group chat.
- * @param {string | null} gameId - The ID of the new active game/offer, or null to clear.
- * @param {string | null} gameType - The type of the new active game/offer, or null to clear.
- * @param {bigint | number | null} betAmount - The bet amount for the new game/offer, or null to clear.
+ * @param {string | null} gameId - The ID of the new active game/offer for the given gameType, or null to clear.
+ * @param {string | null} gameType - The type of the game/offer to update/clear. Crucial for type-specific locks.
+ * @param {bigint | number | null} betAmount - The bet amount (optional, primarily for logging or if needed by other logic).
  */
 async function updateGroupGameDetails(chatId, gameId, gameType, betAmount) {
     const stringChatId = String(chatId);
-    const session = await getGroupSession(stringChatId, null); // Title isn't strictly necessary for update
+    const session = await getGroupSession(stringChatId, null); // Ensures session and activeGamesByTypeInGroup map exist
 
-    session.currentGameId = gameId;
-    session.activeGameType = gameType;
-    session.activeBetAmount = gameId && betAmount !== null ? BigInt(betAmount) : 0n; // Store as BigInt if game is active
-    session.lastActivity = Date.now();
-
-    // If gameId is null, it implies the game is over, so clear active players for this session.
-    if (!gameId) {
-        session.activePlayers = {};
+    if (!gameType) {
+        console.warn(`[UpdateGroupGameDetails] Attempted to update/clear game for chat ${stringChatId} without specifying a gameType. Action skipped.`);
+        session.lastActivity = Date.now(); // Still update activity
+        return;
     }
 
-    groupGameSessions.set(stringChatId, session);
-    console.log(`[UpdateGroupGameDetails] Updated session for chat ${stringChatId}: GameID=${gameId}, Type=${gameType}, Bet=${session.activeBetAmount}`);
-}
+    if (gameId) {
+        // A new game of this type is starting or an offer is being made
+        session.activeGamesByTypeInGroup.set(gameType, gameId); // Store only gameId, betAmount can be fetched from activeGames if needed
+        console.log(`[UpdateGroupGameDetails] Set active game for chat ${stringChatId}: Type=${gameType}, GameID=${gameId}`);
+    } else {
+        // A game of this type is ending or being cancelled
+        if (session.activeGamesByTypeInGroup.has(gameType)) {
+            const clearedGameId = session.activeGamesByTypeInGroup.get(gameType);
+            session.activeGamesByTypeInGroup.delete(gameType);
+            console.log(`[UpdateGroupGameDetails] Cleared active game for chat ${stringChatId}: Type=${gameType}, OldGameID=${clearedGameId}`);
+        } else {
+            // console.log(`[UpdateGroupGameDetails] Attempted to clear game type ${gameType} for chat ${stringChatId}, but no such active game type was found.`);
+        }
+    }
 
-// --- End of Part 3 ---
+    session.lastActivity = Date.now();
+    // No need to explicitly call groupGameSessions.set(stringChatId, session) if `session` is a direct reference to the object in the Map.
+    // If getGroupSession returns a copy, then setting it back would be necessary.
+    // Standard Map.get() returns a reference.
+}
+// --- End of REVISED Group Game Session Management Functions ---
+
+// --- End of Part 3 (REVISED for new Group Session Lock Management) ---
 // --- Start of Part 4 --- (Ensure this is placed correctly in your file structure)
 // index.js - Part 4: Simplified Game Logic (Enhanced)
 //---------------------------------------------------------------------------
