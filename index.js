@@ -6005,139 +6005,172 @@ async function handleDice21PvPStand(gameId, userIdWhoStood, originalMessageId, c
 }
 
 async function finalizeDice21PvPGame(gameData) {
-    const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER; // Canonical Lock Key
-    const logPrefix = `[D21_PvP_Finalize_V2_CanonLock GID:${gameData.gameId}]`;
+    // --- BEGIN DIAGNOSTIC LOGS (Kept for initial verification if needed, can be removed later) ---
+    if (!gameData) {
+        console.error(`[D21_PvP_Finalize_DIAGNOSTIC] CRITICAL: gameData object itself is null or undefined when passed to finalizeDice21PvPGame.`);
+        return;
+    }
+    const diagnosticLogPrefix = `[D21_PvP_Finalize_DIAGNOSTIC GID:${gameData.gameId || 'UNKNOWN_GAME_ID'}]`;
+    // console.log(`${diagnosticLogPrefix} Entered finalizeDice21PvPGame. Full gameData received (abbreviated if long): ${stringifyWithBigInt(gameData).substring(0, 1500)}`); // Can be very verbose
 
-    if (!gameData) { /* ... error handling ... */ return; }
-
-    if (gameData.currentTurnTimeoutId) {
-        clearTimeout(gameData.currentTurnTimeoutId);
-        gameData.currentTurnTimeoutId = null;
+    if (!gameData.initiator) {
+        console.error(`${diagnosticLogPrefix} CRITICAL_ERROR: gameData.initiator is undefined!`);
+        throw new Error("CRITICAL_ERROR_FINALIZE_PVP_D21: gameData.initiator is undefined.");
+    } else if (typeof gameData.initiator.score === 'undefined') {
+        console.error(`${diagnosticLogPrefix} CRITICAL_ERROR: gameData.initiator.score is undefined! Initiator object: ${stringifyWithBigInt(gameData.initiator)}`);
+        throw new Error("CRITICAL_ERROR_FINALIZE_PVP_D21: gameData.initiator.score is undefined.");
     }
 
-    const finalStatus = gameData.status;
-    const { gameId, chatId, betAmount, p1, p2, chatType } = gameData; // Ensure chatType is in gameData for PvP
-
-    console.log(`${logPrefix} Finalizing PvP game. P1 Score: ${p1.score} (Status: ${p1.status}). P2 Score: ${p2.score} (Status: ${p2.status}). Game Status: ${finalStatus}`);
-    activeGames.delete(gameId);
-
-    // --- MODIFICATION: Clear the canonical family lock for this group ---
-    if (chatType && chatType !== 'private') { // Only clear group locks if it was a group game
-        await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
-        console.log(`${logPrefix} Cleared Dice 21 family lock (${DICE21_FAMILY_LOCK_KEY}) for chat ${chatId}.`);
+    if (!gameData.opponent) {
+        console.error(`${diagnosticLogPrefix} CRITICAL_ERROR: gameData.opponent is undefined!`);
+        throw new Error("CRITICAL_ERROR_FINALIZE_PVP_D21: gameData.opponent is undefined.");
+    } else if (typeof gameData.opponent.score === 'undefined') {
+        console.error(`${diagnosticLogPrefix} CRITICAL_ERROR: gameData.opponent.score is undefined! Opponent object: ${stringifyWithBigInt(gameData.opponent)}`);
+        throw new Error("CRITICAL_ERROR_FINALIZE_PVP_D21: gameData.opponent.score is undefined.");
     }
-    // --- END MODIFICATION ---
+    // --- END DIAGNOSTIC LOGS ---
 
-    // ... (rest of the result determination logic, payout calculations, and DB updates remain the same as your existing finalizeDice21PvPGame) ...
-    // Ensure all player mention variables (p1MentionHTML, p2MentionHTML) are HTML escaped
-    const p1MentionHTML = escapeHTML(p1.mention);
-    const p2MentionHTML = escapeHTML(p2.mention);
-    let titleEmoji = "🏁";
-    let resultTextHTML = "";
-    let p1_payout = 0n; let p2_payout = 0n;
-    const target = DICE_21_TARGET_SCORE;
-    // betAmount is already BigInt from gameData
-    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+    const DICE21_FAMILY_LOCK_KEY = GAME_IDS.DICE_21_UNIFIED_OFFER;
+    const logPrefix = `[D21_PvP_Finalize_V2_CanonLock GID:${gameData.gameId}]`;
 
-    // Logic for determining winner, loser, push, blackjack, forfeit (from your existing function)
-    if (finalStatus === 'game_over_error_deal_initiator' || finalStatus === 'game_over_error_deal_opponent' || finalStatus === 'game_over_error_ui_update' || finalStatus === 'game_over_error_helper_bot' || finalStatus === 'game_over_error_timeout_logic') {
-        titleEmoji = "⚙️";
-        resultTextHTML = `A technical error occurred. All bets (<b>${betDisplayHTML}</b> each) refunded.`;
-        p1_payout = betAmount; p2_payout = betAmount;
-    } else if (finalStatus === 'game_over_initiator_timeout_forfeit') {
-        titleEmoji = "⏳🏆"; 
-        resultTextHTML = `${p1MentionHTML} timed out! ${p2MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'))}</b> by default!`;
-        p2_payout = gameData.betAmount * 2n;
-    } else if (finalStatus === 'game_over_opponent_timeout_forfeit') {
-        titleEmoji = "⏳🏆"; 
-        resultTextHTML = `${p2MentionHTML} timed out! ${p1MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'))}</b> by default!`;
-        p1_payout = gameData.betAmount * 2n;
-    } else if (finalStatus === 'game_over_push_both_blackjack') {
-        titleEmoji = "✨⚖️✨";
-        resultTextHTML = `DOUBLE BLACKJACK! Both ${p1MentionHTML} & ${p2MentionHTML} hit <b>${target}</b>! It's a PUSH. Bets (<b>${betDisplayHTML}</b> each) returned.`;
-        p1_payout = betAmount; p2_payout = betAmount;
-    } else if (finalStatus === 'game_over_initiator_blackjack') {
-        titleEmoji = "✨🏆"; 
-        const blackjackProfitLamportsP1 = betAmount * 15n / 10n;
-        p1_payout = betAmount + blackjackProfitLamportsP1;
-        resultTextHTML = `${p1MentionHTML} hits a natural BLACKJACK! ${p1MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p1_payout, 'USD'))}</b>!`;
-    } else if (finalStatus === 'game_over_opponent_blackjack') {
-        titleEmoji = "✨🏆"; 
-        const blackjackProfitLamportsP2 = betAmount * 15n / 10n;
-        p2_payout = betAmount + blackjackProfitLamportsP2;
-        resultTextHTML = `${p2MentionHTML} hits a natural BLACKJACK! ${p2MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p2_payout, 'USD'))}</b>!`;
-    } else if (p1.status === 'bust' || finalStatus === 'game_over_initiator_bust_during_turn') {
-        titleEmoji = "💥🏆"; 
-        p2_payout = betAmount * 2n;
-        resultTextHTML = `${p1MentionHTML} BUSTED with <b>${escapeHTML(String(p1.score))}</b>! ${p2MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p2_payout, 'USD'))}</b>!`;
-    } else if (p2.status === 'bust' || finalStatus === 'game_over_opponent_bust_during_turn') {
-        titleEmoji = "💥🏆"; 
-        p1_payout = betAmount * 2n;
-        resultTextHTML = `${p2MentionHTML} BUSTED with <b>${escapeHTML(String(p2.score))}</b>! ${p1MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p1_payout, 'USD'))}</b>!`;
-    } else { // Both stood or game ended after turns
-        const p1_finalScore = p1.score;
-        const p2_finalScore = p2.score;
-        if (p1_finalScore > p2_finalScore) {
-            titleEmoji = "🏆"; p1_payout = betAmount * 2n;
-            resultTextHTML = `${p1MentionHTML} WINS with <b>${escapeHTML(String(p1.score))}</b> vs ${p2MentionHTML}'s <b>${escapeHTML(String(p2.score))}</b>! Wins <b>${escapeHTML(await formatBalanceForDisplay(p1_payout, 'USD'))}</b>!`;
-        } else if (p2_finalScore > p1_finalScore) {
-            titleEmoji = "🏆"; p2_payout = betAmount * 2n;
-            resultTextHTML = `${p2MentionHTML} WINS with <b>${escapeHTML(String(p2.score))}</b> vs ${p1MentionHTML}'s <b>${escapeHTML(String(p1.score))}</b>! Wins <b>${escapeHTML(await formatBalanceForDisplay(p2_payout, 'USD'))}</b>!`;
-        } else {
-            titleEmoji = "⚖️";
-            resultTextHTML = `PUSH! Both players tied with <b>${escapeHTML(String(p1.score))}</b>! Bets (<b>${betDisplayHTML}</b> each) returned.`;
-            p1_payout = betAmount; p2_payout = betAmount;
-        }
+    if (gameData.currentTurnTimeoutId) {
+        clearTimeout(gameData.currentTurnTimeoutId);
+        gameData.currentTurnTimeoutId = null;
+    }
+
+    const finalStatus = gameData.status;
+    // *** MODIFIED DESTRUCTURING ***
+    const { gameId, chatId, betAmount, initiator, opponent, chatType } = gameData;
+    const p1 = initiator; // Assign to p1 if rest of function uses p1
+    const p2 = opponent;  // Assign to p2 if rest of function uses p2
+    // *** END OF MODIFICATION ***
+
+    // Defensive check after assignment, though diagnostics above should catch it if initiator/opponent were initially issues
+    if (!p1 || typeof p1.score === 'undefined') {
+        console.error(`${logPrefix} CRITICAL after mapping: p1 or p1.score is undefined. p1: ${stringifyWithBigInt(p1)}`);
+        throw new Error("CRITICAL_ERROR_FINALIZE_PVP_D21: p1 or p1.score became undefined after mapping.");
     }
-    // Database update logic from your existing finalizeDice21PvPGame
-    let dbErrorTextForUserHTML = "";
-    let criticalDbErrorForAdmin = false;
-    let client = null;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-
-        const determineLedgerType = (payout, bet, isPushOrError, isBlackjackWin = false, isWinByForfeit = false) => {
-            if (isWinByForfeit) return 'win_dice21_pvp_forfeit';
-            if (isPushOrError) return 'refund_dice21_pvp';
-            if (isBlackjackWin) return 'win_dice21_pvp_blackjack';
-            return payout > bet ? 'win_dice21_pvp' : (payout === 0n ? 'loss_dice21_pvp' : 'unknown_dice21_pvp_outcome');
-        };
-        const p1_is_push_or_error = (finalStatus.includes('_error_') || finalStatus.includes('_push_') || (p1.score === p2.score && p1.status !== 'bust' && p2.status !== 'bust' && !finalStatus.includes('timeout_forfeit') && !finalStatus.includes('blackjack')));
-        const p2_is_push_or_error = p1_is_push_or_error;
-        const p1_is_bj_win = (finalStatus === 'game_over_initiator_blackjack');
-        const p2_is_bj_win = (finalStatus === 'game_over_opponent_blackjack');
-        const p1_won_by_forfeit = (finalStatus === 'game_over_opponent_timeout_forfeit');
-        const p2_won_by_forfeit = (finalStatus === 'game_over_initiator_timeout_forfeit');
-
-        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1_payout, determineLedgerType(p1_payout, betAmount, p1_is_push_or_error, p1_is_bj_win, p1_won_by_forfeit), {game_id_custom_field: gameData.gameId, opponent_id: p2.userId, player_score: p1.score, opponent_score: p2.score}, `Dice 21 PvP result vs ${p2.mention}`);
-        if (!p1Update.success) throw new Error(`P1 (${p1MentionHTML}) balance update failed: ${p1Update.error}`);
-        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2_payout, determineLedgerType(p2_payout, betAmount, p2_is_push_or_error, p2_is_bj_win, p2_won_by_forfeit), {game_id_custom_field: gameData.gameId, opponent_id: p1.userId, player_score: p2.score, opponent_score: p1.score}, `Dice 21 PvP result vs ${p1.mention}`);
-        if (!p2Update.success) throw new Error(`P2 (${p2MentionHTML}) balance update failed: ${p2Update.error}`);
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(()=>{});
-        criticalDbErrorForAdmin = true;
-        dbErrorTextForUserHTML = `\n\n⚠️ <b>Critical Balance Update Error:</b> Server issue (<code>${escapeHTML(e.message || "DB Error")}</code>). Support notified.`;
-        console.error(`${logPrefix} CRITICAL DB error finalizing PvP Dice 21 ${gameData.gameId}: ${e.message}`);
-    } finally {
-        if (client) client.release();
+    if (!p2 || typeof p2.score === 'undefined') {
+        console.error(`${logPrefix} CRITICAL after mapping: p2 or p2.score is undefined. p2: ${stringifyWithBigInt(p2)}`);
+        throw new Error("CRITICAL_ERROR_FINALIZE_PVP_D21: p2 or p2.score became undefined after mapping.");
     }
-    if (criticalDbErrorForAdmin && typeof notifyAdmin === 'function') { /* ... notify admin ... */ }
 
-    const p1StatusIconDisplay = p1.status === 'bust' ? "💥 (Busted)" : (p1.status === 'blackjack' ? "✨ (Blackjack!)" : (p1.status === 'stood' ? `(Stood at ${escapeHTML(String(p1.score))})` : (p1.status === 'timeout_forfeit' ? '⏳ (Timed Out)' : `(Score: ${escapeHTML(String(p1.score))})`)));
-    const p2StatusIconDisplay = p2.status === 'bust' ? "💥 (Busted)" : (p2.status === 'blackjack' ? "✨ (Blackjack!)" : (p2.status === 'stood' ? `(Stood at ${escapeHTML(String(p2.score))})` : (p2.status === 'timeout_forfeit' ? '⏳ (Timed Out)' : `(Score: ${escapeHTML(String(p2.score))})`)));
 
-    const fullResultMessageHTML =
-        `${titleEmoji} <b>Dice 21 PvP - Game Over!</b> ${titleEmoji}\n\n` +
-        `Player 1: ${p1MentionHTML} - Score: <b>${escapeHTML(String(p1.score))}</b> ${formatDiceRolls(p1.hand)} ${p1StatusIconDisplay}\n` +
-        `Player 2: ${p2MentionHTML} - Score: <b>${escapeHTML(String(p2.score))}</b> ${formatDiceRolls(p2.hand)} ${p2StatusIconDisplay}\n\n` +
-        `------------------------------------\n${resultTextHTML}` +
-        `${dbErrorTextForUserHTML}`;
+    console.log(`${logPrefix} Finalizing PvP game. P1 Score: ${p1.score} (Status: ${p1.status}). P2 Score: ${p2.score} (Status: ${p2.status}). Game Status: ${finalStatus}`);
+    activeGames.delete(gameId);
 
-    const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_21_PVP, gameData.betAmount);
-    // updateDice21PvPGameMessage handles deleting the old game message and sending this new one
-    await updateDice21PvPGameMessage(gameData, true, fullResultMessageHTML); // Pass true for isFinal
+    if (chatType && chatType !== 'private') {
+        await updateGroupGameDetails(chatId, null, DICE21_FAMILY_LOCK_KEY, null);
+        console.log(`${logPrefix} Cleared Dice 21 family lock (${DICE21_FAMILY_LOCK_KEY}) for chat ${chatId}.`);
+    }
+
+    const p1MentionHTML = escapeHTML(p1.mention);
+    const p2MentionHTML = escapeHTML(p2.mention);
+    let titleEmoji = "🏁";
+    let resultTextHTML = "";
+    let p1_payout = 0n; let p2_payout = 0n;
+    const target = DICE_21_TARGET_SCORE;
+    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+
+    if (finalStatus === 'game_over_error_deal_initiator' || finalStatus === 'game_over_error_deal_opponent' || finalStatus === 'game_over_error_ui_update' || finalStatus === 'game_over_error_helper_bot' || finalStatus === 'game_over_error_timeout_logic') {
+        titleEmoji = "⚙️";
+        resultTextHTML = `A technical error occurred. All bets (<b>${betDisplayHTML}</b> each) refunded.`;
+        p1_payout = betAmount; p2_payout = betAmount;
+    } else if (finalStatus === 'game_over_initiator_timeout_forfeit') {
+        titleEmoji = "⏳🏆"; 
+        resultTextHTML = `${p1MentionHTML} timed out! ${p2MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'))}</b> by default!`;
+        p2_payout = gameData.betAmount * 2n; // Use gameData.betAmount here as betAmount is from destructuring
+    } else if (finalStatus === 'game_over_opponent_timeout_forfeit') {
+        titleEmoji = "⏳🏆"; 
+        resultTextHTML = `${p2MentionHTML} timed out! ${p1MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'))}</b> by default!`;
+        p1_payout = gameData.betAmount * 2n; // Use gameData.betAmount here
+    } else if (finalStatus === 'game_over_push_both_blackjack') {
+        titleEmoji = "✨⚖️✨";
+        resultTextHTML = `DOUBLE BLACKJACK! Both ${p1MentionHTML} & ${p2MentionHTML} hit <b>${target}</b>! It's a PUSH. Bets (<b>${betDisplayHTML}</b> each) returned.`;
+        p1_payout = betAmount; p2_payout = betAmount;
+    } else if (finalStatus === 'game_over_initiator_blackjack') {
+        titleEmoji = "✨🏆"; 
+        const blackjackProfitLamportsP1 = betAmount * 15n / 10n;
+        p1_payout = betAmount + blackjackProfitLamportsP1;
+        resultTextHTML = `${p1MentionHTML} hits a natural BLACKJACK! ${p1MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p1_payout, 'USD'))}</b>!`;
+    } else if (finalStatus === 'game_over_opponent_blackjack') {
+        titleEmoji = "✨🏆"; 
+        const blackjackProfitLamportsP2 = betAmount * 15n / 10n;
+        p2_payout = betAmount + blackjackProfitLamportsP2;
+        resultTextHTML = `${p2MentionHTML} hits a natural BLACKJACK! ${p2MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p2_payout, 'USD'))}</b>!`;
+    } else if (p1.status === 'bust' || finalStatus === 'game_over_initiator_bust_during_turn') {
+        titleEmoji = "💥🏆"; 
+        p2_payout = betAmount * 2n;
+        resultTextHTML = `${p1MentionHTML} BUSTED with <b>${escapeHTML(String(p1.score))}</b>! ${p2MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p2_payout, 'USD'))}</b>!`;
+    } else if (p2.status === 'bust' || finalStatus === 'game_over_opponent_bust_during_turn') {
+        titleEmoji = "💥🏆"; 
+        p1_payout = betAmount * 2n;
+        resultTextHTML = `${p2MentionHTML} BUSTED with <b>${escapeHTML(String(p2.score))}</b>! ${p1MentionHTML} wins <b>${escapeHTML(await formatBalanceForDisplay(p1_payout, 'USD'))}</b>!`;
+    } else { // Both stood or game ended after turns
+        const p1_finalScore = p1.score;
+        const p2_finalScore = p2.score;
+        if (p1_finalScore > p2_finalScore) {
+            titleEmoji = "🏆"; p1_payout = betAmount * 2n;
+            resultTextHTML = `${p1MentionHTML} WINS with <b>${escapeHTML(String(p1.score))}</b> vs ${p2MentionHTML}'s <b>${escapeHTML(String(p2.score))}</b>! Wins <b>${escapeHTML(await formatBalanceForDisplay(p1_payout, 'USD'))}</b>!`;
+        } else if (p2_finalScore > p1_finalScore) {
+            titleEmoji = "🏆"; p2_payout = betAmount * 2n;
+            resultTextHTML = `${p2MentionHTML} WINS with <b>${escapeHTML(String(p2.score))}</b> vs ${p1MentionHTML}'s <b>${escapeHTML(String(p1.score))}</b>! Wins <b>${escapeHTML(await formatBalanceForDisplay(p2_payout, 'USD'))}</b>!`;
+        } else {
+            titleEmoji = "⚖️";
+            resultTextHTML = `PUSH! Both players tied with <b>${escapeHTML(String(p1.score))}</b>! Bets (<b>${betDisplayHTML}</b> each) returned.`;
+            p1_payout = betAmount; p2_payout = betAmount;
+        }
+    }
+
+    let dbErrorTextForUserHTML = "";
+    let criticalDbErrorForAdmin = false;
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const determineLedgerType = (payout, betValue, isPushOrError, isBlackjackWin = false, isWinByForfeit = false) => { // Renamed bet to betValue to avoid conflict
+            if (isWinByForfeit) return 'win_dice21_pvp_forfeit';
+            if (isPushOrError) return 'refund_dice21_pvp';
+            if (isBlackjackWin) return 'win_dice21_pvp_blackjack';
+            return payout > betValue ? 'win_dice21_pvp' : (payout === 0n ? 'loss_dice21_pvp' : 'unknown_dice21_pvp_outcome');
+        };
+        const p1_is_push_or_error = (finalStatus.includes('_error_') || finalStatus.includes('_push_') || (p1.score === p2.score && p1.status !== 'bust' && p2.status !== 'bust' && !finalStatus.includes('timeout_forfeit') && !finalStatus.includes('blackjack')));
+        const p2_is_push_or_error = p1_is_push_or_error;
+        const p1_is_bj_win = (finalStatus === 'game_over_initiator_blackjack');
+        const p2_is_bj_win = (finalStatus === 'game_over_opponent_blackjack');
+        const p1_won_by_forfeit = (finalStatus === 'game_over_opponent_timeout_forfeit');
+        const p2_won_by_forfeit = (finalStatus === 'game_over_initiator_timeout_forfeit');
+
+        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1_payout, determineLedgerType(p1_payout, betAmount, p1_is_push_or_error, p1_is_bj_win, p1_won_by_forfeit), {game_id_custom_field: gameData.gameId, opponent_id: p2.userId, player_score: p1.score, opponent_score: p2.score}, `Dice 21 PvP result vs ${p2.mention}`);
+        if (!p1Update.success) throw new Error(`P1 (${p1MentionHTML}) balance update failed: ${p1Update.error}`);
+        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2_payout, determineLedgerType(p2_payout, betAmount, p2_is_push_or_error, p2_is_bj_win, p2_won_by_forfeit), {game_id_custom_field: gameData.gameId, opponent_id: p1.userId, player_score: p2.score, opponent_score: p1.score}, `Dice 21 PvP result vs ${p1.mention}`);
+        if (!p2Update.success) throw new Error(`P2 (${p2MentionHTML}) balance update failed: ${p2Update.error}`);
+        await client.query('COMMIT');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(()=>{});
+        criticalDbErrorForAdmin = true;
+        dbErrorTextForUserHTML = `\n\n⚠️ <b>Critical Balance Update Error:</b> Server issue (<code>${escapeHTML(e.message || "DB Error")}</code>). Support notified.`;
+        console.error(`${logPrefix} CRITICAL DB error finalizing PvP Dice 21 ${gameData.gameId}: ${e.message}`);
+    } finally {
+        if (client) client.release();
+    }
+    if (criticalDbErrorForAdmin && typeof notifyAdmin === 'function') {
+        notifyAdmin(`🚨 CRITICAL D21 PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameData.gameId)}</code>\nError: ${escapeHTML(dbErrorTextForUserHTML.includes("DB Error") ? "DB Error during payout" : "Unknown payout error" )}. MANUAL CHECK REQUIRED.`, {parse_mode: 'HTML'});
+    }
+
+    const p1StatusIconDisplay = p1.status === 'bust' ? "💥 (Busted)" : (p1.status === 'blackjack' ? "✨ (Blackjack!)" : (p1.status === 'stood' ? `(Stood at ${escapeHTML(String(p1.score))})` : (p1.status === 'timeout_forfeit' ? '⏳ (Timed Out)' : `(Score: ${escapeHTML(String(p1.score))})`)));
+    const p2StatusIconDisplay = p2.status === 'bust' ? "💥 (Busted)" : (p2.status === 'blackjack' ? "✨ (Blackjack!)" : (p2.status === 'stood' ? `(Stood at ${escapeHTML(String(p2.score))})` : (p2.status === 'timeout_forfeit' ? '⏳ (Timed Out)' : `(Score: ${escapeHTML(String(p2.score))})`)));
+
+    const fullResultMessageHTML =
+        `${titleEmoji} <b>Dice 21 PvP - Game Over!</b> ${titleEmoji}\n\n` +
+        `Player 1: ${p1MentionHTML} - Score: <b>${escapeHTML(String(p1.score))}</b> ${formatDiceRolls(p1.hand)} ${p1StatusIconDisplay}\n` +
+        `Player 2: ${p2MentionHTML} - Score: <b>${escapeHTML(String(p2.score))}</b> ${formatDiceRolls(p2.hand)} ${p2StatusIconDisplay}\n\n` +
+        `------------------------------------\n${resultTextHTML}` +
+        `${dbErrorTextForUserHTML}`;
+
+    const finalKeyboard = createPostGameKeyboard(GAME_IDS.DICE_21_PVP, gameData.betAmount);
+    await updateDice21PvPGameMessage(gameData, true, fullResultMessageHTML);
 }
 
 // New function: handleDice21PvPTurnTimeout
