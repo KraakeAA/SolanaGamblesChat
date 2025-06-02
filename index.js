@@ -10054,15 +10054,10 @@ async function handleGrantCommand(msg, args, adminUserObj) {
  * @returns {object} Telegram InlineKeyboardMarkup object.
  */
 function createPostGameKeyboard(gameCode, betAmountLamports) {
-    // The "Repeat Bet" functionality and its associated logic (playAgainCallbackActionPrefix, playAgainCallbackData) are now removed.
-
     const keyboardRows = [
         [
-            // The only button is now "Quick Deposit"
-            { text: "💸 Quick Deposit", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION }
-            // The "💳 Wallet" button is also removed as per the focus on a single "Quick Deposit" button post-game.
-            // If "Wallet" is desired alongside "Quick Deposit", it can be added back here.
-            // For now, strictly implementing "The only button on the final result should have any game should be quick deposit."
+            // Use the corrected constant name
+            { text: "💸 Quick Deposit", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }
         ]
     ];
 
@@ -10095,7 +10090,7 @@ function createStandardTitle(titleText, emoji = '✨') {
 
 // console.log("Part 5a, Section 4 (REVISED for Simplified Post-Game Keyboard) - Complete.");
 // --- End of Part 5a, Section 4 ---
-// --- Start of Part 5a, Section 1 (CORRECTED REVISED - BOT_NAME & Play Again fixed - Core Listeners Setup - GRANULAR ACTIVE GAME LIMITS) ---
+// --- Start of Part 5a, Section 1 (CORRECTED - BOT_NAME & Play Again fixed - Core Listeners Setup - GRANULAR ACTIVE GAME LIMITS) ---
 // index.js - Part 5a, Section 1: Core Listeners Setup (Message & Callback) and Populated Routers
 // (This entire block should be placed LATE in your index.js, AFTER all game logic, general commands, and UI helpers, but BEFORE Part 6)
 //----------------------------------------------------------------------------------------------
@@ -10103,12 +10098,12 @@ function createStandardTitle(titleText, emoji = '✨') {
 // Dependencies from previous Parts (assumed to be globally available or correctly imported)
 // Part 1: isShuttingDown, userStateCache, COMMAND_COOLDOWN_MS, bot, getPlayerDisplayReference,
 //         safeSendMessage, escapeMarkdownV2, escapeHTML, MIN_BET_USD_val, MAX_BET_USD_val, LAMPORTS_PER_SOL,
-//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, ADMIN_USER_ID, BOT_NAME, // Using global BOT_NAME
+//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, ADMIN_USER_ID, BOT_NAME, 
 //         MIN_BET_AMOUNT_LAMPORTS_config, MAX_BET_AMOUNT_LAMPORTS_config, stringifyWithBigInt,
 //         RULES_CALLBACK_PREFIX_CONST, DEPOSIT_CALLBACK_ACTION_CONST, WITHDRAW_CALLBACK_ACTION_CONST, QUICK_DEPOSIT_CALLBACK_ACTION_CONST,
 //         userCooldowns, pool, activeGames, groupGameSessions, GAME_IDS,
 //         UNIFIED_OFFER_TIMEOUT_MS, DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS, ACTIVE_GAME_TURN_TIMEOUT_MS, INSTANT_GAME_ACTION_TIMEOUT_MS, GAME_ACTIVITY_LIMITS,
-//         checkUserActiveGameLimit // Now expects a second boolean parameter
+//         checkUserActiveGameLimit 
 // Part 2: getOrCreateUser, findRecipientUser
 // Part 3: createUserMention, formatCurrency
 // Part P3: clearUserState, routeStatefulInput, handleMenuAction, handleWithdrawalConfirmation
@@ -10503,7 +10498,6 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
     const msgContext = { chatId: originalChatId, chatType: originalChatType, messageId: originalMessageId };
 
     try {
-        // "Play Again" cases were removed from here too
         switch (action) {
             case 'ou7_choice':
                 const choiceOU7 = params[1];
@@ -10588,12 +10582,12 @@ bot.on('message', async (msg) => {
                 if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVB && typeof processDiceEscalatorPvBRollByEmoji_New === 'function') await processDiceEscalatorPvBRollByEmoji_New(gameDataForDiceRoll, diceValue);
                 else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP && typeof processDiceEscalatorPvPRollByEmoji_New === 'function') await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId);
             } else if (isDice21Emoji) {
+                // The same processDice21PvBRollByEmoji is called for both DICE_21 (PvB) and DICE_21_PVP.
+                // It must internally differentiate or be made generic enough.
                 if ((gameDataForDiceRoll.type === GAME_IDS.DICE_21 || gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) && typeof processDice21PvBRollByEmoji === 'function') {
-                     // processDice21PvBRollByEmoji is called for both PvB (DICE_21) and PvP (DICE_21_PVP)
-                     // It needs to handle the context internally based on gameDataForDiceRoll.type or specific fields.
-                     // The third parameter for PvP context was 'rollerId', for PvB it was 'msg'.
                      if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) {
-                        await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg); // Pass full msg for PvP context as original, or adjust if rollerId is better
+                        // Pass rollerId for PvP context if the function expects it differently
+                        await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg); // Original passes full msg, can be refined
                      } else { // PvB
                         await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg);
                      }
@@ -10710,8 +10704,6 @@ bot.on('message', async (msg) => {
                     if (typeof handleStartSlotCommand === 'function') { const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betSlot) await handleStartSlotCommand(msg, betSlot); }
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSlotCommand`); break;
                 case 'mines':
-                    // handleStartMinesCommand was moved to Part 5d and updated there.
-                    // This ensures it's called correctly. It expects (msg, args_array, userObject)
                     if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
                 default:
@@ -10911,11 +10903,10 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         offerData.timeoutId = null;
     }
 
-    // Key for the *pending direct challenge offer* (e.g., GAME_IDS.COINFLIP_PVP). This is used to clear the offer from groupGameSessions.
+    // Key for the *pending direct challenge offer* (e.g., GAME_IDS.COINFLIP_PVP). Used to clear the offer from groupGameSessions.
     let pendingDirectChallengeOfferKey = offerData.gameToStart; 
                                                               
-    // Key for the *new active game* that will start if accepted. This is also the same key,
-    // as this key will be used for the limit check in GAME_ACTIVITY_LIMITS.ACTIVE_GAMES.
+    // Key for the *new active game* that will start if accepted. Used for limit check in GAME_ACTIVITY_LIMITS.ACTIVE_GAMES.
     let activeGameKeyForNewLimitCheck = offerData.gameToStart; 
 
     let gameDisplayNameForMessages = "Game";
@@ -10972,7 +10963,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
 
     switch (actionType) {
         case 'dir_chal_acc': 
-        case 'cf_direct_accept': // Specific game accepts route here now
+        case 'cf_direct_accept': 
         case 'rps_direct_accept':
         case 'de_direct_accept':
         case 'd21_direct_accept':
@@ -10983,8 +10974,11 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
 
             const gameSession = await getGroupSession(originalChatIdFromGroup);
+            // activeGameKeyForNewLimitCheck is, e.g., GAME_IDS.COINFLIP_PVP, which should now have its own limit
+            // in GAME_ACTIVITY_LIMITS.ACTIVE_GAMES for PvP games from direct challenges.
             const currentActiveGamesOfThisType = gameSession.activeGamesByTypeInGroup.get(activeGameKeyForNewLimitCheck) || [];
             const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyForNewLimitCheck] || 1;
+
 
             if (currentActiveGamesOfThisType.length >= limitActive) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: `Cannot accept now. Max ${limitActive} active ${gameDisplayNameForMessages} (from Direct Challenge) game(s) allowed. Please wait.`, show_alert: true });
@@ -11014,17 +11008,13 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 finally { if(refundClientNoFunds) refundClientNoFunds.release(); }
                 return;
             }
-            // Initiator's balance was checked and bet taken when offer was created. Re-check is mostly a safeguard.
-            if (BigInt(freshInitiator.balance) < 0n && BigInt(freshInitiator.balance) + offerData.betAmount < 0n) { // Check if they can cover their already placed bet conceptually
+            if (BigInt(freshInitiator.balance) < 0n && BigInt(freshInitiator.balance) + offerData.betAmount < 0n) { 
                  await safeSendMessage(originalChatIdFromGroup, `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds for their prior commitment. Bet (if taken) refunded.`, { parse_mode: 'HTML' });
                  if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
                  activeGames.delete(offerId);
                  await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
-                 // Initiator's bet already taken, so this state indicates a serious issue or change.
-                 // This is a simplified re-check; original bet deduction is primary.
                  return;
             }
-
 
             let clientAccept = null;
             let newPvPGameId; 
@@ -11047,7 +11037,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                     throw new Error(`PvP starter function for ${offerData.gameToStart} is not defined.`);
                 }
                 
-                newPvPGameId = generateGameId(offerData.gameToStart); // Generate PvP game ID here
+                newPvPGameId = generateGameId(offerData.gameToStart); 
 
                 if (offerData.gameToStart === GAME_IDS.DICE_21_PVP) {
                     await specificPvPGameStarterFunction(newPvPGameId, freshInitiator, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
@@ -11059,10 +11049,9 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                         freshTarget,
                         offerData.betAmount,
                         originalChatIdFromGroup,
-                        // originalChatTypeFromGroup, // This param might not be in all starters like Coinflip, RPS
-                        null, // originalOfferMessageIdToDelete (already handled)
+                        null, 
                         'direct_challenge',
-                        true // Target's bet just deducted, initiator's was at offer time.
+                        true 
                     );
                 }
 
@@ -11085,7 +11074,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             break;
 
         case 'dir_chal_dec':
-        case 'cf_direct_decline': // Specific game declines route here
+        case 'cf_direct_decline': 
         case 'rps_direct_decline':
         case 'de_direct_decline':
         case 'd21_direct_decline':
@@ -11108,7 +11097,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             break;
 
         case 'dir_chal_can':
-        case 'cf_direct_cancel': // Specific game cancels route here
+        case 'cf_direct_cancel': 
         case 'rps_direct_cancel':
         case 'de_direct_cancel':
         case 'd21_direct_cancel':
@@ -11134,7 +11123,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false });
     }
 }
-// --- End of Part 5a, Section 1 (CORRECTED REVISED - BOT_NAME & Play Again fixed - GRANULAR ACTIVE GAME LIMITS) ---
+// --- End of Part 5a, Section 1 (CORRECTED - BOT_NAME & Play Again fixed - GRANULAR ACTIVE GAME LIMITS) ---
 // index.js - Part 6: Main Application Logic (Initialization, Error Handling, Graceful Shutdown)
 //---------------------------------------------------------------------------
 // Assumed all necessary functions from previous parts are loaded and available.
