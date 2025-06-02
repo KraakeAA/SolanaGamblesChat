@@ -1,4 +1,4 @@
-// --- Start of Part 1 (CORRECTED - BOT_NAME restored - All declarations fixed - All original code included - RETAINS GRANULAR ACTIVE GAME LIMITS) ---
+// --- Start of Part 1 (FINAL CORRECTION - Original Constant Names Restored, All Declarations Fixed, All Original Code Included, Retains Granular Active Game Limits) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
@@ -41,7 +41,7 @@ function stringifyWithBigInt(obj) {
       return `[Function: ${value.name || 'anonymous'}]`;
     }
     if (value === undefined) {
-      return 'undefined_value'; // Represent undefined explicitly
+      return 'undefined_value'; 
     }
     return value;
   }, 2);
@@ -91,16 +91,16 @@ const CASINO_ENV_DEFAULTS = {
   'MINES_MAX_MINES_PERCENT': '0.6', 
   'MINES_EDIT_THROTTLE_MS': '1200',
   'LIMIT_UNIFIED_OFFER_COINFLIP': '1',
-  'LIMIT_DIRECT_CHALLENGE_COINFLIP_PVP': '1', 
+  'LIMIT_DIRECT_CHALLENGE_COINFLIP_OFFER': '1', // For pending direct challenge offers
   'LIMIT_UNIFIED_OFFER_RPS': '1',
-  'LIMIT_DIRECT_CHALLENGE_RPS_PVP': '1',
+  'LIMIT_DIRECT_CHALLENGE_RPS_OFFER': '1',      
   'LIMIT_UNIFIED_OFFER_MINES': '1', 
   'LIMIT_UNIFIED_OFFER_DICE_ESCALATOR': '1',
-  'LIMIT_DIRECT_CHALLENGE_DICE_ESCALATOR_PVP': '1',
+  'LIMIT_DIRECT_CHALLENGE_DICE_ESCALATOR_OFFER': '1', 
   'LIMIT_UNIFIED_OFFER_DICE_21': '1',
-  'LIMIT_DIRECT_CHALLENGE_DICE_21_PVP': '1',
+  'LIMIT_DIRECT_CHALLENGE_DICE_21_OFFER': '1',      
   'LIMIT_UNIFIED_OFFER_DUEL': '1',
-  'LIMIT_DIRECT_CHALLENGE_DUEL_PVP': '1',
+  'LIMIT_DIRECT_CHALLENGE_DUEL_OFFER': '1',         
   'LIMIT_ACTIVE_GAME_COINFLIP_PVB': '1',
   'LIMIT_ACTIVE_GAME_COINFLIP_PVP_UNIFIED': '1', 
   'LIMIT_ACTIVE_GAME_COINFLIP_PVP_DIRECT': '1',  
@@ -196,40 +196,45 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOT_NAME = process.env.BOT_NAME; // Correctly defined from process.env
+const BOT_NAME = process.env.BOT_NAME; // Original global constant
 
 // Payment System Keys & Seeds
 const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
 const MAIN_BOT_PRIVATE_KEY_BS58 = process.env.MAIN_BOT_PRIVATE_KEY;
 const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY;
 
-// --- GAME_IDS Constant (UPDATED for Granular Active Game Tracking) ---
+// --- GAME_IDS Constant (UPDATED for Granular Active Game Tracking & Distinct Offer Keys) ---
 const GAME_IDS = {
     COINFLIP: 'coinflip', 
-    COINFLIP_UNIFIED_OFFER: 'coinflip_unified_offer',
+    COINFLIP_UNIFIED_OFFER: 'coinflip_unified_offer', // For pending unified offers
+    COINFLIP_DIRECT_CHALLENGE_OFFER: 'coinflip_direct_challenge_offer', // For pending direct challenge offers
     COINFLIP_PVB: 'coinflip_pvb', 
-    COINFLIP_PVP: 'coinflip_pvp', 
+    COINFLIP_PVP: 'coinflip_pvp', // Represents active PvP from Direct Challenge
     COINFLIP_PVP_FROM_UNIFIED: 'coinflip_pvp_from_unified', 
 
     RPS: 'rps', 
     RPS_UNIFIED_OFFER: 'rps_unified_offer',
+    RPS_DIRECT_CHALLENGE_OFFER: 'rps_direct_challenge_offer', 
     RPS_PVB: 'rps_pvb',
     RPS_PVP: 'rps_pvp',
     RPS_PVP_FROM_UNIFIED: 'rps_pvp_from_unified',
 
     DICE_ESCALATOR: 'dice_escalator', 
     DICE_ESCALATOR_UNIFIED_OFFER: 'dice_escalator_unified_offer',
+    DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER: 'dice_escalator_direct_challenge_offer', 
     DICE_ESCALATOR_PVB: 'dice_escalator_pvb',
     DICE_ESCALATOR_PVP: 'dice_escalator_pvp',
     DICE_ESCALATOR_PVP_FROM_UNIFIED: 'dice_escalator_pvp_from_unified',
 
     DICE_21: 'dice21', 
     DICE_21_UNIFIED_OFFER: 'dice21_unified_offer',
+    DICE_21_DIRECT_CHALLENGE_OFFER: 'dice21_direct_challenge_offer', 
     DICE_21_PVP: 'dice21_pvp', 
     DICE_21_PVP_FROM_UNIFIED: 'dice21_pvp_from_unified', 
 
     DUEL: 'duel', 
     DUEL_UNIFIED_OFFER: 'duel_unified_offer',
+    DUEL_DIRECT_CHALLENGE_OFFER: 'duel_direct_challenge_offer', 
     DUEL_PVB: 'duel_pvb',
     DUEL_PVP: 'duel_pvp',
     DUEL_PVP_FROM_UNIFIED: 'duel_pvp_from_unified',
@@ -305,7 +310,7 @@ const MINES_DIFFICULTY_CONFIG = {
 };
 
 const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
-    UNIFIED_OFFERS: {
+    UNIFIED_OFFERS: { // These keys are for *pending unified offers*
         [GAME_IDS.COINFLIP]: parseInt(process.env.LIMIT_UNIFIED_OFFER_COINFLIP, 10) || 1,
         [GAME_IDS.RPS]: parseInt(process.env.LIMIT_UNIFIED_OFFER_RPS, 10) || 1,
         [GAME_IDS.MINES_OFFER]: parseInt(process.env.LIMIT_UNIFIED_OFFER_MINES, 10) || 1,
@@ -313,33 +318,33 @@ const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
         [GAME_IDS.DICE_21]: parseInt(process.env.LIMIT_UNIFIED_OFFER_DICE_21, 10) || 1, 
         [GAME_IDS.DUEL]: parseInt(process.env.LIMIT_UNIFIED_OFFER_DUEL, 10) || 1,
     },
-    DIRECT_CHALLENGES: { 
-        [GAME_IDS.COINFLIP_PVP]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_COINFLIP_PVP, 10) || 1,
-        [GAME_IDS.RPS_PVP]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_RPS_PVP, 10) || 1,
-        [GAME_IDS.DICE_ESCALATOR_PVP]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_DICE_ESCALATOR_PVP, 10) || 1,
-        [GAME_IDS.DICE_21_PVP]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_DICE_21_PVP, 10) || 1,
-        [GAME_IDS.DUEL_PVP]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_DUEL_PVP, 10) || 1,
+    DIRECT_CHALLENGES: { // These keys are for *pending direct challenge offers*
+        [GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_COINFLIP_OFFER, 10) || 1,
+        [GAME_IDS.RPS_DIRECT_CHALLENGE_OFFER]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_RPS_OFFER, 10) || 1,
+        [GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_DICE_ESCALATOR_OFFER, 10) || 1,
+        [GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_DICE_21_OFFER, 10) || 1,
+        [GAME_IDS.DUEL_DIRECT_CHALLENGE_OFFER]: parseInt(process.env.LIMIT_DIRECT_CHALLENGE_DUEL_OFFER, 10) || 1,
     },
-    ACTIVE_GAMES: {
+    ACTIVE_GAMES: { // These keys are for *active games*
         [GAME_IDS.COINFLIP_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVB, 10) || 1,
         [GAME_IDS.COINFLIP_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVP_UNIFIED, 10) || 1,
-        [GAME_IDS.COINFLIP_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVP_DIRECT, 10) || 1,
+        [GAME_IDS.COINFLIP_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVP_DIRECT, 10) || 1, // Active PvP from Direct
         
         [GAME_IDS.RPS_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVB, 10) || 1,
         [GAME_IDS.RPS_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVP_UNIFIED, 10) || 1,
-        [GAME_IDS.RPS_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVP_DIRECT, 10) || 1,
+        [GAME_IDS.RPS_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVP_DIRECT, 10) || 1, // Active PvP from Direct
         
         [GAME_IDS.DICE_ESCALATOR_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVB, 10) || 1,
         [GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_UNIFIED, 10) || 1,
-        [GAME_IDS.DICE_ESCALATOR_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_DIRECT, 10) || 1,
+        [GAME_IDS.DICE_ESCALATOR_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_DIRECT, 10) || 1, // Active PvP from Direct
         
         [GAME_IDS.DICE_21]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVB, 10) || 1, 
         [GAME_IDS.DICE_21_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVP_UNIFIED, 10) || 1,
-        [GAME_IDS.DICE_21_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVP_DIRECT, 10) || 1,
+        [GAME_IDS.DICE_21_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVP_DIRECT, 10) || 1, // Active PvP from Direct
         
         [GAME_IDS.DUEL_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVB, 10) || 1,
         [GAME_IDS.DUEL_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVP_UNIFIED, 10) || 1,
-        [GAME_IDS.DUEL_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVP_DIRECT, 10) || 1,
+        [GAME_IDS.DUEL_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVP_DIRECT, 10) || 1, // Active PvP from Direct
         
         [GAME_IDS.MINES]: parseInt(process.env.LIMIT_ACTIVE_GAME_MINES, 10) || 1,
         [GAME_IDS.OVER_UNDER_7]: parseInt(process.env.LIMIT_ACTIVE_GAME_OVER_UNDER_7, 10) || 1,
@@ -386,9 +391,7 @@ const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
     .split(',')
     .map(u => u.trim())
     .filter(u => u && (u.startsWith('http://') || u.startsWith('https://')));
-
 const SINGLE_MAINNET_RPC_FROM_ENV = process.env.SOLANA_RPC_URL || null;
-
 let combinedRpcEndpointsForConnection = [...RPC_URLS_LIST_FROM_ENV];
 if (SINGLE_MAINNET_RPC_FROM_ENV && !combinedRpcEndpointsForConnection.some(url => url.startsWith(SINGLE_MAINNET_RPC_FROM_ENV.split('?')[0]))) {
     combinedRpcEndpointsForConnection.push(SINGLE_MAINNET_RPC_FROM_ENV);
@@ -398,13 +401,13 @@ if (combinedRpcEndpointsForConnection.length === 0) {
     combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
 }
 
-// More Constants derived from ENV
+// More Constants derived from ENV (using original names from process.env)
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
 const MAIN_JACKPOT_ID = 'dice_escalator_main_pvb';
-const TARGET_JACKPOT_SCORE_CONST = parseInt(process.env.TARGET_JACKPOT_SCORE, 10);
+const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10); // Reverted from _CONST
 
 const MIN_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MIN_BET_AMOUNT_LAMPORTS);
 const MAX_BET_AMOUNT_LAMPORTS_config = BigInt(process.env.MAX_BET_AMOUNT_LAMPORTS);
@@ -413,10 +416,10 @@ const MAX_BET_USD_val = parseFloat(process.env.MAX_BET_USD);
 
 const COMMAND_COOLDOWN_MS = parseInt(process.env.COMMAND_COOLDOWN_MS, 10);
 const DEFAULT_STARTING_BALANCE_LAMPORTS = BigInt(process.env.DEFAULT_STARTING_BALANCE_LAMPORTS);
-const RULES_CALLBACK_PREFIX_CONST = process.env.RULES_CALLBACK_PREFIX;
-const DEPOSIT_CALLBACK_ACTION_CONST = process.env.DEPOSIT_CALLBACK_ACTION;
-const WITHDRAW_CALLBACK_ACTION_CONST = process.env.WITHDRAW_CALLBACK_ACTION;
-const QUICK_DEPOSIT_CALLBACK_ACTION_CONST = process.env.QUICK_DEPOSIT_CALLBACK_ACTION;
+const RULES_CALLBACK_PREFIX = process.env.RULES_CALLBACK_PREFIX; // Reverted from _CONST
+const DEPOSIT_CALLBACK_ACTION = process.env.DEPOSIT_CALLBACK_ACTION; // Reverted
+const WITHDRAW_CALLBACK_ACTION = process.env.WITHDRAW_CALLBACK_ACTION; // Reverted
+const QUICK_DEPOSIT_CALLBACK_ACTION = process.env.QUICK_DEPOSIT_CALLBACK_ACTION; // Reverted
 
 const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
@@ -431,80 +434,29 @@ const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD);
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
-
-if (isNaN(UNIFIED_OFFER_TIMEOUT_MS) || UNIFIED_OFFER_TIMEOUT_MS <= 0) {
-    console.error(`🚨 FATAL ERROR: UNIFIED_OFFER_TIMEOUT_MS ('${process.env.UNIFIED_OFFER_TIMEOUT_MS}') must be a positive number.`);
-    process.exit(1);
-}
-if (isNaN(DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS) || DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS <= 0) {
-    console.error(`🚨 FATAL ERROR: DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS ('${process.env.DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS}') must be a positive number.`);
-    process.exit(1);
-}
-if (isNaN(ACTIVE_GAME_TURN_TIMEOUT_MS) || ACTIVE_GAME_TURN_TIMEOUT_MS <= 0) {
-    console.error(`🚨 FATAL ERROR: ACTIVE_GAME_TURN_TIMEOUT_MS ('${process.env.ACTIVE_GAME_TURN_TIMEOUT_MS}') must be a positive number.`);
-    process.exit(1);
-}
-if (isNaN(INSTANT_GAME_ACTION_TIMEOUT_MS) || INSTANT_GAME_ACTION_TIMEOUT_MS <= 0) {
-    console.error(`🚨 FATAL ERROR: INSTANT_GAME_ACTION_TIMEOUT_MS ('${process.env.INSTANT_GAME_ACTION_TIMEOUT_MS}') must be a positive number.`);
-    process.exit(1);
-}
-
-if (isNaN(PVP_TURN_TIMEOUT_MS_LEGACY) || PVP_TURN_TIMEOUT_MS_LEGACY <= 0) {
-    console.warn(`⚠️ WARNING: Legacy PVP_TURN_TIMEOUT_MS ('${process.env.PVP_TURN_TIMEOUT_MS}') is not a valid positive number. Logic has shifted to ACTIVE_GAME_TURN_TIMEOUT_MS.`);
-}
-if (isNaN(JOIN_GAME_TIMEOUT_MS_LEGACY) || JOIN_GAME_TIMEOUT_MS_LEGACY <= 0) {
-    console.warn(`⚠️ WARNING: Legacy JOIN_GAME_TIMEOUT_MS ('${process.env.JOIN_GAME_TIMEOUT_MS}') is not a valid positive number. Logic has shifted to specific offer timeouts.`);
-}
-
-const criticalGameScoresCheck = { TARGET_JACKPOT_SCORE_CONST, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
-for (const [key, value] of Object.entries(criticalGameScoresCheck)) {
-    if (isNaN(value) || value <=0) {
-        console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number.`);
-        process.exit(1);
-    }
-}
-if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`);
-    process.exit(1);
-}
-if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`);
-    process.exit(1);
-}
-if (isNaN(MIN_WITHDRAWAL_USD_val) || MIN_WITHDRAWAL_USD_val <= 0) {
-    console.error(`🚨 FATAL ERROR: MIN_WITHDRAWAL_USD ('${process.env.MIN_WITHDRAWAL_USD}') must be a positive number. Bot cannot start.`);
-    process.exit(1);
-}
-if (MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE < 0n) {
-    console.warn(`⚠️ WARNING: MIN_WITHDRAWAL_LAMPORTS ('${process.env.MIN_WITHDRAWAL_LAMPORTS}') is negative. This value is legacy for withdrawal minimums but should ideally be non-negative if set.`);
-}
-
-if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`);
-    process.exit(1);
-}
-if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS_config))) {
-    console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`);
-    process.exit(1);
-}
-if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) {
-    console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive).`);
-    process.exit(1);
-}
-if (isNaN(OU7_PAYOUT_NORMAL) || OU7_PAYOUT_NORMAL < 0) {
-    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_NORMAL must be a non-negative number.`); process.exit(1);
-}
-if (isNaN(OU7_PAYOUT_SEVEN) || OU7_PAYOUT_SEVEN < 0) {
-    console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);
-}
-
+if (isNaN(UNIFIED_OFFER_TIMEOUT_MS) || UNIFIED_OFFER_TIMEOUT_MS <= 0) { console.error(`🚨 FATAL ERROR: UNIFIED_OFFER_TIMEOUT_MS ('${process.env.UNIFIED_OFFER_TIMEOUT_MS}') must be a positive number.`); process.exit(1); }
+if (isNaN(DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS) || DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS <= 0) { console.error(`🚨 FATAL ERROR: DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS ('${process.env.DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS}') must be a positive number.`); process.exit(1); }
+if (isNaN(ACTIVE_GAME_TURN_TIMEOUT_MS) || ACTIVE_GAME_TURN_TIMEOUT_MS <= 0) { console.error(`🚨 FATAL ERROR: ACTIVE_GAME_TURN_TIMEOUT_MS ('${process.env.ACTIVE_GAME_TURN_TIMEOUT_MS}') must be a positive number.`); process.exit(1); }
+if (isNaN(INSTANT_GAME_ACTION_TIMEOUT_MS) || INSTANT_GAME_ACTION_TIMEOUT_MS <= 0) { console.error(`🚨 FATAL ERROR: INSTANT_GAME_ACTION_TIMEOUT_MS ('${process.env.INSTANT_GAME_ACTION_TIMEOUT_MS}') must be a positive number.`); process.exit(1); }
+if (isNaN(PVP_TURN_TIMEOUT_MS_LEGACY) || PVP_TURN_TIMEOUT_MS_LEGACY <= 0) { console.warn(`⚠️ WARNING: Legacy PVP_TURN_TIMEOUT_MS ('${process.env.PVP_TURN_TIMEOUT_MS}') is not a valid positive number. Logic has shifted to ACTIVE_GAME_TURN_TIMEOUT_MS.`);}
+if (isNaN(JOIN_GAME_TIMEOUT_MS_LEGACY) || JOIN_GAME_TIMEOUT_MS_LEGACY <= 0) { console.warn(`⚠️ WARNING: Legacy JOIN_GAME_TIMEOUT_MS ('${process.env.JOIN_GAME_TIMEOUT_MS}') is not a valid positive number. Logic has shifted to specific offer timeouts.`);}
+const criticalGameScoresCheckFull = { TARGET_JACKPOT_SCORE, DICE_21_TARGET_SCORE, DICE_21_BOT_STAND_SCORE, OU7_DICE_COUNT, DUEL_DICE_COUNT, LADDER_ROLL_COUNT, LADDER_BUST_ON, DICE_ESCALATOR_BUST_ON };
+for (const [key, value] of Object.entries(criticalGameScoresCheckFull)) { if (isNaN(value) || value <=0) { console.error(`🚨 FATAL ERROR: Game score/parameter '${key}' ('${value}') is not a valid positive number.`); process.exit(1);}}
+if (isNaN(MIN_BET_USD_val) || MIN_BET_USD_val <= 0) { console.error(`🚨 FATAL ERROR: MIN_BET_USD ('${process.env.MIN_BET_USD}') must be a positive number.`); process.exit(1);}
+if (isNaN(MAX_BET_USD_val) || MAX_BET_USD_val < MIN_BET_USD_val) { console.error(`🚨 FATAL ERROR: MAX_BET_USD ('${process.env.MAX_BET_USD}') must be >= MIN_BET_USD and be a number.`); process.exit(1);}
+if (isNaN(MIN_WITHDRAWAL_USD_val) || MIN_WITHDRAWAL_USD_val <= 0) { console.error(`🚨 FATAL ERROR: MIN_WITHDRAWAL_USD ('${process.env.MIN_WITHDRAWAL_USD}') must be a positive number. Bot cannot start.`); process.exit(1);}
+if (MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE < 0n) { console.warn(`⚠️ WARNING: MIN_WITHDRAWAL_LAMPORTS ('${process.env.MIN_WITHDRAWAL_LAMPORTS}') is negative. This value is legacy for withdrawal minimums but should ideally be non-negative if set.`);}
+if (MIN_BET_AMOUNT_LAMPORTS_config < 1n || isNaN(Number(MIN_BET_AMOUNT_LAMPORTS_config))) { console.error(`🚨 FATAL ERROR: MIN_BET_AMOUNT_LAMPORTS ('${MIN_BET_AMOUNT_LAMPORTS_config}') must be a positive number.`); process.exit(1);}
+if (MAX_BET_AMOUNT_LAMPORTS_config < MIN_BET_AMOUNT_LAMPORTS_config || isNaN(Number(MAX_BET_AMOUNT_LAMPORTS_config))) { console.error(`🚨 FATAL ERROR: MAX_BET_AMOUNT_LAMPORTS ('${MAX_BET_AMOUNT_LAMPORTS_config}') must be >= MIN_BET_AMOUNT_LAMPORTS and be a number.`); process.exit(1);}
+if (isNaN(JACKPOT_CONTRIBUTION_PERCENT) || JACKPOT_CONTRIBUTION_PERCENT < 0 || JACKPOT_CONTRIBUTION_PERCENT >= 1) { console.error(`🚨 FATAL ERROR: JACKPOT_CONTRIBUTION_PERCENT ('${process.env.JACKPOT_CONTRIBUTION_PERCENT}') must be a number between 0 (inclusive) and 1 (exclusive).`); process.exit(1);}
+if (isNaN(OU7_PAYOUT_NORMAL) || OU7_PAYOUT_NORMAL < 0) { console.error(`🚨 FATAL ERROR: OU7_PAYOUT_NORMAL must be a non-negative number.`); process.exit(1);}
+if (isNaN(OU7_PAYOUT_SEVEN) || OU7_PAYOUT_SEVEN < 0) { console.error(`🚨 FATAL ERROR: OU7_PAYOUT_SEVEN must be a non-negative number.`); process.exit(1);}
 if (isNaN(MINES_DEFAULT_ROWS) || MINES_DEFAULT_ROWS < 3 || MINES_DEFAULT_ROWS > 8) { console.error("FATAL: MINES_DEFAULT_ROWS must be a number between 3-8 for reasonable button display."); process.exit(1); }
 if (isNaN(MINES_DEFAULT_COLS) || MINES_DEFAULT_COLS < 3 || MINES_DEFAULT_COLS > 8) { console.error("FATAL: MINES_DEFAULT_COLS must be a number between 3-8."); process.exit(1); }
 if (isNaN(MINES_FALLBACK_DEFAULT_MINES) || MINES_FALLBACK_DEFAULT_MINES < 1) { console.error("FATAL: MINES_FALLBACK_DEFAULT_MINES must be at least 1."); process.exit(1); }
 if (MINES_FALLBACK_DEFAULT_MINES >= MINES_DEFAULT_ROWS * MINES_DEFAULT_COLS) { console.error("FATAL: MINES_FALLBACK_DEFAULT_MINES must be less than total cells."); process.exit(1); }
 if (isNaN(MINES_MIN_MINES) || MINES_MIN_MINES < 1) { console.error("FATAL: MINES_MIN_MINES must be at least 1."); process.exit(1); }
 if (isNaN(MINES_MAX_MINES_PERCENT) || MINES_MAX_MINES_PERCENT <= 0 || MINES_MAX_MINES_PERCENT >= 0.8) { console.error("FATAL: MINES_MAX_MINES_PERCENT must be between 0 (exclusive) and 0.8 (exclusive for playability)."); process.exit(1); }
-
 for (const key in MINES_DIFFICULTY_CONFIG) {
     const config = MINES_DIFFICULTY_CONFIG[key];
     if (isNaN(config.rows) || config.rows < 2 || config.rows > 8) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.rows must be 2-8.`); process.exit(1); }
@@ -529,7 +481,7 @@ function formatLamportsToSolStringForLog(lamports) {
 }
 
 console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
-  Dice Escalator (PvB): Target Jackpot Score: ${TARGET_JACKPOT_SCORE_CONST}, Player Bust On: ${DICE_ESCALATOR_BUST_ON}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
+  Dice Escalator (PvB): Target Jackpot Score: ${TARGET_JACKPOT_SCORE}, Player Bust On: ${DICE_ESCALATOR_BUST_ON}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
   Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
   Mines Config (Example 'easy'): Grid ${MINES_DIFFICULTY_CONFIG.easy.rows}x${MINES_DIFFICULTY_CONFIG.easy.cols}, Mines: ${MINES_DIFFICULTY_CONFIG.easy.mines}
   Bet Limits (USD): $${MIN_BET_USD_val.toFixed(2)} - $${MAX_BET_USD_val.toFixed(2)} (Lamports Ref: ${formatLamportsToSolStringForLog(MIN_BET_AMOUNT_LAMPORTS_config)} SOL - ${formatLamportsToSolStringForLog(MAX_BET_AMOUNT_LAMPORTS_config)} SOL)
@@ -547,15 +499,15 @@ console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Dice Roll Polling (Helper Bot System): Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
   Sweep Fee Buffer (for TX cost): ${formatLamportsToSolStringForLog(BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS))} SOL
   --- Game Activity Limits (Per Group, Defaults) ---
-  Coinflip: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.COINFLIP]}, Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.COINFLIP_PVP]}
+  Coinflip: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.COINFLIP]}, Pending Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER]}
     Active PvB: ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.COINFLIP_PVB]}, Active PvP (Unified): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.COINFLIP_PVP_FROM_UNIFIED]}, Active PvP (Direct): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.COINFLIP_PVP]}
-  RPS: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.RPS]}, Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.RPS_PVP]}
+  RPS: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.RPS]}, Pending Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.RPS_DIRECT_CHALLENGE_OFFER]}
     Active PvB: ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.RPS_PVB]}, Active PvP (Unified): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.RPS_PVP_FROM_UNIFIED]}, Active PvP (Direct): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.RPS_PVP]}
-  Dice Escalator: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR]}, Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.DICE_ESCALATOR_PVP]}
+  Dice Escalator: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR]}, Pending Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER]}
     Active PvB: ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DICE_ESCALATOR_PVB]}, Active PvP (Unified): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED]}, Active PvP (Direct): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DICE_ESCALATOR_PVP]}
-  Dice 21: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_21]}, Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.DICE_21_PVP]}
+  Dice 21: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_21]}, Pending Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER]}
     Active PvB: ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DICE_21]}, Active PvP (Unified): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DICE_21_PVP_FROM_UNIFIED]}, Active PvP (Direct): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DICE_21_PVP]}
-  Duel: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DUEL]}, Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.DUEL_PVP]}
+  Duel: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DUEL]}, Pending Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.DUEL_DIRECT_CHALLENGE_OFFER]}
     Active PvB: ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DUEL_PVB]}, Active PvP (Unified): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DUEL_PVP_FROM_UNIFIED]}, Active PvP (Direct): ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.DUEL_PVP]}
   Mines: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.MINES_OFFER]}, Active PvB: ${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.MINES]}
   (Other PvB-only game family limits also apply: OU7 (${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.OVER_UNDER_7]}), Ladder (${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.LADDER]}), Slot Frenzy (${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.SLOT_FRENZY]}), Lucky Sum (${GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.SEVEN_OUT]}))
@@ -621,7 +573,7 @@ const solanaConnection = new RateLimitedConnection(
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-let app = null; // Correctly declared with let
+let app = null; 
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
@@ -633,19 +585,17 @@ if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
 
 const BOT_VERSION = process.env.BOT_VERSION || '3.4.0-de-rewrite';
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
-let isShuttingDown = false; // Correctly declared with let
-let activeGames = new Map(); // Correctly declared with let
-let userCooldowns = new Map(); // Correctly declared with let
-let groupGameSessions = new Map(); // Correctly declared with let
+let isShuttingDown = false; 
+let activeGames = new Map(); 
+let userCooldowns = new Map(); 
+let groupGameSessions = new Map(); 
 const walletCache = new Map(); 
 const activeDepositAddresses = new Map(); 
 const processedDepositTxSignatures = new Set(); 
-// PENDING_REFERRAL_TTL_MS and pendingReferrals are not in original Part 1, moved to Part 2 contextually
 const userStateCache = new Map(); 
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map(); 
 
-// checkUserActiveGameLimit (updated version with gameBeingStartedIsDirectChallengeOffer param and PvB exemption)
 async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectChallengeOffer = false) {
     const userIdStr = String(userIdToCheck);
     let activePlayGameFound = null;
@@ -693,7 +643,7 @@ async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectC
 
             if (!isGameTrulyOverOrSimplyOffer) {
                 const isUserOwnPendingOffer = (
-                    (gameData.type.endsWith('_unified_offer') || gameData.type === GAME_IDS.MINES_OFFER || gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE) &&
+                    (gameData.type.endsWith('_unified_offer') || gameData.type === GAME_IDS.MINES_OFFER || gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE || gameData.type.endsWith('_direct_challenge_offer')) && // Include new offer types
                     gameData.initiatorId === userIdStr &&
                     (gameData.status === 'pending_offer' || gameData.status === 'pending_unified_offer' || gameData.status === 'awaiting_difficulty' || gameData.status === 'waiting_for_choice' || gameData.status === 'pending_direct_challenge_response')
                 );
@@ -885,7 +835,7 @@ const SLOT_PAYOUTS = {
     43: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" } 
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
-// --- End of Part 1 (CORRECTED) ---
+// --- End of Part 1 (FINAL CORRECTION) ---
 // --- Start of Part 2 (Modified for dice_roll_requests table) ---
 // index.js - Part 2: Database Schema Initialization & Core User Management
 //---------------------------------------------------------------------------
