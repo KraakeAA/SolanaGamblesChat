@@ -2187,11 +2187,10 @@ async function handleCoinflipCancelOfferCallback(offerId, userWhoClicked, origin
     }
 }
 
-// --- Coinflip Player vs. Bot (PvB) Logic ---
-// --- Coinflip Player vs. Bot (PvB) Logic ---
+// --- Coinflip Player vs. Bot (PvB) // --- Coinflip Player vs. Bot (PvB) Logic ---
 async function startCoinflipPvBGame(chatId, initiatorUserObj, betAmountLamports, originalOfferMessageId, offerIdToDelete) {
     const userId = String(initiatorUserObj.id || initiatorUserObj.telegram_id);
-    const logPrefix = `[CF_PvB_Start_Timeout UID:${userId} CH:${chatId}]`; // Added Timeout to log
+    const logPrefix = `[CF_PvB_Start_TimeoutOnly UID:${userId} CH:${chatId}]`; // Updated log for this version
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
     const COINFLIP_FAMILY_LOCK_KEY = GAME_IDS.COINFLIP_UNIFIED_OFFER;
@@ -2221,7 +2220,7 @@ async function startCoinflipPvBGame(chatId, initiatorUserObj, betAmountLamports,
         playerRefHTML, userObj: initiatorUserObj, betAmount: betAmountLamports,
         playerChoice: null, result: null, status: 'pvb_waiting_choice',
         gameMessageId: null, lastInteractionTime: Date.now(),
-        choiceTimeoutId: null // ADDED: To store the choice timeout
+        choiceTimeoutId: null // For the choice timeout
     };
     activeGames.set(pvbGameId, gameDataPvB);
     await updateGroupGameDetails(chatId, pvbGameId, COINFLIP_FAMILY_LOCK_KEY, betAmountLamports);
@@ -2229,36 +2228,55 @@ async function startCoinflipPvBGame(chatId, initiatorUserObj, betAmountLamports,
     const titleHTML = `🤖${COIN_EMOJI_DISPLAY} <b>Coinflip: ${playerRefHTML} vs. Bot Dealer!</b> ${COIN_EMOJI_DISPLAY}🤖`;
     const initialMessageTextHTML = `${titleHTML}\n\nWager: <b>${betDisplayHTML}</b>\n\n` +
         `The Bot Dealer polishes a shimmering virtual coin! ${playerRefHTML}, make your call: Heads or Tails?`;
-    const keyboard = {
+    const keyboard = { // Keyboard without the "Cancel Game" button
         inline_keyboard: [
             [
                 { text: `${COIN_EMOJI_DISPLAY} Heads`, callback_data: `cf_pvb_choice:${pvbGameId}:${COINFLIP_CHOICE_HEADS}` },
                 { text: `${COIN_EMOJI_DISPLAY} Tails`, callback_data: `cf_pvb_choice:${pvbGameId}:${COINFLIP_CHOICE_TAILS}` }
             ],
-            // ADDED: Cancel Game button
-            [ { text: "🚫 Cancel Game & Refund", callback_data: `cf_pvb_cancel:${pvbGameId}` } ],
             [ { text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.COINFLIP_UNIFIED_OFFER}` } ]
         ]
     };
     const sentMessage = await safeSendMessage(chatId, initialMessageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
     if (sentMessage?.message_id) {
         gameDataPvB.gameMessageId = String(sentMessage.message_id);
-        // ADDED: Start timeout for player choice
+        // Start timeout for player choice
         gameDataPvB.choiceTimeoutId = setTimeout(() => {
+            // Ensure the handler function exists before calling
             if (typeof handleCoinflipPvBChoiceTimeout === 'function') {
                 handleCoinflipPvBChoiceTimeout(pvbGameId);
             } else {
                 console.error(`[CF_PvB_TimeoutCallback GID:${pvbGameId}] CRITICAL: handleCoinflipPvBChoiceTimeout function not defined!`);
+                // Fallback logic if handler is missing: try to clean up game and refund
+                const gameToEnd = activeGames.get(pvbGameId);
+                if (gameToEnd && gameToEnd.status === 'pvb_waiting_choice') {
+                    activeGames.delete(pvbGameId);
+                    updateGroupGameDetails(gameToEnd.chatId, null, COINFLIP_FAMILY_LOCK_KEY, null);
+                    // Attempt direct refund (simplified, full refund logic should be in the handler)
+                    let refundClientErr = null;
+                    try {
+                        pool.connect(async (err, clientErr, doneErr) => {
+                            if(err) { console.error("CF Timeout: DB connection error for emergency refund", err); return; }
+                            try {
+                                await clientErr.query('BEGIN');
+                                await updateUserBalanceAndLedger(clientErr, gameToEnd.userId, gameToEnd.betAmount, 'refund_cf_pvb_missing_handler');
+                                await clientErr.query('COMMIT');
+                            } catch (e) { await clientErr.query('ROLLBACK'); console.error("CF Timeout: DB error during emergency refund", e);
+                            } finally { doneErr(); }
+                        });
+                         safeSendMessage(gameToEnd.chatId, `${gameToEnd.playerRefHTML}, your game timed out. A refund was attempted due to a handler error. Please check balance.`, {parse_mode: 'HTML'});
+                    } catch (e) {console.error("CF Timeout: Error in emergency refund block", e);}
+                }
             }
         }, PVP_TURN_TIMEOUT_MS); // Using PVP_TURN_TIMEOUT_MS (default 60s) for choice
-        activeGames.set(pvbGameId, gameDataPvB); // Save gameData with messageId and timeoutId
+        activeGames.set(pvbGameId, gameDataPvB);
     } else { 
         console.error(`${logPrefix} Failed to send Coinflip PvB game message for ${pvbGameId}. Refunding.`);
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_coinflip_pvb_setup_fail', {}, `Refund CF PvB game ${pvbGameId}`);
-            await refundClient.query('COMMIT');
+            await client.query('COMMIT'); // Should be refundClient.query('COMMIT')
         } catch (dbErr) { if (refundClient) await refundClient.query('ROLLBACK'); console.error(`${logPrefix} CRITICAL: Refund failed after CF PvB setup fail for ${pvbGameId}: ${dbErr.message}`);
         } finally { if (refundClient) refundClient.release(); }
         activeGames.delete(pvbGameId);
@@ -2266,91 +2284,33 @@ async function startCoinflipPvBGame(chatId, initiatorUserObj, betAmountLamports,
     }
 }
 
-async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, originalMessageId, callbackQueryId) {
-    const userId = String(userObj.id || userObj.telegram_id);
-    const logPrefix = `[CF_PvBChoiceCB GID:${gameId} UID:${userId} Choice:${playerChoice}]`;
-    const gameData = activeGames.get(gameId);
-
-    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB || gameData.userId !== userId || gameData.status !== 'pvb_waiting_choice') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Coinflip game action is outdated or not yours.", show_alert: true }).catch(() => {});
-        if (originalMessageId && bot && gameData && String(gameData.gameMessageId) !== String(originalMessageId)) {
-            bot.editMessageReplyMarkup({}, { chat_id: gameData.chatId, message_id: Number(originalMessageId) }).catch(() => {});
-        }
-        return;
-    }
-    const choiceDisplay = playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-    await bot.answerCallbackQuery(callbackQueryId, { text: `You called ${choiceDisplay}! Bot is flipping...` }).catch(() => {});
-
-    gameData.playerChoice = playerChoice;
-    gameData.status = 'pvb_flipping';
-    activeGames.set(gameId, gameData);
-
-    // Simulate "Helper Bot announcing result" by main bot doing the flip and animating
-    const actualFlipOutcome = Math.random() < 0.5 ? COINFLIP_CHOICE_HEADS : COINFLIP_CHOICE_TAILS;
-    gameData.result = actualFlipOutcome;
-
-    const titleFlippingHTML = `💫 ${COIN_EMOJI_DISPLAY} <b>Coin in the Air!</b> ${COIN_EMOJI_DISPLAY} 💫`;
-    let flippingMessageText = `${titleFlippingHTML}\n\n${gameData.playerRefHTML} called <b>${escapeHTML(choiceDisplay)}</b>!\n` +
-                              `The Bot Dealer flips the coin... it's spinning wildly!\n\n`;
-
-    if (gameData.gameMessageId && bot) {
-        for (let i = 0; i < COIN_FLIP_ANIMATION_STEPS; i++) {
-            const frame = COIN_FLIP_ANIMATION_FRAMES[i % COIN_FLIP_ANIMATION_FRAMES.length];
-            try {
-                await bot.editMessageText(flippingMessageText + `<b>${frame}</b>`, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: {} });
-            } catch (e) { if(!e.message?.includes("message is not modified")) console.warn(`${logPrefix} Animation edit fail step ${i}`); break; }
-            await sleep(COIN_FLIP_ANIMATION_INTERVAL_MS);
-        }
-    } else { // Fallback if no message to edit
-        await safeSendMessage(gameData.chatId, flippingMessageText + "<i>Flip in progress!</i>", {parse_mode: "HTML"});
-        await sleep(COIN_FLIP_ANIMATION_DURATION_MS);
-    }
-    
-    await finalizeCoinflipPvBGame(gameData);
-}
-
-async function handleCoinflipPvBCancelCallback(gameId, userObj, originalMessageId, callbackQueryId, msgContext) {
-    const userId = String(userObj.id || userObj.telegram_id);
-    const chatId = String(msgContext.chatId || originalChatId); // Use msgContext.chatId if available from router
-    const LOG_PREFIX_CF_PVB_CANCEL = `[CF_PvB_Cancel UID:${userId} GID:${gameId}]`;
-    console.log(`${LOG_PREFIX_CF_PVB_CANCEL} Attempting to cancel Coinflip PvB game.`);
-
+async function handleCoinflipPvBChoiceTimeout(gameId) {
+    const LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT = `[CF_PvB_ChoiceTimeout GID:${gameId}]`;
     const gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Coinflip game is no longer active or invalid.", show_alert: true }).catch(() => {});
-        console.warn(`${LOG_PREFIX_CF_PVB_CANCEL} Game not found or invalid type for gameId: ${gameId}.`);
-        if (bot && originalMessageId) {
-            try {
-                await bot.editMessageReplyMarkup({}, { chat_id: chatId, message_id: Number(originalMessageId) });
-            } catch (e) { /* ignore */ }
+    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB || gameData.status !== 'pvb_waiting_choice') {
+        console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Timeout fired but game ${gameId} not found, not Coinflip PvB, or not in 'pvb_waiting_choice' state. Current status: ${gameData?.status}. Aborting timeout action.`);
+        // Ensure the timeoutId is cleared from gameData if it somehow still exists and this is a stray call
+        if (gameData && gameData.choiceTimeoutId) {
+            clearTimeout(gameData.choiceTimeoutId); // Should have been cleared by the timeout itself
+            gameData.choiceTimeoutId = null;
+            // No activeGames.set needed if just returning due to invalid state.
         }
         return;
     }
+    console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Player ${gameData.userId} timed out waiting for Coinflip PvB choice (${PVP_TURN_TIMEOUT_MS / 1000}s). Game is ending.`);
 
-    if (gameData.userId !== userId) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Only the player who started this game can cancel it.", show_alert: true }).catch(() => {});
-        console.warn(`${LOG_PREFIX_CF_PVB_CANCEL} User ${userId} tried to cancel game ${gameId} belonging to ${gameData.userId}.`);
-        return;
-    }
-
-    if (gameData.status !== 'pvb_waiting_choice') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This game cannot be cancelled at this stage.", show_alert: true }).catch(() => {});
-        console.warn(`${LOG_PREFIX_CF_PVB_CANCEL} Game ${gameId} is not in 'pvb_waiting_choice' state. Current state: ${gameData.status}.`);
-        return;
-    }
-
-    // Clear the choice timeout
+    // Clear the timeoutId from gameData as it has fired (should be redundant but safe)
     if (gameData.choiceTimeoutId) {
         clearTimeout(gameData.choiceTimeoutId);
         gameData.choiceTimeoutId = null;
-        console.log(`${LOG_PREFIX_CF_PVB_CANCEL} Choice timeout cleared for game ${gameId}.`);
     }
 
-    activeGames.delete(gameId);
-    console.log(`${LOG_PREFIX_CF_PVB_CANCEL} Game ${gameId} removed from activeGames.`);
+    activeGames.delete(gameId); // Remove before async DB operations
     const COINFLIP_FAMILY_LOCK_KEY = GAME_IDS.COINFLIP_UNIFIED_OFFER;
-    await updateGroupGameDetails(chatId, null, COINFLIP_FAMILY_LOCK_KEY, null);
+    // Ensure chatId is retrieved correctly from gameData for updateGroupGameDetails
+    const chatIdForLockClear = String(gameData.chatId);
+    await updateGroupGameDetails(chatIdForLockClear, null, COINFLIP_FAMILY_LOCK_KEY, null);
 
 
     let client = null;
@@ -2360,61 +2320,59 @@ async function handleCoinflipPvBCancelCallback(gameId, userObj, originalMessageI
         await client.query('BEGIN');
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client,
-            userId,
-            gameData.betAmount, // Refund full bet amount
-            'refund_coinflip_pvb_cancel',
+            gameData.userId,
+            gameData.betAmount, // Refund full bet
+            'refund_coinflip_pvb_choice_timeout',
             { game_id_custom_field: gameId },
-            `Player cancelled Coinflip PvB game ${gameId} before choice.`
+            `Refund for Coinflip PvB game ${gameId} due to choice timeout.`
         );
 
         if (balanceUpdateResult.success) {
             await client.query('COMMIT');
             refundSuccess = true;
-            console.log(`${LOG_PREFIX_CF_PVB_CANCEL} Bet successfully refunded for game ${gameId}.`);
+            console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Bet successfully refunded for timed out game ${gameId}.`);
         } else {
             await client.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_CF_PVB_CANCEL} Failed to refund bet for game ${gameId}: ${balanceUpdateResult.error}`);
+            console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Failed to refund bet for timed out game ${gameId}: ${balanceUpdateResult.error}`);
         }
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_CF_PVB_CANCEL} DB error during refund for game ${gameId}: ${dbError.message}`);
+        console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} DB error during refund for timed out game ${gameId}: ${dbError.message}`);
     } finally {
         if (client) client.release();
     }
 
-    const playerRefHTML = gameData.playerRefHTML || escapeHTML(getPlayerDisplayReference(userObj));
+    const playerRefHTML = gameData.playerRefHTML || escapeHTML(getPlayerDisplayReference(gameData.userObj || { id: gameData.userId, first_name: "Player" }));
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
-    let cancelMessageText = "";
+    let timeoutMessageText = "";
 
     if (refundSuccess) {
-        cancelMessageText = `🚫 Game Cancelled by ${playerRefHTML}.\nYour Coinflip game (Bet: <b>${betDisplayHTML}</b>) has been cancelled, and your bet has been refunded.`;
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Game cancelled. Bet refunded." }).catch(() => {});
+        timeoutMessageText = `⏰ ${playerRefHTML}, your Coinflip game (Bet: <b>${betDisplayHTML}</b>) timed out as no choice (Heads/Tails) was made.\nYour bet has been refunded.`;
     } else {
-        cancelMessageText = `🚫 Game Cancelled by ${playerRefHTML}.\nThere was an issue refunding your bet automatically for the cancelled Coinflip game (Bet: <b>${betDisplayHTML}</b>). Please contact support.`;
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Game cancelled. Refund error - contact support.", show_alert: true }).catch(() => {});
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB CANCEL REFUND FAILURE 🚨\nGame ID: ${gameId}, User: ${userId}. Manual refund of ${formatCurrency(gameData.betAmount)} needed.`, {parse_mode: 'MarkdownV2'});
+        timeoutMessageText = `⏰ ${playerRefHTML}, your Coinflip game (Bet: <b>${betDisplayHTML}</b>) timed out.\nThere was an issue automatically refunding your bet. Please contact support.`;
+        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB TIMEOUT REFUND FAILURE 🚨\nGame ID: ${gameId}, User: ${gameData.userId}. Manual refund of ${formatCurrency(gameData.betAmount)} needed.`, {parse_mode: 'MarkdownV2'});
     }
 
-    const messageIdToEdit = Number(originalMessageId || gameData.gameMessageId);
+    const messageIdToEdit = Number(gameData.gameMessageId);
     if (bot && messageIdToEdit) {
-        await bot.editMessageText(cancelMessageText, {
-            chat_id: chatId,
+        await bot.editMessageText(timeoutMessageText, {
+            chat_id: String(gameData.chatId),
             message_id: messageIdToEdit,
             parse_mode: 'HTML',
-            // Keep post-game keyboard consistent if desired
+            // Simple keyboard for timed out game
             reply_markup: { inline_keyboard: [[{ text: "🪙 Play Coinflip Again?", callback_data: `play_again_coinflip:${gameData.betAmount.toString()}` }]]}
         }).catch(async (err) => {
-            console.warn(`${LOG_PREFIX_CF_PVB_CANCEL} Failed to edit cancelled game message ${messageIdToEdit}, sending new: ${err.message}`);
-            await safeSendMessage(chatId, cancelMessageText, { parse_mode: 'HTML' });
+            console.warn(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Failed to edit timed out message ${messageIdToEdit}, sending new: ${err.message}`);
+            await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "🪙 Play Coinflip Again?", callback_data: `play_again_coinflip:${gameData.betAmount.toString()}` }]]} });
         });
-    } else {
-        await safeSendMessage(chatId, cancelMessageText, { parse_mode: 'HTML' });
+    } else { // If somehow gameMessageId was not set or bot is unavailable
+        await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "🪙 Play Coinflip Again?", callback_data: `play_again_coinflip:${gameData.betAmount.toString()}` }]]} });
     }
 }
 
 async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, originalMessageId, callbackQueryId) {
     const userId = String(userObj.id || userObj.telegram_id);
-    const logPrefix = `[CF_PvBChoiceCB_TimeoutClear GID:${gameId} UID:${userId} Choice:${playerChoice}]`; // Added TimeoutClear to log
+    const logPrefix = `[CF_PvBChoiceCB_TimeoutClear GID:${gameId} UID:${userId} Choice:${playerChoice}]`;
     const gameData = activeGames.get(gameId);
 
     if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB || gameData.userId !== userId || gameData.status !== 'pvb_waiting_choice') {
@@ -2425,12 +2383,13 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
         return;
     }
 
-    // ADDED: Clear the choice timeout
+    // *** MODIFIED PART: Clear the choice timeout ***
     if (gameData.choiceTimeoutId) {
         clearTimeout(gameData.choiceTimeoutId);
-        gameData.choiceTimeoutId = null;
-        console.log(`${logPrefix} Choice timeout cleared for game ${gameId}.`);
+        gameData.choiceTimeoutId = null; // Clear the ID from gameData
+        console.log(`${logPrefix} Choice timeout cleared for game ${gameId} as player made a choice.`);
     }
+    // *** END OF MODIFICATION ***
 
     const choiceDisplay = playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
     await bot.answerCallbackQuery(callbackQueryId, { text: `You called ${choiceDisplay}! Bot is flipping...` }).catch(() => {});
@@ -2439,7 +2398,6 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
     gameData.status = 'pvb_flipping';
     activeGames.set(gameId, gameData); // Save updated status and cleared timeoutId
 
-    // Simulate "Helper Bot announcing result" by main bot doing the flip and animating
     const actualFlipOutcome = Math.random() < 0.5 ? COINFLIP_CHOICE_HEADS : COINFLIP_CHOICE_TAILS;
     gameData.result = actualFlipOutcome;
 
@@ -2448,7 +2406,6 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
                               `The Bot Dealer flips the coin... it's spinning wildly!\n\n`;
 
     if (gameData.gameMessageId && bot) {
-        // Edit the existing message to show animation
         for (let i = 0; i < COIN_FLIP_ANIMATION_STEPS; i++) {
             const frame = COIN_FLIP_ANIMATION_FRAMES[i % COIN_FLIP_ANIMATION_FRAMES.length];
             try {
@@ -2456,20 +2413,17 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
             } catch (e) { if(!e.message?.includes("message is not modified")) console.warn(`${logPrefix} Animation edit fail step ${i}`); break; }
             await sleep(COIN_FLIP_ANIMATION_INTERVAL_MS);
         }
-    } else { // Fallback if no message to edit (should ideally not happen if gameMessageId was set)
+    } else { 
         console.warn(`${logPrefix} gameMessageId not found for animation. Sending new message.`);
         const tempAnimMsg = await safeSendMessage(gameData.chatId, flippingMessageText + "<i>Flip in progress!</i>", {parse_mode: "HTML"});
-        // If a new message was sent for animation, it will be orphaned. Finalize will send its own.
         await sleep(COIN_FLIP_ANIMATION_DURATION_MS);
-        if (tempAnimMsg?.message_id && bot) { // Attempt to clean up temp animation message
+        if (tempAnimMsg?.message_id && bot) { 
             await bot.deleteMessage(gameData.chatId, tempAnimMsg.message_id).catch(()=>{});
         }
     }
     
-    await finalizeCoinflipPvBGame(gameData); // finalizeCoinflipPvBGame will edit or send the final result message
+    await finalizeCoinflipPvBGame(gameData);
 }
-
-// In Part 5a, Section 3 (ensure all dependencies like pool, updateUserBalanceAndLedger, formatBalanceForDisplay, etc. are available)
 
 async function finalizeCoinflipPvBGame(gameData) {
     const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, result, userObj } = gameData;
@@ -11748,15 +11702,7 @@ async function forwardCoinflipRPSCallback(action, params, userObject, originalMe
             if (typeof handleCoinflipPvPCallCallback === 'function') await handleCoinflipPvPCallCallback(offerIdOrGameId, callerIdCheckCF, callChoiceCF, userObject, originalMessageId, callbackQueryId);
             else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvPCallCallback`);
             break;
-        case 'cf_pvb_cancel': // New case
-        if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing gameId for cf_pvb_cancel.`); return; }
-        if (typeof handleCoinflipPvBCancelCallback === 'function') {
-            await handleCoinflipPvBCancelCallback(offerIdOrGameId, userObject, originalMessageId, callbackQueryId, { chatId: originalChatId, type: originalChatType });
-        } else {
-            console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvBCancelCallback`);
-        }
-        break;
-
+    
         // RPS Callbacks
         case 'rps_accept_bot':
             if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_bot.`); return; }
