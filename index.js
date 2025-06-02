@@ -2285,73 +2285,69 @@ async function startCoinflipPvBGame(chatId, initiatorUserObj, betAmountLamports,
 }
 
 async function handleCoinflipPvBChoiceTimeout(gameId) {
-    const LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT = `[CF_PvB_ChoiceTimeout GID:${gameId}]`;
+    const LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT = `[CF_PvB_ChoiceTimeout_Forfeit GID:${gameId}]`; // Added Forfeit to log
     const gameData = activeGames.get(gameId);
 
     if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB || gameData.status !== 'pvb_waiting_choice') {
-        console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Timeout fired but game ${gameId} not found, not Coinflip PvB, or not in 'pvb_waiting_choice' state. Current status: ${gameData?.status}. Aborting timeout action.`);
-        // Ensure the timeoutId is cleared from gameData if it somehow still exists and this is a stray call
+        console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Timeout fired but game ${gameId} not found, not Coinflip PvB, or not in 'pvb_waiting_choice' state. Status: ${gameData?.status}. Aborting.`);
         if (gameData && gameData.choiceTimeoutId) {
-            clearTimeout(gameData.choiceTimeoutId); // Should have been cleared by the timeout itself
+            clearTimeout(gameData.choiceTimeoutId);
             gameData.choiceTimeoutId = null;
-            // No activeGames.set needed if just returning due to invalid state.
         }
         return;
     }
-    console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Player ${gameData.userId} timed out waiting for Coinflip PvB choice (${PVP_TURN_TIMEOUT_MS / 1000}s). Game is ending.`);
+    console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Player ${gameData.userId} timed out waiting for Coinflip PvB choice (${PVP_TURN_TIMEOUT_MS / 1000}s). Bet will be forfeited.`);
 
-    // Clear the timeoutId from gameData as it has fired (should be redundant but safe)
     if (gameData.choiceTimeoutId) {
         clearTimeout(gameData.choiceTimeoutId);
         gameData.choiceTimeoutId = null;
     }
 
-    activeGames.delete(gameId); // Remove before async DB operations
+    activeGames.delete(gameId);
     const COINFLIP_FAMILY_LOCK_KEY = GAME_IDS.COINFLIP_UNIFIED_OFFER;
-    // Ensure chatId is retrieved correctly from gameData for updateGroupGameDetails
     const chatIdForLockClear = String(gameData.chatId);
     await updateGroupGameDetails(chatIdForLockClear, null, COINFLIP_FAMILY_LOCK_KEY, null);
 
-
     let client = null;
-    let refundSuccess = false;
+    let forfeitureLogged = false;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
+        // Bet was already deducted. Log the loss due to timeout/forfeit.
         const balanceUpdateResult = await updateUserBalanceAndLedger(
             client,
             gameData.userId,
-            gameData.betAmount, // Refund full bet
-            'refund_coinflip_pvb_choice_timeout',
-            { game_id_custom_field: gameId },
-            `Refund for Coinflip PvB game ${gameId} due to choice timeout.`
+            0n, // Bet is forfeited, so no change to balance from this transaction itself
+            'loss_coinflip_pvb_choice_timeout', // Specific ledger type for this forfeit
+            { game_id_custom_field: gameId, original_bet_amount: gameData.betAmount.toString() },
+            `Player forfeited Coinflip PvB game ${gameId} due to choice timeout. Bet lost.`
         );
 
         if (balanceUpdateResult.success) {
             await client.query('COMMIT');
-            refundSuccess = true;
-            console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Bet successfully refunded for timed out game ${gameId}.`);
+            forfeitureLogged = true;
+            console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Bet forfeiture successfully logged for timed out game ${gameId}.`);
         } else {
             await client.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Failed to refund bet for timed out game ${gameId}: ${balanceUpdateResult.error}`);
+            console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Failed to log bet forfeiture for timed out game ${gameId}: ${balanceUpdateResult.error}`);
+            // Notify admin as this is an accounting discrepancy if logging fails
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB TIMEOUT FORFEIT LOGGING FAILURE 🚨\nGame ID: ${gameId}, User: ${gameData.userId}. Bet forfeiture logging failed. DB Error: ${balanceUpdateResult.error}`, {parse_mode: 'MarkdownV2'});
         }
     } catch (dbError) {
         if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} DB error during refund for timed out game ${gameId}: ${dbError.message}`);
+        console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} DB error during forfeiture logging for timed out game ${gameId}: ${dbError.message}`);
+        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB TIMEOUT DB EXCEPTION 🚨\nGame ID: ${gameId}, User: ${gameData.userId}. DB Exception during forfeit logging: ${dbError.message}`, {parse_mode: 'MarkdownV2'});
     } finally {
         if (client) client.release();
     }
 
     const playerRefHTML = gameData.playerRefHTML || escapeHTML(getPlayerDisplayReference(gameData.userObj || { id: gameData.userId, first_name: "Player" }));
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
-    let timeoutMessageText = "";
+    let timeoutMessageText = `⏰ ${playerRefHTML}, your Coinflip game (Bet: <b>${betDisplayHTML}</b>) timed out as no choice (Heads/Tails) was made.\nYour bet has been forfeited.`;
 
-    if (refundSuccess) {
-        timeoutMessageText = `⏰ ${playerRefHTML}, your Coinflip game (Bet: <b>${betDisplayHTML}</b>) timed out as no choice (Heads/Tails) was made.\nYour bet has been refunded.`;
-    } else {
-        timeoutMessageText = `⏰ ${playerRefHTML}, your Coinflip game (Bet: <b>${betDisplayHTML}</b>) timed out.\nThere was an issue automatically refunding your bet. Please contact support.`;
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB TIMEOUT REFUND FAILURE 🚨\nGame ID: ${gameId}, User: ${gameData.userId}. Manual refund of ${formatCurrency(gameData.betAmount)} needed.`, {parse_mode: 'MarkdownV2'});
-    }
+    if (!forfeitureLogged) {
+        timeoutMessageText += "\n\n⚠️ A system error occurred while finalizing the forfeiture. Please contact support if your balance appears incorrect.";
+    }
 
     const messageIdToEdit = Number(gameData.gameMessageId);
     if (bot && messageIdToEdit) {
@@ -2359,13 +2355,12 @@ async function handleCoinflipPvBChoiceTimeout(gameId) {
             chat_id: String(gameData.chatId),
             message_id: messageIdToEdit,
             parse_mode: 'HTML',
-            // Simple keyboard for timed out game
             reply_markup: { inline_keyboard: [[{ text: "🪙 Play Coinflip Again?", callback_data: `play_again_coinflip:${gameData.betAmount.toString()}` }]]}
         }).catch(async (err) => {
             console.warn(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Failed to edit timed out message ${messageIdToEdit}, sending new: ${err.message}`);
             await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "🪙 Play Coinflip Again?", callback_data: `play_again_coinflip:${gameData.betAmount.toString()}` }]]} });
         });
-    } else { // If somehow gameMessageId was not set or bot is unavailable
+    } else {
         await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "🪙 Play Coinflip Again?", callback_data: `play_again_coinflip:${gameData.betAmount.toString()}` }]]} });
     }
 }
@@ -3074,9 +3069,10 @@ async function handleRPSCancelOfferCallback(offerId, userWhoClicked, originalOff
 // --- RPS Player vs. Bot (PvB) Logic ---
 async function startRPSPvBGame(chatId, initiatorUserObj, betAmountLamports, originalOfferMessageId, offerIdToDelete) {
     const userId = String(initiatorUserObj.id || initiatorUserObj.telegram_id);
-    const logPrefix = `[RPS_PvB_Start UID:${userId} CH:${chatId}]`;
+    const logPrefix = `[RPS_PvB_Start_Timeout UID:${userId} CH:${chatId}]`; // Added Timeout to log
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
     const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const RPS_FAMILY_LOCK_KEY = GAME_IDS.RPS_UNIFIED_OFFER;
 
     if (originalOfferMessageId && bot) await bot.deleteMessage(chatId, Number(originalOfferMessageId)).catch(() => {});
     if (offerIdToDelete) activeGames.delete(offerIdToDelete);
@@ -3093,36 +3089,52 @@ async function startRPSPvBGame(chatId, initiatorUserObj, betAmountLamports, orig
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} DB error starting PvB RPS: ${error.message}`);
         await safeSendMessage(chatId, `⚙️ Database error for ${playerRefHTML} starting RPS vs Bot. Wager not processed. Try again.`, { parse_mode: 'HTML' });
-        // Ensure correct family key used on error cleanup for group lock
-        const RPS_FAMILY_LOCK_KEY_ERROR_CASE = GAME_IDS.RPS_UNIFIED_OFFER;
-        await updateGroupGameDetails(chatId, null, RPS_FAMILY_LOCK_KEY_ERROR_CASE, null); return;
+        await updateGroupGameDetails(chatId, null, RPS_FAMILY_LOCK_KEY, null); return;
     } finally { if (client) client.release(); }
 
     const gameDataPvB = {
         type: GAME_IDS.RPS_PVB, gameId: pvbGameId, chatId, userId,
         playerRefHTML, userObj: initiatorUserObj, betAmount: betAmountLamports,
         playerChoice: null, botChoice: null, result: null, status: 'pvb_waiting_player_choice',
-        gameMessageId: null, lastInteractionTime: Date.now()
+        gameMessageId: null, lastInteractionTime: Date.now(),
+        choiceTimeoutId: null // ADDED: For player choice timeout
     };
     activeGames.set(pvbGameId, gameDataPvB);
-    // *** MODIFIED LINE FOR CANONICAL FAMILY ID LOCK ***
-    const RPS_FAMILY_LOCK_KEY = GAME_IDS.RPS_UNIFIED_OFFER;
     await updateGroupGameDetails(chatId, pvbGameId, RPS_FAMILY_LOCK_KEY, betAmountLamports);
-    // *** END OF MODIFICATION ***
 
     const titleHTML = `🤖🪨📄✂️ <b>RPS: ${playerRefHTML} vs. The Bot Brain!</b> ✂️📄🪨🤖`;
     const initialMessageTextHTML = `${titleHTML}\n\nWager: <b>${betDisplayHTML}</b>\n\n` +
-        `The Bot Dealer cracks its digital knuckles! ${playerRefHTML}, make your move! Choose your weapon: Rock, Paper, or Scissors?`;
+        `The Bot Dealer cracks its digital knuckles! ${playerRefHTML}, make your move! Choose your weapon: Rock, Paper, or Scissors?\n<i>(You have ${PVP_TURN_TIMEOUT_MS / 1000} seconds to choose)</i>`;
     const keyboard = {
-        inline_keyboard: [[
-            { text: `${RPS_EMOJIS.rock} Rock`, callback_data: `rps_pvb_choice:${pvbGameId}:${RPS_CHOICES.ROCK}` },
-            { text: `${RPS_EMOJIS.paper} Paper`, callback_data: `rps_pvb_choice:${pvbGameId}:${RPS_CHOICES.PAPER}` },
-            { text: `${RPS_EMOJIS.scissors} Scissors`, callback_data: `rps_pvb_choice:${pvbGameId}:${RPS_CHOICES.SCISSORS}` }
-        ],[{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.RPS_UNIFIED_OFFER}` }]]
+        inline_keyboard: [
+            [ // One row for choices
+                { text: `${RPS_EMOJIS.rock} Rock`, callback_data: `rps_pvb_choice:${pvbGameId}:${RPS_CHOICES.ROCK}` },
+                { text: `${RPS_EMOJIS.paper} Paper`, callback_data: `rps_pvb_choice:${pvbGameId}:${RPS_CHOICES.PAPER}` },
+                { text: `${RPS_EMOJIS.scissors} Scissors`, callback_data: `rps_pvb_choice:${pvbGameId}:${RPS_CHOICES.SCISSORS}` }
+            ],
+            [ // Separate row for rules
+                { text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.RPS_UNIFIED_OFFER}` }
+            ]
+        ]
     };
     const sentMessage = await safeSendMessage(chatId, initialMessageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
     if (sentMessage?.message_id) {
         gameDataPvB.gameMessageId = String(sentMessage.message_id);
+        // ADDED: Start timeout for player choice
+        gameDataPvB.choiceTimeoutId = setTimeout(() => {
+            if (typeof handleRPSPvBChoiceTimeout === 'function') {
+                handleRPSPvBChoiceTimeout(pvbGameId);
+            } else {
+                console.error(`[RPS_PvB_TimeoutCallback GID:${pvbGameId}] CRITICAL: handleRPSPvBChoiceTimeout function not defined!`);
+                // Minimal fallback if handler is missing (bet is already taken)
+                const gameToEnd = activeGames.get(pvbGameId);
+                if (gameToEnd && gameToEnd.status === 'pvb_waiting_player_choice') {
+                    activeGames.delete(pvbGameId);
+                    updateGroupGameDetails(gameToEnd.chatId, null, RPS_FAMILY_LOCK_KEY, null);
+                    safeSendMessage(gameToEnd.chatId, `${gameToEnd.playerRefHTML}, your RPS game timed out due to a system error processing the timeout. Your bet was likely forfeited. Please contact support if issues persist.`, {parse_mode: 'HTML'});
+                }
+            }
+        }, PVP_TURN_TIMEOUT_MS);
         activeGames.set(pvbGameId, gameDataPvB);
     } else {
         console.error(`${logPrefix} Failed to send RPS PvB game message for ${pvbGameId}. Refunding.`);
@@ -3130,54 +3142,157 @@ async function startRPSPvBGame(chatId, initiatorUserObj, betAmountLamports, orig
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_rps_pvb_setup_fail', {}, `Refund RPS PvB game ${pvbGameId}`);
-            await refundClient.query('COMMIT');
+            await client.query('COMMIT'); // Should be refundClient.query('COMMIT')
         } catch (dbErr) { if (refundClient) await refundClient.query('ROLLBACK'); console.error(`${logPrefix} CRITICAL: Refund failed after RPS PvB setup fail for ${pvbGameId}: ${dbErr.message}`);
         } finally { if (refundClient) refundClient.release(); }
         activeGames.delete(pvbGameId);
-        // Ensure correct family key used on error cleanup for group lock
-        const RPS_FAMILY_LOCK_KEY_ERROR_CASE_MSG_FAIL = GAME_IDS.RPS_UNIFIED_OFFER;
-        await updateGroupGameDetails(chatId, null, RPS_FAMILY_LOCK_KEY_ERROR_CASE_MSG_FAIL, null);
+        await updateGroupGameDetails(chatId, null, RPS_FAMILY_LOCK_KEY, null);
+    }
+}
+
+async function handleRPSPvBChoiceTimeout(gameId) {
+    const LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT = `[RPS_PvB_ChoiceTimeout GID:${gameId}]`;
+    const gameData = activeGames.get(gameId);
+
+    if (!gameData || gameData.type !== GAME_IDS.RPS_PVB || gameData.status !== 'pvb_waiting_player_choice') {
+        console.log(`${LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT} Timeout fired but game ${gameId} not found, not RPS PvB, or not in 'pvb_waiting_player_choice' state. Status: ${gameData?.status}. Aborting.`);
+        if (gameData && gameData.choiceTimeoutId) {
+            clearTimeout(gameData.choiceTimeoutId);
+            gameData.choiceTimeoutId = null;
+        }
+        return;
+    }
+    console.log(`${LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT} Player ${gameData.userId} timed out waiting for RPS PvB choice (${PVP_TURN_TIMEOUT_MS / 1000}s). Game ending by forfeit.`);
+
+    if (gameData.choiceTimeoutId) {
+        clearTimeout(gameData.choiceTimeoutId);
+        gameData.choiceTimeoutId = null;
+    }
+
+    activeGames.delete(gameId);
+    const RPS_FAMILY_LOCK_KEY = GAME_IDS.RPS_UNIFIED_OFFER;
+    const chatIdForLockClear = String(gameData.chatId);
+    await updateGroupGameDetails(chatIdForLockClear, null, RPS_FAMILY_LOCK_KEY, null);
+
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        // Bet was already deducted. Log the loss.
+        const balanceUpdateResult = await updateUserBalanceAndLedger(
+            client,
+            gameData.userId,
+            0n, // No change to balance, bet already taken and is forfeited
+            'loss_rps_pvb_choice_timeout', // Specific ledger type for this event
+            { game_id_custom_field: gameId, bet_amount_original: gameData.betAmount.toString() },
+            `Player forfeited RPS PvB game ${gameId} due to choice timeout. Bet lost.`
+        );
+
+        if (balanceUpdateResult.success) {
+            await client.query('COMMIT');
+            console.log(`${LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT} Bet forfeiture logged for timed out game ${gameId}.`);
+        } else {
+            await client.query('ROLLBACK');
+            console.error(`${LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT} Failed to log bet forfeiture for timed out game ${gameId}: ${balanceUpdateResult.error}`);
+            // Notify admin as this is an accounting discrepancy if logging fails
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvB TIMEOUT LEDGER FAILURE 🚨\nGame ID: ${gameId}, User: ${gameData.userId}. Bet forfeiture logging failed. DB Error: ${balanceUpdateResult.error}`, {parse_mode: 'MarkdownV2'});
+        }
+    } catch (dbError) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        console.error(`${LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT} DB error during forfeiture logging for timed out game ${gameId}: ${dbError.message}`);
+        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvB TIMEOUT DB EXCEPTION 🚨\nGame ID: ${gameId}, User: ${gameData.userId}. DB Exception: ${dbError.message}`, {parse_mode: 'MarkdownV2'});
+    } finally {
+        if (client) client.release();
+    }
+
+    const playerRefHTML = gameData.playerRefHTML || escapeHTML(getPlayerDisplayReference(gameData.userObj || { id: gameData.userId, first_name: "Player" }));
+    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
+    const timeoutMessageText = `⏰ ${playerRefHTML}, your Rock Paper Scissors game (Bet: <b>${betDisplayHTML}</b>) timed out as no choice was made.\nYour bet has been forfeited.`;
+
+    const messageIdToEdit = Number(gameData.gameMessageId);
+    if (bot && messageIdToEdit) {
+        await bot.editMessageText(timeoutMessageText, {
+            chat_id: String(gameData.chatId),
+            message_id: messageIdToEdit,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: "✂️ Play RPS Again?", callback_data: `play_again_rps:${gameData.betAmount.toString()}` }]]}
+        }).catch(async (err) => {
+            console.warn(`${LOG_PREFIX_RPS_PVB_CHOICE_TIMEOUT} Failed to edit timed out message ${messageIdToEdit}, sending new: ${err.message}`);
+            await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "✂️ Play RPS Again?", callback_data: `play_again_rps:${gameData.betAmount.toString()}` }]]} });
+        });
+    } else {
+        await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "✂️ Play RPS Again?", callback_data: `play_again_rps:${gameData.betAmount.toString()}` }]]} });
     }
 }
 
 async function handleRPSPvBChoiceCallback(gameId, playerChoiceKey, userObj, originalMessageId, callbackQueryId) {
-    const userId = String(userObj.id || userObj.telegram_id);
-    const logPrefix = `[RPS_PvBChoiceCB GID:${gameId} UID:${userId} Choice:${playerChoiceKey}]`;
-    const gameData = activeGames.get(gameId);
+    const userId = String(userObj.id || userObj.telegram_id);
+    const logPrefix = `[RPS_PvBChoiceCB_TimeoutClear GID:${gameId} UID:${userId} Choice:${playerChoiceKey}]`; // Added TimeoutClear
+    const gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.type !== GAME_IDS.RPS_PVB || gameData.userId !== userId || gameData.status !== 'pvb_waiting_player_choice') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This RPS game action is outdated or not yours.", show_alert: true }).catch(() => {});
-        if (originalMessageId && bot && gameData && String(gameData.gameMessageId) !== String(originalMessageId)) {
-            bot.editMessageReplyMarkup({}, { chat_id: gameData.chatId, message_id: Number(originalMessageId) }).catch(() => {});
-        }
-        return;
+    if (!gameData || gameData.type !== GAME_IDS.RPS_PVB || gameData.userId !== userId || gameData.status !== 'pvb_waiting_player_choice') {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This RPS game action is outdated or not yours.", show_alert: true }).catch(() => {});
+        if (originalMessageId && bot && gameData && String(gameData.gameMessageId) !== String(originalMessageId)) {
+            bot.editMessageReplyMarkup({}, { chat_id: gameData.chatId, message_id: Number(originalMessageId) }).catch(() => {});
+        }
+        return;
+    }
+
+    // *** MODIFIED PART: Clear the choice timeout ***
+    if (gameData.choiceTimeoutId) {
+        clearTimeout(gameData.choiceTimeoutId);
+        gameData.choiceTimeoutId = null; // Clear the ID from gameData
+        console.log(`${logPrefix} Choice timeout cleared for game ${gameId} as player made a choice.`);
     }
-    const playerChoiceDisplay = playerChoiceKey.charAt(0).toUpperCase() + playerChoiceKey.slice(1);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `You chose ${RPS_EMOJIS[playerChoiceKey]} ${playerChoiceDisplay}! Bot is making its move...` }).catch(() => {});
+    // *** END OF MODIFICATION ***
 
-    gameData.playerChoice = playerChoiceKey;
-    const botRPSChoice = getRandomRPSChoice(); // from Part 4
-    gameData.botChoice = botRPSChoice.choice;
-    gameData.status = 'pvb_resolving';
-    activeGames.set(gameId, gameData);
+    const playerChoiceDisplay = playerChoiceKey.charAt(0).toUpperCase() + playerChoiceKey.slice(1);
+    await bot.answerCallbackQuery(callbackQueryId, { text: `You chose ${RPS_EMOJIS[playerChoiceKey]} ${playerChoiceDisplay}! Bot is making its move...` }).catch(() => {});
 
-    const playerChoiceEmoji = RPS_EMOJIS[gameData.playerChoice];
-    const titleResolvingHTML = `💥 <b>RPS Showdown Unfolds!</b> 💥`;
-    let resolvingText = `${titleResolvingHTML}\n\n${gameData.playerRefHTML} throws: ${playerChoiceEmoji}\n` +
-                        `Bot Dealer counters with: Thinking... 🤔\n\n<i>The tension mounts!</i>`;
+    gameData.playerChoice = playerChoiceKey;
+    const botRPSChoice = getRandomRPSChoice(); // from Part 4
+    gameData.botChoice = botRPSChoice.choice;
+    gameData.status = 'pvb_resolving';
+    activeGames.set(gameId, gameData); // Save updated status and cleared timeoutId
+
+    const playerChoiceEmoji = RPS_EMOJIS[gameData.playerChoice];
+    const titleResolvingHTML = `💥 <b>RPS Showdown Unfolds!</b> 💥`;
+    let resolvingText = `${titleResolvingHTML}\n\n${gameData.playerRefHTML} throws: ${playerChoiceEmoji}\n` +
+                        `Bot Dealer counters with: Thinking... 🤔\n\n<i>The tension mounts!</i>`;
+    
+    // Edit the existing game message (which had the choice buttons)
     if (gameData.gameMessageId && bot) {
-        try {
-            await bot.editMessageText(resolvingText, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: {} });
-        } catch(e) {
-            if (!e.message?.includes("message is not modified")) {
-                const newMsg = await safeSendMessage(gameData.chatId, resolvingText, {parse_mode: 'HTML'});
-                if(newMsg?.message_id && activeGames.has(gameId)) activeGames.get(gameId).gameMessageId = String(newMsg.message_id);
+        try {
+            await bot.editMessageText(resolvingText, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: {} });
+        } catch(e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`${logPrefix} Failed to edit message ${gameData.gameMessageId} to 'resolving', sending new. Error: ${e.message}`);
+                const newMsg = await safeSendMessage(gameData.chatId, resolvingText, {parse_mode: 'HTML'});
+                // If a new message was sent, update gameMessageId so finalizeRPSPvBGame knows which one to edit/delete
+                if(newMsg?.message_id && activeGames.has(gameId)) { // Check if gameData still exists
+                    const currentGd = activeGames.get(gameId);
+                    if(currentGd) {
+                        currentGd.gameMessageId = String(newMsg.message_id);
+                        activeGames.set(gameId, currentGd);
+                    }
+                }
+            }
+        }
+    } else { // Fallback if gameMessageId was somehow lost
+        console.warn(`${logPrefix} gameMessageId was null when trying to update to 'resolving'. Sending new.`);
+        const newMsg = await safeSendMessage(gameData.chatId, resolvingText, {parse_mode: 'HTML'});
+        if(newMsg?.message_id && activeGames.has(gameId)) {
+            const currentGd = activeGames.get(gameId);
+            if(currentGd) {
+                currentGd.gameMessageId = String(newMsg.message_id);
+                activeGames.set(gameId, currentGd);
             }
         }
     }
-    await sleep(2500); // Dramatic pause for the "explosion"
 
-    await finalizeRPSPvBGame(gameData);
+    await sleep(2500); // Dramatic pause for the "explosion"
+
+    await finalizeRPSPvBGame(gameData); // finalizeRPSPvBGame will edit or send the final result message
 }
 
 async function finalizeRPSPvBGame(gameData) {
@@ -3328,186 +3443,375 @@ async function startRPSPvPGame(
 }
 
 async function updateRPSPvPGameMessage(gameData) {
-    const logPrefix = `[RPS_PvP_UpdateMsg GID:${gameData.gameId}]`;
-    if (gameData.gameMessageId && bot) {
-        await bot.deleteMessage(gameData.chatId, Number(gameData.gameMessageId)).catch(()=>{/*ignore error if already deleted*/});
-        gameData.gameMessageId = null;
+    const logPrefix = `[RPS_PvP_UpdateMsg_Timeout GID:${gameData.gameId}]`; // Added Timeout to log
+    if (gameData.currentMessageId && bot) { // gameData.currentMessageId was gameData.gameMessageId in original code
+        await bot.deleteMessage(gameData.chatId, Number(gameData.currentMessageId)).catch(()=>{/*ignore error if already deleted*/});
+        gameData.currentMessageId = null;
+    }
+
+    // Clear any existing turn timeout before setting a new one or if game is ending
+    if (gameData.currentChoiceTimeoutId) { // Assuming we use this field to store the active timeout
+        clearTimeout(gameData.currentChoiceTimeoutId);
+        gameData.currentChoiceTimeoutId = null;
     }
 
-    const p1 = gameData.p1; const p2 = gameData.p2;
-    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
-    let titleHTML = `🌌✨ <b>High Stakes RPS Duel: ${p1.mentionHTML} vs ${p2.mentionHTML}!</b> ✨🌌`;
-    let textHTML = `${titleHTML}\nWager of Doom: <b>${betDisplayHTML}</b> each!\n\n`;
-    let keyboard = null;
+    const p1 = gameData.p1; const p2 = gameData.p2;
+    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
+    let titleHTML = `🌌✨ <b>High Stakes RPS Duel: ${p1.mentionHTML} vs ${p2.mentionHTML}!</b> ✨🌌`;
+    let textHTML = `${titleHTML}\nWager of Doom: <b>${betDisplayHTML}</b> each!\n\n`;
+    let keyboard = null;
+    let activePlayerIdForTimeout = null;
 
-    // Player Status Display
-    textHTML += `<b>${p1.mentionHTML} (P1):</b> ${p1.hasChosen ? "✅ Choice Locked!" : "🤔 Strategizing..."}\n`;
-    textHTML += `<b>${p2.mentionHTML} (P2):</b> ${p2.hasChosen ? "✅ Choice Locked!" : (p1.hasChosen ? "🤔 Strategizing..." : "⏳ Waiting for P1...")}\n\n`;
+    textHTML += `<b>${p1.mentionHTML} (P1):</b> ${p1.hasChosen ? "✅ Choice Locked!" : "🤔 Strategizing..."}\n`;
+    textHTML += `<b>${p2.mentionHTML} (P2):</b> ${p2.hasChosen ? "✅ Choice Locked!" : (p1.hasChosen ? "🤔 Strategizing..." : "⏳ Waiting for P1...")}\n\n`;
 
-    if (gameData.status === 'pvp_p1_choosing') {
-        textHTML += `🔥 ${p1.mentionHTML}, the arena awaits your command! Click your SECRET choice below. Your move will be hidden until both players have chosen!`;
-        keyboard = { inline_keyboard: [[
-            { text: `${RPS_EMOJIS.rock} Rock`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p1.userId}:${RPS_CHOICES.ROCK}` },
-            { text: `${RPS_EMOJIS.paper} Paper`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p1.userId}:${RPS_CHOICES.PAPER}` },
-            { text: `${RPS_EMOJIS.scissors} Scissors`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p1.userId}:${RPS_CHOICES.SCISSORS}` }
-        ]]};
-    } else if (gameData.status === 'pvp_p2_choosing') {
-        textHTML += `⚡️ ${p1.mentionHTML} has committed their strategy! Now, ${p2.mentionHTML}, it's your turn to make your SECRET choice. May your wisdom prevail!`;
-        keyboard = { inline_keyboard: [[
-            { text: `${RPS_EMOJIS.rock} Rock`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p2.userId}:${RPS_CHOICES.ROCK}` },
-            { text: `${RPS_EMOJIS.paper} Paper`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p2.userId}:${RPS_CHOICES.PAPER}` },
-            { text: `${RPS_EMOJIS.scissors} Scissors`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p2.userId}:${RPS_CHOICES.SCISSORS}` }
-        ]]};
-    } else if (gameData.status === 'pvp_reveal') {
-        textHTML += `Decision time is over! Both warriors have made their move. The moment of truth arrives... Unveiling the clash! 💥`;
-        // No keyboard here, as it will quickly transition to finalize
+    if (gameData.status === 'pvp_p1_choosing') {
+        textHTML += `🔥 ${p1.mentionHTML}, the arena awaits your command! Click your SECRET choice below. Your move will be hidden until both players have chosen! (You have ${PVP_TURN_TIMEOUT_MS / 1000} seconds)`;
+        keyboard = { inline_keyboard: [[
+            { text: `${RPS_EMOJIS.rock} Rock`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p1.userId}:${RPS_CHOICES.ROCK}` },
+            { text: `${RPS_EMOJIS.paper} Paper`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p1.userId}:${RPS_CHOICES.PAPER}` },
+            { text: `${RPS_EMOJIS.scissors} Scissors`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p1.userId}:${RPS_CHOICES.SCISSORS}` }
+        ]]};
+        activePlayerIdForTimeout = p1.userId;
+    } else if (gameData.status === 'pvp_p2_choosing') {
+        textHTML += `⚡️ ${p1.mentionHTML} has committed their strategy! Now, ${p2.mentionHTML}, it's your turn to make your SECRET choice. May your wisdom prevail! (You have ${PVP_TURN_TIMEOUT_MS / 1000} seconds)`;
+        keyboard = { inline_keyboard: [[
+            { text: `${RPS_EMOJIS.rock} Rock`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p2.userId}:${RPS_CHOICES.ROCK}` },
+            { text: `${RPS_EMOJIS.paper} Paper`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p2.userId}:${RPS_CHOICES.PAPER}` },
+            { text: `${RPS_EMOJIS.scissors} Scissors`, callback_data: `rps_pvp_choice:${gameData.gameId}:${p2.userId}:${RPS_CHOICES.SCISSORS}` }
+        ]]};
+        activePlayerIdForTimeout = p2.userId;
+    } else if (gameData.status === 'pvp_reveal') {
+        textHTML += `Decision time is over! Both warriors have made their move. The moment of truth arrives... Unveiling the clash! 💥`;
+    }
+    
+    if(keyboard && keyboard.inline_keyboard && (gameData.status === 'pvp_p1_choosing' || gameData.status === 'pvp_p2_choosing') ) {
+        keyboard.inline_keyboard.push([{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.RPS_UNIFIED_OFFER}` }]);
+    } else if (gameData.status === 'pvp_reveal' || gameData.status.startsWith('game_over_')) {
+        // No action buttons if revealing or game over, just rules if desired or post-game options later
     }
-     if(keyboard && keyboard.inline_keyboard) { // Add rules button if there are other buttons
-        keyboard.inline_keyboard.push([{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.RPS_UNIFIED_OFFER}` }]);
-    }
 
 
-    const sentMessage = await safeSendMessage(gameData.chatId, textHTML, { parse_mode: 'HTML', reply_markup: keyboard });
-    if (sentMessage?.message_id) {
-        const currentGameData = activeGames.get(gameData.gameId); // Re-fetch, gameData might be stale if an async operation happened elsewhere
-        if(currentGameData){
-            currentGameData.gameMessageId = String(sentMessage.message_id);
-            activeGames.set(gameData.gameId, currentGameData); // Update with new message ID
+    const sentMessage = await safeSendMessage(gameData.chatId, textHTML, { parse_mode: 'HTML', reply_markup: keyboard });
+    if (sentMessage?.message_id) {
+        const currentGameData = activeGames.get(gameData.gameId);
+        if(currentGameData){ // Ensure gameData is still in activeGames
+            currentGameData.currentMessageId = String(sentMessage.message_id); // Use currentMessageId consistently
+
+            // ADDED: Start turn timeout if it's a player's turn to choose
+            if (activePlayerIdForTimeout && (currentGameData.status === 'pvp_p1_choosing' || currentGameData.status === 'pvp_p2_choosing')) {
+                currentGameData.currentChoiceTimeoutId = setTimeout(() => {
+                    if (typeof handleRPSPvPTurnTimeout === 'function') {
+                        handleRPSPvPTurnTimeout(currentGameData.gameId, activePlayerIdForTimeout);
+                    } else {
+                        console.error(`${logPrefix} CRITICAL: handleRPSPvPTurnTimeout function not defined for game ${currentGameData.gameId}!`);
+                        // Fallback: Mark game as error, try to finalize
+                        const gameToEnd = activeGames.get(currentGameData.gameId);
+                        if(gameToEnd && (gameToEnd.status === 'pvp_p1_choosing' || gameToEnd.status === 'pvp_p2_choosing')) {
+                            gameToEnd.status = 'game_over_error_timeout_logic';
+                            activeGames.set(currentGameData.gameId, gameToEnd);
+                            if(typeof finalizeRPSPvPGame === 'function') finalizeRPSPvPGame(gameToEnd);
+                        }
+                    }
+                }, PVP_TURN_TIMEOUT_MS);
+                activeGames.set(currentGameData.gameId, currentGameData); // Save new timeoutId
+                console.log(`${logPrefix} Turn timeout started for player ${activePlayerIdForTimeout} in RPS PvP game ${currentGameData.gameId} (${PVP_TURN_TIMEOUT_MS / 1000}s).`);
+            }
+        }
+    } else {
+        console.error(`${logPrefix} Failed to send/update RPS PvP game message for ${gameData.gameId}.`);
+        // If message send fails, game is unplayable. Consider error state and refund.
+        const gameToEndOnError = activeGames.get(gameData.gameId);
+        if (gameToEndOnError) {
+            gameToEndOnError.status = 'game_over_error_ui_update';
+            activeGames.set(gameData.gameId, gameToEndOnError);
+            if(typeof finalizeRPSPvPGame === 'function') await finalizeRPSPvPGame(gameToEndOnError); // finalizeRPSPvPGame needs to handle refunds for this status
         }
-    } else {
-        console.error(`${logPrefix} Failed to send/update RPS PvP game message for ${gameData.gameId}.`);
-    }
+    }
 }
 
 async function handleRPSPvPChoiceCallback(gameId, chooserId, choiceKey, userObj, originalMessageId, callbackQueryId) {
-    const userIdMakingChoice = String(userObj.id || userObj.telegram_id);
-    const logPrefix = `[RPS_PvPChoiceCB GID:${gameId} UID:${userIdMakingChoice} ChosenID:${chooserId} Choice:${choiceKey}]`;
-    const gameData = activeGames.get(gameId);
+    const userIdMakingChoice = String(userObj.id || userObj.telegram_id);
+    const logPrefix = `[RPS_PvPChoiceCB_TimeoutClear GID:${gameId} UID:${userIdMakingChoice} ChosenID:${chooserId} Choice:${choiceKey}]`; // Added TimeoutClear
+    const gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.type !== GAME_IDS.RPS_PVP) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This RPS PvP game is no longer active.", show_alert: true }).catch(() => {});
+    if (!gameData || gameData.type !== GAME_IDS.RPS_PVP) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This RPS PvP game is no longer active.", show_alert: true }).catch(() => {});
+        return;
+    }
+
+    // Ensure the clicker is the one whose turn it is supposed to be for this choice button
+    if (userIdMakingChoice !== chooserId) { 
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This is not your turn to choose or the button is not for you.", show_alert: true }).catch(() => {});
+        return;
+    }
+
+    let playerObj; // The player object (p1 or p2) from gameData that corresponds to chooserId
+    let isP1Choosing = false;
+    let isP2Choosing = false;
+
+    if (gameData.status === 'pvp_p1_choosing' && gameData.p1.userId === chooserId && !gameData.p1.hasChosen) {
+        playerObj = gameData.p1;
+        isP1Choosing = true;
+    } else if (gameData.status === 'pvp_p2_choosing' && gameData.p2.userId === chooserId && !gameData.p2.hasChosen) {
+        playerObj = gameData.p2;
+        isP2Choosing = true;
+    } else {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "It's not the right time for your choice, or you've already chosen.", show_alert: false }).catch(() => {});
+        console.warn(`${logPrefix} Choice received but not expecting it. Game status: ${gameData.status}, P1 chosen: ${gameData.p1.hasChosen}, P2 chosen: ${gameData.p2.hasChosen}`);
+        return;
+    }
+
+    // *** MODIFIED PART: Clear the current choice/turn timeout ***
+    if (gameData.currentChoiceTimeoutId) {
+        clearTimeout(gameData.currentChoiceTimeoutId);
+        gameData.currentChoiceTimeoutId = null;
+        console.log(`${logPrefix} Cleared current choice timeout for game ${gameId}.`);
+    }
+    // *** END OF MODIFICATION ***
+
+    playerObj.choice = choiceKey;
+    playerObj.hasChosen = true;
+    const choiceDisplay = choiceKey.charAt(0).toUpperCase() + choiceKey.slice(1);
+    await bot.answerCallbackQuery(callbackQueryId, { text: `Your choice ${RPS_EMOJIS[choiceKey]} ${choiceDisplay} is locked in secretly!` }).catch(() => {});
+    gameData.lastInteractionTime = Date.now();
+
+    if (isP1Choosing && gameData.p1.hasChosen && !gameData.p2.hasChosen) {
+        gameData.status = 'pvp_p2_choosing'; // Transition to P2's turn
+        activeGames.set(gameData.gameId, gameData);
+        console.log(`${logPrefix} P1 (${playerObj.mentionHTML}) chose. Now P2's turn. New game status: ${gameData.status}`);
+        await updateRPSPvPGameMessage(gameData); // This will set up P2's turn and timeout 
+    } else if (isP2Choosing && gameData.p1.hasChosen && gameData.p2.hasChosen) { // P2 chose, and P1 had already chosen
+        gameData.status = 'pvp_reveal';
+        activeGames.set(gameData.gameId, gameData);
+        console.log(`${logPrefix} P2 (${playerObj.mentionHTML}) chose. Both players have chosen. Revealing. Game status: ${gameData.status}`);
+        await updateRPSPvPGameMessage(gameData); // Show "revealing" message (no buttons, no new timeout)
+        await sleep(3000); // Pause before showing results 
+        await finalizeRPSPvPGame(gameData);
+    } else {
+        // This case should ideally not be reached if logic is sound (e.g. P1 chose, P2 already chosen - impossible by flow)
+        console.warn(`${logPrefix} Unexpected state after choice. P1 chosen: ${gameData.p1.hasChosen}, P2 chosen: ${gameData.p2.hasChosen}, Game status: ${gameData.status}. Attempting to update UI.`);
+        activeGames.set(gameData.gameId, gameData); // Save any partial state
+        await updateRPSPvPGameMessage(gameData); // Update UI to reflect current known state
+    }
+}
+
+async function handleRPSPvPTurnTimeout(gameId, timedOutPlayerId) {
+    const LOG_PREFIX_RPS_PVP_TIMEOUT = `[RPS_PvP_TurnTimeout GID:${gameId} TimedOutUID:${timedOutPlayerId}]`;
+    const gameData = activeGames.get(gameId);
+
+    if (!gameData || gameData.type !== GAME_IDS.RPS_PVP) {
+        console.log(`${LOG_PREFIX_RPS_PVP_TIMEOUT} Timeout fired but game ${gameId} not found or not RPS PvP. Aborting.`);
+        if (gameData && gameData.currentChoiceTimeoutId) {
+            clearTimeout(gameData.currentChoiceTimeoutId);
+            gameData.currentChoiceTimeoutId = null;
+        }
+        return;
+    }
+
+    // Check if the timeout is for the correct player and game status
+    const isP1TurnTimeout = (gameData.status === 'pvp_p1_choosing' && gameData.p1.userId === timedOutPlayerId);
+    const isP2TurnTimeout = (gameData.status === 'pvp_p2_choosing' && gameData.p2.userId === timedOutPlayerId);
+
+    if (!isP1TurnTimeout && !isP2TurnTimeout) {
+        console.log(`${LOG_PREFIX_RPS_PVP_TIMEOUT} Timeout for player ${timedOutPlayerId} fired, but game status ('${gameData.status}') or active player does not match. Aborting.`);
+        // Clear the timeout if it somehow still exists for this game, to prevent repeated firing for this specific instance
+        if (gameData.currentChoiceTimeoutId) {
+            clearTimeout(gameData.currentChoiceTimeoutId);
+            gameData.currentChoiceTimeoutId = null;
+        }
         return;
     }
-    if (userIdMakingChoice !== chooserId) { 
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This is not your turn to choose.", show_alert: true }).catch(() => {});
-        return;
+
+    console.log(`${LOG_PREFIX_RPS_PVP_TIMEOUT} Player ${timedOutPlayerId} timed out choosing Rock/Paper/Scissors. Game ending by forfeit.`);
+
+    if (gameData.currentChoiceTimeoutId) {
+        clearTimeout(gameData.currentChoiceTimeoutId);
+        gameData.currentChoiceTimeoutId = null;
     }
 
-    let playerObj;
-    if (gameData.status === 'pvp_p1_choosing' && gameData.p1.userId === chooserId && !gameData.p1.hasChosen) {
-        playerObj = gameData.p1;
-    } else if (gameData.status === 'pvp_p2_choosing' && gameData.p2.userId === chooserId && !gameData.p2.hasChosen) {
-        playerObj = gameData.p2;
+    let winnerPlayerObj, timedOutPlayerObj;
+
+    if (gameData.p1.userId === timedOutPlayerId) {
+        gameData.status = 'game_over_p1_timeout_forfeit'; // Initiator (p1) timed out
+        gameData.p1.status = 'timeout_forfeit'; // Mark player's status
+        gameData.p2.status = 'win_by_opponent_timeout'; // Mark other player's status
+        timedOutPlayerObj = gameData.p1;
+        winnerPlayerObj = gameData.p2;
+    } else if (gameData.p2.userId === timedOutPlayerId) {
+        gameData.status = 'game_over_p2_timeout_forfeit'; // Opponent (p2) timed out
+        gameData.p2.status = 'timeout_forfeit';
+        gameData.p1.status = 'win_by_opponent_timeout';
+        timedOutPlayerObj = gameData.p2;
+        winnerPlayerObj = gameData.p1;
     } else {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "It's not the right time or you've already chosen.", show_alert: false }).catch(() => {});
+        // This case should ideally not be reached if the checks above are correct
+        console.error(`${LOG_PREFIX_RPS_PVP_TIMEOUT} CRITICAL: TimedOutPlayerId ${timedOutPlayerId} does not match p1 or p2. This should not happen.`);
+        gameData.status = 'game_over_error_timeout_logic'; // Fallback to a generic error
+        activeGames.set(gameId, gameData);
+        if(typeof finalizeRPSPvPGame === 'function') await finalizeRPSPvPGame(gameData);
         return;
     }
+    
+    console.log(`${LOG_PREFIX_RPS_PVP_TIMEOUT} Player ${timedOutPlayerObj.mentionHTML} timed out. Winner: ${winnerPlayerObj.mentionHTML}. New game status: ${gameData.status}`);
+    
+    activeGames.set(gameId, gameData); // Save the new status
 
-    playerObj.choice = choiceKey;
-    playerObj.hasChosen = true;
-    const choiceDisplay = choiceKey.charAt(0).toUpperCase() + choiceKey.slice(1);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `Your choice ${RPS_EMOJIS[choiceKey]} ${choiceDisplay} is locked in secretly!` }).catch(() => {});
-    gameData.lastInteractionTime = Date.now();
-
-    if (gameData.p1.hasChosen && gameData.p2.hasChosen) {
-        gameData.status = 'pvp_reveal';
-        activeGames.set(gameData.gameId, gameData);
-        await updateRPSPvPGameMessage(gameData); 
-        await sleep(3000); 
+    // finalizeRPSPvPGame will handle DB updates, notifications, and cleanup.
+    // It needs to be able to interpret 'game_over_p1_timeout_forfeit' and 'game_over_p2_timeout_forfeit'.
+    if (typeof finalizeRPSPvPGame === 'function') {
         await finalizeRPSPvPGame(gameData);
-    } else if (gameData.p1.hasChosen && !gameData.p2.hasChosen) {
-        gameData.status = 'pvp_p2_choosing';
-        activeGames.set(gameData.gameId, gameData);
-        await updateRPSPvPGameMessage(gameData); 
     } else {
-        // Should not happen if P1 must choose first
-        activeGames.set(gameData.gameId, gameData);
-        await updateRPSPvPGameMessage(gameData);
+        console.error(`${LOG_PREFIX_RPS_PVP_TIMEOUT} CRITICAL: finalizeRPSPvPGame function not found! Cannot finalize game ${gameId}.`);
+        // Attempt basic cleanup if finalize is missing
+        activeGames.delete(gameId);
+        const RPS_FAMILY_LOCK_KEY = GAME_IDS.RPS_UNIFIED_OFFER;
+        await updateGroupGameDetails(String(gameData.chatId), null, RPS_FAMILY_LOCK_KEY, null);
+        await safeSendMessage(String(gameData.chatId), `A critical error occurred processing the RPS game timeout (handler missing). Game ${gameId} aborted. Please contact support.`, {parse_mode: 'HTML'});
     }
 }
 
 async function finalizeRPSPvPGame(gameData) {
-    const { gameId, chatId, betAmount, p1, p2 } = gameData;
-    const logPrefix = `[RPS_PvP_Finalize_V3 GID:${gameId}]`;
-    activeGames.delete(gameId);
-    await updateGroupGameDetails(chatId, null, null, null);
+    const { gameId, chatId, betAmount, p1, p2, status: finalStatus } = gameData; // Added finalStatus
+    const logPrefix = `[RPS_PvP_Finalize_V3_TimeoutLogic GID:${gameId}]`; // Added TimeoutLogic
+    activeGames.delete(gameId);
+    const RPS_FAMILY_LOCK_KEY = GAME_IDS.RPS_UNIFIED_OFFER;
+    await updateGroupGameDetails(chatId, null, RPS_FAMILY_LOCK_KEY, null); // Use family key
 
-    if (!p1.choice || !p2.choice) {
-        console.error(`${logPrefix} Finalize called but one or both choices are missing! P1: ${p1.choice}, P2: ${p2.choice}. Refunding.`);
-        let clientRefund;
+    // Ensure p1 and p2 objects and their properties are valid
+    if (!p1 || typeof p1.mentionHTML === 'undefined' || typeof p1.userId === 'undefined' || !p2 || typeof p2.mentionHTML === 'undefined' || typeof p2.userId === 'undefined') {
+        console.error(`${logPrefix} CRITICAL: p1 or p2 object or their essential properties (mentionHTML, userId) are missing in gameData. GameData: ${stringifyWithBigInt(gameData).substring(0,500)}`);
+        // Attempt to refund both players if critical data is missing for proper resolution
+        let refundClient = null;
         try {
-            clientRefund = await pool.connect(); await clientRefund.query('BEGIN');
-            await updateUserBalanceAndLedger(clientRefund, p1.userId, betAmount, 'refund_rps_pvp_incomplete', { game_id_custom_field: gameId }, `PvP RPS refund due to incomplete choices.`);
-            await updateUserBalanceAndLedger(clientRefund, p2.userId, betAmount, 'refund_rps_pvp_incomplete', { game_id_custom_field: gameId }, `PvP RPS refund due to incomplete choices.`);
-            await clientRefund.query('COMMIT');
-        } catch (e) { if (clientRefund) await clientRefund.query('ROLLBACK'); console.error(`${logPrefix} Error refunding incomplete PvP RPS: ${e.message}`); }
-        finally { if (clientRefund) clientRefund.release(); }
-        await safeSendMessage(chatId, "⚙️ RPS PvP game ended prematurely due to missing choices. Bets have been refunded.", {parse_mode: "HTML"});
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            if(p1?.userId) await updateUserBalanceAndLedger(refundClient, p1.userId, betAmount, 'refund_rps_pvp_critical_error', { game_id_custom_field: gameId }, `RPS PvP refund due to critical data error.`);
+            if(p2?.userId) await updateUserBalanceAndLedger(refundClient, p2.userId, betAmount, 'refund_rps_pvp_critical_error', { game_id_custom_field: gameId }, `RPS PvP refund due to critical data error.`);
+            await refundClient.query('COMMIT');
+        } catch (e) {
+            if (refundClient) await refundClient.query('ROLLBACK');
+            console.error(`${logPrefix} CRITICAL error during emergency refund for GID ${gameId}: ${e.message}`);
+            if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvP FINALIZE ERROR & REFUND FAIL 🚨\nGame ID: ${gameId}. Error: Missing player data. Refund attempt also failed. Manual check needed.`, {parse_mode:'MarkdownV2'});
+        } finally {
+            if (refundClient) refundClient.release();
+        }
+        await safeSendMessage(chatId, "⚙️ A critical internal error occurred finalizing the RPS game. Bets are being refunded if possible. Please contact support if issues persist.", {parse_mode: "HTML"});
         return;
     }
 
-    const rpsOutcome = determineRPSOutcome(p1.choice, p2.choice, p1.mentionHTML, p2.mentionHTML);
-    let p1Payout = 0n; let p2Payout = 0n;
-    let p1Ledger = `loss_rps_pvp_${p1.choice}_vs_${p2.choice}`;
-    let p2Ledger = `loss_rps_pvp_${p2.choice}_vs_${p1.choice}`;
-    let finalP1Balance = BigInt(p1.userObj.balance); // For internal tracking, not display
-    let finalP2Balance = BigInt(p2.userObj.balance); // For internal tracking, not display
 
-    let financialOutcomeTextPvP = "";
-    const totalPotDisplay = escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'));
-    const singleBetDisplay = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+    const p1MentionHTML = p1.mentionHTML; // Already escaped from source
+    const p2MentionHTML = p2.mentionHTML; // Already escaped from source
+    let p1Payout = 0n; let p2Payout = 0n;
+    let p1Ledger = `loss_rps_pvp`; // Default
+    let p2Ledger = `loss_rps_pvp`; // Default
+    let finalP1Balance = BigInt(p1.userObj?.balance || '0'); // Get from userObj if available
+    let finalP2Balance = BigInt(p2.userObj?.balance || '0');
 
-    if (rpsOutcome.result === 'win_player1') { // p1 wins
-        p1Payout = betAmount * 2n;
-        financialOutcomeTextPvP = `${p1.mentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p1Ledger = `win_rps_pvp_${p1.choice}_vs_${p2.choice}`;
-    } else if (rpsOutcome.result === 'win_player2') { // p2 wins
+    let financialOutcomeTextPvP = "";
+    let rpsOutcome = null; // Will hold result from determineRPSOutcome if applicable
+    let resultDescriptionForMessage = "";
+    const totalPotDisplay = escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'));
+    const singleBetDisplay = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+    let titleResultHTML = `💥✨ <b>RPS PvP - The Reckoning!</b> ✨💥`;
+
+
+    if (finalStatus === 'game_over_p1_timeout_forfeit') {
+        titleResultHTML = `⏳🏆 <b>${p2MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
+        resultDescriptionForMessage = `${p1MentionHTML} timed out making a choice.`;
+        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
         p2Payout = betAmount * 2n;
-        financialOutcomeTextPvP = `${p2.mentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p2Ledger = `win_rps_pvp_${p2.choice}_vs_${p1.choice}`;
-    } else if (rpsOutcome.result === 'draw') {
+        p2Ledger = 'win_rps_pvp_opponent_timeout';
+        p1Ledger = 'loss_rps_pvp_self_timeout';
+    } else if (finalStatus === 'game_over_p2_timeout_forfeit') {
+        titleResultHTML = `⏳🏆 <b>${p1MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
+        resultDescriptionForMessage = `${p2MentionHTML} timed out making a choice.`;
+        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
+        p1Payout = betAmount * 2n;
+        p1Ledger = 'win_rps_pvp_opponent_timeout';
+        p2Ledger = 'loss_rps_pvp_self_timeout';
+    } else if (finalStatus === 'game_over_error_timeout_logic' || finalStatus === 'game_over_error_ui_update' || !p1.choice || !p2.choice) {
+        // If choices are missing (e.g., error before both chose, or timeout logic itself had an issue)
+        titleResultHTML = `⚙️ <b>RPS PvP - Game Concluded Inconclusively</b> ⚙️`;
+        if (!p1.choice && !p2.choice) {
+            resultDescriptionForMessage = `The game could not be completed as expected (e.g. initial error or missing choices).`;
+        } else if (!p1.choice) {
+            resultDescriptionForMessage = `${p1MentionHTML} did not make a choice.`;
+        } else if (!p2.choice) {
+            resultDescriptionForMessage = `${p2MentionHTML} did not make a choice.`;
+        } else {
+             resultDescriptionForMessage = `The game concluded due to an unexpected error.`;
+        }
+        financialOutcomeTextPvP = `Bets of <b>${singleBetDisplay}</b> each are refunded for fairness.`;
         p1Payout = betAmount; p2Payout = betAmount;
-        financialOutcomeTextPvP = `It's a draw! Bets of <b>${singleBetDisplay}</b> each are returned.`;
-        p1Ledger = `draw_rps_pvp_${p1.choice}_vs_${p2.choice}`;
-        p2Ledger = `draw_rps_pvp_${p2.choice}_vs_${p1.choice}`;
-    }
+        p1Ledger = 'refund_rps_pvp_error'; p2Ledger = 'refund_rps_pvp_error';
+    } else { // Normal game resolution based on choices
+        // This part assumes p1.choice and p2.choice are valid
+        rpsOutcome = determineRPSOutcome(p1.choice, p2.choice, p1MentionHTML, p2MentionHTML);
+        resultDescriptionForMessage = `<i>${rpsOutcome.description}</i>`; // Contains "Player X is the winner" etc.
 
-    let client;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1Ledger, { game_id_custom_field: gameId, opponent_id_custom_field: p2.userId }, `PvP RPS result: P1(${p1.choice}) vs P2(${p2.choice})`);
-        if (!p1Update.success) throw new Error(`P1 balance update failed: ${p1Update.error}`);
-        finalP1Balance = p1Update.newBalanceLamports;
+        if (rpsOutcome.result === 'win_player1') {
+            p1Payout = betAmount * 2n;
+            financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
+            p1Ledger = `win_rps_pvp_${p1.choice}_vs_${p2.choice}`;
+            p2Ledger = `loss_rps_pvp_${p2.choice}_vs_${p1.choice}`;
+        } else if (rpsOutcome.result === 'win_player2') {
+            p2Payout = betAmount * 2n;
+            financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
+            p2Ledger = `win_rps_pvp_${p2.choice}_vs_${p1.choice}`;
+            p1Ledger = `loss_rps_pvp_${p1.choice}_vs_${p2.choice}`;
+        } else if (rpsOutcome.result === 'draw') {
+            p1Payout = betAmount; p2Payout = betAmount;
+            financialOutcomeTextPvP = `It's a draw! Bets of <b>${singleBetDisplay}</b> each are returned.`;
+            p1Ledger = `draw_rps_pvp_${p1.choice}_vs_${p2.choice}`;
+            p2Ledger = `draw_rps_pvp_${p2.choice}_vs_${p1.choice}`;
+        } else { // Should not happen if determineRPSOutcome is robust
+            console.error(`${logPrefix} Unknown rpsOutcome.result: ${rpsOutcome.result}. Refunding.`);
+            titleResultHTML = `⚙️ <b>RPS PvP - Unexpected Outcome</b> ⚙️`;
+            resultDescriptionForMessage = `The game result was unclear due to an internal error.`;
+            financialOutcomeTextPvP = `Bets of <b>${singleBetDisplay}</b> each are refunded.`;
+            p1Payout = betAmount; p2Payout = betAmount;
+            p1Ledger = 'refund_rps_pvp_internal_error'; p2Ledger = 'refund_rps_pvp_internal_error';
+        }
+    }
 
-        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2Ledger, { game_id_custom_field: gameId, opponent_id_custom_field: p1.userId }, `PvP RPS result: P2(${p2.choice}) vs P1(${p1.choice})`);
-        if (!p2Update.success) throw new Error(`P2 balance update failed: ${p2Update.error}`);
-        finalP2Balance = p2Update.newBalanceLamports;
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        rpsOutcome.description = (rpsOutcome.description || "") + `<br><br>⚠️ Critical error settling wagers. Admin notified.`;
-        financialOutcomeTextPvP = `⚠️ Critical error settling wagers. Admin notified.`; // Overwrite financial outcome on DB error
-        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed for P1:${p1.userId}, P2:${p2.userId}.`, { parse_mode: 'HTML'});
-    } finally { if (client) client.release(); }
+    let client = null;
+    let dbErrorOccurred = false;
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
+        const p1Update = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1Ledger, { game_id_custom_field: gameId, opponent_id_custom_field: p2.userId }, `PvP RPS result: P1(${p1.choice || 'N/A'}) vs P2(${p2.choice || 'N/A'})`);
+        if (!p1Update.success) { dbErrorOccurred = true; console.error(`${logPrefix} P1 (${p1MentionHTML}) balance update failed: ${p1Update.error}`); }
+        else finalP1Balance = p1Update.newBalanceLamports;
 
-    const titleResultHTML = `💥✨ <b>RPS PvP - The Reckoning!</b> ✨💥`;
-    const resultMessageHTML = `${titleResultHTML}\n\n` +
-        `The dust settles between ${p1.mentionHTML} and ${p2.mentionHTML} (Wager: <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> each)!\n\n` +
-        `<b>${p1.mentionHTML} (P1) secretly chose:</b> ${RPS_EMOJIS[p1.choice]} <b>${escapeHTML(rpsOutcome.player1.choiceFormatted)}</b>\n` +
-        `<b>${p2.mentionHTML} (P2) secretly chose:</b> ${RPS_EMOJIS[p2.choice]} <b>${escapeHTML(rpsOutcome.player2.choiceFormatted)}</b>\n\n` +
-        `<i>${rpsOutcome.description}</i>\n\n` + // Contains "Player X is the winner" with actual names
-        `${financialOutcomeTextPvP}`; // Clear statement of who won what, or draw outcome
-        // Balance display lines removed
+        const p2Update = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2Ledger, { game_id_custom_field: gameId, opponent_id_custom_field: p1.userId }, `PvP RPS result: P2(${p2.choice || 'N/A'}) vs P1(${p1.choice || 'N/A'})`);
+        if (!p2Update.success) { dbErrorOccurred = true; console.error(`${logPrefix} P2 (${p2MentionHTML}) balance update failed: ${p2Update.error}`); }
+        else finalP2Balance = p2Update.newBalanceLamports;
 
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVP, betAmount);
-    if (gameData.gameMessageId && bot) {
-        await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e)=>{
-             if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-        });
-    } else {
-        await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-    }
+        if(dbErrorOccurred) throw new Error("One or more balance updates failed during RPS finalization.");
+        await client.query('COMMIT');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
+        resultDescriptionForMessage += `<br><br>⚠️ Critical error settling wagers. Admin notified.`;
+        financialOutcomeTextPvP = `⚠️ Critical error settling wagers. Admin notified.`;
+        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL RPS PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed for P1:${p1.userId}, P2:${p2.userId}.`, { parse_mode: 'HTML'});
+    } finally { if (client) client.release(); }
+
+    const resultMessageHTML = `${titleResultHTML}\n\n` +
+        `The dust settles between ${p1MentionHTML} and ${p2MentionHTML} (Wager: <b>${singleBetDisplay}</b> each)!\n\n` +
+        `<b>${p1MentionHTML} (P1) secretly chose:</b> ${p1.choice ? RPS_EMOJIS[p1.choice] : '❓'} <b>${p1.choice ? escapeHTML(rpsOutcome?.player1?.choiceFormatted || p1.choice) : 'N/A'}</b>\n` +
+        `<b>${p2MentionHTML} (P2) secretly chose:</b> ${p2.choice ? RPS_EMOJIS[p2.choice] : '❓'} <b>${p2.choice ? escapeHTML(rpsOutcome?.player2?.choiceFormatted || p2.choice) : 'N/A'}</b>\n\n` +
+        `${resultDescriptionForMessage}\n\n` +
+        `${financialOutcomeTextPvP}`;
+
+    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.RPS_PVP, betAmount);
+    if (gameData.currentMessageId && bot) { // Changed from gameMessageId to currentMessageId
+        await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.currentMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e)=>{
+             if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
+        });
+    } else {
+        await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
+    }
 }
 // --- End of REVISED Rock Paper Scissors (RPS) Game Logic & Handlers ---
 
@@ -6565,7 +6869,7 @@ async function handleDice21PvPTurnTimeout(gameId, timedOutPlayerId) {
 async function handleStartOverUnder7Command(msg, betAmountLamports) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_OU7_START = `[OU7_Start_DEBUG_Timeout UID:${userId} CH:${chatId}_HTML]`; // Updated log
+    const LOG_PREFIX_OU7_START = `[OU7_Start_TimeoutForfeit UID:${userId} CH:${chatId}_HTML]`; // Updated log
     console.log(`${LOG_PREFIX_OU7_START} Entered function. Bet amount received: ${betAmountLamports}`);
 
     if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
@@ -6640,20 +6944,19 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
         userObj,
         betAmount: betAmountLamports, playerChoice: null, diceRolls: [], diceSum: null,
         status: 'waiting_player_choice', gameMessageId: null, lastInteractionTime: Date.now(),
-        timeoutId: null // ADDED: To store the choice timeout
+        timeoutId: null
     };
     activeGames.set(gameId, gameData);
     console.log(`${LOG_PREFIX_OU7_START} Game data created and stored in activeGames. Status: ${gameData.status}`);
 
     const titleHTML = `🎲 <b>Over/Under 7 Showdown</b> 🎲`;
-    const initialMessageTextHTML = `${titleHTML}\n\n${playerRefHTML}, you've courageously wagered <b>${betDisplayUSD_HTML}</b>. The dice are polished and ready for action!\n\nPredict the total sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b>: Will it be Under 7, Exactly 7, or Over 7? Make your fateful choice below! 👇`;
+    const initialMessageTextHTML = `${titleHTML}\n\n${playerRefHTML}, you've courageously wagered <b>${betDisplayUSD_HTML}</b>. The dice are polished and ready for action!\n\nPredict the total sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b>: Will it be Under 7, Exactly 7, or Over 7? Make your fateful choice below! 👇\n<i>(You have ${JOIN_GAME_TIMEOUT_MS / 1000} seconds to choose)</i>`;
     const keyboard = {
         inline_keyboard: [
             [{ text: "📉 Under 7 (Sum 2-6)", callback_data: `ou7_choice:${gameId}:under` }],
             [{ text: "🎯 Exactly 7 (BIG PAYOUT!)", callback_data: `ou7_choice:${gameId}:seven` }],
             [{ text: "📈 Over 7 (Sum 8-12)", callback_data: `ou7_choice:${gameId}:over` }],
-            // ADDED: Cancel Game button
-            [{ text: "🚫 Cancel Game & Refund Bet", callback_data: `ou7_cancel_game:${gameId}` }],
+            // Removed "Cancel Game" button as per preference for other PvB games
             [{ text: `📖 Game Rules`, callback_data: `${RULES_CALLBACK_PREFIX}${GAME_IDS.OVER_UNDER_7}` }, { text: '💳 Wallet', callback_data: 'menu:wallet' }]
         ]
     };
@@ -6662,36 +6965,43 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
 
     if (sentMessage?.message_id) {
         gameData.gameMessageId = sentMessage.message_id;
-        // ADDED: Start timeout for player choice
         gameData.timeoutId = setTimeout(async () => {
             const currentTimedOutGame = activeGames.get(gameId);
             if (currentTimedOutGame && currentTimedOutGame.status === 'waiting_player_choice') {
-                console.log(`${LOG_PREFIX_OU7_START} Game ${gameId} timed out waiting for player choice.`);
-                activeGames.delete(gameId); // Remove before async DB operations
+                console.log(`${LOG_PREFIX_OU7_START} Game ${gameId} timed out waiting for player choice. Bet will be forfeited.`);
+                activeGames.delete(gameId);
 
-                let refundClientTimeout = null;
+                let forfeitClientTimeout = null;
+                let forfeitureLogged = false;
                 try {
-                    refundClientTimeout = await pool.connect();
-                    await refundClientTimeout.query('BEGIN');
+                    forfeitClientTimeout = await pool.connect();
+                    await forfeitClientTimeout.query('BEGIN');
+                    // *** MODIFIED: Log as loss (forfeit), 0n balance change as bet already taken ***
                     await updateUserBalanceAndLedger(
-                        refundClientTimeout,
+                        forfeitClientTimeout,
                         userId,
-                        betAmountLamports, // Refund full bet
-                        'refund_ou7_choice_timeout',
-                        { game_id_custom_field: gameId },
-                        `Refund for OU7 game ${gameId} due to choice timeout.`
+                        0n, // Bet is forfeited
+                        'loss_ou7_choice_timeout', // New ledger type for forfeit
+                        { game_id_custom_field: gameId, original_bet_amount: betAmountLamports.toString() },
+                        `Player forfeited OU7 game ${gameId} due to choice timeout. Bet lost.`
                     );
-                    await refundClientTimeout.query('COMMIT');
-                    console.log(`${LOG_PREFIX_OU7_START} Bet refunded for timed out game ${gameId}.`);
+                    await forfeitClientTimeout.query('COMMIT');
+                    forfeitureLogged = true;
+                    console.log(`${LOG_PREFIX_OU7_START} Bet forfeiture logged for timed out game ${gameId}.`);
                 } catch (e) {
-                    if (refundClientTimeout) await refundClientTimeout.query('ROLLBACK').catch(() => {});
-                    console.error(`${LOG_PREFIX_OU7_START} CRITICAL: Failed to refund bet for timed out OU7 game ${gameId}: ${e.message}`);
-                    if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 TIMEOUT REFUND FAILURE 🚨\nGame ID: ${gameId}, User: ${userId}. Manual refund of ${formatCurrency(betAmountLamports)} needed.`, {parse_mode: 'MarkdownV2'});
+                    if (forfeitClientTimeout) await forfeitClientTimeout.query('ROLLBACK').catch(() => {});
+                    console.error(`${LOG_PREFIX_OU7_START} CRITICAL: Failed to log bet forfeiture for timed out OU7 game ${gameId}: ${e.message}`);
+                    if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 TIMEOUT FORFEIT LOGGING FAILURE 🚨\nGame ID: ${gameId}, User: ${userId}. Bet forfeiture logging failed. DB Error: ${e.message}`, {parse_mode: 'MarkdownV2'});
                 } finally {
-                    if (refundClientTimeout) refundClientTimeout.release();
+                    if (forfeitClientTimeout) forfeitClientTimeout.release();
                 }
 
-                const timeoutMsg = `⏰ ${playerRefHTML}, your Over/Under 7 game (Bet: <b>${betDisplayUSD_HTML}</b>) timed out as no choice was made.\nYour bet has been refunded.`;
+                // *** MODIFIED: Message to player indicates forfeiture ***
+                let timeoutMsg = `⏰ ${playerRefHTML}, your Over/Under 7 game (Bet: <b>${betDisplayUSD_HTML}</b>) timed out as no choice was made.\nYour bet has been forfeited.`;
+                if (!forfeitureLogged) {
+                    timeoutMsg += "\n\n⚠️ A system error occurred while finalizing the forfeiture. Please contact support if your balance appears incorrect.";
+                }
+
                 if (bot && currentTimedOutGame.gameMessageId) {
                     await bot.editMessageText(timeoutMsg, {
                         chat_id: chatId,
@@ -6700,23 +7010,23 @@ async function handleStartOverUnder7Command(msg, betAmountLamports) {
                         reply_markup: { inline_keyboard: [[{ text: "🎲 Play OU7 Again?", callback_data: `play_again_ou7:${betAmountLamports.toString()}` }]]}
                     }).catch(async (err) => {
                         console.warn(`${LOG_PREFIX_OU7_START} Failed to edit timed out message ${currentTimedOutGame.gameMessageId}, sending new: ${err.message}`);
-                        await safeSendMessage(chatId, timeoutMsg, { parse_mode: 'HTML' });
+                        await safeSendMessage(chatId, timeoutMsg, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "🎲 Play OU7 Again?", callback_data: `play_again_ou7:${betAmountLamports.toString()}` }]]} });
                     });
                 } else {
-                    await safeSendMessage(chatId, timeoutMsg, { parse_mode: 'HTML' });
+                    await safeSendMessage(chatId, timeoutMsg, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "🎲 Play OU7 Again?", callback_data: `play_again_ou7:${betAmountLamports.toString()}` }]]} });
                 }
             }
-        }, JOIN_GAME_TIMEOUT_MS); // Using existing JOIN_GAME_TIMEOUT_MS, can be a new constant
+        }, JOIN_GAME_TIMEOUT_MS); // Using JOIN_GAME_TIMEOUT_MS for consistency with other offer/initial choice timeouts
 
-        activeGames.set(gameId, gameData); // Save gameData with messageId and timeoutId
+        activeGames.set(gameId, gameData);
         console.log(`${LOG_PREFIX_OU7_START} Initial game message sent successfully. Message ID: ${gameData.gameMessageId}. Timeout set.`);
     } else {
-        console.error(`${LOG_PREFIX_OU7_START} Failed to send Over/Under 7 game message for ${gameId}. Attempting to refund wager.`);
+        console.error(`${LOG_PREFIX_OU7_START} Failed to send Over/Under 7 game message for ${gameId}. Attempting to refund wager (as game effectively didn't start).`);
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
             await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_ou7_setup_fail', { game_id_custom_field: gameId }, `Refund OU7 game ${gameId} (message send fail)`);
-            await refundClient.query('COMMIT');
+            await refundClient.query('COMMIT'); // Corrected: was client.query('COMMIT')
             console.log(`${LOG_PREFIX_OU7_START} Refund processed due to message send failure.`);
         } catch (err) {
             if (refundClient) await refundClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_OU7_START} Rollback error on OU7 setup refund: ${rbErr.message}`));
@@ -6920,104 +7230,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     activeGames.delete(gameId);
 }
 
-async function handleOverUnder7CancelGameCallback(gameId, userObj, originalMessageId, callbackQueryId, msgContext) {
-    const userId = String(userObj.telegram_id || userObj.id);
-    const chatId = String(msgContext.chatId || originalMessageId); // msgContext should have chatId
-    const LOG_PREFIX_OU7_CANCEL = `[OU7_Cancel UID:${userId} GID:${gameId}]`;
-    console.log(`${LOG_PREFIX_OU7_CANCEL} Attempting to cancel Over/Under 7 game.`);
-
-    const gameData = activeGames.get(gameId);
-
-    if (!gameData || gameData.type !== GAME_IDS.OVER_UNDER_7) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Over/Under 7 game is no longer active or invalid.", show_alert: true }).catch(() => {});
-        console.warn(`${LOG_PREFIX_OU7_CANCEL} Game not found or invalid type for gameId: ${gameId}.`);
-        if (bot && originalMessageId) { // Try to clean up the button message if possible
-            try {
-                await bot.editMessageReplyMarkup({}, { chat_id: chatId, message_id: Number(originalMessageId) });
-            } catch (e) { /* ignore */ }
-        }
-        return;
-    }
-
-    if (gameData.userId !== userId) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Only the player who started this game can cancel it.", show_alert: true }).catch(() => {});
-        console.warn(`${LOG_PREFIX_OU7_CANCEL} User ${userId} tried to cancel game ${gameId} belonging to ${gameData.userId}.`);
-        return;
-    }
-
-    if (gameData.status !== 'waiting_player_choice') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This game cannot be cancelled at this stage.", show_alert: true }).catch(() => {});
-        console.warn(`${LOG_PREFIX_OU7_CANCEL} Game ${gameId} is not in 'waiting_player_choice' state. Current state: ${gameData.status}.`);
-        return;
-    }
-
-    // Clear the choice timeout
-    if (gameData.timeoutId) {
-        clearTimeout(gameData.timeoutId);
-        gameData.timeoutId = null;
-        console.log(`${LOG_PREFIX_OU7_CANCEL} Choice timeout cleared for game ${gameId}.`);
-    }
-
-    activeGames.delete(gameId); // Remove before async DB operations
-    console.log(`${LOG_PREFIX_OU7_CANCEL} Game ${gameId} removed from activeGames.`);
-
-    let client = null;
-    let refundSuccess = false;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const balanceUpdateResult = await updateUserBalanceAndLedger(
-            client,
-            userId,
-            gameData.betAmount, // Refund full bet amount
-            'refund_ou7_player_cancel',
-            { game_id_custom_field: gameId },
-            `Player cancelled Over/Under 7 game ${gameId} before choice.`
-        );
-
-        if (balanceUpdateResult.success) {
-            await client.query('COMMIT');
-            refundSuccess = true;
-            console.log(`${LOG_PREFIX_OU7_CANCEL} Bet successfully refunded for game ${gameId}.`);
-        } else {
-            await client.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_OU7_CANCEL} Failed to refund bet for game ${gameId}: ${balanceUpdateResult.error}`);
-        }
-    } catch (dbError) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_OU7_CANCEL} DB error during refund for game ${gameId}: ${dbError.message}`);
-    } finally {
-        if (client) client.release();
-    }
-
-    const playerRefHTML = gameData.playerRef || escapeHTML(getPlayerDisplayReference(userObj)); // Use stored playerRef if available
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
-    let cancelMessageText = "";
-
-    if (refundSuccess) {
-        cancelMessageText = `🚫 Game Cancelled by ${playerRefHTML}.\nYour Over/Under 7 game (Bet: <b>${betDisplayUSD_HTML}</b>) has been cancelled, and your bet has been refunded.`;
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Game cancelled. Bet refunded." }).catch(() => {});
-    } else {
-        cancelMessageText = `🚫 Game Cancelled by ${playerRefHTML}.\nThere was an issue refunding your bet automatically for the cancelled Over/Under 7 game (Bet: <b>${betDisplayUSD_HTML}</b>). Please contact support.`;
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Game cancelled. Refund error - contact support.", show_alert: true }).catch(() => {});
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL OU7 CANCEL REFUND FAILURE 🚨\nGame ID: ${gameId}, User: ${userId}. Manual refund of ${formatCurrency(gameData.betAmount)} needed.`, {parse_mode: 'MarkdownV2'});
-    }
-
-    const messageIdToEdit = Number(originalMessageId || gameData.gameMessageId);
-    if (bot && messageIdToEdit) {
-        await bot.editMessageText(cancelMessageText, {
-            chat_id: chatId,
-            message_id: messageIdToEdit,
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "🎲 Play OU7 Again?", callback_data: `play_again_ou7:${gameData.betAmount.toString()}` }]]}
-        }).catch(async (err) => {
-            console.warn(`${LOG_PREFIX_OU7_CANCEL} Failed to edit cancelled game message ${messageIdToEdit}, sending new: ${err.message}`);
-            await safeSendMessage(chatId, cancelMessageText, { parse_mode: 'HTML' });
-        });
-    } else {
-        await safeSendMessage(chatId, cancelMessageText, { parse_mode: 'HTML' });
-    }
-}
 // --- End of Part 5c, Section 1 (NEW + DEBUG LOGS) ---
 // --- Start of Part 5c, Section 2 (COMPLETE REWRITE FOR NEW DUEL GAME LOGIC - CONSOLIDATED UPDATES) ---
 // index.js - Part 5c, Section 2: Duel Game Logic & Handlers (PvP/PvB Unified Offer Style)
@@ -12251,15 +12463,6 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
                     console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleOverUnder7Choice`);
                 }
                 break;
-                case 'ou7_cancel_game': // New case
-            if (!gameIdOrBetAmountStr) { console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing gameId for ou7_cancel_game.`); return; }
-            if (typeof handleOverUnder7CancelGameCallback === 'function') {
-                await handleOverUnder7CancelGameCallback(gameIdOrBetAmountStr, userObject, originalMessageId, callbackQueryId, msgContext);
-            } else {
-                console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleOverUnder7CancelGameCallback`);
-                await bot.answerCallbackQuery(callbackQueryId, {text: "Cancel action unavailable.", show_alert: true});
-            }
-            break;
             case 'play_again_ou7':
                 if (typeof handleStartOverUnder7Command === 'function') await handleStartOverUnder7Command(mockMsgForReplay, betAmount);
                 else console.error(`${LOG_PREFIX_ADD_GAME_CB} Missing handler: handleStartOverUnder7Command`);
