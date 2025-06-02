@@ -352,7 +352,7 @@ const GAME_ACTIVITY_LIMITS = DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS;
 
 
 // Keypair Initializations
-MAIN_BOT_KEYPAIR = null; // Explicitly null before assignment
+let MAIN_BOT_KEYPAIR = null; // Declaration with 'let' and initialization
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
     try {
         MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
@@ -366,14 +366,14 @@ if (MAIN_BOT_PRIVATE_KEY_BS58) {
     process.exit(1);
 }
 
-REFERRAL_PAYOUT_KEYPAIR = null; // Explicitly null before assignment
+let REFERRAL_PAYOUT_KEYPAIR = null; // Declaration with 'let' and initialization
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
     try {
         REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
         console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
     } catch (e) {
         console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null;
+        REFERRAL_PAYOUT_KEYPAIR = null; // Assign null if error
     }
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
