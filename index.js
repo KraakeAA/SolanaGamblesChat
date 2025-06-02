@@ -11366,7 +11366,7 @@ bot.on('callback_query', async (callbackQuery) => {
                          await bot.answerCallbackQuery(callbackQueryId, {text: "Mines action handler not found.", show_alert: true}).catch(()=>{});
                     }
                     break;
-                case 'ou7_choice': case 'play_again_ou7':
+                case 'ou7_choice': case 'ou7_cancel_game': case 'play_again_ou7':
                 case 'ladder_roll': case 'play_again_ladder':
                 case 's7_roll': case 'play_again_s7':
                 case 'play_again_slot':
