@@ -5214,7 +5214,7 @@ async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, r
 }
 
 // --- Dice 21 Main Command Handler (UPDATED FOR LOCKS AND TIMEOUTS) ---
-// --- START OF REPLACEMENT for handleStartDice21Command function ---
+// --- START OF FULL REPLACEMENT for handleStartDice21Command function ---
 async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRaw = null, gameModeArg = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
@@ -5277,17 +5277,18 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
     let limit;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
+        offerActivityKeyForLock = GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER; // MODIFIED
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
+        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // MODIFIED
         if (currentDirectChallenges.length >= limit) {
             await safeSendMessage(chatId, `⏳ ${initiatorPlayerRefHTML}, the limit of ${limit} concurrent direct Dice 21 challenge(s) in this group is active. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
     } else { // Unified Offer
-        offerActivityKeyForLock = GAME_IDS.DICE_21_UNIFIED_OFFER; // Use specific unified offer key if available, or base DICE_21
+        offerActivityKeyForLock = GAME_IDS.DICE_21_UNIFIED_OFFER;
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_21] || 1; // Fallback to base D21 if specific D21_UNIFIED_OFFER limit not set
+        // Use the specific unified offer key for limit lookup if defined, otherwise fallback to base D21 for unified limit
+        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_21_UNIFIED_OFFER] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_21] || 1;
         if (currentUnifiedOffers.length >= limit) {
             await safeSendMessage(chatId, `⏳ ${initiatorPlayerRefHTML}, the limit of ${limit} concurrent Dice 21 offer(s) in this group is active. Please wait.`, { parse_mode: 'HTML' });
             return;
@@ -5357,16 +5358,16 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
 
             offerData = {
                 type: GAME_IDS.DICE_21_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId), chatType,
-                initiatorId: userId, initiatorMention: initiatorPlayerRefHTML,
+                initiatorId: userId, initiatorMention: initiatorPlayerRefHTML, // For unified offer, store as initiatorMention
                 initiatorUserObj, betAmount: betAmountLamports, status: 'waiting_for_choice',
                 creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
-                // _offerKeyUsedForGroupLock not strictly needed here if offerActivityKeyForLock is already DICE_21_UNIFIED_OFFER
+                // _offerKeyUsedForGroupLock is not needed here, as offerActivityKeyForLock is already DICE_21_UNIFIED_OFFER
             };
         }
 
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
-        await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
+        await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports); // Uses the correct key based on if/else
         console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
 
         offerData.timeoutId = setTimeout(async () => {
@@ -5374,7 +5375,7 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
             if (timedOutOffer && (timedOutOffer.status === 'waiting_for_choice' || timedOutOffer.status === 'pending_direct_challenge_response')) {
                 console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for Dice 21 has timed out.`);
                 activeGames.delete(offerId);
-                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock; // Use stored if direct, else the one from scope
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
                 await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
 
                 let refundClientTimeout = null;
@@ -5395,9 +5396,12 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
 
                 const messageIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.gameSetupMessageId;
                 const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'));
+                const initiatorMentionForTimeout = timedOutOffer.initiatorMentionHTML || timedOutOffer.initiatorMention || escapeHTML(getPlayerDisplayReference(timedOutOffer.initiatorUserObj || {id: timedOutOffer.initiatorId}));
+                const targetMentionForTimeout = timedOutOffer.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(timedOutOffer.targetUserObj || {}));
+
                 const timeoutMessageHTML = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ?
-                    `⏳ The Dice 21 challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.` :
-                    `⏳ The Dice 21 offer by ${timedOutOffer.initiatorMention || timedOutOffer.initiatorMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
+                    `⏳ The Dice 21 challenge from ${initiatorMentionForTimeout} to ${targetMentionForTimeout} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.` :
+                    `⏳ The Dice 21 offer by ${initiatorMentionForTimeout} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
 
                 if (messageIdToEdit && bot) {
                     await bot.editMessageText(timeoutMessageHTML, {
@@ -5422,7 +5426,6 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
-// --- END OF REPLACEMENT for handleStartDice21Command function ---
 
 // --- Callback Handlers for Unified Dice 21 Offer (UPDATED FOR LOCKS AND TIMEOUTS) ---
 async function handleDice21AcceptBotGame(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, originalChatTypeFromRouter, callbackQueryId = null) {
