@@ -627,7 +627,7 @@ const solanaConnection = new RateLimitedConnection(
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-app = null; // Initialize app as null
+let app = null; // Initialize app as null
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
