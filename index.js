@@ -5882,14 +5882,273 @@ async function handleDice21PvBCancel(gameId, userObj, originalMessageId, callbac
     } finally { if (client) client.release(); }
 }
 
-// processDice21PvBRollByEmoji was defined in Segment 1.
-// Its logic remains the same for PvB rolls.
+// --- START OF NEW processDice21PvBRollByEmoji function (for D21 PvB Player Hits) ---
+async function processDice21PvBRollByEmoji(gameData, diceValue, msg) {
+    // msg is passed to get userId, but gameData should already have playerId for PvB
+    const rollerId = String(msg.from.id || msg.from.telegram_id);
+    const logPrefix = `[D21_PvBRoll_Emoji_V1 UID:${rollerId} GID:${gameData.gameId}]`;
 
-// handleDice21PvBStand was defined in Segment 1.
-// Its logic remains the same for PvB stand.
+    if (!gameData || gameData.type !== GAME_IDS.DICE_21) {
+        console.warn(`${logPrefix} Incorrect game type: ${gameData?.type}. Expected DICE_21.`);
+        return;
+    }
 
-// processDice21BotTurn was defined in Segment 1.
-// Its logic remains the same for PvB bot turn.
+    // Verify it's the correct player and game status for a roll
+    if (gameData.playerId !== rollerId ||
+        !(gameData.status === 'player_initial_roll_1_prompted' ||
+          gameData.status === 'player_initial_roll_2_prompted' ||
+          gameData.status === 'player_turn_hit_stand_prompt')) {
+        console.warn(`${logPrefix} Roll received from UID ${rollerId} but not their turn or game status is ${gameData.status}. Expected player: ${gameData.playerId}. Ignoring.`);
+        // User's dice emoji message was already deleted by the main handler.
+        // Optionally, send a message if they weren't supposed to roll.
+        // await safeSendMessage(gameData.chatId, "It's not your turn to roll, or the game is not awaiting a roll.", {parse_mode: 'HTML'});
+        return;
+    }
+
+    console.log(`${logPrefix} Processing roll of ${diceValue} for player ${gameData.playerId} in status ${gameData.status}.`);
+
+    // Clear any active turn timeout for the player
+    if (gameData.turnTimeoutId) {
+        clearTimeout(gameData.turnTimeoutId);
+        gameData.turnTimeoutId = null;
+        console.log(`${logPrefix} Cleared turn timeout for player ${gameData.playerId}.`);
+    }
+
+    gameData.playerHandRolls.push(diceValue);
+    gameData.playerScore += diceValue;
+    gameData.lastInteractionTime = Date.now();
+
+    const playerRefHTML = gameData.playerRef || escapeHTML(getPlayerDisplayReference(gameData.userObj || {id: gameData.playerId})); // Fallback for playerRef
+    let statusUpdateMessageHTML = `🎲 ${playerRefHTML} rolled a <b>${diceValue}</b>!`;
+
+    if (gameData.status === 'player_initial_roll_1_prompted') {
+        gameData.status = 'player_initial_roll_2_prompted';
+        statusUpdateMessageHTML += `\nYour score: <b>${gameData.playerScore}</b>. Send your second 🎲 dice!`;
+        activeGames.set(gameData.gameId, gameData);
+        await updateDice21PvBMessage(gameData, statusUpdateMessageHTML); // Update UI, will set new timeout
+    } else if (gameData.status === 'player_initial_roll_2_prompted') {
+        statusUpdateMessageHTML += `\nYour starting hand total: <b>${gameData.playerScore}</b>.`;
+        if (gameData.playerScore === DICE_21_TARGET_SCORE) { // Natural Blackjack
+            console.log(`${logPrefix} Player hit Blackjack on initial deal!`);
+            gameData.status = 'player_blackjack'; // Special status for natural blackjack
+            activeGames.set(gameData.gameId, gameData);
+            // Update message to show blackjack, then proceed to bot's turn (or finalize if bot also has BJ)
+            await updateDice21PvBMessage(gameData, `${statusUpdateMessageHTML}\n✨ BLACKJACK! ✨`);
+            await sleep(1500); // Pause for player to see
+            if (typeof processDice21BotTurn === 'function') {
+                await processDice21BotTurn(gameData);
+            } else {
+                console.error(`${logPrefix} CRITICAL: processDice21BotTurn function not defined!`);
+                gameData.status = 'game_over_bot_error'; // Fallback error state
+                await finalizeDice21PvBGame(gameData);
+            }
+        } else {
+            gameData.status = 'player_turn_hit_stand_prompt';
+            activeGames.set(gameData.gameId, gameData);
+            await updateDice21PvBMessage(gameData, statusUpdateMessageHTML); // Update UI for Hit/Stand choice
+        }
+    } else if (gameData.status === 'player_turn_hit_stand_prompt') { // Player chose to Hit
+        statusUpdateMessageHTML += `\nYour new score: <b>${gameData.playerScore}</b>.`;
+        if (gameData.playerScore > DICE_21_TARGET_SCORE) {
+            console.log(`${logPrefix} Player BUSTED with score ${gameData.playerScore}.`);
+            gameData.status = 'game_over_player_bust';
+            activeGames.set(gameData.gameId, gameData);
+            await updateDice21PvBMessage(gameData, `${statusUpdateMessageHTML}\n💥 BUSTED! 💥`);
+            await sleep(1500);
+            await finalizeDice21PvBGame(gameData);
+        } else if (gameData.playerScore === DICE_21_TARGET_SCORE) {
+            console.log(`${logPrefix} Player hit 21. Auto-standing.`);
+            gameData.status = 'player_action_processing_stand'; // Player stands on 21
+            activeGames.set(gameData.gameId, gameData);
+            await updateDice21PvBMessage(gameData, `${statusUpdateMessageHTML}\n🎯 Perfect 21! You stand.`);
+            await sleep(1500);
+            if (typeof processDice21BotTurn === 'function') {
+                await processDice21BotTurn(gameData);
+            } else {
+                console.error(`${logPrefix} CRITICAL: processDice21BotTurn function not defined!`);
+                gameData.status = 'game_over_bot_error';
+                await finalizeDice21PvBGame(gameData);
+            }
+        } else {
+            // Score < 21, still player's turn to Hit or Stand
+            gameData.status = 'player_turn_hit_stand_prompt';
+            activeGames.set(gameData.gameId, gameData);
+            await updateDice21PvBMessage(gameData, statusUpdateMessageHTML);
+        }
+    } else {
+        console.warn(`${logPrefix} Roll processed in an unexpected status: ${gameData.status}`);
+        activeGames.set(gameData.gameId, gameData); // Save changes like score if any
+        await updateDice21PvBMessage(gameData, statusUpdateMessageHTML + "\n🤔 Unexpected game state.");
+    }
+}
+// --- END OF NEW processDice21PvBRollByEmoji function ---
+// --- START OF NEW handleDice21PvBStand function ---
+async function handleDice21PvBStand(gameId, userObj, originalMessageId, callbackQueryId, chatData) {
+    const userId = String(userObj.id || userObj.telegram_id);
+    const logPrefix = `[D21_PvBStand GID:${gameId} UID:${userId}]`;
+    let gameData = activeGames.get(gameId);
+
+    if (!gameData || gameData.type !== GAME_IDS.DICE_21 || gameData.playerId !== userId || gameData.status !== 'player_turn_hit_stand_prompt') {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "⚠️ Not your turn to stand or game state is invalid.", show_alert: true }).catch(() => {});
+        return;
+    }
+
+    console.log(`${logPrefix} Player ${userId} chose to stand with score ${gameData.playerScore}.`);
+
+    // Clear any active turn timeout for the player
+    if (gameData.turnTimeoutId) {
+        clearTimeout(gameData.turnTimeoutId);
+        gameData.turnTimeoutId = null;
+        console.log(`${logPrefix} Cleared turn timeout for player ${userId}.`);
+    }
+
+    await bot.answerCallbackQuery(callbackQueryId, { text: `You stand with ${gameData.playerScore}. Bot's turn...` }).catch(() => {});
+
+    gameData.status = 'player_action_processing_stand'; // Indicate player has stood, now bot's turn
+    gameData.lastInteractionTime = Date.now();
+    activeGames.set(gameData.gameId, gameData); // Save status change
+
+    const playerRefHTML = gameData.playerRef || escapeHTML(getPlayerDisplayReference(gameData.userObj || {id: gameData.playerId}));
+    const standMessageHTML = `✋ ${playerRefHTML} stands with a score of <b>${gameData.playerScore}</b>.\nNow it's the Bot Dealer's turn... 🤖`;
+
+    // Update the main game message to reflect the stand
+    // updateDice21PvBMessage will delete the old message and send a new one.
+    await updateDice21PvBMessage(gameData, standMessageHTML);
+    await sleep(1500); // Brief pause for player to see the stand update
+
+    // Proceed to bot's turn
+    if (typeof processDice21BotTurn === 'function') {
+        await processDice21BotTurn(gameData);
+    } else {
+        console.error(`${logPrefix} CRITICAL: processDice21BotTurn function not defined! Cannot proceed to bot's turn.`);
+        // Attempt to finalize with an error to prevent game from being stuck
+        gameData.status = 'game_over_bot_error'; // A generic error state
+        activeGames.set(gameData.gameId, gameData);
+        await finalizeDice21PvBGame(gameData);
+    }
+}
+// --- END OF NEW handleDice21PvBStand function ---
+
+// --- START OF NEW processDice21BotTurn function ---
+async function processDice21BotTurn(gameData) {
+    const gameId = gameData.gameId;
+    const chatId = gameData.chatId;
+    const playerId = gameData.playerId; // For logging/context if needed
+    const logPrefix = `[D21_BotTurn GID:${gameId} ForPlayerUID:${playerId}]`;
+
+    if (!gameData || (gameData.status !== 'player_action_processing_stand' && gameData.status !== 'player_blackjack')) {
+        console.warn(`${logPrefix} Bot turn called in unexpected status: ${gameData.status}. Aborting bot turn.`);
+        // If player had blackjack, and we are here, it implies bot also needs to check its hand.
+        // If status is not 'player_blackjack', it's likely an error if not 'player_action_processing_stand'.
+        if (gameData.status !== 'player_blackjack') {
+            gameData.status = 'game_over_bot_error'; // Fallback error if state is unexpected
+            activeGames.set(gameId, gameData);
+            await finalizeDice21PvBGame(gameData);
+        } else {
+            // If player had blackjack, we proceed to check bot's hand without bot hitting.
+            // Bot initial deal would have happened if player didn't have BJ.
+            // For now, let's assume initial 2 dice for bot are rolled here if player has BJ.
+            // Or, the initial deal for bot should happen regardless, and we just reveal.
+            // Let's simplify: if player has BJ, bot reveals its hand.
+            // If player stood, bot plays its hand.
+
+            if (gameData.botHandRolls.length === 0) { // Bot hasn't had initial deal yet (e.g. player BJ)
+                 console.log(`${logPrefix} Player has Blackjack. Bot revealing its initial hand.`);
+                 for (let i = 0; i < 2; i++) { // Bot gets two dice
+                    const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Initial Roll ${i + 1}`);
+                    if (rollResult.error) {
+                        console.error(`${logPrefix} Error getting Bot Roll ${i + 1}: ${rollResult.message}. Using fallback.`);
+                        gameData.botHandRolls.push(rollDie()); // rollDie() from Part 3
+                    } else {
+                        gameData.botHandRolls.push(rollResult.roll);
+                    }
+                    gameData.botScore = gameData.botHandRolls.reduce((sum, r) => sum + r, 0);
+                }
+            }
+             gameData.status = 'game_over_bot_played'; // Set status to indicate bot's hand is set
+             activeGames.set(gameId, gameData);
+             await finalizeDice21PvBGame(gameData); // Finalize immediately
+        }
+        return;
+    }
+
+    console.log(`${logPrefix} Bot Dealer's turn. Player score: ${gameData.playerScore}.`);
+    gameData.status = 'bot_rolling'; // Bot is now actively playing
+    activeGames.set(gameId, gameData);
+
+    let botDealingMessage = "🤖 Bot Dealer is revealing its hand...\n";
+    await updateDice21PvBMessage(gameData, botDealingMessage);
+    await sleep(1000);
+
+    // Initial two dice for the bot
+    if (gameData.botHandRolls.length === 0) {
+        for (let i = 0; i < 2; i++) {
+            const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Initial Roll ${i + 1}`);
+            let currentRollValue;
+            if (rollResult.error) {
+                console.error(`${logPrefix} Error getting Bot Roll ${i + 1}: ${rollResult.message}. Using fallback.`);
+                currentRollValue = rollDie();
+            } else {
+                currentRollValue = rollResult.roll;
+            }
+            gameData.botHandRolls.push(currentRollValue);
+            gameData.botScore = gameData.botHandRolls.reduce((sum, r) => sum + r, 0);
+            activeGames.set(gameId, gameData); // Save each roll to gameData
+
+            if (i === 0) { // First card (typically one shown, one hidden, but we'll show progress)
+                botDealingMessage += `Bot's first die: <b>${currentRollValue}</b> 🎲\n`;
+            } else { // Second card
+                botDealingMessage += `Bot's second die: <b>${currentRollValue}</b> 🎲. Total: <b>${gameData.botScore}</b>\n`;
+            }
+            await updateDice21PvBMessage(gameData, botDealingMessage);
+            await sleep(1500);
+        }
+    }
+
+    // Bot hits based on strategy
+    while (gameData.botScore < DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
+        if (isShuttingDown) { console.log(`${logPrefix} Shutdown during bot's turn.`); break; }
+
+        botDealingMessage += `Bot score is ${gameData.botScore}. Bot hits! 🤖\n`;
+        await updateDice21PvBMessage(gameData, botDealingMessage);
+        await sleep(1000);
+
+        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Hit Roll ${gameData.botHandRolls.length + 1}`);
+        let hitRollValue;
+        if (rollResult.error) {
+            console.error(`${logPrefix} Error getting Bot Hit Roll: ${rollResult.message}. Using fallback.`);
+            hitRollValue = rollDie();
+        } else {
+            hitRollValue = rollResult.roll;
+        }
+
+        gameData.botHandRolls.push(hitRollValue);
+        gameData.botScore += hitRollValue;
+        activeGames.set(gameId, gameData); // Save new roll and score
+
+        botDealingMessage += `Bot draws a <b>${hitRollValue}</b> 🎲. Bot total: <b>${gameData.botScore}</b>\n`;
+        await updateDice21PvBMessage(gameData, botDealingMessage);
+        await sleep(1500);
+
+        if (gameData.botScore > DICE_21_TARGET_SCORE) {
+            botDealingMessage += `💥 Bot BUSTED with <b>${gameData.botScore}</b>!\n`;
+            await updateDice21PvBMessage(gameData, botDealingMessage);
+            await sleep(1000);
+            break;
+        }
+    }
+
+    if (gameData.botScore >= DICE_21_BOT_STAND_SCORE && gameData.botScore <= DICE_21_TARGET_SCORE) {
+        botDealingMessage += `✋ Bot stands with <b>${gameData.botScore}</b>.\n`;
+        await updateDice21PvBMessage(gameData, botDealingMessage);
+        await sleep(1000);
+    }
+
+    gameData.status = 'game_over_bot_played';
+    activeGames.set(gameData.gameId, gameData);
+    await finalizeDice21PvBGame(gameData);
+}
+// --- END OF NEW processDice21BotTurn function ---
 
 // REVISED finalizeDice21PvBGame (to use HTML parse_mode and correct lock clearing)
 async function finalizeDice21PvBGame(gameData) {
