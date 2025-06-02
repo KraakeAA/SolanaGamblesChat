@@ -4183,9 +4183,10 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
 }
 // --- END OF REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 
+// --- START OF FULL REPLACEMENT for handleDiceEscalatorAcceptBotGame_New function ---
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const userId = String(userWhoClicked.telegram_id);
-    const logPrefix = `[DE_AcceptBot_V3_GranLimit UID:${userId} OfferID:"${offerId}" CH:${originalChatId}]`;
+    const userId = String(userWhoClicked.telegram_id); // Assuming telegram_id
+    const logPrefix = `[DE_AcceptBot_V3_GranLimit UID:<span class="math-inline">\{userId\} OfferID\:"</span>{offerId}" CH:${originalChatId}]`;
     const offerData = activeGames.get(offerId);
 
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
@@ -4198,7 +4199,7 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
     }
 
     const gameSession = await getGroupSession(originalChatId);
-    const activeGameKeyToCheck = GAME_IDS.DICE_ESCALATOR_PVB; 
+    const activeGameKeyToCheck = GAME_IDS.DICE_ESCALATOR_PVB;
     const currentActiveDEGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
@@ -4207,28 +4208,31 @@ async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, ori
         return;
     }
 
-    if (offerData.timeoutId) clearTimeout(offerData.timeoutId); 
+    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
     await bot.answerCallbackQuery(callbackQueryId, { text: "Starting Dice Escalator vs Bot..." });
-    offerData.status = 'bot_game_accepted'; 
-    activeGames.set(offerId, offerData);
+    offerData.status = 'bot_game_accepted';
+    // Do not delete from activeGames yet, startDiceEscalatorPvBGame_New might use it then delete.
+    // activeGames.set(offerId, offerData); // Status updated
 
-    // Key for pending unified DE offers is GAME_IDS.DICE_ESCALATOR
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR, null); 
-    activeGames.delete(offerId); 
+    // MODIFIED: Use the correct key for unified DE offer removal
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
+    // The offerId object itself in activeGames will be deleted by startDiceEscalatorPvBGame_New if it takes offerIdToDeleteIfAny
 
     await startDiceEscalatorPvBGame_New(
         { id: originalChatId, type: originalChatType },
-        offerData.initiatorUserObj, 
+        offerData.initiatorUserObj,
         offerData.betAmount,
         originalOfferMessageId || offerData.gameSetupMessageId,
-        false, 
-        null 
+        false,
+        offerId // Pass offerId to be deleted by the start function
     );
 }
+// --- END OF FULL REPLACEMENT for handleDiceEscalatorAcceptBotGame_New function ---
 
+// --- START OF FULL REPLACEMENT for handleDiceEscalatorAcceptPvPChallenge_New function ---
 async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjFromCallback, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const joinerId = String(joinerUserObjFromCallback.telegram_id);
-    const logPrefix = `[DE_AcceptPvP_V3_GranLimit UID:${joinerId} OfferID:"${offerId}" CH:${originalChatId}]`;
+    const joinerId = String(joinerUserObjFromCallback.telegram_id); // Assuming telegram_id
+    const logPrefix = `[DE_AcceptPvP_V3_GranLimit UID:<span class="math-inline">\{joinerId\} OfferID\:"</span>{offerId}" CH:${originalChatId}]`;
     const offerData = activeGames.get(offerId);
 
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
@@ -4241,8 +4245,7 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
     }
 
     const gameSession = await getGroupSession(originalChatId);
-    // Specific key for active PvP DE games originating from unified offers
-    const activeGameKeyToCheck = GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED; 
+    const activeGameKeyToCheck = GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED;
     const currentActiveDEGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
@@ -4257,12 +4260,13 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
         await bot.answerCallbackQuery(callbackQueryId, { text: `Your balance is too low for this ${betDisplayHTML} duel.`, show_alert: true });
         return;
     }
-    const currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId); 
+    const currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId);
     if (!currentInitiatorUserObj || BigInt(currentInitiatorUserObj.balance) < offerData.betAmount) {
         await bot.answerCallbackQuery(callbackQueryId, { text: "Initiator can't cover the bet. Offer cancelled.", show_alert: true });
         if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
         activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR, null);
+         // MODIFIED: Use the correct key for unified DE offer removal
+        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
         const msgIdToEdit = offerData.gameSetupMessageId || originalOfferMessageId;
         if(msgIdToEdit && bot) await bot.editMessageText(`⚠️ Dice Escalator offer by ${offerData.initiatorMentionHTML} cancelled (initiator funds insufficient).`, {chat_id: originalChatId, message_id: Number(msgIdToEdit), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
         return;
@@ -4271,10 +4275,10 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
     await bot.answerCallbackQuery(callbackQueryId, { text: `Joining DE PvP vs ${offerData.initiatorMentionHTML}...` });
     offerData.status = 'pvp_accepted';
-    activeGames.set(offerId, offerData);
+    // activeGames.set(offerId, offerData); // Status update, but will be deleted soon
 
-    // Key for pending unified DE offers is GAME_IDS.DICE_ESCALATOR
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR, null);
+    // MODIFIED: Use the correct key for unified DE offer removal
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
 
     let clientBet = null;
     try {
@@ -4282,7 +4286,7 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
         await clientBet.query('BEGIN');
         const joinBetRes = await updateUserBalanceAndLedger(clientBet, joinerId, BigInt(-offerData.betAmount), 'bet_placed_de_pvp_join', { game_id_custom_field: offerId, opponent_id_custom_field: offerData.initiatorId }, `Dice Escalator PvP Join vs ${offerData.initiatorMentionHTML}`);
         if (!joinBetRes.success) throw new Error(joinBetRes.error || "Failed to deduct joiner's bet.");
-        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports; 
+        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports;
         await clientBet.query('COMMIT');
     } catch (e) {
         if (clientBet) await clientBet.query('ROLLBACK').catch(() => {});
@@ -4295,27 +4299,29 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
             await refundClient.query('COMMIT');
         } catch (refErr) { if(refundClient) await refundClient.query('ROLLBACK'); console.error(`${logPrefix} CRITICAL: Failed to refund initiator after joiner bet fail: ${refErr.message}`); }
         finally { if(refundClient) refundClient.release(); }
-        activeGames.delete(offerId); 
+        activeGames.delete(offerId); // Ensure it's deleted from activeGames as well
         return;
     } finally {
         if (clientBet) clientBet.release();
     }
 
     await startDiceEscalatorPvPGame_New(
-        currentInitiatorUserObj, 
-        currentJoinerUserObj,     
+        currentInitiatorUserObj,
+        currentJoinerUserObj,
         offerData.betAmount,
         originalChatId,
         originalChatType,
         offerData.gameSetupMessageId || originalOfferMessageId,
         'unified_offer' // Origin parameter
     );
-    activeGames.delete(offerId); 
+    activeGames.delete(offerId); // Offer is now fully processed and replaced by PvP game
 }
+// --- END OF FULL REPLACEMENT for handleDiceEscalatorAcceptPvPChallenge_New function ---
 
+// --- START OF FULL REPLACEMENT for handleDiceEscalatorCancelUnifiedOffer_New function ---
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, callbackQueryId) {
-    const userId = String(userWhoClicked.telegram_id);
-    const logPrefix = `[DE_CancelUnified_V2 UID:${userId} OfferID:"${offerId}"]`;
+    const userId = String(userWhoClicked.telegram_id); // Assuming telegram_id, adjust if using .id
+    const logPrefix = `[DE_CancelUnified_V2 UID:<span class="math-inline">\{userId\} OfferID\:"</span>{offerId}"]`;
     const offerData = activeGames.get(offerId);
 
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
@@ -4330,8 +4336,8 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
     await bot.answerCallbackQuery(callbackQueryId, { text: "Dice Escalator offer cancelled. Refunding bet..." });
     activeGames.delete(offerId);
-    // Key for pending unified DE offers is GAME_IDS.DICE_ESCALATOR
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR, null); 
+    // MODIFIED: Use the correct key for unified DE offer removal
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
 
     let refundClient = null;
     try {
@@ -4348,7 +4354,7 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
     }
 
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-    const cancelledMessage = `🚫 ${offerData.initiatorMentionHTML} has cancelled their Dice Escalator offer for <b>${betDisplayUSD_HTML}</b>. Bet refunded.`;
+    const cancelledMessage = `🚫 <span class="math-inline">\{offerData\.initiatorMentionHTML\} has cancelled their Dice Escalator offer for <b\></span>{betDisplayUSD_HTML}</b>. Bet refunded.`;
     const messageIdToEdit = originalOfferMessageId || offerData.gameSetupMessageId;
     if (bot && messageIdToEdit) {
         await bot.editMessageText(cancelledMessage, {
@@ -4359,6 +4365,7 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
         safeSendMessage(originalChatId, cancelledMessage, { parse_mode: 'HTML' });
     }
 }
+// --- END OF FULL REPLACEMENT for handleDiceEscalatorCancelUnifiedOffer_New function ---
 
 // --- Dice Escalator Player vs. Bot (PvB) Game Logic ---
 async function startDiceEscalatorPvBGame_New(chat, initiatorUserObj, betAmountLamports, originalOfferMessageIdToDelete = null, isPlayAgain = false, unifiedOfferIdIfAny = null) {
@@ -5428,11 +5435,12 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
 }
 
 // --- Callback Handlers for Unified Dice 21 Offer (UPDATED FOR LOCKS AND TIMEOUTS) ---
+// --- START OF FULL REPLACEMENT for handleDice21AcceptBotGame function ---
 async function handleDice21AcceptBotGame(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, originalChatTypeFromRouter, callbackQueryId = null) {
     const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
-    const logPrefix = `[D21_AcceptBotCB_V3_GranLimit GID:${offerId} UID:${initiatorId}]`; // V3
+    const logPrefix = `[D21_AcceptBotCB_V3_GranLimit GID:${offerId} UID:${initiatorId}]`;
     const offerData = activeGames.get(offerId);
-    const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObjFromCb)); // Use HTML
+    const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObjFromCb));
 
     if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId).catch(() => {});
 
@@ -5442,19 +5450,18 @@ async function handleDice21AcceptBotGame(offerId, initiatorUserObjFromCb, origin
         if (msgIdToClear && bot) {
             await bot.editMessageText("This Dice 21 offer is no longer active or has expired.", {
                 chat_id: originalChatId, message_id: Number(msgIdToClear),
-                parse_mode: 'HTML', reply_markup: {} // Use HTML
+                parse_mode: 'HTML', reply_markup: {}
             }).catch(e => {});
         }
         return;
     }
     if (offerData.initiatorId !== initiatorId) {
         console.warn(`${logPrefix} User ${initiatorRefHTML} (ID: ${initiatorId}) tried to accept PvB for D21 offer by ${offerData.initiatorMention}. Denied.`);
-        return; 
+        return;
     }
 
     const gameSession = await getGroupSession(originalChatId);
-    // Key for active PvB D21 games (using base GAME_IDS.DICE_21 for active PvB)
-    const activeGameKeyToCheck = GAME_IDS.DICE_21; 
+    const activeGameKeyToCheck = GAME_IDS.DICE_21; // PvB active game limit
     const currentActiveD21Games = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
@@ -5463,30 +5470,32 @@ async function handleDice21AcceptBotGame(offerId, initiatorUserObjFromCb, origin
         return;
     }
 
-    if (offerData.timeoutId) clearTimeout(offerData.timeoutId); 
+    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
 
     console.log(`${logPrefix} Initiator ${offerData.initiatorMention || initiatorRefHTML} selected PvB from D21 offer ${offerId}.`);
-    offerData.status = 'bot_game_accepted'; 
-    activeGames.set(offerId, offerData);
+    offerData.status = 'bot_game_accepted';
+    activeGames.set(offerId, offerData); // Save status before deleting offer object below
 
-    // Remove unified offer from group lock (key for pending unified D21 offers is GAME_IDS.DICE_21)
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21, null); 
-    activeGames.delete(offerId); 
+    // MODIFIED: Ensure correct key for removing the unified offer from group lock
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21_UNIFIED_OFFER, null);
+    activeGames.delete(offerId); // Now delete the offer object from activeGames
 
     await startDice21PvBGame(
         originalChatId,
-        offerData.initiatorUserObj, 
+        offerData.initiatorUserObj,
         offerData.betAmount,
         Number(offerData.gameSetupMessageId || originalOfferMessageId),
-        false, 
-        null,   
+        false,
+        null, // unifiedOfferIdIfAny - the offer is now processed
         originalChatTypeFromRouter
     );
 }
+// --- END OF FULL REPLACEMENT for handleDice21AcceptBotGame function ---
 
+// --- START OF FULL REPLACEMENT for handleDice21AcceptPvPChallenge function ---
 async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId = null) {
     const joinerId = String(joinerUserObjFromCb.id || joinerUserObjFromCb.telegram_id);
-    const logPrefix = `[D21_AcceptPvPCB_V3_GranLimit GID:${offerId} JoinerID:${joinerId}]`; // V3
+    const logPrefix = `[D21_AcceptPvPCB_V3_GranLimit GID:${offerId} JoinerID:${joinerId}]`;
     let offerData = activeGames.get(offerId);
     const joinerRefHTML = escapeHTML(getPlayerDisplayReference(joinerUserObjFromCb));
 
@@ -5502,14 +5511,13 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
         }
         return;
     }
-    if (offerData.initiatorId === joinerId) { // Prevent self-accept
-         await safeSendMessage(originalChatId, `😅 ${joinerRefHTML}, you can't accept your own Dice 21 challenge!`, {parse_mode: 'HTML'});
-         return;
+    if (offerData.initiatorId === joinerId) {
+        await safeSendMessage(originalChatId, `😅 ${joinerRefHTML}, you can't accept your own Dice 21 challenge!`, {parse_mode: 'HTML'});
+        return;
     }
 
     const gameSession = await getGroupSession(originalChatId);
-    // Key for active PvP D21 games originating from unified offers
-    const activeGameKeyToCheck = GAME_IDS.DICE_21_PVP_FROM_UNIFIED; 
+    const activeGameKeyToCheck = GAME_IDS.DICE_21_PVP_FROM_UNIFIED;
     const currentActiveD21Games = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
@@ -5528,22 +5536,23 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
         });
         return;
     }
-    let currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId); 
+    let currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId);
     if (!currentInitiatorUserObj || BigInt(currentInitiatorUserObj.balance) < betAmount) {
         const initiatorMentionHTML_Fail = offerData.initiatorMention || escapeHTML(getPlayerDisplayReference(currentInitiatorUserObj || {telegram_id: offerData.initiatorId}));
         if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
         activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21, null); 
+        // MODIFIED: Use the correct key for unified offer removal
+        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21_UNIFIED_OFFER, null);
         const cancelTextHTML = `The Dice 21 PvP offer from ${initiatorMentionHTML_Fail} (for <b>${betDisplayUSD_HTML}</b>) was auto-cancelled. Initiator has insufficient funds.`;
-        if (offerData.gameSetupMessageId && bot) {
-            await bot.editMessageText(cancelTextHTML, { chat_id: originalChatId, message_id: Number(offerData.gameSetupMessageId), parse_mode: 'HTML', reply_markup: {} }).catch(async () => {await safeSendMessage(originalChatId, cancelTextHTML, {parse_mode: 'HTML'});});
-        } else { await safeSendMessage(originalChatId, cancelTextHTML, {parse_mode: 'HTML'});}
+        const msgIdToEdit = offerData.gameSetupMessageId || originalOfferMessageId;
+        if(msgIdToEdit && bot) await bot.editMessageText(cancelTextHTML, { chat_id: originalChatId, message_id: Number(msgIdToEdit), parse_mode: 'HTML', reply_markup: {} }).catch(async () => {await safeSendMessage(originalChatId, cancelTextHTML, {parse_mode: 'HTML'});});
+        else { await safeSendMessage(originalChatId, cancelTextHTML, {parse_mode: 'HTML'});}
         return;
     }
 
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    offerData.status = 'pvp_accepted'; 
-    activeGames.set(offerId, offerData);
+    offerData.status = 'pvp_accepted';
+    activeGames.set(offerData.gameId, offerData); // Save status before potentially deleting offerId object
 
     const offerMessageIdToDelete = offerData.gameSetupMessageId || originalOfferMessageId;
     if (offerMessageIdToDelete && bot) {
@@ -5551,7 +5560,7 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
     }
 
     let clientBet = null;
-    const pvpGameId = generateGameId(GAME_IDS.DICE_21_PVP); 
+    const pvpGameId = generateGameId(GAME_IDS.DICE_21_PVP);
     try {
         clientBet = await pool.connect(); await clientBet.query('BEGIN');
         const joinBetRes = await updateUserBalanceAndLedger(clientBet, joinerId, BigInt(-betAmount), 'bet_placed_dice21_pvp_join', { game_id_custom_field: pvpGameId, opponent_id_custom_field: offerData.initiatorId }, `PvP Dice 21 Join vs ${offerData.initiatorMention}`);
@@ -5559,11 +5568,10 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
         currentJoinerUserObj.balance = joinBetRes.newBalanceLamports;
         await clientBet.query('COMMIT');
 
-        // Removed pending unified offer from group lock
-        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21, null);
-        activeGames.delete(offerId); // Delete the unified offer now that bets are taken and game is starting
+        // MODIFIED: Use the correct key for removing the unified offer from group lock
+        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21_UNIFIED_OFFER, null);
+        activeGames.delete(offerId); // Delete the unified offer object from activeGames
 
-        // Call startDice21PvPInitialDeal with origin and correct parameters
         await startDice21PvPInitialDeal(
             pvpGameId,
             currentInitiatorUserObj,
@@ -5572,19 +5580,21 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
             originalChatId,
             originalChatType,
             null, // Offer message already deleted
-            'unified_offer' // << NEW origin parameter
+            'unified_offer'
         );
 
     } catch (e) {
         if (clientBet) await clientBet.query('ROLLBACK').catch(()=>{});
         console.error(`${logPrefix} CRITICAL error creating D21 PvP game ${pvpGameId}: ${e.message}`);
         await safeSendMessage(originalChatId, `⚙️ Error starting Dice 21 PvP: \`${escapeHTML(e.message)}\`. Game cancelled.`, { parse_mode: 'HTML'});
-        
-        // Clean up offer if it's still there from a previous error stage
-        if(activeGames.has(offerId)) activeGames.delete(offerId); 
-        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21, null);
-        
-        // Refund initiator if joiner's bet failed (initiator's bet was taken for the offer)
+
+        if(activeGames.has(offerId)) activeGames.delete(offerId); // Ensure offer object is cleaned up
+        // Also ensure it's cleaned from groupGameSessions if the error happened before that line
+        const currentUnifiedOffersCheck = await getGroupSession(originalChatId);
+        if (currentUnifiedOffersCheck.activeGamesByTypeInGroup.get(GAME_IDS.DICE_21_UNIFIED_OFFER)?.includes(offerId)){
+             await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21_UNIFIED_OFFER, null);
+        }
+
         if (e.message.toLowerCase().includes("joiner bet failed")) {
             let refundClient = null;
             try {
@@ -5599,10 +5609,12 @@ async function handleDice21AcceptPvPChallenge(offerId, joinerUserObjFromCb, orig
         if (clientBet) clientBet.release();
     }
 }
+// --- END OF FULL REPLACEMENT for handleDice21AcceptPvPChallenge function ---
 
+// --- START OF FULL REPLACEMENT for handleDice21CancelUnifiedOffer function ---
 async function handleDice21CancelUnifiedOffer(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, callbackQueryId = null) {
     const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
-    const logPrefix = `[D21_CancelOffer_V3_GranLimit GID:${offerId} UID:${initiatorId}]`; // V3
+    const logPrefix = `[D21_CancelOffer_V3_GranLimit GID:${offerId} UID:${initiatorId}]`;
     const offerData = activeGames.get(offerId);
     const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObjFromCb));
 
@@ -5619,8 +5631,8 @@ async function handleDice21CancelUnifiedOffer(offerId, initiatorUserObjFromCb, o
     if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Cancelling Dice 21 offer and refunding bet..." }).catch(() => {});
 
     activeGames.delete(offerId);
-    // Use base GAME_IDS.DICE_21 key for removing pending unified offer from group lock
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21, null); 
+    // MODIFIED: Use the correct key for unified offer removal
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_21_UNIFIED_OFFER, null);
 
     let refundClient = null;
     try {
@@ -5647,6 +5659,7 @@ async function handleDice21CancelUnifiedOffer(offerId, initiatorUserObjFromCb, o
         await safeSendMessage(originalChatId, confirmationMessageHTML, { parse_mode: 'HTML' });
     }
 }
+// --- END OF FULL REPLACEMENT for handleDice21CancelUnifiedOffer function ---
 
 // --- REVISED Player vs. Bot (PvB) Dice 21 Game Logic (V7: Refined Player Hit & Bot Turn Messaging) ---
 async function startDice21PvBGame(chatId, initiatorUserObj, betAmountLamports, originalCmdOrOfferMsgId, isPrivateChatStart = false, unifiedOfferIdIfAny = null, chatTypeFromCaller) {
@@ -6114,36 +6127,76 @@ async function startDice21PvPInitialDeal(pvpGameId, initiatorUserObj, opponentUs
     }
 }
 
-// `updateDice21PvPGameMessage` (Revised for HTML and to initiate turn timeouts)
+// --- START OF FULL REPLACEMENT for updateDice21PvPGameMessage function ---
 async function updateDice21PvPGameMessage(gameData, isFinal = false, customMessageContent = null) {
-    if (!gameData || !bot) return;
-    const logPrefix = `[D21_PvP_UpdateMsg_V3_GranLimit GID:${gameData.gameId} Final:${isFinal}]`; // V3
+    if (!gameData || !bot) return; // Basic guard
+    // Ensure gameData is the reference from activeGames, or re-fetch if necessary
+    const activeGameDataRef = activeGames.get(gameData.gameId);
+    if (!activeGameDataRef) {
+        console.warn(`[UpdateD21PvPMsg] Game GID:${gameData.gameId} not found in activeGames. Cannot update message.`);
+        return;
+    }
+    // Use the reference from activeGames to ensure all updates are on the correct object
+    gameData = activeGameDataRef;
+
+    const logPrefix = `[D21_PvP_UpdateMsg_V3_GranLimit GID:${gameData.gameId} Final:${isFinal}]`;
     const currentMainMessageId = gameData.currentMessageId;
 
-    if (gameData.currentTurnTimeoutId) { 
-        clearTimeout(gameData.currentTurnTimeoutId);
-        gameData.currentTurnTimeoutId = null;
+    // Clear previous intermediate messages (like individual roll announcements)
+    if (gameData.intermediateMessageIds && gameData.intermediateMessageIds.length > 0) {
+        console.log(`${logPrefix} Clearing ${gameData.intermediateMessageIds.length} intermediate messages.`);
+        for (const mid of gameData.intermediateMessageIds) {
+            if (bot && mid) {
+                await bot.deleteMessage(String(gameData.chatId), Number(mid)).catch(e => {
+                    // Log if deletion failed for a reason other than "message to delete not found" or "message can't be deleted"
+                    if (e.code !== 'ETELEGRAM' || (e.response && e.response.body && 
+                        !(e.response.body.description?.includes("message to delete not found") || 
+                          e.response.body.description?.includes("message can't be deleted")))) {
+                        console.warn(`${logPrefix} Non-critical: Failed to delete intermediate message ID ${mid}: ${e.message}`);
+                    }
+                });
+            }
+        }
+        gameData.intermediateMessageIds = []; // Clear the array after attempting deletion
     }
 
+    // Clear existing turn timeout if any
+    if (gameData.currentTurnTimeoutId) {
+        clearTimeout(gameData.currentTurnTimeoutId);
+        gameData.currentTurnTimeoutId = null;
+        console.log(`${logPrefix} Cleared existing turn timeout.`);
+    }
+
+    // Delete old main game message before sending new one
     if (currentMainMessageId && bot) {
-        await bot.deleteMessage(gameData.chatId, Number(currentMainMessageId)).catch(e => {});
-        const gd = activeGames.get(gameData.gameId); // Re-fetch or ensure gameData is reference
-        if (gd) gd.currentMessageId = null; 
+        await bot.deleteMessage(String(gameData.chatId), Number(currentMainMessageId)).catch(e => {
+             if (e.code !== 'ETELEGRAM' || (e.response && e.response.body && 
+                !(e.response.body.description?.includes("message to delete not found") || 
+                  e.response.body.description?.includes("message can't be deleted")))) {
+                console.warn(`${logPrefix} Non-critical: Failed to delete previous main game message ID ${currentMainMessageId}: ${e.message}`);
+            }
+        });
+        gameData.currentMessageId = null; // Mark as deleted
     }
 
     let messageTextHTML;
-    let keyboard = {};
+    let keyboard = { inline_keyboard: [] }; // Initialize for safety
     const p1MentionHTML = escapeHTML(gameData.initiator.mention);
     const p2MentionHTML = escapeHTML(gameData.opponent.mention);
     const betDisplayHTML_Update = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
 
     if (customMessageContent) {
         messageTextHTML = customMessageContent;
-        if (!isFinal) keyboard = { inline_keyboard: [[{ text: "📖 Game Rules", callback_data: `${RULES_CALLBACK_PREFIX_CONST}${GAME_IDS.DICE_21}` }]] };
+        // For final messages handled by customMessageContent (like results from finalizeDice21PvPGame),
+        // the keyboard is usually built there. If not final, can add rules.
+        if (!isFinal) { // Example: could be a "waiting for opponent after initial deal" type message
+            keyboard.inline_keyboard.push([{ text: "📖 Game Rules", callback_data: `${RULES_CALLBACK_PREFIX_CONST}${GAME_IDS.DICE_21}` }]);
+        }
     } else {
-        const p1 = gameData.initiator; const p2 = gameData.opponent;
-        const p1StatusIcon = p1.status === 'stood' ? "✅" : (p1.status === 'bust' ? "💥" : (p1.status === 'blackjack' ? "✨" : (p1.status === 'timeout_forfeit' ? "⏳" : "")));
-        const p2StatusIcon = p2.status === 'stood' ? "✅" : (p2.status === 'bust' ? "💥" : (p2.status === 'blackjack' ? "✨" : (p2.status === 'timeout_forfeit' ? "⏳" : "")));
+        const p1 = gameData.initiator;
+        const p2 = gameData.opponent;
+        const p1StatusIcon = p1.status === 'stood' ? "✅ Stood" : (p1.status === 'bust' ? "💥 BUST" : (p1.status === 'blackjack' ? "✨ BJ!" : (p1.status === 'timeout_forfeit' ? "⏳ Forfeit" : "")));
+        const p2StatusIcon = p2.status === 'stood' ? "✅ Stood" : (p2.status === 'bust' ? "💥 BUST" : (p2.status === 'blackjack' ? "✨ BJ!" : (p2.status === 'timeout_forfeit' ? "⏳ Forfeit" : "")));
 
         messageTextHTML = `⚔️ <b>Dice 21 PvP: ${p1MentionHTML} vs ${p2MentionHTML}</b> ⚔️\n` +
             `Bet: <b>${betDisplayHTML_Update}</b> each.\n\n` +
@@ -6162,6 +6215,10 @@ async function updateDice21PvPGameMessage(gameData, isFinal = false, customMessa
             buttonsForKeyboard.push([{ text: `✅ Stand (Score: ${activePlayer.score})`, callback_data: `d21_pvp_stand:${gameData.gameId}:${activePlayer.userId}` }]);
         } else if (gameData.status.startsWith('game_over_')) {
             currentActionPromptHTML = "🏁 Game concluding... Results incoming!";
+        } else if (p1.status === 'stood' && p2.status === 'waiting_turn' && !p2.isTurn) {
+             currentActionPromptHTML = `Waiting for ${p2MentionHTML} to begin their turn...`; // Should transition quickly
+        } else if (p2.status === 'stood' && p1.status === 'waiting_turn' && !p1.isTurn) {
+            currentActionPromptHTML = `Waiting for ${p1MentionHTML} to begin their turn...`;
         } else {
             currentActionPromptHTML = "Waiting for next turn or resolution...";
         }
@@ -6173,44 +6230,145 @@ async function updateDice21PvPGameMessage(gameData, isFinal = false, customMessa
         if (buttonsForKeyboard.length > 0) keyboard = { inline_keyboard: buttonsForKeyboard };
     }
 
-    const sentNewMainMessage = await safeSendMessage(gameData.chatId, messageTextHTML, {
-        parse_mode: 'HTML',
-        reply_markup: Object.keys(keyboard).length > 0 && keyboard.inline_keyboard?.length > 0 ? keyboard : {}
-    });
+    // Ensure the final message has the appropriate keyboard if it's a "post game" scenario
+    if (isFinal && customMessageContent) { // If custom content is for final results, use post-game keyboard
+        keyboard = createPostGameKeyboard(GAME_IDS.DICE_21_PVP, gameData.betAmount);
+    }
 
-    if (sentNewMainMessage?.message_id) {
-        const gd = activeGames.get(gameData.gameId);
-        if (gd) {
-            gd.currentMessageId = sentNewMainMessage.message_id;
-            const activePlayerForTimeout = gd.initiator.isTurn ? gd.initiator : (gd.opponent.isTurn ? gd.opponent : null);
-            if (!isFinal && activePlayerForTimeout && activePlayerForTimeout.status === 'playing_turn' && !gd.status.startsWith('game_over_')) {
-                const timedOutPlayerId = activePlayerForTimeout.userId;
-                gd.currentTurnTimeoutId = setTimeout(async () => {
-                    handleDice21PvPTurnTimeout(gd.gameId, timedOutPlayerId);
-                }, ACTIVE_GAME_TURN_TIMEOUT_MS);
-                console.log(`${logPrefix} Set turn timeout ${gd.currentTurnTimeoutId} for player ${timedOutPlayerId}.`);
-            }
-            activeGames.set(gd.gameId, gd);
+
+    const messageOptions = {
+        parse_mode: 'HTML',
+        reply_markup: (keyboard.inline_keyboard && keyboard.inline_keyboard.length > 0) ? keyboard : {},
+        disable_web_page_preview: true
+    };
+
+    const newMainMsg = await safeSendMessage(String(gameData.chatId), messageTextHTML, messageOptions);
+
+    if (newMainMsg?.message_id) {
+        gameData.currentMessageId = String(newMainMsg.message_id);
+        const activePlayerForTimeout = gameData.initiator.isTurn ? gameData.initiator : (gameData.opponent.isTurn ? gameData.opponent : null);
+
+        if (!isFinal && activePlayerForTimeout && activePlayerForTimeout.status === 'playing_turn' && !gameData.status.startsWith('game_over_')) {
+            const timedOutPlayerId = activePlayerForTimeout.userId;
+            gameData.currentTurnTimeoutId = setTimeout(async () => {
+                // Fetch gameData again inside timeout to ensure it's the latest state
+                const currentTimeoutGameData = activeGames.get(gameData.gameId);
+                if (currentTimeoutGameData && currentTimeoutGameData.currentTurnTimeoutId !== null) { // Check if timeout hasn't been cleared
+                     handleDice21PvPTurnTimeout(gameData.gameId, timedOutPlayerId);
+                }
+            }, ACTIVE_GAME_TURN_TIMEOUT_MS);
+            console.log(`${logPrefix} New main message sent (ID: ${newMainMsg.message_id}). Player turn timeout SET for ${timedOutPlayerId}: ${gameData.currentTurnTimeoutId}`);
+        } else {
+            console.log(`${logPrefix} New main message sent (ID: ${newMainMsg.message_id}). Not player's turn, game over, or final summary; no new turn timeout set.`);
         }
     } else {
         console.error(`${logPrefix} CRITICAL: Failed to send new PvP main game message for GID ${gameData.gameId}.`);
-        const gdOnError = activeGames.get(gameData.gameId);
-        if (gdOnError) {
-            gdOnError.status = 'game_over_error_ui_update';
-            if (gdOnError.currentTurnTimeoutId) clearTimeout(gdOnError.currentTurnTimeoutId);
-            if (!isFinal) await finalizeDice21PvPGame(gdOnError);
+        // If message sending fails, the game might be stuck.
+        // Attempt to finalize with an error state if it's not already over.
+        if (!gameData.status.startsWith('game_over_') && !isFinal) {
+            gameData.status = 'game_over_error_ui_update';
+            if (gameData.currentTurnTimeoutId) clearTimeout(gameData.currentTurnTimeoutId);
+            gameData.currentTurnTimeoutId = null;
+            // Don't call finalizeDice21PvPGame directly from here if it might cause loops.
+            // Instead, log critical error and potentially notify admin.
+            console.error(`${logPrefix} UI update failed for GID ${gameData.gameId}. Game may be stuck.`);
+            if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL UI FAIL D21 PvP GID:${gameData.gameId}`);
         }
     }
+    // Crucially, save any changes to gameData (like cleared timeouts, new message ID) back to the activeGames map
+    activeGames.set(gameData.gameId, gameData);
 }
+// --- END OF FULL REPLACEMENT for updateDice21PvPGameMessage function ---
 
-// processDice21PvPRollByEmoji - this is called by the main message handler for GAME_IDS.DICE_21_PVP.
-// The existing processDice21PvBRollByEmoji (from Segment 1) would be called. It needs to handle PvP context.
-// For this exercise, I will assume processDice21PvBRollByEmoji from Segment 1 is made generic or
-// a separate processDice21PvPRollByEmoji exists and is correctly routed by the main message handler.
-// If I were to write it here, it would be similar to the PvB one but update PvP gameData.
-// For now, I will assume the routing in bot.on('message') handles this correctly by calling the one from Segment 1,
-// and that function from Segment 1 (if it's indeed the one being called) would need internal logic based on gameData.type.
-// This specific refactor is about active game *limits and tracking keys*.
+// --- START OF NEW processDice21PvPRoll function (for D21 PvP Hits) ---
+async function processDice21PvPRoll(gameData, diceValue, rollerId) {
+    const logPrefix = `[D21_PvPRoll GID:${gameData.gameId} Roller:${rollerId}]`;
+    console.log(`${logPrefix} Processing PvP roll. Value: ${diceValue}`);
+
+    let currentPlayer;
+    let otherPlayer;
+    let playerKey; // 'initiator' or 'opponent'
+
+    if (gameData.initiator.userId === rollerId && gameData.initiator.isTurn && gameData.initiator.status === 'playing_turn') {
+        currentPlayer = gameData.initiator;
+        otherPlayer = gameData.opponent;
+        playerKey = 'initiator';
+    } else if (gameData.opponent.userId === rollerId && gameData.opponent.isTurn && gameData.opponent.status === 'playing_turn') {
+        currentPlayer = gameData.opponent;
+        otherPlayer = gameData.initiator;
+        playerKey = 'opponent';
+    } else {
+        console.warn(`${logPrefix} Roll from non-active player, not their turn, or incorrect status. Roller: ${rollerId}. Current turns/statuses - I:${gameData.initiator.isTurn}/${gameData.initiator.status}, O:${gameData.opponent.isTurn}/${gameData.opponent.status}. Ignoring roll.`);
+        // The dice emoji message itself is deleted by the main message handler
+        return;
+    }
+
+    // Clear current turn timeout for the active player
+    if (gameData.currentTurnTimeoutId) {
+        clearTimeout(gameData.currentTurnTimeoutId);
+        gameData.currentTurnTimeoutId = null;
+        console.log(`${logPrefix} Cleared turn timeout for player ${rollerId}.`);
+    }
+
+    currentPlayer.hand.push(diceValue);
+    currentPlayer.score += diceValue;
+    gameData.lastInteractionTime = Date.now();
+
+    const playerRefHTML = escapeHTML(currentPlayer.mention); // Ensure 'mention' is available or use getPlayerDisplayReference
+    const hitMessageText = `🎲 ${playerRefHTML} hits and gets a <b>${diceValue}</b>! Their new score: <b>${currentPlayer.score}</b>.`;
+
+    // Send a temporary message about the roll. This will be cleaned up by the next updateDice21PvPGameMessage call.
+    const tempMsg = await safeSendMessage(gameData.chatId, hitMessageText, { parse_mode: 'HTML' });
+    if (tempMsg?.message_id) {
+        const currentGd = activeGames.get(gameData.gameId); // Re-fetch to be safe
+        if (currentGd) {
+            currentGd.intermediateMessageIds = [...(currentGd.intermediateMessageIds || []), tempMsg.message_id];
+            // No need to activeGames.set(gameData.gameId, currentGd) here just for this,
+            // as gameData is a reference and will be set before major state changes or finalization.
+        }
+    }
+    await sleep(1500); // Allow players to see the hit message
+
+    if (currentPlayer.score > DICE_21_TARGET_SCORE) {
+        console.log(`${logPrefix} Player ${playerRefHTML} BUSTED with score ${currentPlayer.score}.`);
+        currentPlayer.status = 'bust';
+        currentPlayer.isTurn = false;
+        gameData.status = (playerKey === 'initiator') ? 'game_over_initiator_bust_during_turn' : 'game_over_opponent_bust_during_turn';
+        activeGames.set(gameData.gameId, gameData); // Save state before finalizing
+        await finalizeDice21PvPGame(gameData);
+    } else if (currentPlayer.score === DICE_21_TARGET_SCORE) {
+        console.log(`${logPrefix} Player ${playerRefHTML} hit 21. Auto-standing.`);
+        currentPlayer.status = 'stood'; // Player stands on 21
+        currentPlayer.isTurn = false;
+
+        // Determine next state based on who hit 21
+        if (playerKey === 'initiator') { // Initiator hit 21
+            if (otherPlayer.status === 'bust' || otherPlayer.status === 'stood' || otherPlayer.status === 'blackjack' || otherPlayer.status === 'timeout_forfeit' || otherPlayer.status === 'lost_to_blackjack') {
+                gameData.status = 'game_over_both_played_final'; // Other player already finished
+            } else {
+                // Other player's turn
+                otherPlayer.isTurn = true;
+                otherPlayer.status = 'playing_turn';
+                gameData.status = 'opponent_turn';
+            }
+        } else { // Opponent hit 21 (Initiator must have already stood or finished their turn)
+            gameData.status = 'game_over_both_played_final';
+        }
+        activeGames.set(gameData.gameId, gameData); // Save state
+
+        if (gameData.status.startsWith('game_over_')) {
+            await finalizeDice21PvPGame(gameData);
+        } else {
+            await updateDice21PvPGameMessage(gameData); // Update UI for opponent's turn or refresh
+        }
+    } else {
+        // Player hit, score is < 21, their turn continues
+        // Status ('playing_turn') remains, isTurn remains true
+        activeGames.set(gameData.gameId, gameData); // Save new hand/score
+        await updateDice21PvPGameMessage(gameData); // Refresh UI and reset timeout for the same player
+    }
+}
+// --- END OF NEW processDice21PvPRoll function ---
 
 async function handleDice21PvPStand(gameId, userIdWhoStood, originalMessageId, callbackQueryId, chatData) {
     const gameData = activeGames.get(gameId);
@@ -10509,6 +10667,7 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
 }
 
 // --- Main Message Handler (`bot.on('message')`) ---
+// --- START OF FULL REPLACEMENT for bot.on('message') function ---
 bot.on('message', async (msg) => {
     const LOG_PREFIX_MSG_HANDLER = `[MsgHandler TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
 
@@ -10518,9 +10677,9 @@ bot.on('message', async (msg) => {
     if (msg.from.is_bot) {
         try {
             const selfBotInfo = await bot.getMe();
-            if (String(msg.from.id) !== String(selfBotInfo.id)) return;
-            if (!msg.dice) return; 
-        } catch (getMeError) { return; }
+            if (String(msg.from.id) !== String(selfBotInfo.id)) return; // Ignore other bots
+            if (!msg.dice) return; // Only process own dice messages if relevant (e.g. for helper bot system)
+        } catch (getMeError) { return; } // If getMe fails, can't confirm if it's self, so ignore.
     }
 
     const userId = String(msg.from.id || msg.from.telegram_id);
@@ -10528,7 +10687,8 @@ bot.on('message', async (msg) => {
     const text = msg.text || "";
     const chatType = msg.chat.type;
 
-    if (msg.dice && msg.from && !msg.from.is_bot) {
+    // Dice emoji handling for active games
+    if (msg.dice && msg.from && !msg.from.is_bot) { // Ensure it's a user's dice roll
         const diceValue = msg.dice.value;
         const rollerId = String(msg.from.id || msg.from.telegram_id);
         let gameIdForDiceRoll = null;
@@ -10537,25 +10697,32 @@ bot.on('message', async (msg) => {
         let isDice21Emoji = false;
         let isDuelGameEmoji = false;
 
+        // Iterate through activeGames to find a matching game expecting a dice roll from this user in this chat
         for (const [gId, gData] of activeGames.entries()) {
             if (String(gData.chatId) === chatId) {
+                // Dice Escalator PvB
                 if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break;
                 }
+                // Dice Escalator PvP
                 if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
                     const isPlayerTurnInDEPvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji');
                     if (isPlayerTurnInDEPvP) { gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDiceEscalatorEmoji = true; break; }
                 }
+                // Dice 21 (PvB)
                 if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status === 'player_turn_hit_stand_prompt' || gData.status === 'player_initial_roll_1_prompted' || gData.status === 'player_initial_roll_2_prompted')) {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break;
                 }
+                // Dice 21 (PvP)
                 if (gData.type === GAME_IDS.DICE_21_PVP) {
                     const isPlayerTurnInD21PvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'playing_turn') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'playing_turn');
                     if (isPlayerTurnInD21PvP) { gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDice21Emoji = true; break; }
                 }
-                if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') { 
+                // Duel (PvB)
+                if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') {
                     gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break;
                 }
+                // Duel (PvP)
                 if (gData.type === GAME_IDS.DUEL_PVP) {
                     const isPlayerTurnInDuelPvP = (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji');
                     if (isPlayerTurnInDuelPvP) { gameIdForDiceRoll = gId; gameDataForDiceRoll = gData; isDuelGameEmoji = true; break; }
@@ -10564,135 +10731,258 @@ bot.on('message', async (msg) => {
         }
 
         if (gameIdForDiceRoll && gameDataForDiceRoll) {
-            bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+            bot.deleteMessage(chatId, msg.message_id).catch(() => {}); // Delete the user's dice emoji message
+
             if (isDiceEscalatorEmoji) {
-                if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVB && typeof processDiceEscalatorPvBRollByEmoji_New === 'function') await processDiceEscalatorPvBRollByEmoji_New(gameDataForDiceRoll, diceValue);
-                else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP && typeof processDiceEscalatorPvPRollByEmoji_New === 'function') await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId);
-            } else if (isDice21Emoji) {
-                // The same processDice21PvBRollByEmoji is called for both DICE_21 (PvB) and DICE_21_PVP.
-                // It must internally differentiate or be made generic enough.
-                if ((gameDataForDiceRoll.type === GAME_IDS.DICE_21 || gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) && typeof processDice21PvBRollByEmoji === 'function') {
-                     if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) {
-                        // Pass rollerId for PvP context if the function expects it differently
-                        await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg); // Original passes full msg, can be refined
-                     } else { // PvB
-                        await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg);
-                     }
-                } else {
-                    console.error(`${LOG_PREFIX_MSG_HANDLER} Missing or misconfigured handler for Dice 21 emoji roll. Type: ${gameDataForDiceRoll.type}`);
+                if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVB && typeof processDiceEscalatorPvBRollByEmoji_New === 'function') {
+                    await processDiceEscalatorPvBRollByEmoji_New(gameDataForDiceRoll, diceValue);
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP && typeof processDiceEscalatorPvPRollByEmoji_New === 'function') {
+                    await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId);
                 }
+            } else if (isDice21Emoji) {
+                // --- MODIFIED BLOCK for D21 Emoji Handling ---
+                if (gameDataForDiceRoll.type === GAME_IDS.DICE_21 && typeof processDice21PvBRollByEmoji === 'function') {
+                    // This is for Player vs. Bot (PvB) Dice 21
+                    await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg);
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP && typeof processDice21PvPRoll === 'function') {
+                    // This is for Player vs. Player (PvP) Dice 21, calling the new function
+                    await processDice21PvPRoll(gameDataForDiceRoll, diceValue, rollerId);
+                } else {
+                    console.error(`${LOG_PREFIX_MSG_HANDLER} Missing or misconfigured handler for Dice 21 emoji roll. Game Type: ${gameDataForDiceRoll.type}`);
+                }
+                // --- END OF MODIFIED BLOCK ---
             } else if (isDuelGameEmoji) {
-                if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVB && typeof processDuelPvBRollByEmoji === 'function') await processDuelPvBRollByEmoji(gameDataForDiceRoll, diceValue);
-                else if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVP && typeof processDuelPvPRollByEmoji === 'function') await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId);
+                if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVB && typeof processDuelPvBRollByEmoji === 'function') {
+                    await processDuelPvBRollByEmoji(gameDataForDiceRoll, diceValue);
+                } else if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVP && typeof processDuelPvPRollByEmoji === 'function') {
+                    await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId);
+                }
             }
-            return;
+            return; // Processed dice emoji, no further command processing needed
         }
     }
 
+    // Stateful input handling (e.g., waiting for withdrawal address/amount)
     if (userStateCache.has(userId) && !text.startsWith('/')) {
         const currentState = userStateCache.get(userId);
-        if (typeof routeStatefulInput === 'function') { await routeStatefulInput(msg, currentState); return; }
-        else { if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId); }
+        // Ensure routeStatefulInput is defined before calling
+        if (typeof routeStatefulInput === 'function') {
+            await routeStatefulInput(msg, currentState);
+            return; // Input handled by stateful router
+        } else {
+            // Fallback if routeStatefulInput is somehow not defined
+            if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+        }
     }
 
+    // Command processing
     if (text.startsWith('/')) {
-        if (!userId || userId === "undefined") { await safeSendMessage(chatId, "⚠️ Error with user session. Try `/start`.", {}); return; }
+        if (!userId || userId === "undefined") { // Basic check
+            await safeSendMessage(chatId, "⚠️ Error with user session. Try `/start`.", {});
+            return;
+        }
+        // Ensure userForCommandProcessing is fetched for every command
         let userForCommandProcessing = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-        if (!userForCommandProcessing) { await safeSendMessage(chatId, "😕 Profile access error. Try `/start`.", {}); return; }
+        if (!userForCommandProcessing) { // If somehow still null after getOrCreateUser
+            await safeSendMessage(chatId, "😕 Profile access error. Try `/start`.", {});
+            return;
+        }
 
         const now = Date.now();
-        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) return;
+        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
+            // Optionally inform user about cooldown, or just silently ignore. For now, silent.
+            return;
+        }
         userCooldowns.set(userId, now);
 
         let fullCommand = text.substring(1);
         let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
         const commandArgs = fullCommand.split(/\s+/).slice(1);
-        const originalMessageId = msg.message_id;
+        const originalMessageId = msg.message_id; // For potential deletion in group chats
 
+        // Handle commands with bot username (e.g., /command@BotName)
         if (commandName.includes('@')) {
             try {
-                const selfBotInfo = await bot.getMe(); const botUsernameLower = selfBotInfo.username.toLowerCase();
-                if (commandName.endsWith(`@${botUsernameLower}`)) commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
-                else if (chatType === 'group' || chatType === 'supergroup') return; 
-                else commandName = commandName.split('@')[0]; 
-            } catch (getMeErr) {}
+                const selfBotInfo = await bot.getMe();
+                const botUsernameLower = selfBotInfo.username.toLowerCase();
+                if (commandName.endsWith(`@${botUsernameLower}`)) {
+                    commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
+                } else if (chatType === 'group' || chatType === 'supergroup') {
+                    // If it's a group, and command has @ but not for this bot, ignore it
+                    return;
+                } else {
+                    // In private chat, if @ is present but not for this bot, still process (might be a typo)
+                    commandName = commandName.split('@')[0];
+                }
+            } catch (getMeErr) { /* If getMe fails, proceed with the commandName as is */ }
         }
+
         console.log(`${LOG_PREFIX_MSG_HANDLER} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${userId} (${userForCommandProcessing.username || 'NoUsername'})`);
 
+        // Helper to parse arguments for game commands that might take bet and/or target user
         const parseGameArgs = (args) => {
-            let betArg = null; let targetRaw = null; let otherArgs = [];
-            if (args.length === 0) {}
-            else if (args.length === 1) {
+            let betArg = null;
+            let targetRaw = null;
+            let otherArgs = []; // For any additional arguments after bet/target
+
+            if (args.length === 0) {
+                // No arguments, bet will be default (null here, handled by parseBetAmount)
+            } else if (args.length === 1) {
                 const arg0 = args[0];
-                if (arg0.startsWith('@') || (/^\d+$/.test(arg0) && arg0.length >= 7 && arg0.length <= 12)) targetRaw = arg0;
-                else betArg = arg0;
-            } else {
+                // Check if the single argument looks like a username/ID or a bet
+                if (arg0.startsWith('@') || (/^\d+$/.test(arg0) && arg0.length >= 7 && arg0.length <= 12)) { // Heuristic for TG ID length
+                    targetRaw = arg0; // Assume it's a target if it looks like one
+                } else {
+                    betArg = arg0; // Otherwise, assume it's a bet
+                }
+            } else { // 2 or more arguments
                 const arg0IsUserLike = args[0].startsWith('@') || (/^\d+$/.test(args[0]) && args[0].length >= 7);
                 const arg1IsUserLike = args.length > 1 && (args[1].startsWith('@') || (/^\d+$/.test(args[1]) && args[1].length >= 7));
-                if (!arg0IsUserLike && arg1IsUserLike) { betArg = args[0]; targetRaw = args[1]; otherArgs = args.slice(2); }
-                else if (arg0IsUserLike && !arg1IsUserLike) { targetRaw = args[0]; betArg = args[1]; otherArgs = args.slice(2); }
-                else if (!arg0IsUserLike && !arg1IsUserLike) { betArg = args[0]; otherArgs = args.slice(1); }
-                else { betArg = args[0]; targetRaw = null; otherArgs = args.slice(1); } 
+
+                if (!arg0IsUserLike && arg1IsUserLike) { // Bet then User: /game 10 @user
+                    betArg = args[0];
+                    targetRaw = args[1];
+                    otherArgs = args.slice(2);
+                } else if (arg0IsUserLike && !arg1IsUserLike) { // User then Bet: /game @user 10 (less common but support)
+                    targetRaw = args[0];
+                    betArg = args[1];
+                    otherArgs = args.slice(2);
+                } else if (!arg0IsUserLike && !arg1IsUserLike) { // Bet then other args (no target user)
+                    betArg = args[0];
+                    otherArgs = args.slice(1);
+                } else { // Both look like users, or some other combo. Default to first as bet, ignore others for target.
+                    betArg = args[0];
+                    targetRaw = null; // Or could decide based on context if needed
+                    otherArgs = args.slice(1);
+                }
             }
             return { betArg, targetRaw, otherArgs };
         };
 
+
         try {
             switch (commandName) {
-                case 'start': await handleStartCommand(msg, commandArgs); break;
-                case 'help': await handleHelpCommand(msg); break;
-                case 'balance': case 'bal': await handleBalanceCommand(msg); break;
-                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, originalMessageId, false, chatType); break;
-                case 'jackpot': await handleJackpotCommand(chatId, userForCommandProcessing, chatType); break;
-                case 'leaderboards': await handleLeaderboardsCommand(msg, commandArgs); break;
-                case 'wallet': if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); break;
-                case 'deposit': if (typeof handleDepositCommand === 'function') await handleDepositCommand(msg, commandArgs, userId); break;
-                case 'withdraw': if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(msg, commandArgs, userId); break;
-                case 'referral': if (typeof handleReferralCommand === 'function') await handleReferralCommand(msg); break;
-                case 'history': if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg); break;
-                case 'setwallet': if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs); break;
-                case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
-                case 'tip': if (typeof handleTipCommand === 'function') await handleTipCommand(msg, commandArgs, userForCommandProcessing); break;
+                case 'start':
+                    if (typeof handleStartCommand === 'function') await handleStartCommand(msg, commandArgs);
+                    break;
+                case 'help':
+                    if (typeof handleHelpCommand === 'function') await handleHelpCommand(msg);
+                    break;
+                case 'balance': case 'bal':
+                    if (typeof handleBalanceCommand === 'function') await handleBalanceCommand(msg);
+                    break;
+                case 'rules': case 'info':
+                    if (typeof handleRulesCommand === 'function') await handleRulesCommand(chatId, userForCommandProcessing, originalMessageId, false, chatType);
+                    break;
+                case 'jackpot':
+                    if (typeof handleJackpotCommand === 'function') await handleJackpotCommand(chatId, userForCommandProcessing, chatType);
+                    break;
+                case 'leaderboards':
+                    if (typeof handleLeaderboardsCommand === 'function') await handleLeaderboardsCommand(msg, commandArgs);
+                    break;
+                case 'wallet':
+                    if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); // msg contains .from and .chat
+                    break;
+                case 'deposit':
+                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(msg, commandArgs, userId); // Pass userId for clarity
+                    break;
+                case 'withdraw':
+                    if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(msg, commandArgs, userId);
+                    break;
+                case 'referral':
+                    if (typeof handleReferralCommand === 'function') await handleReferralCommand(msg);
+                    break;
+                case 'history':
+                    if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg);
+                    break;
+                case 'setwallet':
+                    if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs);
+                    break;
+                case 'grant':
+                    if (typeof handleGrantCommand === 'function') await handleGrantCommand(msg, commandArgs, userForCommandProcessing); // Pass admin user object
+                    break;
+                case 'tip':
+                    if (typeof handleTipCommand === 'function') await handleTipCommand(msg, commandArgs, userForCommandProcessing); // Pass tipper user object
+                    break;
+
+                // Game Commands
                 case 'coinflip': case 'cf': {
                     if (chatType === 'private') { await safeSendMessage(chatId, `🪙 Coinflip is in <b>groups</b>! Use <code>/cf &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betCF = await parseBetAmount(betArg, chatId, chatType, userId); if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartCoinflipUnifiedOfferCommand`); break;
+                    if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') {
+                        const { betArg, targetRaw } = parseGameArgs(commandArgs);
+                        const betCF = await parseBetAmount(betArg, chatId, chatType, userId);
+                        if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF, targetRaw);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartCoinflipUnifiedOfferCommand`);
+                    break;
                 }
                 case 'rps': {
                     if (chatType === 'private') { await safeSendMessage(chatId, `🪨📄✂️ RPS is in <b>groups</b>! Use <code>/rps &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartRPSUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betRPS = await parseBetAmount(betArg, chatId, chatType, userId); if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartRPSUnifiedOfferCommand`); break;
+                    if (typeof handleStartRPSUnifiedOfferCommand === 'function') {
+                        const { betArg, targetRaw } = parseGameArgs(commandArgs);
+                        const betRPS = await parseBetAmount(betArg, chatId, chatType, userId);
+                        if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS, targetRaw);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartRPSUnifiedOfferCommand`);
+                    break;
                 }
                 case 'de': case 'diceescalator': {
                     if (chatType === 'private') { await safeSendMessage(chatId, `🎲 Dice Escalator is in <b>groups</b>! Use <code>/de &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betDE = await parseBetAmount(betArg, chatId, chatType, userId); if(betDE) await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDiceEscalatorUnifiedOfferCommand_New`); break;
+                    if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') {
+                        const { betArg, targetRaw } = parseGameArgs(commandArgs);
+                        const betDE = await parseBetAmount(betArg, chatId, chatType, userId);
+                        if(betDE) await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetRaw);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDiceEscalatorUnifiedOfferCommand_New`);
+                    break;
                 }
                 case 'd21': case 'blackjack': {
                     if (chatType === 'private') { await safeSendMessage(chatId, `🎲 Dice 21 is in <b>groups</b>! Use <code>/d21 &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartDice21Command === 'function') { const { betArg, targetRaw, otherArgs } = parseGameArgs(commandArgs); const gameModeArgD21 = otherArgs[0] || null; const betD21 = await parseBetAmount(betArg, chatId, chatType, userId); if(betD21) await handleStartDice21Command(msg, betD21, targetRaw, gameModeArgD21); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDice21Command`); break;
+                    if (typeof handleStartDice21Command === 'function') {
+                        const { betArg, targetRaw, otherArgs } = parseGameArgs(commandArgs);
+                        const gameModeArgD21 = otherArgs[0] || null; // Example if d21 took another arg
+                        const betD21 = await parseBetAmount(betArg, chatId, chatType, userId);
+                        if(betD21) await handleStartDice21Command(msg, betD21, targetRaw, gameModeArgD21);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDice21Command`);
+                    break;
                 }
                 case 'duel': case 'highroller': {
                     if (chatType === 'private') { await safeSendMessage(chatId, `⚔️ Duel is in <b>groups</b>! Use <code>/duel &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartDuelUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betDuel = await parseBetAmount(betArg, chatId, chatType, userId); if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDuelUnifiedOfferCommand`); break;
+                    if (typeof handleStartDuelUnifiedOfferCommand === 'function') {
+                        const { betArg, targetRaw } = parseGameArgs(commandArgs);
+                        const betDuel = await parseBetAmount(betArg, chatId, chatType, userId);
+                        if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel, targetRaw);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDuelUnifiedOfferCommand`);
+                    break;
                 }
                 case 'ou7': case 'overunder7':
-                    if (typeof handleStartOverUnder7Command === 'function') { const betOU7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betOU7) await handleStartOverUnder7Command(msg, betOU7); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartOverUnder7Command`); break;
+                    if (typeof handleStartOverUnder7Command === 'function') {
+                        const betOU7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betOU7) await handleStartOverUnder7Command(msg, betOU7);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartOverUnder7Command`);
+                    break;
                 case 'ladder': case 'greedsladder':
-                    if (typeof handleStartLadderCommand === 'function') { const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betLadder) await handleStartLadderCommand(msg, betLadder); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartLadderCommand`); break;
-                case 's7': case 'sevenout': case 'luckysum': 
-                    if (typeof handleStartSevenOutCommand === 'function') { const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betS7) await handleStartSevenOutCommand(msg, betS7); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSevenOutCommand`); break;
+                    if (typeof handleStartLadderCommand === 'function') {
+                        const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betLadder) await handleStartLadderCommand(msg, betLadder);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartLadderCommand`);
+                    break;
+                case 's7': case 'sevenout': case 'luckysum':
+                    if (typeof handleStartSevenOutCommand === 'function') {
+                        const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betS7) await handleStartSevenOutCommand(msg, betS7);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSevenOutCommand`);
+                    break;
                 case 'slot': case 'slots': case 'slotfrenzy':
-                    if (typeof handleStartSlotCommand === 'function') { const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betSlot) await handleStartSlotCommand(msg, betSlot); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSlotCommand`); break;
+                    if (typeof handleStartSlotCommand === 'function') {
+                        const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
+                        if(betSlot) await handleStartSlotCommand(msg, betSlot);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSlotCommand`);
+                    break;
                 case 'mines':
-                    if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
+                    if (typeof handleStartMinesCommand === 'function') {
+                         // handleStartMinesCommand expects userObj as 3rd param
+                        await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
+                    } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`);
+                    break;
+
                 default:
                     const selfBotInfoDefault = await bot.getMe();
                     if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
@@ -10707,6 +10997,7 @@ bot.on('message', async (msg) => {
         }
     }
 });
+// --- END OF FULL REPLACEMENT for bot.on('message') function ---
 
 // --- Callback Query Handler (`bot.on('callback_query')`) ---
 bot.on('callback_query', async (callbackQuery) => {
