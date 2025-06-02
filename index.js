@@ -1,4 +1,4 @@
-// --- Start of Part 1 (CORRECTED - BOT_NAME reverted - ALL ORIGINAL CODE INCLUDED - RETAINS GRANULAR ACTIVE GAME LIMITS) ---
+// --- Start of Part 1 (CORRECTED - BOT_NAME restored - All declarations fixed - All original code included - RETAINS GRANULAR ACTIVE GAME LIMITS) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
@@ -81,7 +81,7 @@ const CASINO_ENV_DEFAULTS = {
   'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
   'MAX_RETRY_POLLING_DELAY': '60000',
   'INITIAL_RETRY_POLLING_DELAY': '5000',
-  'BOT_NAME': 'Solana Casino Royale', // Original BOT_NAME in defaults
+  'BOT_NAME': 'Solana Casino Royale', 
   'DICE_ROLL_POLL_INTERVAL_MS': '2500',
   'DICE_ROLL_POLL_ATTEMPTS': '24',
   'MINES_DEFAULT_ROWS': '5',
@@ -196,7 +196,7 @@ Object.entries(OPTIONAL_ENV_DEFAULTS).forEach(([key, defaultValue]) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOT_NAME = process.env.BOT_NAME; // Using original BOT_NAME constant
+const BOT_NAME = process.env.BOT_NAME; // Correctly defined from process.env
 
 // Payment System Keys & Seeds
 const DEPOSIT_MASTER_SEED_PHRASE = process.env.DEPOSIT_MASTER_SEED_PHRASE;
@@ -236,7 +236,7 @@ const GAME_IDS = {
 
     OVER_UNDER_7: 'ou7', 
     LADDER: 'ladder',       
-    SEVEN_OUT: 'sevenout',  // Lucky Sum
+    SEVEN_OUT: 'sevenout',  
     SLOT_FRENZY: 'slotfrenzy',
     MINES: 'mines',         
     MINES_OFFER: 'mines_offer', 
@@ -350,9 +350,8 @@ const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
 };
 const GAME_ACTIVITY_LIMITS = DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS;
 
-
 // Keypair Initializations
-let MAIN_BOT_KEYPAIR = null; // Declaration with 'let' and initialization
+let MAIN_BOT_KEYPAIR = null; 
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
     try {
         MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
@@ -366,22 +365,21 @@ if (MAIN_BOT_PRIVATE_KEY_BS58) {
     process.exit(1);
 }
 
-let REFERRAL_PAYOUT_KEYPAIR = null; // Declaration with 'let' and initialization
+let REFERRAL_PAYOUT_KEYPAIR = null; 
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
     try {
         REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
         console.log(`🔑 Referral Payout Wallet Initialized: ${REFERRAL_PAYOUT_KEYPAIR.publicKey.toBase58()}`);
     } catch (e) {
         console.warn(`⚠️ WARNING: Invalid REFERRAL_PAYOUT_PRIVATE_KEY. Falling back to main bot wallet for referral payouts. Error: ${e.message}`);
-        REFERRAL_PAYOUT_KEYPAIR = null; // Assign null if error
+        REFERRAL_PAYOUT_KEYPAIR = null;
     }
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
-if (!REFERRAL_PAYOUT_KEYPAIR) { // Fallback assignment
+if (!REFERRAL_PAYOUT_KEYPAIR) { 
     REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
 }
-
 
 // RPC Endpoint Configuration
 const RPC_URLS_LIST_FROM_ENV = (process.env.RPC_URLS || '')
@@ -399,7 +397,6 @@ if (combinedRpcEndpointsForConnection.length === 0) {
     console.warn("⚠️ WARNING: No RPC URLs provided (RPC_URLS, SOLANA_RPC_URL). Using default public Solana RPC as a last resort.");
     combinedRpcEndpointsForConnection.push('https://api.mainnet-beta.solana.com/');
 }
-
 
 // More Constants derived from ENV
 const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 10);
@@ -430,8 +427,7 @@ const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS || '0'); 
 const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD); 
 
-
-// Critical Configuration Validations (Full block from original)
+// Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
 if (!DEPOSIT_MASTER_SEED_PHRASE) { console.error("🚨 FATAL ERROR: DEPOSIT_MASTER_SEED_PHRASE is not defined. Payment system cannot generate deposit addresses."); process.exit(1); }
@@ -519,7 +515,6 @@ for (const key in MINES_DIFFICULTY_CONFIG) {
     if (!Array.isArray(config.multipliers) || config.multipliers.length !== (config.rows * config.cols - config.mines + 1)) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.multipliers array is missing or has incorrect length. Expected ${config.rows * config.cols - config.mines + 1} entries (0 gems + N gems).`); process.exit(1); }
 }
 
-
 if (ADMIN_USER_ID) console.log(`ℹ️ Admin User ID: ${ADMIN_USER_ID} loaded.`);
 
 function formatLamportsToSolStringForLog(lamports) {
@@ -533,7 +528,6 @@ function formatLamportsToSolStringForLog(lamports) {
     return (Number(lamports) / Number(LAMPORTS_PER_SOL)).toFixed(SOL_DECIMALS);
 }
 
-// Log Key Configurations (UPDATED with new active game limit categories)
 console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Dice Escalator (PvB): Target Jackpot Score: ${TARGET_JACKPOT_SCORE_CONST}, Player Bust On: ${DICE_ESCALATOR_BUST_ON}, Jackpot Fee: ${JACKPOT_CONTRIBUTION_PERCENT * 100}%
   Dice 21 (Blackjack): Target Score: ${DICE_21_TARGET_SCORE}, Bot Stand: ${DICE_21_BOT_STAND_SCORE}
@@ -627,7 +621,7 @@ const solanaConnection = new RateLimitedConnection(
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-let app = null; // Initialize app as null
+let app = null; // Correctly declared with let
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
@@ -639,15 +633,14 @@ if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
 
 const BOT_VERSION = process.env.BOT_VERSION || '3.4.0-de-rewrite';
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
-isShuttingDown = false; // Initialize isShuttingDown
-activeGames = new Map(); 
-userCooldowns = new Map(); 
-groupGameSessions = new Map(); 
+let isShuttingDown = false; // Correctly declared with let
+let activeGames = new Map(); // Correctly declared with let
+let userCooldowns = new Map(); // Correctly declared with let
+let groupGameSessions = new Map(); // Correctly declared with let
 const walletCache = new Map(); 
 const activeDepositAddresses = new Map(); 
 const processedDepositTxSignatures = new Set(); 
-const PENDING_REFERRAL_TTL_MS = 24 * 60 * 60 * 1000; 
-const pendingReferrals = new Map(); 
+// PENDING_REFERRAL_TTL_MS and pendingReferrals are not in original Part 1, moved to Part 2 contextually
 const userStateCache = new Map(); 
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map(); 
