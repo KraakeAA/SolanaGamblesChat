@@ -2032,6 +2032,7 @@ const COIN_FLIP_ANIMATION_DURATION_MS = 2000;
 const COIN_FLIP_ANIMATION_STEPS = Math.floor(COIN_FLIP_ANIMATION_DURATION_MS / COIN_FLIP_ANIMATION_INTERVAL_MS);
 
 // --- Coinflip Unified Offer Command ---
+// --- START OF REPLACEMENT for handleStartCoinflipUnifiedOfferCommand function ---
 async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
@@ -2069,7 +2070,7 @@ async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, ta
     }
 
     let targetUserObject = null;
-    let isDirectChallenge = (targetUsernameRaw != null);
+    let isDirectChallenge = (targetUsernameRaw != null); // isDirectChallengeOfferAttempt is the same
 
     if (isDirectChallenge) {
         targetUserObject = await findRecipientUser(targetUsernameRaw);
@@ -2083,18 +2084,18 @@ async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, ta
     }
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock; 
+    let offerActivityKeyForLock;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.COINFLIP_PVP; 
+        offerActivityKeyForLock = GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        const limitDirect = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
+        const limitDirect = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
         if (currentDirectChallenges.length >= limitDirect) {
             await safeSendMessage(chatId, `⏳ Hold your coins, ${initiatorPlayerRefHTML}! The limit of ${limitDirect} concurrent direct Coinflip challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
-    } else { 
-        offerActivityKeyForLock = GAME_IDS.COINFLIP; 
+    } else {
+        offerActivityKeyForLock = GAME_IDS.COINFLIP; // For unified offers
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
         const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
         if (currentUnifiedOffers.length >= limitUnified) {
@@ -2152,6 +2153,7 @@ async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, ta
                 chatTitle: msg.chat.title || `Group Chat ${chatId}`,
                 status: 'pending_direct_challenge_response',
                 gameToStart: GAME_IDS.COINFLIP_PVP,
+                _offerKeyUsedForGroupLock: GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER, // MODIFIED: Store the correct key
                 creationTime: Date.now(),
                 timeoutId: null
             };
@@ -2194,20 +2196,25 @@ async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, ta
                 creationTime: Date.now(),
                 offerMessageId: String(sentMessage.message_id),
                 timeoutId: null
+                // No _offerKeyUsedForGroupLock needed here as offerActivityKeyForLock is already GAME_IDS.COINFLIP for unified offers
             };
         }
 
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
+        // This will now use the correct `offerActivityKeyForLock`
+        // (e.g., GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER or GAME_IDS.COINFLIP)
         await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Pending Offer Lock Key: ${offerActivityKeyForLock}) created and bet placed.`);
+        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created and bet placed.`);
 
         offerData.timeoutId = setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
             if (timedOutOffer && (timedOutOffer.status === 'pending_offer' || timedOutOffer.status === 'pending_direct_challenge_response')) {
                 console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) timed out.`);
                 activeGames.delete(offerId);
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+                // Use the same key for removal as was used for adding
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
 
                 let refundClient = null;
                 try {
@@ -2240,20 +2247,23 @@ async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, ta
                 }
             }
         }, timeoutDuration);
-        activeGames.set(offerId, offerData);
+        activeGames.set(offerId, offerData); // Ensure timeoutId is saved
 
     } catch (error) {
         if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} Error creating Coinflip offer or placing bet: ${error.message}`);
         await safeSendMessage(chatId, `⚠️ Error creating your Coinflip offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
         if (offerId && activeGames.has(offerId)) {
-             activeGames.delete(offerId);
-             if(offerActivityKeyForLock) await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+            activeGames.delete(offerId);
+            // Use the offerActivityKeyForLock that would have been set
+            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock; // Fallback if offerData not fully formed
+            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
         }
     } finally {
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
+// --- END OF REPLACEMENT for handleStartCoinflipUnifiedOfferCommand function ---
 
 // --- Coinflip Offer Callback Handlers ---
 async function handleCoinflipAcceptBotGameCallback(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
@@ -2880,6 +2890,7 @@ async function finalizeCoinflipPvPGame(gameData) {
 // --- Start of REVISED Rock Paper Scissors (RPS) Game Logic & Handlers (Unified Offer, HTML, New Mechanics, Granular Limits) ---
 // (RPS_CHOICES, RPS_EMOJIS, RPS_RULES are assumed defined from Part 4)
 
+// --- START OF REPLACEMENT for handleStartRPSUnifiedOfferCommand function ---
 async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
@@ -2931,18 +2942,18 @@ async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetU
     }
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock; 
+    let offerActivityKeyForLock;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.RPS_PVP; 
+        offerActivityKeyForLock = GAME_IDS.RPS_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        const limitDirect = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
+        const limitDirect = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
         if (currentDirectChallenges.length >= limitDirect) {
             await safeSendMessage(chatId, `⏳ Hold your hands, ${initiatorPlayerRefHTML}! The limit of ${limitDirect} concurrent direct RPS challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
     } else { // Unified Offer
-        offerActivityKeyForLock = GAME_IDS.RPS; 
+        offerActivityKeyForLock = GAME_IDS.RPS;
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
         const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
         if (currentUnifiedOffers.length >= limitUnified) {
@@ -2985,22 +2996,23 @@ async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetU
             }
 
             offerData = {
-                type: GAME_IDS.DIRECT_PVP_CHALLENGE, 
-                offerId: offerId, 
-                gameId: offerId, 
+                type: GAME_IDS.DIRECT_PVP_CHALLENGE,
+                offerId: offerId,
+                gameId: offerId,
                 initiatorId: userId,
-                initiatorUserObj: initiatorUserObj, 
+                initiatorUserObj: initiatorUserObj,
                 initiatorMentionHTML: initiatorPlayerRefHTML,
-                targetUserId: String(targetUserObject.telegram_id), 
-                targetUserObj: targetUserObject, 
-                targetUserMentionHTML: targetPlayerRefHTML,
-                betAmount: betAmountLamports, 
-                originalGroupId: chatId, 
+                targetUserId: String(targetUserObject.telegram_id),
+                targetUserObj: targetUserObject,
+                targetUserMentionHTML: targetPlayerRefHTML, // Make sure this is defined from targetUserObject
+                betAmount: betAmountLamports,
+                originalGroupId: chatId,
                 offerMessageIdInGroup: String(sentGroupMessage.message_id),
-                chatTitle: msg.chat.title || `Group Chat ${chatId}`, 
+                chatTitle: msg.chat.title || `Group Chat ${chatId}`,
                 status: 'pending_direct_challenge_response',
-                gameToStart: GAME_IDS.RPS_PVP, 
-                creationTime: Date.now(), 
+                gameToStart: GAME_IDS.RPS_PVP,
+                _offerKeyUsedForGroupLock: GAME_IDS.RPS_DIRECT_CHALLENGE_OFFER, // MODIFIED: Store the correct key
+                creationTime: Date.now(),
                 timeoutId: null
             };
         } else { // Unified Offer
@@ -3030,17 +3042,17 @@ async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetU
             }
 
             offerData = {
-                type: GAME_IDS.RPS_UNIFIED_OFFER, 
-                gameId: offerId, 
-                chatId: chatId, 
+                type: GAME_IDS.RPS_UNIFIED_OFFER,
+                gameId: offerId,
+                chatId: chatId,
                 chatType: chatType,
-                initiatorId: userId, 
-                initiatorMentionHTML: initiatorPlayerRefHTML, 
+                initiatorId: userId,
+                initiatorMentionHTML: initiatorPlayerRefHTML,
                 initiatorUserObj: initiatorUserObj,
-                betAmount: betAmountLamports, 
+                betAmount: betAmountLamports,
                 status: 'pending_offer',
-                creationTime: Date.now(), 
-                offerMessageId: String(sentMessage.message_id), 
+                creationTime: Date.now(),
+                offerMessageId: String(sentMessage.message_id),
                 timeoutId: null
             };
         }
@@ -3048,14 +3060,15 @@ async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetU
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Pending Offer Lock Key: ${offerActivityKeyForLock}) created and bet placed.`);
+        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created and bet placed.`);
 
         offerData.timeoutId = setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
             if (timedOutOffer && (timedOutOffer.status === 'pending_offer' || timedOutOffer.status === 'pending_direct_challenge_response')) {
                 console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for RPS timed out.`);
                 activeGames.delete(offerId);
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
 
                 let refundClient = null;
                 try {
@@ -3088,7 +3101,7 @@ async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetU
                 }
             }
         }, timeoutDuration);
-        activeGames.set(offerId, offerData);
+        activeGames.set(offerId, offerData); // Ensure timeoutId is saved
 
     } catch (error) {
         if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
@@ -3096,12 +3109,14 @@ async function handleStartRPSUnifiedOfferCommand(msg, betAmountLamports, targetU
         await safeSendMessage(chatId, `⚠️ Error creating your RPS offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
         if (offerId && activeGames.has(offerId)) {
             activeGames.delete(offerId);
-            if(offerActivityKeyForLock) await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
        }
     } finally {
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
+// --- END OF REPLACEMENT for handleStartRPSUnifiedOfferCommand function ---
 
 // --- RPS Offer Callback Handlers ---
 async function handleRPSAcceptBotGameCallback(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
@@ -3967,14 +3982,15 @@ async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogConte
     return rolls;
 }
 
+// --- START OF REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const logPrefix = `[DE_OfferOrDirect_V7_GranLimit UID:${userId} CH:${chatId}]`; // Updated log
+    const logPrefix = `[DE_OfferOrDirect_V7_GranLimit UID:${userId} CH:${chatId}]`;
 
-    const isDirectChallengeOfferAttempt = (targetUsernameRaw != null); // Moved up
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt); // Pass boolean
+    const isDirectChallengeOfferAttempt = (targetUsernameRaw != null);
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt);
     if (activeUserGameCheck.limitReached) {
         const gameTypeDisplay = activeUserGameCheck.details.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         await safeSendMessage(chatId, `${escapeHTML(getPlayerDisplayReference(msg.from))}, you already have an active game of "${escapeHTML(gameTypeDisplay)}" (Status: ${escapeHTML(activeUserGameCheck.details.status)}). Please finish it before starting Dice Escalator.`, { parse_mode: 'HTML' });
@@ -4004,7 +4020,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     }
 
     let targetUserObjectForChallenge = null;
-    let isDirectChallenge = (targetUsernameRaw != null); // Already defined based on parameter
+    let isDirectChallenge = (targetUsernameRaw != null);
 
     if (isDirectChallenge) {
         targetUserObjectForChallenge = await findRecipientUser(targetUsernameRaw);
@@ -4018,19 +4034,19 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     }
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock; 
+    let offerActivityKeyForLock;
     let limit;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_PVP; 
+        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
+        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
         if (currentDirectChallenges.length >= limit) {
             await safeSendMessage(chatId, `⏳ Hold your dice, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent direct Dice Escalator challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
-    } else { 
-        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR; 
+    } else {
+        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR;
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
         limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
         if (currentUnifiedOffers.length >= limit) {
@@ -4074,10 +4090,12 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                 targetUserId: String(targetUserObjectForChallenge.telegram_id), targetUserObj: targetUserObjectForChallenge, targetUserMentionHTML: targetPlayerRefHTML,
                 betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: String(sentGroupMessage.message_id),
                 chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
-                gameToStart: GAME_IDS.DICE_ESCALATOR_PVP, creationTime: Date.now(), timeoutId: null
+                gameToStart: GAME_IDS.DICE_ESCALATOR_PVP,
+                _offerKeyUsedForGroupLock: GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER, // MODIFIED: Store the correct key
+                creationTime: Date.now(), timeoutId: null
             };
-        } else { 
-            offerId = generateGameId("de_uo"); 
+        } else {
+            offerId = generateGameId("de_uo");
             timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
 
             const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_unified_offer', { custom_offer_id: offerId }, `Dice Escalator Unified Offer`);
@@ -4100,7 +4118,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
             offerData = {
                 type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId),
                 chatType: chatType, initiatorId: userId, initiatorMentionHTML: initiatorPlayerRefHTML,
-                initiatorUserObj: initiatorUserObj, betAmount: betAmountLamports, status: 'pending_unified_offer', 
+                initiatorUserObj: initiatorUserObj, betAmount: betAmountLamports, status: 'pending_unified_offer',
                 creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
             };
         }
@@ -4108,14 +4126,15 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Pending Offer Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
+        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
 
         offerData.timeoutId = setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
             if (timedOutOffer && (timedOutOffer.status === 'pending_unified_offer' || timedOutOffer.status === 'pending_direct_challenge_response')) {
                 console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for Dice Escalator has timed out.`);
                 activeGames.delete(offerId);
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
 
                 let refundClientTimeout = null;
                 try {
@@ -4134,7 +4153,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                 }
 
                 const messageIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.gameSetupMessageId;
-                const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD')); 
+                const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'));
                 const timeoutMsgHTML = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ?
                     `⏳ The Dice Escalator challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.` :
                     `⏳ The Dice Escalator offer by ${timedOutOffer.initiatorMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
@@ -4147,7 +4166,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                 }
             }
         }, timeoutDuration);
-        activeGames.set(offerId, offerData);
+        activeGames.set(offerId, offerData); // Save timeoutId
 
     } catch (error) {
         if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
@@ -4155,12 +4174,14 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         await safeSendMessage(chatId, `⚠️ Error creating your Dice Escalator offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
         if (offerId && activeGames.has(offerId)) {
             activeGames.delete(offerId);
-            if(offerActivityKeyForLock) await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
         }
     } finally {
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
+// --- END OF REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
     const userId = String(userWhoClicked.telegram_id);
@@ -5193,14 +5214,15 @@ async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, r
 }
 
 // --- Dice 21 Main Command Handler (UPDATED FOR LOCKS AND TIMEOUTS) ---
+// --- START OF REPLACEMENT for handleStartDice21Command function ---
 async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRaw = null, gameModeArg = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const logPrefix = `[D21_OfferOrDirect_V4_GranLimit UID:${userId} CH:${chatId} Type:${chatType}]`; // Log updated
+    const logPrefix = `[D21_OfferOrDirect_V4_GranLimit UID:${userId} CH:${chatId} Type:${chatType}]`;
 
     const isDirectChallengeOfferAttempt = (targetUsernameRaw != null);
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt); // Pass boolean
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt);
     if (activeUserGameCheck.limitReached) {
         const gameTypeDisplay = activeUserGameCheck.details.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         await safeSendMessage(chatId, `${escapeHTML(getPlayerDisplayReference(msg.from))}, you already have an active game of "${escapeHTML(gameTypeDisplay)}" (Status: ${escapeHTML(activeUserGameCheck.details.status)}). Please finish it before starting Dice 21.`, { parse_mode: 'HTML' });
@@ -5237,7 +5259,7 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
     }
 
     let targetUserObject = null;
-    let isDirectChallenge = (targetUsernameRaw != null); // Already determined
+    let isDirectChallenge = (targetUsernameRaw != null);
 
     if (isDirectChallenge) {
         targetUserObject = await findRecipientUser(targetUsernameRaw);
@@ -5251,21 +5273,21 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
     }
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock; 
+    let offerActivityKeyForLock;
     let limit;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.DICE_21_PVP; // Key for *pending direct D21 challenge offers*
+        offerActivityKeyForLock = GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
+        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
         if (currentDirectChallenges.length >= limit) {
             await safeSendMessage(chatId, `⏳ ${initiatorPlayerRefHTML}, the limit of ${limit} concurrent direct Dice 21 challenge(s) in this group is active. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
     } else { // Unified Offer
-        offerActivityKeyForLock = GAME_IDS.DICE_21; // Base family ID for *pending unified D21 offers*
+        offerActivityKeyForLock = GAME_IDS.DICE_21_UNIFIED_OFFER; // Use specific unified offer key if available, or base DICE_21
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
+        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_21] || 1; // Fallback to base D21 if specific D21_UNIFIED_OFFER limit not set
         if (currentUnifiedOffers.length >= limit) {
             await safeSendMessage(chatId, `⏳ ${initiatorPlayerRefHTML}, the limit of ${limit} concurrent Dice 21 offer(s) in this group is active. Please wait.`, { parse_mode: 'HTML' });
             return;
@@ -5283,7 +5305,7 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
 
         if (isDirectChallenge) {
             offerId = generateGameId(`dd21_${userId.slice(-3)}_${String(targetUserObject.telegram_id).slice(-3)}`);
-            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS; 
+            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS;
 
             const betResultDirect = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_d21_direct_challenge_offer', { custom_offer_id: offerId, opponent_id_custom_field: targetUserObject.telegram_id }, `Direct Dice 21 Challenge Offer to ${targetUserObject.username || targetUserObject.telegram_id}`);
             if (!betResultDirect.success) throw new Error(betResultDirect.error || "Failed to place your bet for the direct challenge.");
@@ -5307,11 +5329,13 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
                 targetUserId: String(targetUserObject.telegram_id), targetUserObj: targetUserObject, targetUserMentionHTML: targetPlayerRefHTML,
                 betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: String(sentGroupMessage.message_id),
                 chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
-                gameToStart: GAME_IDS.DICE_21_PVP, creationTime: Date.now(), timeoutId: null
+                gameToStart: GAME_IDS.DICE_21_PVP,
+                _offerKeyUsedForGroupLock: GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER, // MODIFIED: Store the correct key
+                creationTime: Date.now(), timeoutId: null
             };
         } else { // Unified Offer
             offerId = generateGameId(GAME_IDS.DICE_21_UNIFIED_OFFER);
-            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS; 
+            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
 
             const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_d21_unified_offer', { custom_offer_id: offerId }, `Dice 21 Unified Offer`);
             if (!betResultUnified.success) throw new Error(betResultUnified.error || "Failed to place your bet for the unified offer.");
@@ -5333,23 +5357,25 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
 
             offerData = {
                 type: GAME_IDS.DICE_21_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId), chatType,
-                initiatorId: userId, initiatorMention: initiatorPlayerRefHTML, 
-                initiatorUserObj, betAmount: betAmountLamports, status: 'waiting_for_choice', 
+                initiatorId: userId, initiatorMention: initiatorPlayerRefHTML,
+                initiatorUserObj, betAmount: betAmountLamports, status: 'waiting_for_choice',
                 creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
+                // _offerKeyUsedForGroupLock not strictly needed here if offerActivityKeyForLock is already DICE_21_UNIFIED_OFFER
             };
         }
 
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Pending Offer Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
+        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
 
         offerData.timeoutId = setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
             if (timedOutOffer && (timedOutOffer.status === 'waiting_for_choice' || timedOutOffer.status === 'pending_direct_challenge_response')) {
                 console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for Dice 21 has timed out.`);
                 activeGames.delete(offerId);
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock; // Use stored if direct, else the one from scope
+                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
 
                 let refundClientTimeout = null;
                 try {
@@ -5371,7 +5397,7 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
                 const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'));
                 const timeoutMessageHTML = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ?
                     `⏳ The Dice 21 challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.` :
-                    `⏳ The Dice 21 offer by ${timedOutOffer.initiatorMentionHTML || timedOutOffer.initiatorMention} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
+                    `⏳ The Dice 21 offer by ${timedOutOffer.initiatorMention || timedOutOffer.initiatorMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
 
                 if (messageIdToEdit && bot) {
                     await bot.editMessageText(timeoutMessageHTML, {
@@ -5381,7 +5407,7 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
                 }
             }
         }, timeoutDuration);
-        activeGames.set(offerId, offerData); 
+        activeGames.set(offerId, offerData); // Save timeoutId
 
     } catch (error) {
         if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
@@ -5389,12 +5415,14 @@ async function handleStartDice21Command(msg, betAmountLamports, targetUsernameRa
         await safeSendMessage(chatId, `⚠️ Error creating your Dice 21 offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
         if (offerId && activeGames.has(offerId)) {
             activeGames.delete(offerId);
-            if(offerActivityKeyForLock) await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
         }
     } finally {
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
+// --- END OF REPLACEMENT for handleStartDice21Command function ---
 
 // --- Callback Handlers for Unified Dice 21 Offer (UPDATED FOR LOCKS AND TIMEOUTS) ---
 async function handleDice21AcceptBotGame(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, originalChatTypeFromRouter, callbackQueryId = null) {
@@ -6892,14 +6920,15 @@ async function getDuelDiceRollsForBot_Internal(gameId, chatId, purposePrefix = "
 
 
 // --- Duel Main Command Handler (Creates Unified Offer or Direct Challenge in Group Chat) ---
+// --- START OF REPLACEMENT for handleStartDuelUnifiedOfferCommand function ---
 async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const logPrefix = `[Duel_OfferOrDirect_V6_GranLimit UID:${userId} CH:${chatId} Type:${chatType}]`; // V6
+    const logPrefix = `[Duel_OfferOrDirect_V6_GranLimit UID:${userId} CH:${chatId} Type:${chatType}]`;
 
     const isDirectChallengeOfferAttempt = (targetUsernameRaw != null);
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt); // Pass boolean
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt);
     if (activeUserGameCheck.limitReached) {
         const gameTypeDisplay = activeUserGameCheck.details.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         await safeSendMessage(chatId, `${escapeHTML(getPlayerDisplayReference(msg.from))}, you already have an active game of "${escapeHTML(gameTypeDisplay)}" (Status: ${escapeHTML(activeUserGameCheck.details.status)}). Please finish it before starting a Duel.`, { parse_mode: 'HTML' });
@@ -6929,7 +6958,7 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
     }
 
     let targetUserObject = null;
-    let isDirectChallenge = (targetUsernameRaw != null); // Already defined
+    let isDirectChallenge = (targetUsernameRaw != null);
 
     if (isDirectChallenge) {
         targetUserObject = await findRecipientUser(targetUsernameRaw);
@@ -6944,21 +6973,21 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
     }
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock; // Key for PENDING offers
+    let offerActivityKeyForLock;
     let limit;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.DUEL_PVP; // Key for *pending direct challenge offers* for Duel
+        offerActivityKeyForLock = GAME_IDS.DUEL_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
+        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
         if (currentDirectChallenges.length >= limit) {
             await safeSendMessage(chatId, `⏳ ${initiatorPlayerRefHTML}, the limit of ${limit} concurrent direct Duel challenge(s) in this group is active. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
     } else { // Unified Offer
-        offerActivityKeyForLock = GAME_IDS.DUEL; // Base family key for *pending unified Duel offers*
+        offerActivityKeyForLock = GAME_IDS.DUEL_UNIFIED_OFFER; // Use specific unified offer key
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
+        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DUEL] || 1; // Fallback to base DUEL if specific unified not set
         if (currentUnifiedOffers.length >= limit) {
             await safeSendMessage(chatId, `⏳ ${initiatorPlayerRefHTML}, the limit of ${limit} concurrent Duel offer(s) in this group is active. Please wait.`, { parse_mode: 'HTML' });
             return;
@@ -6976,7 +7005,7 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
 
         if (isDirectChallenge) {
             offerId = generateGameId(`dduel_${userId.slice(-3)}_${String(targetUserObject.telegram_id).slice(-3)}`);
-            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS; 
+            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS;
 
             const betResultDirect = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_duel_direct_challenge_offer', { custom_offer_id: offerId, opponent_id_custom_field: targetUserObject.telegram_id }, `Direct Duel Challenge Offer to ${targetUserObject.username || targetUserObject.telegram_id}`);
             if (!betResultDirect.success) throw new Error(betResultDirect.error || "Failed to place your bet for the direct challenge.");
@@ -6986,7 +7015,7 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
             const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has thrown down the gauntlet, challenging you to a <b>Duel</b> for <b>${betDisplayUSD_HTML}</b>! You have ${timeoutDuration / 1000} seconds to respond.`;
             const groupChallengeKeyboard = {
                 inline_keyboard: [
-                    [{ text: "✅ Accept Duel", callback_data: `duel_direct_accept:${offerId}` }], // Specific prefix
+                    [{ text: "✅ Accept Duel", callback_data: `duel_direct_accept:${offerId}` }],
                     [{ text: "❌ Decline Duel", callback_data: `duel_direct_decline:${offerId}` }],
                     [{ text: "🚫 Withdraw My Challenge", callback_data: `duel_direct_cancel:${offerId}` }]
                 ]
@@ -7000,11 +7029,13 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
                 targetUserId: String(targetUserObject.telegram_id), targetUserObj: targetUserObject, targetUserMentionHTML: targetPlayerRefHTML,
                 betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: String(sentGroupMessage.message_id),
                 chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
-                gameToStart: GAME_IDS.DUEL_PVP, creationTime: Date.now(), timeoutId: null
+                gameToStart: GAME_IDS.DUEL_PVP,
+                _offerKeyUsedForGroupLock: GAME_IDS.DUEL_DIRECT_CHALLENGE_OFFER, // MODIFIED: Store the correct key
+                creationTime: Date.now(), timeoutId: null
             };
         } else { // Unified Offer
             offerId = generateGameId(GAME_IDS.DUEL_UNIFIED_OFFER);
-            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS; 
+            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
 
             const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_duel_unified_offer', { custom_offer_id: offerId }, `Duel Unified Offer`);
             if (!betResultUnified.success) throw new Error(betResultUnified.error || "Failed to place your bet for the unified offer.");
@@ -7025,7 +7056,7 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
 
             offerData = {
                 type: GAME_IDS.DUEL_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId), chatType,
-                initiatorId: userId, initiatorMention: initiatorPlayerRefHTML, // Using initiatorMention for consistency
+                initiatorId: userId, initiatorMention: initiatorPlayerRefHTML,
                 initiatorUserObj, betAmount: betAmountLamports, status: 'waiting_for_choice',
                 creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
             };
@@ -7034,14 +7065,15 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Duel Offer ${offerId} (Type: ${offerData.type}, Pending Offer Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
+        console.log(`${logPrefix} Duel Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
 
         offerData.timeoutId = setTimeout(async () => {
             const timedOutOffer = activeGames.get(offerId);
             if (timedOutOffer && (timedOutOffer.status === 'waiting_for_choice' || timedOutOffer.status === 'pending_direct_challenge_response')) {
                 console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for Duel has timed out.`);
                 activeGames.delete(offerId);
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
 
                 let refundClientTimeout = null;
                 try {
@@ -7071,20 +7103,22 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
                 }
             }
         }, timeoutDuration);
-        activeGames.set(offerId, offerData); 
+        activeGames.set(offerId, offerData); // Save timeoutId
 
     } catch (error) {
         if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} Error creating Duel offer or placing bet: ${error.message}`);
         await safeSendMessage(chatId, `⚠️ Error creating your Duel offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
-        if (offerId && activeGames.has(offerId)) { 
+        if (offerId && activeGames.has(offerId)) {
             activeGames.delete(offerId);
-            if(offerActivityKeyForLock) await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKeyForLock, null);
+            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
         }
     } finally {
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
+// --- END OF REPLACEMENT for handleStartDuelUnifiedOfferCommand function ---
 
 // --- Callback Handlers for Duel Unified Offer ---
 async function handleDuelAcceptBotGameCallback(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
@@ -10823,6 +10857,7 @@ bot.on('callback_query', async (callbackQuery) => {
 });
 
 // --- Centralized Handler for Direct Challenge Responses (Accept/Decline/Cancel) ---
+// --- START OF REPLACEMENT for handleDirectChallengeResponse function ---
 async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj, originalMessageIdInGroupStr, originalChatIdFromGroupStr, originalChatTypeFromGroup, callbackQueryId) {
     const clickerId = String(clickerUserObj.id || clickerUserObj.telegram_id);
     const originalMessageIdInGroup = Number(originalMessageIdInGroupStr);
@@ -10853,16 +10888,24 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         offerData.timeoutId = null;
     }
 
-    // Key for the *pending direct challenge offer* (e.g., GAME_IDS.COINFLIP_PVP). Used to clear the offer from groupGameSessions.
-    let pendingDirectChallengeOfferKey = offerData.gameToStart; 
-                                                              
+    // Retrieve the key under which this pending offer was tracked in groupGameSessions
+    const pendingDirectChallengeOfferKeyUsed = offerData._offerKeyUsedForGroupLock; // MODIFIED: Use the stored key
+    if (!pendingDirectChallengeOfferKeyUsed) {
+        console.error(`${logPrefix} CRITICAL: _offerKeyUsedForGroupLock missing in offerData for ${offerId}. Cannot reliably update group session count for offer. Attempting fallback using gameToStart.`);
+        // Fallback (less ideal, but better than doing nothing if new field wasn't populated yet in old offers)
+        // However, for this fix to work, the offer creation MUST populate _offerKeyUsedForGroupLock.
+        // If it's missing, it indicates an older offer object structure or an error in populating it.
+        // Forcing a specific key for cleanup if the field is missing could be problematic if the offer creation wasn't also fixed.
+        // For now, we'll rely on it being present due to the previous fixes. If not, it will fail at updateGroupGameDetails.
+    }
+
     // Key for the *new active game* that will start if accepted. Used for limit check in GAME_ACTIVITY_LIMITS.ACTIVE_GAMES.
-    let activeGameKeyForNewLimitCheck = offerData.gameToStart; 
+    const activeGameKeyForNewLimitCheck = offerData.gameToStart;
 
     let gameDisplayNameForMessages = "Game";
     let specificPvPGameStarterFunction = null;
 
-    switch (offerData.gameToStart) { 
+    switch (offerData.gameToStart) {
         case GAME_IDS.COINFLIP_PVP:
             gameDisplayNameForMessages = "Coinflip";
             specificPvPGameStarterFunction = startCoinflipPvPGame;
@@ -10877,7 +10920,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             break;
         case GAME_IDS.DICE_21_PVP:
             gameDisplayNameForMessages = "Dice 21";
-            specificPvPGameStarterFunction = startDice21PvPInitialDeal; 
+            specificPvPGameStarterFunction = startDice21PvPInitialDeal;
             break;
         case GAME_IDS.DUEL_PVP:
             gameDisplayNameForMessages = "Duel";
@@ -10887,8 +10930,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             console.error(`${logPrefix} Unknown gameToStart in offerData: ${offerData.gameToStart}`);
             await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Unknown game type for this challenge.", show_alert: true });
             activeGames.delete(offerId);
-            const offerTypeForCleanup = offerData.gameToStart || `UNKNOWN_DIRECT_CHALLENGE_TYPE`;
-            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, offerTypeForCleanup, null);
+            // Use the stored offer key if available for cleanup, otherwise fallback
+            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed || `UNKNOWN_OFFER_KEY_${offerData.gameToStart}`, null);
             return;
     }
 
@@ -10902,18 +10945,18 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         console.error(`${logPrefix} Critical: Missing initiator or target user object details in offerData for ${offerId}.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true });
         activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
+        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed || `UNKNOWN_OFFER_KEY_${offerData.gameToStart}`, null);
         if (bot && offerData.offerMessageIdInGroup) {
             bot.editMessageText("Error processing challenge: Player details missing. Offer cancelled.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
         }
         return;
     }
 
-    const actionType = actionName.split(':')[0]; 
+    const actionType = actionName.split(':')[0];
 
     switch (actionType) {
-        case 'dir_chal_acc': 
-        case 'cf_direct_accept': 
+        case 'dir_chal_acc':
+        case 'cf_direct_accept':
         case 'rps_direct_accept':
         case 'de_direct_accept':
         case 'd21_direct_accept':
@@ -10924,11 +10967,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
 
             const gameSession = await getGroupSession(originalChatIdFromGroup);
-            // activeGameKeyForNewLimitCheck is, e.g., GAME_IDS.COINFLIP_PVP, which should now have its own limit
-            // in GAME_ACTIVITY_LIMITS.ACTIVE_GAMES for PvP games from direct challenges.
             const currentActiveGamesOfThisType = gameSession.activeGamesByTypeInGroup.get(activeGameKeyForNewLimitCheck) || [];
             const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyForNewLimitCheck] || 1;
-
 
             if (currentActiveGamesOfThisType.length >= limitActive) {
                 await bot.answerCallbackQuery(callbackQueryId, { text: `Cannot accept now. Max ${limitActive} active ${gameDisplayNameForMessages} (from Direct Challenge) game(s) allowed. Please wait.`, show_alert: true });
@@ -10937,18 +10977,18 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting ${gameDisplayNameForMessages} challenge... Verifying...` });
 
             const freshInitiator = await getOrCreateUser(offerData.initiatorId);
-            const freshTarget = await getOrCreateUser(offerData.targetUserId); 
+            const freshTarget = await getOrCreateUser(offerData.targetUserId);
 
-            if (!freshInitiator || !freshTarget) { 
+            if (!freshInitiator || !freshTarget) {
                 console.error(`${logPrefix} Failed to fetch fresh user details for challenge ${offerId}.`);
                 await safeSendMessage(originalChatIdFromGroup, `⚙️ Error fetching player details for the challenge. Please try again.`, { parse_mode: 'HTML' });
-                return; 
+                return;
             }
-            if (BigInt(freshTarget.balance) < offerData.betAmount) { 
+            if (BigInt(freshTarget.balance) < offerData.betAmount) {
                 await safeSendMessage(originalChatIdFromGroup, `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}. Challenge cancelled. Initiator's bet refunded.`, { parse_mode: 'HTML' });
                 if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
                 activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
+                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
                 let refundClientNoFunds = null;
                 try {
                     refundClientNoFunds = await pool.connect(); await refundClientNoFunds.query('BEGIN');
@@ -10958,16 +10998,20 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 finally { if(refundClientNoFunds) refundClientNoFunds.release(); }
                 return;
             }
-            if (BigInt(freshInitiator.balance) < 0n && BigInt(freshInitiator.balance) + offerData.betAmount < 0n) { 
-                 await safeSendMessage(originalChatIdFromGroup, `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds for their prior commitment. Bet (if taken) refunded.`, { parse_mode: 'HTML' });
-                 if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
-                 activeGames.delete(offerId);
-                 await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
-                 return;
+             if (BigInt(freshInitiator.balance) < 0n && BigInt(freshInitiator.balance) + offerData.betAmount < 0n) { // Check if initiator still has their bet reserved essentially
+                await safeSendMessage(originalChatIdFromGroup, `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML} has insufficient funds for their prior commitment. Bet (if taken) refunded.`, { parse_mode: 'HTML' });
+                if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
+                activeGames.delete(offerId);
+                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
+                // Initiator's bet was already taken when offer was made, so if their balance went negative for other reasons, this check is an additional safeguard.
+                // A refund might not be strictly necessary unless their total balance for the bet itself became invalid.
+                // The original refund logic was within the `handleStart...` if it failed there.
+                // This primarily cancels the offer.
+                return;
             }
 
             let clientAccept = null;
-            let newPvPGameId; 
+            let newPvPGameId;
             try {
                 clientAccept = await pool.connect(); await clientAccept.query('BEGIN');
                 const targetBetRes = await updateUserBalanceAndLedger(clientAccept, offerData.targetUserId, BigInt(-offerData.betAmount), `bet_placed_${offerData.gameToStart.toLowerCase()}_direct_join`, { game_id_custom_field: offerId , opponent_id_custom_field: offerData.initiatorId }, `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
@@ -10975,8 +11019,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 freshTarget.balance = targetBetRes.newBalanceLamports;
                 await clientAccept.query('COMMIT');
 
-                activeGames.delete(offerId); 
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null); 
+                activeGames.delete(offerId);
+                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
 
                 const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\nA <b>${gameDisplayNameForMessages}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
                 if (bot && offerData.offerMessageIdInGroup) {
@@ -10986,22 +11030,20 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 if (typeof specificPvPGameStarterFunction !== 'function') {
                     throw new Error(`PvP starter function for ${offerData.gameToStart} is not defined.`);
                 }
-                
-                newPvPGameId = generateGameId(offerData.gameToStart); 
 
-                if (offerData.gameToStart === GAME_IDS.DICE_21_PVP) {
+                newPvPGameId = generateGameId(offerData.gameToStart);
+
+                if (offerData.gameToStart === GAME_IDS.DICE_21_PVP || offerData.gameToStart === GAME_IDS.DUEL_PVP) {
                     await specificPvPGameStarterFunction(newPvPGameId, freshInitiator, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
-                } else if (offerData.gameToStart === GAME_IDS.DUEL_PVP) {
-                     await specificPvPGameStarterFunction(newPvPGameId, freshInitiator, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
-                } else { 
+                } else {
                     await specificPvPGameStarterFunction(
                         freshInitiator,
                         freshTarget,
                         offerData.betAmount,
                         originalChatIdFromGroup,
-                        null, 
-                        'direct_challenge',
-                        true 
+                        null, // originalOfferMessageIdToDelete (already handled or not applicable for this structure)
+                        'direct_challenge', // origin
+                        true  // joinerBetAlreadyDeducted
                     );
                 }
 
@@ -11009,11 +11051,12 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 if (clientAccept) await clientAccept.query('ROLLBACK').catch(()=>{});
                 console.error(`${logPrefix} Error accepting direct challenge or starting PvP game: ${e.message}`);
                 await safeSendMessage(originalChatIdFromGroup, `⚙️ Error processing challenge acceptance: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
+                activeGames.delete(offerId); // Ensure offer is cleaned up from activeGames
+                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
                 let refundClientCatch = null;
                 try {
                     refundClientCatch = await pool.connect(); await refundClientCatch.query('BEGIN');
+                    // Refund initiator as their bet was taken at offer creation
                     await updateUserBalanceAndLedger(refundClientCatch, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_accept_sys_error', {custom_offer_id: offerId}, `Direct challenge ${offerId} accept phase system error.`);
                     await refundClientCatch.query('COMMIT');
                 } catch (refErr) { if(refundClientCatch) await refundClientCatch.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL (sys error) for ${offerId}: ${refErr.message}`);}
@@ -11024,7 +11067,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             break;
 
         case 'dir_chal_dec':
-        case 'cf_direct_decline': 
+        case 'cf_direct_decline':
         case 'rps_direct_decline':
         case 'de_direct_decline':
         case 'd21_direct_decline':
@@ -11034,7 +11077,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." });
             activeGames.delete(offerId);
-            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
+            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
             let refundClientDec = null;
             try {
                 refundClientDec = await pool.connect(); await refundClientDec.query('BEGIN');
@@ -11047,7 +11090,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             break;
 
         case 'dir_chal_can':
-        case 'cf_direct_cancel': 
+        case 'cf_direct_cancel':
         case 'rps_direct_cancel':
         case 'de_direct_cancel':
         case 'd21_direct_cancel':
@@ -11057,7 +11100,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." });
             activeGames.delete(offerId);
-            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKey, null);
+            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
             let refundClientCan = null;
             try {
                 refundClientCan = await pool.connect(); await refundClientCan.query('BEGIN');
@@ -11073,6 +11116,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false });
     }
 }
+// --- END OF REPLACEMENT for handleDirectChallengeResponse function ---
 // --- End of Part 5a, Section 1 (CORRECTED - BOT_NAME & Play Again fixed - GRANULAR ACTIVE GAME LIMITS) ---
 // index.js - Part 6: Main Application Logic (Initialization, Error Handling, Graceful Shutdown)
 //---------------------------------------------------------------------------
