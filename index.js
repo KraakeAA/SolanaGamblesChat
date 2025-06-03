@@ -5465,23 +5465,36 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
 //-------------------------------------------------------------------------------------------------
 // Assumed dependencies as before.
 
-// --- Helper function for a single dice roll via Helper Bot (Unchanged from its original definition in this section) ---
-async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, rollPurposeNote) {
-    const logPrefix = `[GetSingleDiceRollHelper GID:${gameId} Purpose:"${rollPurposeNote}" UID:${userIdForRoll || 'BOT_INTERNAL'}]`;
+* Helper function to request a single dice roll via the Helper Bot system and poll for its result.
+ * @param {string} gameId - Identifier for the game requesting the roll.
+ * @param {string|number} chatIdForLog - The chat ID context for logging (not necessarily where dice is sent if helper handles that).
+ * @param {string|number|null} userIdForRoll - The user ID for whom the roll is, or null for system/bot rolls.
+ * @param {string} rollPurposeNote - A note describing the purpose of this roll.
+ * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
+ * @returns {Promise<{roll: number, error: false} | {error: true, message: string, isTimeout: boolean}>}
+ */
+async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, rollPurposeNote, handlerType = null) {
+    const logPrefix = `[GetSingleDiceRollHelper GID:${gameId} Purpose:"${rollPurposeNote}" UID:${userIdForRoll || 'BOT_INTERNAL'} HType:${handlerType || 'ANY'}]`;
     let client = null;
     let requestId = null;
-    let specificErrorMessage = `Failed to obtain dice roll for "${rollPurposeNote}" via Helper Bot.`;
+    let specificErrorMessage = `Failed to obtain dice roll for "${rollPurposeNote}" via Helper Bot. Handler: ${handlerType || 'ANY'}.`;
     let isTimeoutErrorFlag = false;
+
     try {
-        client = await pool.connect();
-        const requestResult = await insertDiceRollRequest(client, gameId, String(chatIdForLog), userIdForRoll, '🎲', rollPurposeNote);
+        client = await pool.connect(); // Use a connection from the pool for the insert
+        // Pass handlerType to insertDiceRollRequest
+        const requestResult = await insertDiceRollRequest(client, gameId, String(chatIdForLog), userIdForRoll, '🎲', rollPurposeNote, handlerType);
         if (!requestResult.success || !requestResult.requestId) {
-            specificErrorMessage = requestResult.error || `Database error when creating roll request for "${rollPurposeNote}".`;
+            specificErrorMessage = requestResult.error || `Database error when creating roll request for "${rollPurposeNote}" (Handler: ${handlerType}).`;
             console.error(`${logPrefix} ${specificErrorMessage}`);
+            // Release client before throwing if acquired
+            if(client) client.release();
+            client = null;
             throw new Error(specificErrorMessage);
         }
         requestId = requestResult.requestId;
-        client.release(); client = null;
+        client.release(); client = null; // Release client after successful insert
+
         let attempts = 0;
         while (attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
             await sleep(DICE_ROLL_POLLING_INTERVAL_MS);
@@ -5490,40 +5503,55 @@ async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, r
                 console.warn(`${logPrefix} ${specificErrorMessage}`);
                 throw new Error(specificErrorMessage);
             }
-            client = await pool.connect();
-            const statusResult = await getDiceRollRequestResult(client, requestId);
-            client.release(); client = null;
+
+            client = await pool.connect(); // Get a new client for polling getDiceRollRequestResult
+            const statusResult = await getDiceRollRequestResult(client, requestId); // Assumes getDiceRollRequestResult is defined elsewhere
+            client.release(); client = null; // Release client after poll
+
             if (statusResult.success && statusResult.status === 'completed') {
                 if (typeof statusResult.roll_value === 'number' && statusResult.roll_value >= 1 && statusResult.roll_value <= 6) {
                     return { roll: statusResult.roll_value, error: false };
                 } else {
                     specificErrorMessage = `Helper Bot returned a completed roll for "${rollPurposeNote}" (Request ID: ${requestId}), but the dice value was invalid: '${statusResult.roll_value}'.`;
                     console.error(`${logPrefix} ${specificErrorMessage}`);
-                    throw new Error(specificErrorMessage);
+                    throw new Error(specificErrorMessage); // This will be caught by the outer catch
                 }
             } else if (statusResult.success && statusResult.status === 'error') {
                 specificErrorMessage = statusResult.notes || `Helper Bot explicitly reported an error for "${rollPurposeNote}" (Request ID: ${requestId}).`;
                 console.error(`${logPrefix} ${specificErrorMessage}`);
-                throw new Error(specificErrorMessage);
+                throw new Error(specificErrorMessage); // This will be caught by the outer catch
             }
+            // If status is still 'pending' or unknown, continue loop
             attempts++;
         }
-        isTimeoutErrorFlag = true;
-        specificErrorMessage = `Timeout after ${attempts} attempts waiting for Helper Bot response for dice roll: "${rollPurposeNote}" (Request ID: ${requestId}).`;
+
+        isTimeoutErrorFlag = true; // If loop finishes, it's a timeout
+        specificErrorMessage = `Timeout after ${attempts} attempts waiting for Helper Bot response for dice roll: "${rollPurposeNote}" (Request ID: ${requestId}). Handler: ${handlerType || 'ANY'}.`;
         throw new Error(specificErrorMessage);
+
     } catch (error) {
-        if (client) client.release();
+        // Ensure client is released if an error occurred at any point after it was acquired
+        if (client) {
+            client.release();
+            client = null;
+        }
+        
         const finalErrorMessageForReturn = error.message || specificErrorMessage;
-        console.error(`${logPrefix} Final error state in getSingleDiceRollViaHelper: ${finalErrorMessageForReturn}`);
-        if (requestId) {
+        console.error(`${logPrefix} Final error state in getSingleDiceRollViaHelper (Handler: ${handlerType || 'ANY'}): ${finalErrorMessageForReturn}`);
+        
+        if (requestId) { // If request was made, try to mark it as error/timeout in DB
             let markErrorClient = null;
             try {
                 markErrorClient = await pool.connect();
                 const statusToUpdate = isTimeoutErrorFlag ? 'timeout' : 'error';
-                await markErrorClient.query("UPDATE dice_roll_requests SET status=$1, notes=$2 WHERE request_id=$3 AND status = 'pending'",
-                    [statusToUpdate, String(finalErrorMessageForReturn).substring(0,250), requestId]);
+                // Make sure notes concatenation is safe or limit length
+                const noteUpdate = `MainBotPollErr: ${String(finalErrorMessageForReturn).substring(0,100)}`;
+                await markErrorClient.query(
+                    "UPDATE dice_roll_requests SET status=$1, notes=COALESCE(notes, '') || E'\\n' || $2 WHERE request_id=$3 AND status = 'pending'",
+                    [statusToUpdate, noteUpdate, requestId]
+                );
             } catch (dbMarkError) {
-                console.error(`${logPrefix} CRITICAL: Failed to mark roll request ${requestId} as failed in DB: ${dbMarkError.message}`);
+                console.error(`${logPrefix} CRITICAL: Failed to mark roll request ${requestId} as failed/timeout in DB from MainBot: ${dbMarkError.message}`);
             } finally {
                 if (markErrorClient) markErrorClient.release();
             }
