@@ -4919,51 +4919,80 @@ async function handleDiceEscalatorPvPTurnTimeout(gameId, timedOutPlayerId) {
     await resolveDiceEscalatorPvPGame_New(gameData, timedOutPlayerId);
 }
 
+// --- START OF FULL REPLACEMENT for processDiceEscalatorPvPRollByEmoji_New function ---
 async function processDiceEscalatorPvPRollByEmoji_New(gameData, diceValue, userIdWhoRolled) {
     const logPrefix = `[DE_PvP_Roll_V3_Timeout UID:${userIdWhoRolled} Game:${gameData.gameId}]`;
-    let currentPlayer, otherPlayer;
+    let currentPlayer, otherPlayer, playerKeyPrefix;
+
+    // Ensure gameData is the authoritative version from activeGames
+    const activeGameData = activeGames.get(gameData.gameId);
+    if (!activeGameData) {
+        console.warn(`${logPrefix} Game not found in activeGames. Aborting roll processing.`);
+        return;
+    }
+    gameData = activeGameData; // Work with the reference from the map
 
     if (gameData.initiator.userId === userIdWhoRolled && gameData.initiator.isTurn) {
-        currentPlayer = gameData.initiator; otherPlayer = gameData.opponent;
+        currentPlayer = gameData.initiator; otherPlayer = gameData.opponent; playerKeyPrefix = 'p1';
     } else if (gameData.opponent.userId === userIdWhoRolled && gameData.opponent.isTurn) {
-        currentPlayer = gameData.opponent; otherPlayer = gameData.initiator;
-    } else { console.warn(`${logPrefix} Roll from non-active player or out of turn.`); return; }
-
-    if (currentPlayer.status !== 'awaiting_roll_emoji') {
-        console.warn(`${logPrefix} Player ${currentPlayer.displayName} status is '${currentPlayer.status}'. Not expecting roll.`); return;
+        currentPlayer = gameData.opponent; otherPlayer = gameData.initiator; playerKeyPrefix = 'p2';
+    } else {
+        console.warn(`${logPrefix} Roll from non-active player or out of turn. Roller: ${userIdWhoRolled}, P1_Turn: ${gameData.initiator.isTurn}, P2_Turn: ${gameData.opponent.isTurn}`);
+        return;
     }
 
-    if (gameData.currentTurnTimeoutId) clearTimeout(gameData.currentTurnTimeoutId); 
-    gameData.currentTurnTimeoutId = null;
+    if (currentPlayer.status !== 'awaiting_roll_emoji') {
+        console.warn(`${logPrefix} Player ${currentPlayer.displayName} status is '${currentPlayer.status}'. Not expecting roll.`);
+        return;
+    }
+
+    // Clear current turn timeout as player has made an action
+    if (gameData.currentTurnTimeoutId) {
+        clearTimeout(gameData.currentTurnTimeoutId);
+        gameData.currentTurnTimeoutId = null;
+        console.log(`${logPrefix} Cleared existing turn timeout for player ${userIdWhoRolled}.`);
+    }
 
     const playerRefHTML = escapeHTML(currentPlayer.displayName);
-    const tempRollMsg = await safeSendMessage(gameData.chatId, `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>! Calculating score...`, { parse_mode: 'HTML' });
-    await sleep(1500);
-    if (tempRollMsg?.message_id && bot) await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
+    // Send a temporary message acknowledging the roll. This will be cleaned up by updateDiceEscalatorPvPMessage_New.
+    const tempRollMsgText = `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>! Score processing...`;
+    const tempRollMsg = await safeSendMessage(gameData.chatId, tempRollMsgText, { parse_mode: 'HTML' });
+    if (tempRollMsg?.message_id) {
+        gameData.intermediateMessageIds = [...(gameData.intermediateMessageIds || []), tempRollMsg.message_id];
+    }
+    await sleep(1000); // Allow user to see their roll acknowledgement briefly
 
     currentPlayer.rolls.push(diceValue);
-    gameData.lastRollValue = diceValue;
+    gameData.lastRollValue = diceValue; // Storing last roll might be useful for display
     gameData.lastInteractionTime = Date.now();
 
     if (diceValue === DICE_ESCALATOR_BUST_ON) {
         currentPlayer.busted = true;
-        currentPlayer.status = 'bust'; 
+        currentPlayer.status = 'bust'; // Player specific status
         currentPlayer.isTurn = false;
-        gameData.status = (currentPlayer === gameData.initiator) ? 'game_over_p1_bust' : 'game_over_p2_bust';
+        // Overall game status reflects which player busted
+        gameData.status = (playerKeyPrefix === 'p1') ? 'game_over_p1_bust' : 'game_over_p2_bust';
+        console.log(`${logPrefix} Player ${playerRefHTML} BUSTED with ${diceValue}. Game status: ${gameData.status}. Score was: ${currentPlayer.score}`);
+        currentPlayer.score = 0; // Score becomes 0 on bust for Dice Escalator if that's the rule, or just use .busted flag. For DE, usually just busted matters.
     } else {
         currentPlayer.score += diceValue;
-        gameData.status = (currentPlayer === gameData.initiator) ? 'p1_awaiting_roll_emoji' : 'p2_awaiting_roll_emoji';
+        // Player's turn continues, they are still 'awaiting_roll_emoji' for their next decision (roll or stand)
+        // Their status currentPlayer.status remains 'awaiting_roll_emoji'
+        // gameData.status also needs to reflect it's still this player's general turn phase
+        gameData.status = (playerKeyPrefix === 'p1') ? 'p1_awaiting_roll_emoji' : 'p2_awaiting_roll_emoji'; // Or a more general status if player status itself is checked by UI
+        console.log(`${logPrefix} Player ${playerRefHTML} new score: ${currentPlayer.score}. Status: ${gameData.status}`);
     }
-    activeGames.set(gameData.gameId, gameData);
+    activeGames.set(gameData.gameId, gameData); // Save changes (score, rolls, status)
 
-    if (gameData.status.startsWith('game_over')) {
-        await updateDiceEscalatorPvPMessage_New(gameData);
-        await sleep(1000);
+    if (gameData.status.startsWith('game_over')) { // If busted
+        await updateDiceEscalatorPvPMessage_New(gameData); // Show bust status on main board
+        await sleep(1000); // Let user see bust message on main board
         await resolveDiceEscalatorPvPGame_New(gameData, currentPlayer.busted ? currentPlayer.userId : null);
-    } else {
-        await updateDiceEscalatorPvPMessage_New(gameData); 
+    } else { // Not a bust, player's turn continues (they can roll again or stand)
+        await updateDiceEscalatorPvPMessage_New(gameData); // Update UI, will show new score, and prompt for next action, resets timeout for the SAME player
     }
 }
+// --- END OF FULL REPLACEMENT for processDiceEscalatorPvPRollByEmoji_New function ---
 
 async function updateDiceEscalatorPvPMessage_New(gameData) {
     if (!gameData || !bot) return;
@@ -5004,57 +5033,92 @@ async function updateDiceEscalatorPvPMessage_New(gameData) {
     if(activeGames.has(gameData.gameId)) activeGames.set(gameData.gameId, gameData);
 }
 
+// --- START OF FULL REPLACEMENT for handleDiceEscalatorPvPStand_New function ---
 async function handleDiceEscalatorPvPStand_New(gameId, userWhoClicked, originalMessageId, callbackQueryId, chatData) {
-    const gameData = activeGames.get(gameId);
-    const logPrefix = `[DE_PvP_Stand_V2_Timeout GID:${gameId} UID:${userWhoClicked.telegram_id}]`;
-    if (!gameData || gameData.type !== GAME_IDS.DICE_ESCALATOR_PVP) { return; }
+    const userIdWhoStood = String(userWhoClicked.telegram_id || userWhoClicked.id);
+    const logPrefix = `[DE_PvP_Stand_V2_Timeout GID:${gameId} UID:${userIdWhoStood}]`;
+    let gameData = activeGames.get(gameId);
 
-    let playerStanding, otherPlayer;
-    if (gameData.initiator.userId === userWhoClicked.telegram_id && gameData.initiator.isTurn) {
-        playerStanding = gameData.initiator; otherPlayer = gameData.opponent;
-    } else if (gameData.opponent.userId === userWhoClicked.telegram_id && gameData.opponent.isTurn) {
-        playerStanding = gameData.opponent; otherPlayer = gameData.initiator;
-    } else { if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text:"Not your turn!", show_alert:true}); return; }
-
-    if (playerStanding.stood || playerStanding.busted || playerStanding.status !== 'awaiting_roll_emoji') {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text:"Cannot stand now.", show_alert:true}); return;
+    if (!gameData || gameData.type !== GAME_IDS.DICE_ESCALATOR_PVP) {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Game not found or invalid.", show_alert: true }).catch(()=>{});
+        return;
+    }
+    // Ensure gameData is the authoritative version from activeGames map
+    gameData = activeGames.get(gameId); 
+    if (!gameData) { // Re-check after fetching, in case it was deleted by a concurrent process
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Game data unavailable.", show_alert: true }).catch(()=>{});
+        return;
     }
 
-    if (gameData.currentTurnTimeoutId) clearTimeout(gameData.currentTurnTimeoutId); 
-    gameData.currentTurnTimeoutId = null;
+
+    let playerStanding, otherPlayer, playerKeyStanding;
+    if (gameData.initiator.userId === userIdWhoStood && gameData.initiator.isTurn) {
+        playerStanding = gameData.initiator; otherPlayer = gameData.opponent; playerKeyStanding = 'p1';
+    } else if (gameData.opponent.userId === userIdWhoStood && gameData.opponent.isTurn) {
+        playerStanding = gameData.opponent; otherPlayer = gameData.initiator; playerKeyStanding = 'p2';
+    } else {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text:"Not your turn to stand!", show_alert:true}).catch(()=>{});
+        return;
+    }
+
+    if (playerStanding.stood || playerStanding.busted || playerStanding.status !== 'awaiting_roll_emoji') {
+        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text:"Cannot stand now (already stood/bust or invalid state).", show_alert:true}).catch(()=>{});
+        return;
+    }
+
+    // Clear current turn timeout as player has made an action
+    if (gameData.currentTurnTimeoutId) {
+        clearTimeout(gameData.currentTurnTimeoutId);
+        gameData.currentTurnTimeoutId = null;
+        console.log(`${logPrefix} Cleared existing turn timeout for player ${userIdWhoStood} upon standing.`);
+    }
 
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: `You stand with ${playerStanding.score} points!`}).catch(()=>{});
 
     playerStanding.stood = true;
     playerStanding.isTurn = false;
-    playerStanding.status = 'stood';
+    playerStanding.status = 'stood'; // Player specific status
     gameData.lastInteractionTime = Date.now();
 
     const playerStandingMentionHTML = escapeHTML(playerStanding.displayName);
+    // This temporary message is good for immediate feedback
     const tempStandMsg = await safeSendMessage(gameData.chatId, `✋ <b>${playerStandingMentionHTML}</b> stands with a score of <b>${escapeHTML(String(playerStanding.score))}</b>!`, {parse_mode:'HTML'});
-    await sleep(1500);
-    if (tempStandMsg?.message_id && bot) await bot.deleteMessage(gameData.chatId, tempStandMsg.message_id).catch(()=>{});
-
-    if (playerStanding === gameData.initiator) {
-        if (otherPlayer.busted || otherPlayer.stood) {
-            gameData.status = 'game_over_pvp_resolved';
-        } else {
-            otherPlayer.isTurn = true; otherPlayer.status = 'awaiting_roll_emoji'; otherPlayer.diceRolledThisTurn = 0;
-            gameData.status = 'p2_awaiting_roll_emoji';
+     if (tempStandMsg?.message_id && activeGames.has(gameData.gameId)) {
+        const currentGd = activeGames.get(gameData.gameId);
+        if(currentGd) {
+             currentGd.intermediateMessageIds = [...(currentGd.intermediateMessageIds || []), tempStandMsg.message_id];
         }
-    } else { 
-        gameData.status = 'game_over_pvp_resolved';
     }
-    activeGames.set(gameData.gameId, gameData);
+    await sleep(1000); // Allow user to see stand acknowledgement
+
+    // Determine next game state
+    if (playerKeyStanding === 'p1') { // Initiator (P1) stood
+        if (otherPlayer.busted || otherPlayer.stood || otherPlayer.status === 'timeout_forfeit') { // If Opponent (P2) already finished their turn (or forfeited)
+            gameData.status = 'game_over_pvp_resolved'; // Both players done, resolve game
+        } else { // Opponent (P2) still needs to play or continue playing
+            otherPlayer.isTurn = true;
+            otherPlayer.status = 'awaiting_roll_emoji';
+            otherPlayer.diceRolledThisTurn = 0; // Reset for their turn if they haven't rolled yet
+            gameData.status = 'p2_awaiting_roll_emoji'; // General game status indicates P2's turn
+            console.log(`${logPrefix} ${playerStandingMentionHTML} stood. Transitioning to ${otherPlayer.displayName}'s turn.`);
+        }
+    } else { // Opponent (P2) stood
+        // If P2 stands, P1 must have already stood, busted or forfeited. Game resolves.
+        gameData.status = 'game_over_pvp_resolved';
+        console.log(`${logPrefix} ${playerStandingMentionHTML} stood. Both players' turns are complete or resolved. Game over.`);
+    }
+    activeGames.set(gameData.gameId, gameData); // Save changes
 
     if (gameData.status.startsWith('game_over')) {
-        await updateDiceEscalatorPvPMessage_New(gameData); 
+        await updateDiceEscalatorPvPMessage_New(gameData); // Show final state before full resolution message
         await sleep(1000);
         await resolveDiceEscalatorPvPGame_New(gameData);
     } else {
-        await updateDiceEscalatorPvPMessage_New(gameData); 
+        // If it's now the other player's turn
+        await updateDiceEscalatorPvPMessage_New(gameData); // Update UI for next player's turn & set their timeout
     }
 }
+// --- END OF FULL REPLACEMENT for handleDiceEscalatorPvPStand_New function ---
 
 async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = null) { 
     const logPrefix = `[DE_PvP_Resolve_V3_Origin GID:${gameData.gameId || 'UNKNOWN_GAME_ID'}]`;
