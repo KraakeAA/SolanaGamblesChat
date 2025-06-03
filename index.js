@@ -4323,8 +4323,8 @@ async function handleDiceEscalatorAcceptPvPChallenge_New(offerId, joinerUserObjF
 
 // --- START OF FULL REPLACEMENT for handleDiceEscalatorCancelUnifiedOffer_New function ---
 async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, callbackQueryId) {
-    const userId = String(userWhoClicked.telegram_id); // Assuming telegram_id, adjust if using .id
-    const logPrefix = `[DE_CancelUnified_V2 UID:<span class="math-inline">\{userId\} OfferID\:"</span>{offerId}"]`;
+    const userId = String(userWhoClicked.telegram_id || userWhoClicked.id); // Use telegram_id if available, fallback to id
+    const logPrefix = `[DE_CancelUnified_V2 UID:${userId} OfferID:"${offerId}"]`;
     const offerData = activeGames.get(offerId);
 
     if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
@@ -4339,7 +4339,7 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
     await bot.answerCallbackQuery(callbackQueryId, { text: "Dice Escalator offer cancelled. Refunding bet..." });
     activeGames.delete(offerId);
-    // MODIFIED: Use the correct key for unified DE offer removal
+    // Ensure we use the specific key for Dice Escalator UNIFIED offers for removal
     await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
 
     let refundClient = null;
@@ -4348,6 +4348,7 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
         await refundClient.query('BEGIN');
         await updateUserBalanceAndLedger(refundClient, offerData.initiatorId, offerData.betAmount, 'refund_de_offer_cancelled', { custom_offer_id: offerId }, `Refund for cancelled DE unified offer ${offerId}`);
         await refundClient.query('COMMIT');
+        console.log(`${logPrefix} Bet refunded to initiator ${offerData.initiatorId} for cancelled DE offer ${offerId}.`);
     } catch (e) {
         if (refundClient) await refundClient.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} CRITICAL: Failed to refund initiator for cancelled DE offer ${offerId}: ${e.message}`);
@@ -4357,19 +4358,29 @@ async function handleDiceEscalatorCancelUnifiedOffer_New(offerId, userWhoClicked
     }
 
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-    const cancelledMessage = `🚫 <span class="math-inline">\{offerData\.initiatorMentionHTML\} has cancelled their Dice Escalator offer for <b\></span>{betDisplayUSD_HTML}</b>. Bet refunded.`;
-    const messageIdToEdit = originalOfferMessageId || offerData.gameSetupMessageId;
+    // offerData.initiatorMentionHTML should already be HTML-escaped from when the offer was created
+    const initiatorDisplayHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(offerData.initiatorUserObj || {id: offerData.initiatorId, first_name: "Player"}));
+
+    // Construct the message without problematic <span> tags
+    const cancelledMessageHTML = `🚫 ${initiatorDisplayHTML} has cancelled their Dice Escalator offer for <b>${betDisplayUSD_HTML}</b>. Bet refunded.`;
+
+    const messageIdToEdit = Number(originalOfferMessageId || offerData.gameSetupMessageId);
     if (bot && messageIdToEdit) {
-        await bot.editMessageText(cancelledMessage, {
-            chat_id: originalChatId, message_id: Number(messageIdToEdit),
+        await bot.editMessageText(cancelledMessageHTML, {
+            chat_id: originalChatId, message_id: messageIdToEdit,
             parse_mode: 'HTML', reply_markup: {}
-        }).catch(e => safeSendMessage(originalChatId, cancelledMessage, { parse_mode: 'HTML' }));
+        }).catch(async (e) => {
+            // If editing fails (e.g., message too old, or some other intermittent issue), send a new message.
+             if (!e.message?.toLowerCase().includes("message is not modified")) {
+                console.warn(`${logPrefix} Failed to edit cancellation message ${messageIdToEdit}, sending new. Error: ${e.message}`);
+                await safeSendMessage(originalChatId, cancelledMessageHTML, { parse_mode: 'HTML' });
+            }
+        });
     } else {
-        safeSendMessage(originalChatId, cancelledMessage, { parse_mode: 'HTML' });
+        await safeSendMessage(originalChatId, cancelledMessageHTML, { parse_mode: 'HTML' });
     }
 }
 // --- END OF FULL REPLACEMENT for handleDiceEscalatorCancelUnifiedOffer_New function ---
-
 // --- Dice Escalator Player vs. Bot (PvB) Game Logic ---
 async function startDiceEscalatorPvBGame_New(chat, initiatorUserObj, betAmountLamports, originalOfferMessageIdToDelete = null, isPlayAgain = false, unifiedOfferIdIfAny = null) {
     const chatId = String(chat.id);
