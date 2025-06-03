@@ -4794,89 +4794,89 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
 
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (HTML Revamp) ---
 async function startDiceEscalatorPvPGame_New(
-    initiatorUserObj, 
-    opponentUserObj,  
-    betAmountLamports,
-    groupChatId,      
-    groupChatType,    
-    messageIdToDeleteAfterAccept = null,
-    origin // << NEW PARAMETER: 'unified_offer' or 'direct_challenge'
+    initiatorUserObj, 
+    opponentUserObj,  
+    betAmountLamports,
+    groupChatId,      
+    groupChatType,    
+    messageIdToDeleteAfterAccept = null,
+    origin // 'unified_offer' or 'direct_challenge'
 ) {
-    const logPrefix = `[DE_PvP_Start_V4_Origin UID1:${initiatorUserObj.telegram_id} UID2:${opponentUserObj.telegram_id} CH:${groupChatId} Origin:${origin}]`;
-    
-    let activeGameKeyForStorage;
-    if (origin === 'unified_offer') {
-        activeGameKeyForStorage = GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED;
-    } else { // 'direct_challenge'
-        activeGameKeyForStorage = GAME_IDS.DICE_ESCALATOR_PVP; 
-    }
+    const logPrefix = `[DE_PvP_Start_V4_Origin UID1:${initiatorUserObj.telegram_id} UID2:${opponentUserObj.telegram_id} CH:${groupChatId} Origin:${origin}]`;
+    
+    let activeGameKeyForStorage;
+    if (origin === 'unified_offer') {
+        activeGameKeyForStorage = GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED;
+    } else { // 'direct_challenge'
+        activeGameKeyForStorage = GAME_IDS.DICE_ESCALATOR_PVP; 
+    }
 
-    if (messageIdToDeleteAfterAccept && bot) {
-        await bot.deleteMessage(groupChatId, Number(messageIdToDeleteAfterAccept))
-            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete previous message ${messageIdToDeleteAfterAccept}: ${e.message}`));
-    }
+    if (messageIdToDeleteAfterAccept && bot) {
+        await bot.deleteMessage(groupChatId, Number(messageIdToDeleteAfterAccept))
+            .catch(e => console.warn(`${logPrefix} Non-critical: Could not delete previous message ${messageIdToDeleteAfterAccept}: ${e.message}`));
+    }
 
-    const pvpGameId = generateGameId(GAME_IDS.DICE_ESCALATOR_PVP);
-    const initiatorPlayerDisplayName = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
-    const opponentPlayerDisplayName = escapeHTML(getPlayerDisplayReference(opponentUserObj));
+    const pvpGameId = generateGameId(GAME_IDS.DICE_ESCALATOR_PVP);
+    const initiatorPlayerDisplayName = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const opponentPlayerDisplayName = escapeHTML(getPlayerDisplayReference(opponentUserObj));
 
-    const initiatorPlayerData = {
-        userId: String(initiatorUserObj.telegram_id),
-        displayName: initiatorPlayerDisplayName,
-        userObj: initiatorUserObj,
-        score: 0, rolls: [],
-        isTurn: true, 
-        busted: false, stood: false,
-        status: 'awaiting_roll_emoji'
-    };
-    const opponentPlayerData = {
-        userId: String(opponentUserObj.telegram_id),
-        displayName: opponentPlayerDisplayName,
-        userObj: opponentUserObj,
-        score: 0, rolls: [],
-        isTurn: false,
-        busted: false, stood: false,
-        status: 'waiting_turn'
-    };
+    const initiatorPlayerData = {
+        userId: String(initiatorUserObj.telegram_id),
+        displayName: initiatorPlayerDisplayName,
+        userObj: initiatorUserObj,
+        score: 0, rolls: [],
+        isTurn: true, 
+        busted: false, stood: false,
+        status: 'awaiting_roll_emoji'
+    };
+    const opponentPlayerData = {
+        userId: String(opponentUserObj.telegram_id),
+        displayName: opponentPlayerDisplayName,
+        userObj: opponentUserObj,
+        score: 0, rolls: [],
+        isTurn: false,
+        busted: false, stood: false,
+        status: 'waiting_turn'
+    };
 
-    const gameData = {
-        gameId: pvpGameId,
-        type: GAME_IDS.DICE_ESCALATOR_PVP,
-        chatId: String(groupChatId),
-        chatType: groupChatType,
-        initiator: initiatorPlayerData,
-        opponent: opponentPlayerData,
-        betAmount: betAmountLamports,
-        status: 'p1_awaiting_roll_emoji', 
-        currentMessageId: null,
-        createdAt: Date.now(),
-        lastRollValue: null,
-        currentTurnTimeoutId: null,
-        _origin_key_for_limits: activeGameKeyForStorage // Store for cleanup
-    };
-    activeGames.set(pvpGameId, gameData);
-    // Use specific key when adding to group's active game list
-    await updateGroupGameDetails(groupChatId, pvpGameId, activeGameKeyForStorage, betAmountLamports); 
-    console.log(`${logPrefix} DE PvP game ${pvpGameId} created. Group lock using key ${activeGameKeyForStorage} updated. Initiator's turn.`);
+    const gameData = {
+        gameId: pvpGameId,
+        type: GAME_IDS.DICE_ESCALATOR_PVP,
+        chatId: String(groupChatId),
+        chatType: groupChatType,
+        initiator: initiatorPlayerData,
+        opponent: opponentPlayerData,
+        betAmount: betAmountLamports,
+        status: 'p1_awaiting_roll_emoji', 
+        currentMessageId: null,
+        createdAt: Date.now(),
+        lastRollValue: null,
+        currentTurnTimeoutId: null,
+        _origin_key_for_limits: activeGameKeyForStorage // Store for cleanup; this will be GAME_IDS.DICE_ESCALATOR_PVP for direct challenges
+    };
+    activeGames.set(pvpGameId, gameData);
+    // Use specific key when adding to group's active game list
+    await updateGroupGameDetails(groupChatId, pvpGameId, activeGameKeyForStorage, betAmountLamports); 
+    console.log(`${logPrefix} DE PvP game ${pvpGameId} created. Group lock using key ${activeGameKeyForStorage} updated. Initiator's turn.`);
 
-    if (typeof updateDiceEscalatorPvPMessage_New === 'function') {
-        await updateDiceEscalatorPvPMessage_New(gameData); 
-    } else {
-        console.error(`${logPrefix} CRITICAL ERROR: updateDiceEscalatorPvPMessage_New function is not defined!`);
-        activeGames.delete(pvpGameId);
-        await updateGroupGameDetails(groupChatId, { removeThisId: pvpGameId }, activeGameKeyForStorage, null);
-        let refundClient = null;
-        try {
-            refundClient = await pool.connect(); await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, initiatorUserObj.telegram_id, betAmountLamports, 'refund_de_pvp_ui_fail', {}, `DE PvP UI Fail ${pvpGameId}`);
-            await updateUserBalanceAndLedger(refundClient, opponentUserObj.telegram_id, betAmountLamports, 'refund_de_pvp_ui_fail', {}, `DE PvP UI Fail ${pvpGameId}`);
-            await refundClient.query('COMMIT');
-        } catch(e) {
-            if(refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${logPrefix} CRITICAL REFUND FAILURE for DE PvP UI Fail GID ${pvpGameId}: ${e.message}`);
-        } finally { if(refundClient) refundClient.release(); }
-        await safeSendMessage(groupChatId, "⚙️ Critical error: Could not display the Dice Escalator PvP game board. Game cancelled, bets refunded.", {parse_mode: 'HTML'});
-    }
+    if (typeof updateDiceEscalatorPvPMessage_New === 'function') {
+        await updateDiceEscalatorPvPMessage_New(gameData); 
+    } else {
+        console.error(`${logPrefix} CRITICAL ERROR: updateDiceEscalatorPvPMessage_New function is not defined!`);
+        activeGames.delete(pvpGameId);
+        await updateGroupGameDetails(groupChatId, { removeThisId: pvpGameId }, activeGameKeyForStorage, null);
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, initiatorUserObj.telegram_id, betAmountLamports, 'refund_de_pvp_ui_fail', {}, `DE PvP UI Fail ${pvpGameId}`);
+            await updateUserBalanceAndLedger(refundClient, opponentUserObj.telegram_id, betAmountLamports, 'refund_de_pvp_ui_fail', {}, `DE PvP UI Fail ${pvpGameId}`);
+            await refundClient.query('COMMIT');
+        } catch(e) {
+            if(refundClient) await refundClient.query('ROLLBACK');
+            console.error(`${logPrefix} CRITICAL REFUND FAILURE for DE PvP UI Fail GID ${pvpGameId}: ${e.message}`);
+        } finally { if(refundClient) refundClient.release(); }
+        await safeSendMessage(groupChatId, "⚙️ Critical error: Could not display the Dice Escalator PvP game board. Game cancelled, bets refunded.", {parse_mode: 'HTML'});
+    }
 }
 
 async function handleDiceEscalatorPvPTurnTimeout(gameId, timedOutPlayerId) {
