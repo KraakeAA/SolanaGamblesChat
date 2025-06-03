@@ -5124,6 +5124,7 @@ async function handleDiceEscalatorPvPStand_New(gameId, userWhoClicked, originalM
 async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = null) {
     const logPrefix = `[DE_PvP_Resolve_V3_Origin GID:${gameData.gameId || 'UNKNOWN_GAME_ID'}]`;
 
+    // Clear any lingering turn timeout for the game, just in case
     if (gameData.currentTurnTimeoutId) {
         clearTimeout(gameData.currentTurnTimeoutId);
         gameData.currentTurnTimeoutId = null;
@@ -5147,10 +5148,9 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
     let p2LedgerCode = 'loss_de_pvp';
     const betDisplayUSD_HTML_Resolve = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
 
-    // Determine winner and outcome messages
-    // *** START OF MODIFIED LOGIC BLOCK ***
-    // Prioritize bust conditions over timeouts or score comparisons
-    if (p1.busted) { // Actual bust from rolling DICE_ESCALATOR_BUST_ON
+    // Determine winner and outcome messages by prioritizing definitive game-ending states.
+    // Order: Busts > Forfeits > Standard Score Comparison > Errors.
+    if (p1.busted) { // Player 1 busted
         titleEmoji = "💥";
         winner = p2;
         loser = p1;
@@ -5159,7 +5159,7 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         p1LedgerCode = 'loss_de_pvp_bust';
         resultHeaderHTML = `💣 <b>${p1MentionHTML} BUSTED!</b> (Rolled a ${DICE_ESCALATOR_BUST_ON})`;
         outcomeDetails = `${p2MentionHTML} seizes victory!`;
-    } else if (p2.busted) { // Actual bust from rolling DICE_ESCALATOR_BUST_ON
+    } else if (p2.busted) { // Player 2 busted
         titleEmoji = "💥";
         winner = p1;
         loser = p2;
@@ -5168,9 +5168,7 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         p2LedgerCode = 'loss_de_pvp_bust';
         resultHeaderHTML = `💣 <b>${p2MentionHTML} BUSTED!</b> (Rolled a ${DICE_ESCALATOR_BUST_ON})`;
         outcomeDetails = `${p1MentionHTML} masterfully claims the win!`;
-    }
-    // Then check for timeout forfeits
-    else if (gameData.status === 'game_over_p1_timeout_forfeit') {
+    } else if (gameData.status === 'game_over_p1_timeout_forfeit') { // Player 1 forfeited due to timeout
         titleEmoji = "⏳";
         winner = p2;
         loser = p1;
@@ -5179,8 +5177,9 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         p1LedgerCode = 'loss_de_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p1MentionHTML} Forfeited (Timeout)!</b>`;
         outcomeDetails = `${p2MentionHTML} wins by default!`;
-        if (p1.status !== 'timeout_forfeit') p1.status = 'timeout_forfeit'; // Ensure status reflects forfeit
-    } else if (gameData.status === 'game_over_p2_timeout_forfeit') {
+        // Ensure status reflects forfeit if it was not already updated
+        if (p1.status !== 'timeout_forfeit') p1.status = 'timeout_forfeit';
+    } else if (gameData.status === 'game_over_p2_timeout_forfeit') { // Player 2 forfeited due to timeout
         titleEmoji = "⏳";
         winner = p1;
         loser = p2;
@@ -5189,10 +5188,9 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         p2LedgerCode = 'loss_de_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p2MentionHTML} Forfeited (Timeout)!</b>`;
         outcomeDetails = `${p1MentionHTML} wins by default!`;
-        if (p2.status !== 'timeout_forfeit') p2.status = 'timeout_forfeit'; // Ensure status reflects forfeit
-    }
-    // Then compare scores if both stood
-    else if (p1.stood && p2.stood) { // Both stood, compare scores
+        // Ensure status reflects forfeit if it was not already updated
+        if (p2.status !== 'timeout_forfeit') p2.status = 'timeout_forfeit';
+    } else if (p1.stood && p2.stood) { // Both players stood, compare scores
         if (p1.score > p2.score) {
             titleEmoji = "🏆";
             winner = p1;
@@ -5228,9 +5226,8 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         p2Payout = gameData.betAmount;
         p1LedgerCode = 'refund_de_pvp_error';
         p2LedgerCode = 'refund_de_pvp_error';
-        console.error(`${logPrefix} Undetermined DE PvP outcome for GID ${gameId}. Refunding. P1 Status: ${p1.status}, P2 Status: ${p2.status}, Game Status: ${gameData.status}`);
+        console.error(`${logPrefix} Undetermined DE PvP outcome for GID ${gameData.gameId}. Refunding. P1 Status: ${p1.status}, P2 Status: ${p2.status}, Game Status: ${gameData.status}`);
     }
-    // *** END OF MODIFIED LOGIC BLOCK ***
 
     if (winner) {
         winningsFooterHTML = `🎉 <b>${escapeHTML(winner.displayName)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
@@ -5259,8 +5256,8 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-        const p1Upd = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1LedgerCode, { game_id_custom_field: gameId, opponent_id_custom_field: p2.userId, player_score: p1.score, opponent_score: p2.score }, `DE PvP Result vs ${p2.displayName || p2.userId}`);
-        const p2Upd = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2LedgerCode, { game_id_custom_field: gameId, opponent_id_custom_field: p1.userId, player_score: p2.score, opponent_score: p1.score }, `DE PvP Result vs ${p1.displayName || p1.userId}`);
+        const p1Upd = await updateUserBalanceAndLedger(client, p1.userId, p1Payout, p1LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p2.userId, player_score: p1.score, opponent_score: p2.score }, `DE PvP Result vs ${p2.displayName || p2.userId}`);
+        const p2Upd = await updateUserBalanceAndLedger(client, p2.userId, p2Payout, p2LedgerCode, { game_id_custom_field: gameData.gameId, opponent_id_custom_field: p1.userId, player_score: p2.score, opponent_score: p1.score }, `DE PvP Result vs ${p1.displayName || p1.userId}`);
         if (!p1Upd.success || !p2Upd.success) {
             let errorMsg = "";
             if (!p1Upd.success) errorMsg += `P1 Fail: ${p1Upd.error}. `;
@@ -5274,20 +5271,20 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         const dbErrorText = `\n\n⚠️ <i>Error settling wagers. Admin notified.</i>`;
         const finalMessageTextHTMLWithError = currentMsg + dbErrorText;
         console.error(`${logPrefix} CRITICAL DB Error: ${e.message}`);
-        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL DE PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nWinner: ${winner?.mentionHTML || 'N/A'}\nLoser: ${loser?.mentionHTML || 'N/A'}\nError: ${escapeHTML(e.message)}. Manual check required.`, { parse_mode: 'HTML' });
-        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(() => {});
+        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL DE PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameData.gameId)}</code>\nWinner: ${winner?.mentionHTML || 'N/A'}\nLoser: ${loser?.mentionHTML || 'N/A'}\nError: ${escapeHTML(e.message)}. Manual check required.`, { parse_mode: 'HTML' });
+        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(() => {});
         const finalKeyboardError = createPostGameKeyboard(GAME_IDS.DICE_ESCALATOR_PVP, gameData.betAmount);
-        await safeSendMessage(String(chatId), finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
+        await safeSendMessage(String(gameData.chatId), finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
         return;
     } finally {
         if (client) client.release();
     }
 
     if (gameData.currentMessageId && bot) {
-        await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(() => {});
+        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(() => {});
     }
     const finalKeyboardSuccess = createPostGameKeyboard(GAME_IDS.DICE_ESCALATOR_PVP, gameData.betAmount);
-    await safeSendMessage(String(chatId), finalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboardSuccess });
+    await safeSendMessage(String(gameData.chatId), finalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboardSuccess });
 }
 // --- END OF FULL REPLACEMENT for resolveDiceEscalatorPvPGame_New function ---
 // --- End of Part 5b, Section 1 (COMPLETE DICE ESCALATOR LOGIC - GRANULAR ACTIVE GAME LIMITS) ---
