@@ -4212,47 +4212,72 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
 // --- END OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 // --- START OF FULL REPLACEMENT for handleDiceEscalatorAcceptBotGame_New function ---
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const userId = String(userWhoClicked.telegram_id); // Assuming telegram_id
-    const logPrefix = `[DE_AcceptBot_V3_GranLimit UID:<span class="math-inline">\{userId\} OfferID\:"</span>{offerId}" CH:${originalChatId}]`;
-    const offerData = activeGames.get(offerId);
+    const userId = String(userWhoClicked.telegram_id || userWhoClicked.id); // Get ID of user who clicked
+    const logPrefix = `[DE_AcceptBot_V3_GranLimit UID:${userId} OfferID:"${offerId}" CH:${originalChatId}]`;
+    const offerData = activeGames.get(offerId);
 
-    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has expired or is invalid.", show_alert: true });
-        return;
-    }
-    if (userId !== offerData.initiatorId) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Only the offer initiator can play against the Bot.", show_alert: true });
-        return;
-    }
+    // --- BEGINNING OF NEW USER ACTIVE GAME LIMIT CHECK ---
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false); // 'false' because accepting an offer is not creating a direct challenge offer
+    if (activeUserGameCheck.limitReached) {
+        const gameTypeDisplay = activeUserGameCheck.details.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        let alertMessage = `${escapeHTML(getPlayerDisplayReference(userWhoClicked))}, you already have an active game of "${escapeHTML(gameTypeDisplay)}" (Status: ${escapeHTML(activeUserGameCheck.details.status)}). Please finish it first.`;
+        if (callbackQueryId) {
+            await bot.answerCallbackQuery(callbackQueryId, { text: alertMessage.substring(0, 200), show_alert: true }).catch(() => {});
+        } else {
+            // If no callbackQueryId, this might have been triggered by a different flow, send message if possible
+            await safeSendMessage(originalChatId, alertMessage, { parse_mode: 'HTML' });
+        }
+        return;
+    }
+    // --- END OF NEW USER ACTIVE GAME LIMIT CHECK ---
 
-    const gameSession = await getGroupSession(originalChatId);
-    const activeGameKeyToCheck = GAME_IDS.DICE_ESCALATOR_PVB;
-    const currentActiveDEGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
+    if (!offerData || offerData.type !== GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER || offerData.status !== 'pending_unified_offer') {
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "This Dice Escalator offer has expired or is invalid.", show_alert: true });
+        // Attempt to clean up buttons on the original message if it's still accessible via offerData or originalMessageId
+        const msgIdToClearButtons = offerData?.gameSetupMessageId || originalOfferMessageId;
+        if (msgIdToClearButtons && bot) {
+            bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(msgIdToClearButtons) }).catch(() => {});
+        }
+        return;
+    }
+    if (userId !== offerData.initiatorId) {
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Only the offer initiator can play against the Bot.", show_alert: true });
+        return;
+    }
 
-    if (currentActiveDEGames.length >= limitActive) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Max ${limitActive} active Dice Escalator PvB game(s) allowed. Please wait.`, show_alert: true });
-        return;
-    }
+    const gameSession = await getGroupSession(originalChatId);
+    const activeGameKeyToCheck = GAME_IDS.DICE_ESCALATOR_PVB; // This is the group concurrency key for the new game
+    const currentActiveDEGamesInGroup = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
+    const limitActiveForGroup = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
-    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    await bot.answerCallbackQuery(callbackQueryId, { text: "Starting Dice Escalator vs Bot..." });
-    offerData.status = 'bot_game_accepted';
-    // Do not delete from activeGames yet, startDiceEscalatorPvBGame_New might use it then delete.
-    // activeGames.set(offerId, offerData); // Status updated
+    if (currentActiveDEGamesInGroup.length >= limitActiveForGroup) {
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: `Max ${limitActiveForGroup} active Dice Escalator PvB game(s) allowed in this group. Please wait.`, show_alert: true }).catch(() => {});
+        return;
+    }
 
-    // MODIFIED: Use the correct key for unified DE offer removal
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
-    // The offerId object itself in activeGames will be deleted by startDiceEscalatorPvBGame_New if it takes offerIdToDeleteIfAny
+    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
+    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Starting Dice Escalator vs Bot..." }).catch(() => {});
+    
+    offerData.status = 'bot_game_accepted'; // Mark offer as actioned
+    // activeGames.set(offerId, offerData); // Not strictly needed if deleting immediately
 
-    await startDiceEscalatorPvBGame_New(
-        { id: originalChatId, type: originalChatType },
-        offerData.initiatorUserObj,
-        offerData.betAmount,
-        originalOfferMessageId || offerData.gameSetupMessageId,
-        false,
-        offerId // Pass offerId to be deleted by the start function
-    );
+    // Remove the unified offer lock
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, null);
+    
+    // The offerId object itself in activeGames will be deleted by startDiceEscalatorPvBGame_New
+    // if it's passed via offerIdToDeleteIfAny, or we can delete it here.
+    // For clarity and to ensure it's gone before the new game starts, let's delete it here.
+    activeGames.delete(offerId); 
+
+    await startDiceEscalatorPvBGame_New(
+        { id: originalChatId, type: originalChatType }, // Pass chat object
+        offerData.initiatorUserObj,
+        offerData.betAmount,
+        offerData.gameSetupMessageId || originalMessageId, // Message ID of the offer to delete
+        false, // isPlayAgain
+        null, // unifiedOfferIdIfAny - the offer (offerId) is now processed and deleted from activeGames
+        originalChatType // Pass chatType for startPvBGame
+    );
 }
 // --- END OF FULL REPLACEMENT for handleDiceEscalatorAcceptBotGame_New function ---
 
