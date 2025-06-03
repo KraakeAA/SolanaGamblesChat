@@ -4509,6 +4509,7 @@ async function handleDEGoForJackpot(gameId, userWhoClicked, originalMessageId, c
     await updateDiceEscalatorPvBMessage_New(gameData); 
 }
 
+// --- START OF FULL REPLACEMENT for processDiceEscalatorPvBRollByEmoji_New function ---
 async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
     const logPrefix = `[DE_PvB_Roll_V2_Timeout_Fix UID:${gameData.player.userId} Game:${gameData.gameId}]`;
 
@@ -4517,8 +4518,8 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
         return;
     }
 
-    if (gameData.turnTimeoutId) clearTimeout(gameData.turnTimeoutId); 
-    gameData.status = 'player_turn_awaiting_emoji'; 
+    if (gameData.turnTimeoutId) clearTimeout(gameData.turnTimeoutId);
+    gameData.status = 'player_turn_awaiting_emoji'; // Reset to this as default before checks
 
     const player = gameData.player;
     const playerRefHTML = escapeHTML(player.displayName);
@@ -4536,7 +4537,7 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
         player.busted = true;
         gameData.status = 'player_busted';
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData); 
+        await updateDiceEscalatorPvBMessage_New(gameData);
         await sleep(BUST_MESSAGE_DELAY_MS);
         await finalizeDiceEscalatorPvBGame_New(gameData, 0);
         return;
@@ -4544,24 +4545,28 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
 
     player.score += diceValue;
 
-    if (player.score >= TARGET_JACKPOT_SCORE_CONST) {
-        player.stood = true;
+    // MODIFIED: Removed _CONST from TARGET_JACKPOT_SCORE
+    if (player.score >= TARGET_JACKPOT_SCORE) {
+        player.stood = true; // Auto-stand if jackpot score is met or exceeded while aiming for it or normally
         gameData.status = 'player_stood';
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData); 
+        await updateDiceEscalatorPvBMessage_New(gameData);
         await sleep(1000);
         await processDiceEscalatorBotTurnPvB_New(gameData);
         return;
     }
 
+    // If score is 18+ and player is NOT already on a jackpot run, and game is not already in decision state
     if (player.score >= 18 && !player.isGoingForJackpot && gameData.status !== 'player_score_18_plus_awaiting_choice') {
         gameData.status = 'player_score_18_plus_awaiting_choice';
     } else {
+        // Continue player's turn if still going for jackpot or score < 18
         gameData.status = 'player_turn_awaiting_emoji';
     }
     activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvBMessage_New(gameData); 
+    await updateDiceEscalatorPvBMessage_New(gameData);
 }
+// --- END OF FULL REPLACEMENT for processDiceEscalatorPvBRollByEmoji_New function ---
 
 async function updateDiceEscalatorPvBMessage_New(gameData, isStanding = false) {
     if (!gameData || !bot) return;
