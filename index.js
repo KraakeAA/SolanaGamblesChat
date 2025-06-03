@@ -4690,7 +4690,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
         const potWonHTML = escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'));
         resultTextOutcomeHTML = `Your score of <b>${player.score}</b> conquers the Bot Dealer's <i>${botFinalScore}</i>!\nYou win the pot of <b>${potWonHTML}</b>!`;
 
-        if (player.score >= TARGET_JACKPOT_SCORE_CONST) {
+        if (player.score >= TARGET_JACKPOT_SCORE) {
             const clientJackpot = await pool.connect(); // Renamed to avoid conflict
             try {
                 await clientJackpot.query('BEGIN');
