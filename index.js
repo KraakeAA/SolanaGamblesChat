@@ -11807,7 +11807,6 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 await safeSendMessage(originalChatIdFromGroup, `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}. Challenge cancelled. Initiator's bet refunded.`, { parse_mode: 'HTML' });
                 if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
                 activeGames.delete(offerId);
-                // THIS IS THE CRITICAL REMOVAL FOR THE OFFER LOCK
                 await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
                 console.log(`${logPrefix} Removed offer ${offerId} from group lock (key: ${pendingDirectChallengeOfferKeyUsed}) due to target low funds.`);
                 let refundClientNoFunds = null;
@@ -11819,17 +11818,12 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 finally { if(refundClientNoFunds) refundClientNoFunds.release(); }
                 return;
             }
-             // This check ensures initiator's funds for *this bet* are still considered reserved.
-             // The balance was already reduced when the offer was made.
              if (BigInt(freshInitiator.balance) < 0n && (BigInt(freshInitiator.balance) + offerData.betAmount < 0n) ) {
                 await safeSendMessage(originalChatIdFromGroup, `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML}'s account cannot cover their prior commitment. Original bet (if successfully placed) is being refunded.`, { parse_mode: 'HTML' });
                 if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
                 activeGames.delete(offerId);
-                // THIS IS THE CRITICAL REMOVAL FOR THE OFFER LOCK
                 await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
                 console.log(`${logPrefix} Removed offer ${offerId} from group lock (key: ${pendingDirectChallengeOfferKeyUsed}) due to initiator low funds post-offer.`);
-                // No need to refund initiator here if their balance went negative for other reasons; their bet for *this* offer was already deducted.
-                // If the initial bet deduction failed, this point wouldn't be reached.
                 return;
             }
 
@@ -11842,7 +11836,6 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 freshTarget.balance = targetBetRes.newBalanceLamports;
                 await clientAccept.query('COMMIT');
 
-                // Once target's bet is secured, remove the pending offer from activeGames and its lock.
                 activeGames.delete(offerId);
                 await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
                 console.log(`${logPrefix} Removed offer ${offerId} from group lock (key: ${pendingDirectChallengeOfferKeyUsed}) as it was accepted.`);
@@ -11861,21 +11854,25 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
 
                 newPvPGameId = generateGameId(offerData.gameToStart); // Generate ID for the new PvP game
 
-                // The game starter function is responsible for adding the *new* active game lock for the PvP game.
-                // The `offerId` from the direct challenge is now resolved and its lock removed.
+                // ** THE FIX IS HERE **
+                // The call to specificPvPGameStarterFunction (like startDiceEscalatorPvPGame_New) needs correct parameters.
+                // For Dice Escalator, Coinflip, RPS (which use the 'else' block below):
+                // Signature: (initiatorUserObj, opponentUserObj, betAmountLamports, groupChatId, groupChatType, messageIdToDeleteAfterAccept = null, origin)
                 if (offerData.gameToStart === GAME_IDS.DICE_21_PVP || offerData.gameToStart === GAME_IDS.DUEL_PVP) {
                     // These specific starters take pvpGameId as first argument
                     await specificPvPGameStarterFunction(newPvPGameId, freshInitiator, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
                 } else {
-                    // Other starters like Coinflip, RPS, Dice Escalator
+                    // Corrected parameter order and inclusion of originalChatTypeFromGroup
                     await specificPvPGameStarterFunction(
-                        freshInitiator,
-                        freshTarget,
-                        offerData.betAmount,
-                        originalChatIdFromGroup,
-                        null, // originalOfferMessageIdToDelete (already handled by editing message)
-                        'direct_challenge', // origin
-                        true  // joinerBetAlreadyDeducted is true because we just deducted it
+                        freshInitiator,                 // param 1
+                        freshTarget,                  // param 2
+                        offerData.betAmount,          // param 3
+                        originalChatIdFromGroup,      // param 4
+                        originalChatTypeFromGroup,    // param 5 (groupChatType) - THIS WAS THE MISSING/MISORDERED PARAMETER
+                        null,                         // param 6 (messageIdToDeleteAfterAccept) - offer message edited, not deleted by starter
+                        'direct_challenge'            // param 7 (origin)
+                        // Note: The 'joinerBetAlreadyDeducted' (previously `true`) is not a parameter for these starters.
+                        // The fact that targetBetRes.success was checked means the bet was handled.
                     );
                 }
 
