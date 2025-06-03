@@ -5465,14 +5465,6 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
 //-------------------------------------------------------------------------------------------------
 // Assumed dependencies as before.
 
-* Helper function to request a single dice roll via the Helper Bot system and poll for its result.
- * @param {string} gameId - Identifier for the game requesting the roll.
- * @param {string|number} chatIdForLog - The chat ID context for logging (not necessarily where dice is sent if helper handles that).
- * @param {string|number|null} userIdForRoll - The user ID for whom the roll is, or null for system/bot rolls.
- * @param {string} rollPurposeNote - A note describing the purpose of this roll.
- * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
- * @returns {Promise<{roll: number, error: false} | {error: true, message: string, isTimeout: boolean}>}
- */
 async function getSingleDiceRollViaHelper(gameId, chatIdForLog, userIdForRoll, rollPurposeNote, handlerType = null) {
     const logPrefix = `[GetSingleDiceRollHelper GID:${gameId} Purpose:"${rollPurposeNote}" UID:${userIdForRoll || 'BOT_INTERNAL'} HType:${handlerType || 'ANY'}]`;
     let client = null;
