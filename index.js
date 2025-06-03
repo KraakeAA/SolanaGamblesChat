@@ -7710,9 +7710,10 @@ async function handleStartDuelUnifiedOfferCommand(msg, betAmountLamports, target
 // --- END OF REPLACEMENT for handleStartDuelUnifiedOfferCommand function ---
 
 // --- Callback Handlers for Duel Unified Offer ---
+// --- START OF FULL REPLACEMENT for handleDuelAcceptBotGameCallback function ---
 async function handleDuelAcceptBotGameCallback(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
     const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
-    const logPrefix = `[Duel_AcceptBotCB_V4_GranLimit GID:${offerId} UID:${initiatorId}]`; // V4
+    const logPrefix = `[Duel_AcceptBotCB_V4_GranLimit GID:${offerId} UID:${initiatorId}]`;
     const offerData = activeGames.get(offerId);
     const callbackQueryId = callbackQueryIdPassed;
 
@@ -7726,7 +7727,7 @@ async function handleDuelAcceptBotGameCallback(offerId, initiatorUserObjFromCb, 
     }
 
     const gameSession = await getGroupSession(originalChatId);
-    const activeGameKeyToCheck = GAME_IDS.DUEL_PVB; // Specific key for active PvB Duel games
+    const activeGameKeyToCheck = GAME_IDS.DUEL_PVB;
     const currentActiveDuelGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
@@ -7736,22 +7737,25 @@ async function handleDuelAcceptBotGameCallback(offerId, initiatorUserObjFromCb, 
     }
 
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    offerData.timeoutId = null; 
+    offerData.timeoutId = null;
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Starting Duel vs Bot Dealer..."}).catch(()=>{});
 
-    offerData.status = 'bot_game_accepted'; 
-    activeGames.set(offerId, offerData);
+    offerData.status = 'bot_game_accepted';
+    // Do not delete from activeGames yet, startDuelPvBGame will use its data then delete it.
+    // activeGames.set(offerId, offerData); // Status is updated in the offerData object in memory
 
-    // Key for pending unified Duel offers is GAME_IDS.DUEL
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL, null); 
-    // Do not delete offerId from activeGames yet, startDuelPvBGame will use its data then delete it.
+    // MODIFIED: Use the correct key for unified Duel offer removal
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL_UNIFIED_OFFER, null);
+    // The offerId object itself in activeGames will be deleted by startDuelPvBGame via offerIdToDeleteIfAny parameter
 
     await startDuelPvBGame(originalChatId, offerData.initiatorUserObj, offerData.betAmount, offerData.gameSetupMessageId, offerId);
 }
+// --- END OF FULL REPLACEMENT for handleDuelAcceptBotGameCallback function ---
 
+// --- START OF FULL REPLACEMENT for handleDuelAcceptPvPChallengeCallback function ---
 async function handleDuelAcceptPvPChallengeCallback(offerId, joinerUserObjFull, originalOfferMessageId, originalChatId, originalChatType, callbackQueryIdPassed = null) {
     const joinerId = String(joinerUserObjFull.id || joinerUserObjFull.telegram_id);
-    const logPrefix = `[Duel_AcceptPvPCB_V4_GranLimit GID:${offerId} JoinerID:${joinerId}]`; // V4
+    const logPrefix = `[Duel_AcceptPvPCB_V4_GranLimit GID:${offerId} JoinerID:${joinerId}]`;
     let offerData = activeGames.get(offerId);
     const callbackQueryId = callbackQueryIdPassed;
 
@@ -7765,8 +7769,7 @@ async function handleDuelAcceptPvPChallengeCallback(offerId, joinerUserObjFull, 
     }
 
     const gameSession = await getGroupSession(originalChatId);
-    // Specific key for active PvP Duel games originating from unified offers
-    const activeGameKeyToCheck = GAME_IDS.DUEL_PVP_FROM_UNIFIED; 
+    const activeGameKeyToCheck = GAME_IDS.DUEL_PVP_FROM_UNIFIED;
     const currentActiveDuelGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
 
@@ -7786,57 +7789,78 @@ async function handleDuelAcceptPvPChallengeCallback(offerId, joinerUserObjFull, 
         if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Initiator can't cover bet. Offer cancelled.", show_alert: true }).catch(()=>{});
         if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
         activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, {removeThisId: offerId}, GAME_IDS.DUEL, null); 
+        // MODIFIED: Use the correct key for unified Duel offer removal
+        await updateGroupGameDetails(originalChatId, {removeThisId: offerId}, GAME_IDS.DUEL_UNIFIED_OFFER, null);
         const msgIdToEdit = offerData.gameSetupMessageId || originalOfferMessageId;
-        if(msgIdToEdit && bot) await bot.editMessageText(`⚠️ Duel offer by ${offerData.initiatorMention} cancelled (initiator funds insufficient).`, {chat_id: originalChatId, message_id: Number(msgIdToEdit), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
+        // Ensure initiatorMention is used, as initiatorMentionHTML might not be on unified offerData object
+        const initiatorDisplayReference = offerData.initiatorMention || escapeHTML(getPlayerDisplayReference(offerData.initiatorUserObj));
+        if(msgIdToEdit && bot) await bot.editMessageText(`⚠️ Duel offer by ${initiatorDisplayReference} cancelled (initiator funds insufficient).`, {chat_id: originalChatId, message_id: Number(msgIdToEdit), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
         return;
     }
 
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    offerData.timeoutId = null; 
+    offerData.timeoutId = null;
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Duel Accepted! Setting up PvP..."}).catch(()=>{});
 
-    offerData.status = 'pvp_accepted'; 
-    activeGames.set(offerId, offerData); 
-
-    // Key for pending unified Duel offers is GAME_IDS.DUEL
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL, null);
+    offerData.status = 'pvp_accepted';
+    // activeGames.set(offerId, offerData); // Status updated, actual offer object will be deleted soon
 
     let clientBet = null;
-    const pvpGameId = generateGameId(GAME_IDS.DUEL_PVP); 
+    const pvpGameId = generateGameId(GAME_IDS.DUEL_PVP);
     try {
         clientBet = await pool.connect(); await clientBet.query('BEGIN');
-        const joinBetRes = await updateUserBalanceAndLedger(clientBet, joinerId, BigInt(-offerData.betAmount), 'bet_placed_duel_pvp_join', { game_id_custom_field: pvpGameId, opponent_id_custom_field: offerData.initiatorId }, `PvP Duel Join vs ${offerData.initiatorMention}`);
+        // Ensure initiatorMention is used, as initiatorMentionHTML might not be on unified offerData object
+        const initiatorDisplayReferenceForLedger = offerData.initiatorMention || escapeHTML(getPlayerDisplayReference(offerData.initiatorUserObj));
+        const joinBetRes = await updateUserBalanceAndLedger(clientBet, joinerId, BigInt(-offerData.betAmount), 'bet_placed_duel_pvp_join', { game_id_custom_field: pvpGameId, opponent_id_custom_field: offerData.initiatorId }, `PvP Duel Join vs ${initiatorDisplayReferenceForLedger}`);
         if (!joinBetRes.success) throw new Error(joinBetRes.error || "Failed to deduct joiner's bet.");
-        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports; 
+        currentJoinerUserObj.balance = joinBetRes.newBalanceLamports;
         await clientBet.query('COMMIT');
 
+        // MODIFIED: Use the correct key for removing the unified offer from group lock
+        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL_UNIFIED_OFFER, null);
+        activeGames.delete(offerId); // Delete the unified offer object from activeGames
+
         await startDuelPvPGameSequence(
-            pvpGameId, // Pass generated PvP game ID
-            currentInitiatorUserObj, 
-            currentJoinerUserObj, 
-            offerData.betAmount, 
-            originalChatId, 
-            originalChatType, 
+            pvpGameId,
+            currentInitiatorUserObj,
+            currentJoinerUserObj,
+            offerData.betAmount,
+            originalChatId,
+            originalChatType,
             offerData.gameSetupMessageId, // Pass offer message ID to delete
             'unified_offer' // Origin
         );
-        activeGames.delete(offerId); 
 
     } catch (e) {
-        // ... (error handling & refund initiator as before) ...
         if (clientBet) await clientBet.query('ROLLBACK').catch(()=>{});
         console.error(`${logPrefix} CRITICAL error creating Duel PvP game ${pvpGameId} or taking joiner's bet: ${e.message}`);
         await safeSendMessage(originalChatId, `⚙️ Error starting Duel PvP: ${escapeHTML(e.message)}. Game cancelled.`, { parse_mode: 'HTML'});
-        if(activeGames.has(offerId)) activeGames.delete(offerId); 
+        // Ensure offer is cleaned up if it still exists in activeGames or groupGameSessions under its specific key
+        if(activeGames.has(offerId)) activeGames.delete(offerId);
+        const currentGroupOffers = await getGroupSession(originalChatId); // Re-fetch session data
+        if(currentGroupOffers.activeGamesByTypeInGroup.get(GAME_IDS.DUEL_UNIFIED_OFFER)?.includes(offerId)) {
+            await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL_UNIFIED_OFFER, null);
+        }
+
         let refundInitiatorClient = null;
-        try { /* ... refund logic ... */ } catch (refErr) { /* ... */ } finally { if(refundInitiatorClient) refundInitiatorClient.release(); }
+        try {
+            refundInitiatorClient = await pool.connect(); await refundInitiatorClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundInitiatorClient, offerData.initiatorId, offerData.betAmount, 'refund_duel_pvp_opponent_bet_fail', {custom_offer_id: offerId}, `Duel offer ${offerId} refund due to joiner bet fail.`);
+            await refundInitiatorClient.query('COMMIT');
+        } catch (refErr) {
+            if(refundInitiatorClient) await refundInitiatorClient.query('ROLLBACK');
+            console.error(`${logPrefix} CRITICAL REFUND FAILURE for initiator on Duel PvP joiner bet fail: ${refErr.message}`);
+        } finally {
+            if(refundInitiatorClient) refundInitiatorClient.release();
+        }
         return;
     } finally {
         if (clientBet) clientBet.release();
     }
 }
+// --- END OF FULL REPLACEMENT for handleDuelAcceptPvPChallengeCallback function ---
 
+// --- START OF FULL REPLACEMENT for handleDuelCancelUnifiedOfferCallback function ---
 async function handleDuelCancelUnifiedOfferCallback(offerId, initiatorUserObjFromCb, originalOfferMessageId, originalChatId, callbackQueryIdPassed = null) {
     const initiatorId = String(initiatorUserObjFromCb.id || initiatorUserObjFromCb.telegram_id);
     const logPrefix = `[Duel_CancelOffer_V3_Refund UID:${initiatorId} OfferID:${offerId}]`;
@@ -7857,8 +7881,8 @@ async function handleDuelCancelUnifiedOfferCallback(offerId, initiatorUserObjFro
     if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Duel offer cancelled. Refunding bet..."}).catch(()=>{});
 
     activeGames.delete(offerId);
-    // Key for pending unified Duel offers is GAME_IDS.DUEL
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL, null); 
+    // MODIFIED: Use the correct key for unified Duel offer removal
+    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.DUEL_UNIFIED_OFFER, null);
 
     let refundClient = null;
     try {
@@ -7875,7 +7899,9 @@ async function handleDuelCancelUnifiedOfferCallback(offerId, initiatorUserObjFro
     }
 
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-    const confirmationMessageHTML = `🚫 Offer Cancelled!\nThe Duel challenge by ${offerData.initiatorMention} for <b>${betDisplayUSD_HTML}</b> has been withdrawn. Bet refunded.`;
+    // Ensure offerData.initiatorMention is used, as initiatorMentionHTML might not be on unified offerData object.
+    const initiatorDisplayReference = offerData.initiatorMention || escapeHTML(getPlayerDisplayReference(offerData.initiatorUserObj));
+    const confirmationMessageHTML = `🚫 Offer Cancelled!\nThe Duel challenge by ${initiatorDisplayReference} for <b>${betDisplayUSD_HTML}</b> has been withdrawn. Bet refunded.`;
     const messageIdToEdit = Number(originalOfferMessageId || offerData.gameSetupMessageId);
     if (messageIdToEdit && bot) {
         await bot.editMessageText(confirmationMessageHTML, { chat_id: originalChatId, message_id: messageIdToEdit, parse_mode: 'HTML', reply_markup: {} }).catch(async () => {
@@ -7885,6 +7911,7 @@ async function handleDuelCancelUnifiedOfferCallback(offerId, initiatorUserObjFro
         await safeSendMessage(originalChatId, confirmationMessageHTML, { parse_mode: 'HTML' });
     }
 }
+// --- END OF FULL REPLACEMENT for handleDuelCancelUnifiedOfferCallback function ---
 
 // --- Player vs. Bot (PvB) Duel Game Logic ---
 async function startDuelPvBGame(chatId, initiatorUserObj, betAmountLamports, originalOfferMessageIdToDelete, offerIdToDeleteIfAny) {
