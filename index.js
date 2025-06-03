@@ -3811,8 +3811,7 @@ async function finalizeRPSPvPGame(gameData) {
 const DE_PVB_BOT_ROLL_COUNT = 3;
 const BUST_MESSAGE_DELAY_MS = 1500;
 
-// --- Helper Function for DE Game Message Formatting (RETURNS HTML) ---
-// (This function's internal logic is unchanged by the current refactoring task for granular limits)
+// --- Helper Function for DE Game Message Formatting (RETURNS // --- START OF FULL REPLACEMENT for formatDiceEscalatorGameMessage_New function ---
 async function formatDiceEscalatorGameMessage_New(gameData) {
     let messageTextHTML = "";
     let jackpotDisplayHTML = "";
@@ -3826,12 +3825,13 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
                 if (jackpotAmountLamports > 0n) {
                     const jackpotUSD_HTML = escapeHTML(await formatBalanceForDisplay(jackpotAmountLamports, 'USD'));
                     const jackpotSOL_HTML = escapeHTML(formatCurrency(jackpotAmountLamports, 'SOL'));
+                    // MODIFIED: Removed _CONST from TARGET_JACKPOT_SCORE
                     jackpotDisplayHTML = `\n\n<pre>🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇\n` +
-                                       `   💎   SUPER JACKPOT ALERT!   💎\n` +
-                                       `🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇</pre>\n` +
-                                       `Current Prize: 🔥<b>${jackpotUSD_HTML}</b>🔥\n` +
-                                       `(<i>Approx. ${jackpotSOL_HTML}</i>)\n` +
-                                       `Score <b>${escapeHTML(String(TARGET_JACKPOT_SCORE_CONST))}+</b> & beat the Bot to WIN IT ALL!\n`;
+                                         `   💎   SUPER JACKPOT ALERT!   💎\n` +
+                                         `🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇🎇</pre>\n` +
+                                         `Current Prize: 🔥<b>${jackpotUSD_HTML}</b>🔥\n` +
+                                         `(<i>Approx. ${jackpotSOL_HTML}</i>)\n` +
+                                         `Score <b>${escapeHTML(String(TARGET_JACKPOT_SCORE))}+</b> & beat the Bot to WIN IT ALL!\n`;
                 } else {
                      jackpotDisplayHTML = `\n\n💎 The Super Jackpot is currently <b>${escapeHTML(await formatBalanceForDisplay(0n, 'USD'))}</b>. Be the first to build it up!\n`;
                 }
@@ -3847,47 +3847,49 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
     let playerRefHTML = "Player";
     if (gameData.type === GAME_IDS.DICE_ESCALATOR_PVB && gameData.player && gameData.player.displayName) {
         playerRefHTML = escapeHTML(gameData.player.displayName);
-    } else if (gameData.initiator && gameData.initiator.displayName) { 
-        playerRefHTML = escapeHTML(gameData.initiator.displayName); 
+    } else if (gameData.initiator && gameData.initiator.displayName) {
+        playerRefHTML = escapeHTML(gameData.initiator.displayName);
     }
-
 
     if (gameData.type === GAME_IDS.DICE_ESCALATOR_PVB) {
         const player = gameData.player;
         messageTextHTML = `🎲 💎 <b>Dice Escalator vs. Bot Dealer</b> 💎 🎲\n\n` +
-                                      `<b>Player</b>: ${playerRefHTML}\n` + 
-                                      `<b>Wager</b>: <b>${betUsdDisplay_HTML}</b> (<i>${betDisplaySOL_HTML}</i>)\n` +
-                                      `${jackpotDisplayHTML}\n`+
-                                      `Your Score: <b>${escapeHTML(String(player.score))}</b>\n`;
+                          `<b>Player</b>: ${playerRefHTML}\n` +
+                          `<b>Wager</b>: <b>${betUsdDisplay_HTML}</b> (<i>${betDisplaySOL_HTML}</i>)\n` +
+                          `${jackpotDisplayHTML}\n`+
+                          `Your Score: <b>${escapeHTML(String(player.score))}</b>\n`;
         if (player.rolls && player.rolls.length > 0) {
             messageTextHTML += `Your Rolls: ${formatDiceRolls(player.rolls)}\n`;
         }
 
         if (gameData.status === 'player_score_18_plus_awaiting_choice') {
+            // MODIFIED: Removed _CONST from TARGET_JACKPOT_SCORE
             messageTextHTML += `\n\n⚠️ <b>DECISION TIME!</b> Score: <b>${escapeHTML(String(player.score))}</b> ⚠️\n` +
-                                       `You can:\n` +
-                                       `1. ✋ <b>Stand Firm:</b> Lock in your score.\n` +
-                                       `2. 🔥 <b>Go for Jackpot!:</b> Roll for <b>${escapeHTML(String(TARGET_JACKPOT_SCORE_CONST))}+</b>! (<i>No standing after this choice!</i>)\n\n` +
-                                       `What's your strategy, <b>${playerRefHTML}</b>? (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
+                               `You can:\n` +
+                               `1. ✋ <b>Stand Firm:</b> Lock in your score.\n` +
+                               `2. 🔥 <b>Go for Jackpot!:</b> Roll for <b>${escapeHTML(String(TARGET_JACKPOT_SCORE))}+</b>! (<i>No standing after this choice!</i>)\n\n` +
+                               `What's your strategy, <b>${playerRefHTML}</b>? (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
         } else if (gameData.status === 'player_turn_awaiting_emoji') {
             if (player.isGoingForJackpot) {
-                messageTextHTML += `\n\n🔥🔥 <b>JACKPOT RUN!</b> 🔥🔥\nScore: <b>${escapeHTML(String(player.score))}</b> (Target: ${escapeHTML(String(TARGET_JACKPOT_SCORE_CONST))}+)\n` +
-                                         `<i>No turning back! Send 🎲 to roll again! (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)</i>`;
+                // MODIFIED: Removed _CONST from TARGET_JACKPOT_SCORE
+                messageTextHTML += `\n\n🔥🔥 <b>JACKPOT RUN!</b> 🔥🔥\nScore: <b>${escapeHTML(String(player.score))}</b> (Target: ${escapeHTML(String(TARGET_JACKPOT_SCORE))}+)\n` +
+                                   `<i>No turning back! Send 🎲 to roll again! (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)</i>`;
             } else {
                 messageTextHTML += `\n👉 <b>${playerRefHTML}</b>, it's your turn! Send a 🎲 emoji to roll.\n` +
-                                         `<i>Or press "Stand Firm" below. (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)</i>`;
+                                   `<i>Or press "Stand Firm" below. (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)</i>`;
             }
         } else if (gameData.status === 'player_stood') {
             messageTextHTML += `\n✅ You stood with <b>${escapeHTML(String(player.score))}</b> points!\n`+
-                                         `<i>🤖 The Bot Dealer is now making its move...</i>`;
+                               `<i>🤖 The Bot Dealer is now making its move...</i>`;
         } else if (gameData.status === 'bot_turn_complete') {
             messageTextHTML += `\n🤖 Bot Dealer's Rolls: ${formatDiceRolls(gameData.botRolls || [])}\n` +
-                                         `Bot's Final Score: <b>${escapeHTML(String(gameData.botScore || 0))}</b>\n\n` +
-                                         `<i>⏳ Calculating results...</i>`;
+                               `Bot's Final Score: <b>${escapeHTML(String(gameData.botScore || 0))}</b>\n\n` +
+                               `<i>⏳ Calculating results...</i>`;
         } else if (gameData.status === 'player_busted') {
             messageTextHTML += `\n💥 <b>Oh no, a BUST!</b> You rolled a <code>${escapeHTML(String(gameData.lastPlayerRoll))}</code> (bust on <code>${escapeHTML(String(DICE_ESCALATOR_BUST_ON))}</code>).\n<i>Bot Dealer wins this round.</i>`;
         }
     } else if (gameData.type === GAME_IDS.DICE_ESCALATOR_PVP) {
+        // ... (PvP message formatting, no changes needed here for TARGET_JACKPOT_SCORE) ...
         const p1 = gameData.initiator;
         const p2 = gameData.opponent;
         const p1MentionHTML = escapeHTML(p1.displayName);
@@ -3895,10 +3897,10 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
         const totalPotUsdDisplay_HTML = escapeHTML(await formatBalanceForDisplay(gameData.betAmount * 2n, 'USD'));
 
         messageTextHTML = `⚔️ <b>Dice Escalator PvP Challenge!</b> ⚔️\n` +
-                                `<i>${p1MentionHTML} vs ${p2MentionHTML}</i>\n\n` +
-                                `<b>Wager</b>: ${betUsdDisplay_HTML} each\n`+
-                                `<b>Total Pot</b>: <b>${totalPotUsdDisplay_HTML}</b>\n\n` +
-                                `--- <b>Current Scores</b> ---\n`;
+                          `<i>${p1MentionHTML} vs ${p2MentionHTML}</i>\n\n` +
+                          `<b>Wager</b>: ${betUsdDisplay_HTML} each\n`+
+                          `<b>Total Pot</b>: <b>${totalPotUsdDisplay_HTML}</b>\n\n` +
+                          `--- <b>Current Scores</b> ---\n`;
         messageTextHTML += `👤 <b>${p1MentionHTML}</b> (P1): ${formatDiceRolls(p1.rolls)} Score: <b>${escapeHTML(String(p1.score))}</b> ${p1.busted ? "💥 BUSTED!" : (p1.stood ? "✅ Stood" : (p1.status === 'awaiting_roll_emoji' ? "🎲 Rolling..." : ""))}\n`;
         messageTextHTML += `👤 <b>${p2MentionHTML}</b> (P2): ${formatDiceRolls(p2.rolls)} Score: <b>${escapeHTML(String(p2.score))}</b> ${p2.busted ? "💥 BUSTED!" : (p2.stood ? "✅ Stood" : (p2.status === 'awaiting_roll_emoji' ? "🎲 Rolling..." : (p2.status === 'waiting_turn' ? "<i>Waiting...</i>" : "")) )}\n\n`;
 
@@ -3908,7 +3910,7 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
             actionPromptHTML = `👉 <b>${p1MentionHTML}</b> (P1), it's your turn! Send 🎲 to roll, or use "Stand" below. (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
         } else if (p2.isTurn && p2.status === 'awaiting_roll_emoji') {
             actionPromptHTML = `👉 <b>${p2MentionHTML}</b> (P2), ${p1MentionHTML} (P1) ${p1.stood ? `stands at <b>${p1.score}</b>` : `busted`}. Your turn! Send 🎲 or "Stand". (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
-        } else if (gameData.status === 'p1_stood' && p2.status === 'waiting_turn') { 
+        } else if (gameData.status === 'p1_stood' && p2.status === 'waiting_turn') {
             actionPromptHTML = `✅ <b>${p1MentionHTML}</b> (P1) stands with <b>${escapeHTML(String(p1.score))}</b>!\n<b>${p2MentionHTML}</b> (P2), your turn to conquer! Send 🎲 to roll or "Stand"! (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
         } else if (gameData.status.startsWith('game_over')) {
             actionPromptHTML = "<i>🏁 Game Over! Calculating final results...</i> ⏳";
@@ -3917,6 +3919,7 @@ async function formatDiceEscalatorGameMessage_New(gameData) {
     }
     return messageTextHTML.trim();
 }
+// --- END OF FULL REPLACEMENT for formatDiceEscalatorGameMessage_New function ---
 
 // (getThreeDiceRollsViaHelper_DE_New remains unchanged by this specific refactoring task)
 async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogContext) {
