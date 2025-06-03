@@ -597,70 +597,78 @@ const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map(); 
 
 async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectChallengeOffer = false) {
-    const userIdStr = String(userIdToCheck);
-    let activePlayGameFound = null;
+    const userIdStr = String(userIdToCheck);
+    let activePlayGameFound = null;
 
-    const PURE_PVB_GAME_TYPES = [ 
-        GAME_IDS.COINFLIP_PVB, GAME_IDS.RPS_PVB, GAME_IDS.DICE_ESCALATOR_PVB,
-        GAME_IDS.DICE_21, 
-        GAME_IDS.MINES, GAME_IDS.LADDER, GAME_IDS.OVER_UNDER_7, GAME_IDS.SLOT_FRENZY,
-        GAME_IDS.DUEL_PVB, GAME_IDS.SEVEN_OUT 
-    ];
+    const PURE_PVB_GAME_TYPES = [ 
+        GAME_IDS.COINFLIP_PVB, GAME_IDS.RPS_PVB, GAME_IDS.DICE_ESCALATOR_PVB,
+        GAME_IDS.DICE_21, 
+        GAME_IDS.MINES, GAME_IDS.LADDER, GAME_IDS.OVER_UNDER_7, GAME_IDS.SLOT_FRENZY,
+        GAME_IDS.DUEL_PVB, GAME_IDS.SEVEN_OUT 
+    ];
 
-    for (const [gameId, gameData] of activeGames.entries()) {
-        let isUserInThisGame = false;
+    for (const [gameId, gameData] of activeGames.entries()) {
+        let isUserInThisGame = false;
 
-        if (gameData.userId === userIdStr || gameData.playerId === userIdStr || gameData.initiatorId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.player?.userId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.initiator?.userId === userIdStr || gameData.opponent?.userId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.p1?.userId === userIdStr || gameData.p2?.userId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (Array.isArray(gameData.participants) && gameData.participants.some(p => String(p.userId) === userIdStr)) {
-            isUserInThisGame = true;
-        } else if (gameData.type === GAME_IDS.MINES_OFFER && gameData.initiatorId === userIdStr) {
-            isUserInThisGame = true;
-        }
+        // --- MODIFIED/ENHANCED isUserInThisGame CHECK ---
+        if (gameData.userId === userIdStr || gameData.playerId === userIdStr || gameData.initiatorId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.player?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.initiator?.userId === userIdStr || gameData.opponent?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.p1?.userId === userIdStr || gameData.p2?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (Array.isArray(gameData.participants) && gameData.participants.some(p => String(p.userId) === userIdStr)) {
+            isUserInThisGame = true;
+        } else if (gameData.type === GAME_IDS.MINES_OFFER && gameData.initiatorId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.targetUserId === userIdStr && // Check if user is the target
+                   (gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE || // Generic direct challenge type
+                    gameData.type.endsWith('_direct_challenge_offer'))) { // Specific game direct challenge offer types
+            isUserInThisGame = true;
+        }
+        // --- END OF MODIFIED/ENHANCED isUserInThisGame CHECK ---
 
-        if (isUserInThisGame) {
-            const nonActivePlayStates = [
-                'pending_offer', 'pending_unified_offer', 'pending_direct_challenge_response', 'awaiting_difficulty',
-                'game_over_player_bust', 'game_over_bot_played', 'game_over_player_forfeit',
-                'game_over_error_ui_update', 'game_over_error_deal_initiator',
-                'game_over_error_deal_opponent', 'game_over_initiator_timeout_forfeit',
-                'game_over_opponent_timeout_forfeit', 'game_over_push_both_blackjack',
-                'game_over_initiator_blackjack', 'game_over_opponent_blackjack',
-                'game_over_pvp_resolved', 'game_over_mine_hit', 'game_over_cashed_out',
-                'game_over_all_gems_found', 'game_over_timeout', 'game_over_refunded',
-                'game_over_win', 'game_over_loss', 'game_over_draw', 'game_over_error', 'game_over_bot_error',
-                'cancelled', 'expired', 'bot_game_accepted', 'pvp_accepted', 'resolved',
-                'player_busted', 'bot_turn_complete',
-            ];
+        if (isUserInThisGame) {
+            const nonActivePlayStates = [
+                'pending_offer', 'pending_unified_offer', 'pending_direct_challenge_response', 'awaiting_difficulty',
+                'game_over_player_bust', 'game_over_bot_played', 'game_over_player_forfeit',
+                'game_over_error_ui_update', 'game_over_error_deal_initiator',
+                'game_over_error_deal_opponent', 'game_over_initiator_timeout_forfeit',
+                'game_over_opponent_timeout_forfeit', 'game_over_push_both_blackjack',
+                'game_over_initiator_blackjack', 'game_over_opponent_blackjack',
+                'game_over_pvp_resolved', 'game_over_mine_hit', 'game_over_cashed_out',
+                'game_over_all_gems_found', 'game_over_timeout', 'game_over_refunded',
+                'game_over_win', 'game_over_loss', 'game_over_draw', 'game_over_error', 'game_over_bot_error',
+                'cancelled', 'expired', 'bot_game_accepted', 'pvp_accepted', 'resolved',
+                'player_busted', 'bot_turn_complete',
+            ];
 
-            const isGameTrulyOverOrSimplyOffer = gameData.status && (gameData.status.startsWith('game_over_') || nonActivePlayStates.includes(gameData.status));
+            const isGameTrulyOverOrSimplyOffer = gameData.status && (gameData.status.startsWith('game_over_') || nonActivePlayStates.includes(gameData.status));
 
-            if (!isGameTrulyOverOrSimplyOffer) {
-                const isUserOwnPendingOffer = (
-                    (gameData.type.endsWith('_unified_offer') || gameData.type === GAME_IDS.MINES_OFFER || gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE || gameData.type.endsWith('_direct_challenge_offer')) && // Include new offer types
-                    gameData.initiatorId === userIdStr &&
-                    (gameData.status === 'pending_offer' || gameData.status === 'pending_unified_offer' || gameData.status === 'awaiting_difficulty' || gameData.status === 'waiting_for_choice' || gameData.status === 'pending_direct_challenge_response')
-                );
-                if (isUserOwnPendingOffer) {
-                    continue;
-                }
-                if (gameBeingStartedIsDirectChallengeOffer && PURE_PVB_GAME_TYPES.includes(gameData.type)) {
-                    console.log(`[checkUserActiveGameLimit] User ${userIdStr} attempting to start a direct challenge offer. Allowing, as current active game ${gameData.type} is PvB.`);
-                    continue; 
-                }
-                activePlayGameFound = { type: gameData.type, status: gameData.status, id: gameId.slice(-6) };
-                break;
-            }
-        }
-    }
-    if (activePlayGameFound) { return { limitReached: true, details: activePlayGameFound }; }
-    return { limitReached: false };
+            if (!isGameTrulyOverOrSimplyOffer) {
+                const isUserOwnPendingOffer = (
+                    (gameData.type.endsWith('_unified_offer') || gameData.type === GAME_IDS.MINES_OFFER || gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE || gameData.type.endsWith('_direct_challenge_offer')) && // Include new offer types
+                    gameData.initiatorId === userIdStr &&
+                    (gameData.status === 'pending_offer' || gameData.status === 'pending_unified_offer' || gameData.status === 'awaiting_difficulty' || gameData.status === 'waiting_for_choice' || gameData.status === 'pending_direct_challenge_response')
+                );
+                if (isUserOwnPendingOffer) {
+                    continue; // If the game/offer being checked is one the user themselves initiated and it's still pending, it doesn't block them from starting/joining something else.
+                }
+                // This allows a user in a PvB game to still *create* a direct challenge offer.
+                if (gameBeingStartedIsDirectChallengeOffer && PURE_PVB_GAME_TYPES.includes(gameData.type)) {
+                    console.log(`[checkUserActiveGameLimit] User ${userIdStr} attempting to start a direct challenge offer. Allowing, as current active game ${gameData.type} is PvB.`);
+                    continue; 
+                }
+                    // If it's not their own initiated pending offer, and not the PvB exception, then it's a blocking active game/engagement.
+                activePlayGameFound = { type: gameData.type, status: gameData.status, id: gameId.slice(-6) };
+                break; // Found a blocking game
+            }
+        }
+    }
+    if (activePlayGameFound) { return { limitReached: true, details: activePlayGameFound }; }
+    return { limitReached: false };
 }
 
 const escapeMarkdownV2 = (text) => {
