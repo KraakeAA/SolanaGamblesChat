@@ -3982,7 +3982,7 @@ async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogConte
     return rolls;
 }
 
-// --- START OF REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
+// --- START OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
@@ -4038,17 +4038,18 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
     let limit;
 
     if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER; // MODIFIED KEY
+        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER;
         const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; // CORRECTED KEY FOR LIMIT LOOKUP
+        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
         if (currentDirectChallenges.length >= limit) {
             await safeSendMessage(chatId, `⏳ Hold your dice, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent direct Dice Escalator challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
-    } else {
-        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR;
+    } else { // Unified Offer Path
+        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER; // MODIFIED: Use specific unified offer key
         const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
+        // Limit lookup will try specific, then fallback to base DE unified limit from config
+        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR] || 1;
         if (currentUnifiedOffers.length >= limit) {
             await safeSendMessage(chatId, `⏳ Slow down, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent Dice Escalator offer(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
             return;
@@ -4091,11 +4092,11 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                 betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: String(sentGroupMessage.message_id),
                 chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
                 gameToStart: GAME_IDS.DICE_ESCALATOR_PVP,
-                _offerKeyUsedForGroupLock: GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER, // MODIFIED: Store the correct key
+                _offerKeyUsedForGroupLock: GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER,
                 creationTime: Date.now(), timeoutId: null
             };
-        } else {
-            offerId = generateGameId("de_uo");
+        } else { // Unified Offer
+            offerId = generateGameId(GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER); // Generate ID with specific type hint
             timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
 
             const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_unified_offer', { custom_offer_id: offerId }, `Dice Escalator Unified Offer`);
@@ -4117,14 +4118,17 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
 
             offerData = {
                 type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId),
-                chatType: chatType, initiatorId: userId, initiatorMentionHTML: initiatorPlayerRefHTML,
+                chatType: chatType, initiatorId: userId, initiatorMentionHTML: initiatorPlayerRefHTML, // Store HTML version for unified
                 initiatorUserObj: initiatorUserObj, betAmount: betAmountLamports, status: 'pending_unified_offer',
                 creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
+                // _offerKeyUsedForGroupLock is not strictly needed if offerActivityKeyForLock is correctly GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER
             };
         }
 
         await clientBetPlacement.query('COMMIT');
         activeGames.set(offerId, offerData);
+        // This call now correctly uses `GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER` if it's a unified offer,
+        // or `GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER` if it's a direct challenge.
         await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
         console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
 
@@ -4181,8 +4185,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
-// --- END OF REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
-
+// --- END OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 // --- START OF FULL REPLACEMENT for handleDiceEscalatorAcceptBotGame_New function ---
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
     const userId = String(userWhoClicked.telegram_id); // Assuming telegram_id
