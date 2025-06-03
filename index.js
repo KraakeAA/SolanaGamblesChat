@@ -1064,10 +1064,14 @@ async function initializeDatabaseSchema() {
     roll_value INTEGER NULL,
     requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     processed_at TIMESTAMPTZ NULL,
-    notes TEXT NULL
-);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
-        console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
+    notes TEXT NULL,
+    handler_type VARCHAR(50) NULL, -- <<<< THIS LINE IS CRITICAL AND MUST BE PRESENT
+    helper_id VARCHAR(100) NULL     -- <<<< Optional, but good to have if you added it
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
+    // Optional but recommended new index if you use handler_type frequently in queries by helpers:
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_handler ON dice_roll_requests(status, handler_type, requested_at);`);
+    console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
 
         // Update function for 'updated_at' columns
         console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
