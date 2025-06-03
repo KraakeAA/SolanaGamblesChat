@@ -11653,7 +11653,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
     const offerData = activeGames.get(offerId);
 
     if (!offerData) {
-        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames.`);
+        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames. It may have already been processed or expired.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge has expired or is no longer valid.", show_alert: true }).catch(() => {});
         if (originalMessageIdInGroup && bot) {
             bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: originalMessageIdInGroup }).catch(() => {});
@@ -11672,16 +11672,38 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         offerData.timeoutId = null;
     }
 
-    // Retrieve the key under which this pending offer was tracked in groupGameSessions
-    const pendingDirectChallengeOfferKeyUsed = offerData._offerKeyUsedForGroupLock; // MODIFIED: Use the stored key
-    if (!pendingDirectChallengeOfferKeyUsed) {
-        console.error(`${logPrefix} CRITICAL: _offerKeyUsedForGroupLock missing in offerData for ${offerId}. Cannot reliably update group session count for offer. Attempting fallback using gameToStart.`);
-        // Fallback (less ideal, but better than doing nothing if new field wasn't populated yet in old offers)
-        // However, for this fix to work, the offer creation MUST populate _offerKeyUsedForGroupLock.
-        // If it's missing, it indicates an older offer object structure or an error in populating it.
-        // Forcing a specific key for cleanup if the field is missing could be problematic if the offer creation wasn't also fixed.
-        // For now, we'll rely on it being present due to the previous fixes. If not, it will fail at updateGroupGameDetails.
+    // --- START OF MODIFICATION: More assertive derivation of pendingDirectChallengeOfferKeyUsed ---
+    // This ensures the key for group lock removal is always correctly derived from the gameToStart.
+    let pendingDirectChallengeOfferKeyUsed;
+    switch (offerData.gameToStart) {
+        case GAME_IDS.COINFLIP_PVP:
+            pendingDirectChallengeOfferKeyUsed = GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER;
+            break;
+        case GAME_IDS.RPS_PVP:
+            pendingDirectChallengeOfferKeyUsed = GAME_IDS.RPS_DIRECT_CHALLENGE_OFFER;
+            break;
+        case GAME_IDS.DICE_ESCALATOR_PVP:
+            pendingDirectChallengeOfferKeyUsed = GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER;
+            break;
+        case GAME_IDS.DICE_21_PVP:
+            pendingDirectChallengeOfferKeyUsed = GAME_IDS.DICE_21_DIRECT_CHALLENGE_OFFER;
+            break;
+        case GAME_IDS.DUEL_PVP:
+            pendingDirectChallengeOfferKeyUsed = GAME_IDS.DUEL_DIRECT_CHALLENGE_OFFER;
+            break;
+        default:
+            console.error(`${logPrefix} CRITICAL: Unknown offerData.gameToStart '${offerData.gameToStart}' for direct challenge offer ${offerId}. Cannot determine correct key for group lock. This could lead to a lingering lock.`);
+            pendingDirectChallengeOfferKeyUsed = 'UNKNOWN_DIRECT_CHALLENGE_OFFER_KEY_ASSERTION_FAILED';
+            break;
     }
+    // Compare derived key with stored key if available, for diagnostic purposes
+    if (offerData._offerKeyUsedForGroupLock && offerData._offerKeyUsedForGroupLock !== pendingDirectChallengeOfferKeyUsed) {
+        console.warn(`${logPrefix} Discrepancy detected! Derived group lock key '${pendingDirectChallengeOfferKeyUsed}' differs from stored key '${offerData._offerKeyUsedForGroupLock}'. Using derived key for removal.`);
+    } else if (!offerData._offerKeyUsedForGroupLock) {
+        console.warn(`${logPrefix} _offerKeyUsedForGroupLock was missing in offerData. Derived key for removal: ${pendingDirectChallengeOfferKeyUsed}.`);
+    }
+    // --- END OF MODIFICATION ---
+
 
     // Key for the *new active game* that will start if accepted. Used for limit check in GAME_ACTIVITY_LIMITS.ACTIVE_GAMES.
     const activeGameKeyForNewLimitCheck = offerData.gameToStart;
@@ -11714,8 +11736,8 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             console.error(`${logPrefix} Unknown gameToStart in offerData: ${offerData.gameToStart}`);
             await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Unknown game type for this challenge.", show_alert: true });
             activeGames.delete(offerId);
-            // Use the stored offer key if available for cleanup, otherwise fallback
-            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed || `UNKNOWN_OFFER_KEY_${offerData.gameToStart}`, null);
+            // Use the determined offer key for cleanup, or the generic one if it failed to determine.
+            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // Use the derived key
             return;
     }
 
@@ -11729,7 +11751,7 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
         console.error(`${logPrefix} Critical: Missing initiator or target user object details in offerData for ${offerId}.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true });
         activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed || `UNKNOWN_OFFER_KEY_${offerData.gameToStart}`, null);
+        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // Use the derived key
         if (bot && offerData.offerMessageIdInGroup) {
             bot.editMessageText("Error processing challenge: Player details missing. Offer cancelled.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
         }
@@ -11804,11 +11826,16 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 await clientAccept.query('COMMIT');
 
                 activeGames.delete(offerId);
+                // Remove the offer from the group's active list
                 await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
+                console.log(`${logPrefix} Removed offer ${offerId} from group lock using key ${pendingDirectChallengeOfferKeyUsed} as it was accepted.`); // ADDED LOG
 
                 const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\nA <b>${gameDisplayNameForMessages}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
                 if (bot && offerData.offerMessageIdInGroup) {
-                    await bot.editMessageText(acceptedMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {});
+                    await bot.editMessageText(acceptedMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
+                        console.warn(`${logPrefix} Could not edit offer message ${offerData.offerMessageIdInGroup} after acceptance: ${e.message}`);
+                        safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' }); // Fallback
+                    });
                 } else { await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' }); }
 
                 if (typeof specificPvPGameStarterFunction !== 'function') {
@@ -11861,7 +11888,9 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." });
             activeGames.delete(offerId);
+            // Remove the offer from the group's active list
             await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
+            console.log(`${logPrefix} Removed offer ${offerId} from group lock using key ${pendingDirectChallengeOfferKeyUsed} as it was declined.`); // ADDED LOG
             let refundClientDec = null;
             try {
                 refundClientDec = await pool.connect(); await refundClientDec.query('BEGIN');
@@ -11870,7 +11899,12 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             } catch (e) { if(refundClientDec) await refundClientDec.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL on decline for ${offerId}: ${e.message}`);}
             finally { if(refundClientDec) refundClientDec.release(); }
             const declineMsgHTML = `🚫 ${targetMentionHTML} has declined the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML} for <b>${betDisplayUSD_HTML}</b>. Initiator's bet refunded.`;
-            if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{});
+            if (bot && offerData.offerMessageIdInGroup) {
+                await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
+                    console.warn(`${logPrefix} Could not edit offer message ${offerData.offerMessageIdInGroup} after decline: ${e.message}`);
+                    safeSendMessage(originalChatIdFromGroup, declineMsgHTML, { parse_mode: 'HTML' }); // Fallback
+                });
+            } else { await safeSendMessage(originalChatIdFromGroup, declineMsgHTML, { parse_mode: 'HTML' }); }
             break;
 
         case 'dir_chal_can':
@@ -11884,7 +11918,9 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             }
             await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." });
             activeGames.delete(offerId);
+            // Remove the offer from the group's active list
             await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null); // MODIFIED
+            console.log(`${logPrefix} Removed offer ${offerId} from group lock using key ${pendingDirectChallengeOfferKeyUsed} as it was cancelled.`); // ADDED LOG
             let refundClientCan = null;
             try {
                 refundClientCan = await pool.connect(); await refundClientCan.query('BEGIN');
@@ -11893,7 +11929,12 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             } catch (e) { if(refundClientCan) await refundClientCan.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL on cancel for ${offerId}: ${e.message}`); }
             finally { if(refundClientCan) refundClientCan.release(); }
             const cancelMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${gameDisplayNameForMessages} challenge to ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b>. Bet refunded.`;
-            if (bot && offerData.offerMessageIdInGroup) await bot.editMessageText(cancelMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{});
+            if (bot && offerData.offerMessageIdInGroup) {
+                await bot.editMessageText(cancelMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
+                    console.warn(`${logPrefix} Could not edit offer message ${offerData.offerMessageIdInGroup} after cancellation: ${e.message}`);
+                    safeSendMessage(originalChatIdFromGroup, cancelMsgHTML, { parse_mode: 'HTML' }); // Fallback
+                });
+            } else { await safeSendMessage(originalChatIdFromGroup, cancelMsgHTML, { parse_mode: 'HTML' }); }
             break;
 
         default:
