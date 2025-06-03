@@ -6555,52 +6555,47 @@ async function processDice21BotTurn(gameData) {
 
     if (!gameData || (gameData.status !== 'player_action_processing_stand' && gameData.status !== 'player_blackjack')) {
         console.warn(`${logPrefix} Bot turn called in unexpected status: ${gameData.status}. Aborting bot turn.`);
-        // If player had blackjack, and we are here, it implies bot also needs to check its hand.
-        // If status is not 'player_blackjack', it's likely an error if not 'player_action_processing_stand'.
-        if (gameData.status !== 'player_blackjack') {
-            gameData.status = 'game_over_bot_error'; // Fallback error if state is unexpected
+        if (gameData.status !== 'player_blackjack') { // If player didn't have BJ, this is likely an error
+            gameData.status = 'game_over_bot_error'; 
             activeGames.set(gameId, gameData);
             await finalizeDice21PvBGame(gameData);
-        } else {
-            // If player had blackjack, we proceed to check bot's hand without bot hitting.
-            // Bot initial deal would have happened if player didn't have BJ.
-            // For now, let's assume initial 2 dice for bot are rolled here if player has BJ.
-            // Or, the initial deal for bot should happen regardless, and we just reveal.
-            // Let's simplify: if player has BJ, bot reveals its hand.
-            // If player stood, bot plays its hand.
-
-            if (gameData.botHandRolls.length === 0) { // Bot hasn't had initial deal yet (e.g. player BJ)
-                 console.log(`${logPrefix} Player has Blackjack. Bot revealing its initial hand.`);
-                 for (let i = 0; i < 2; i++) { // Bot gets two dice
-                    const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Initial Roll ${i + 1}`);
+        } else { // Player had Blackjack, bot just reveals hand (rolls if needed) and game finalizes
+            if (gameData.botHandRolls.length === 0) { 
+                console.log(`${logPrefix} Player has Blackjack. Bot revealing its initial hand.`);
+                for (let i = 0; i < 2; i++) { // Bot gets two dice
+                    // MODIFIED CALL below: Added 'DICE_21_ROLL'
+                    const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Initial Roll ${i + 1} (vs Player BJ)`, 'DICE_21_ROLL');
                     if (rollResult.error) {
-                        console.error(`${logPrefix} Error getting Bot Roll ${i + 1}: ${rollResult.message}. Using fallback.`);
-                        gameData.botHandRolls.push(rollDie()); // rollDie() from Part 3
+                        console.error(`${logPrefix} Error getting Bot Roll ${i + 1} (vs Player BJ): ${rollResult.message}. Using fallback.`);
+                        gameData.botHandRolls.push(rollDie());
                     } else {
                         gameData.botHandRolls.push(rollResult.roll);
                     }
                     gameData.botScore = gameData.botHandRolls.reduce((sum, r) => sum + r, 0);
                 }
             }
-             gameData.status = 'game_over_bot_played'; // Set status to indicate bot's hand is set
-             activeGames.set(gameId, gameData);
-             await finalizeDice21PvBGame(gameData); // Finalize immediately
+            gameData.status = 'game_over_bot_played'; 
+            activeGames.set(gameId, gameData);
+            await updateDice21PvBMessage(gameData, "Bot reveals hand after player Blackjack."); // Update message to show bot's hand
+            await sleep(1500);
+            await finalizeDice21PvBGame(gameData);
         }
         return;
     }
 
     console.log(`${logPrefix} Bot Dealer's turn. Player score: ${gameData.playerScore}.`);
-    gameData.status = 'bot_rolling'; // Bot is now actively playing
+    gameData.status = 'bot_rolling'; 
     activeGames.set(gameId, gameData);
 
     let botDealingMessage = "🤖 Bot Dealer is revealing its hand...\n";
     await updateDice21PvBMessage(gameData, botDealingMessage);
     await sleep(1000);
 
-    // Initial two dice for the bot
+    // Initial two dice for the bot if not already dealt (e.g., if player stood normally)
     if (gameData.botHandRolls.length === 0) {
         for (let i = 0; i < 2; i++) {
-            const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Initial Roll ${i + 1}`);
+            // MODIFIED CALL below: Added 'DICE_21_ROLL'
+            const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Initial Roll ${i + 1}`, 'DICE_21_ROLL');
             let currentRollValue;
             if (rollResult.error) {
                 console.error(`${logPrefix} Error getting Bot Roll ${i + 1}: ${rollResult.message}. Using fallback.`);
@@ -6610,11 +6605,11 @@ async function processDice21BotTurn(gameData) {
             }
             gameData.botHandRolls.push(currentRollValue);
             gameData.botScore = gameData.botHandRolls.reduce((sum, r) => sum + r, 0);
-            activeGames.set(gameId, gameData); // Save each roll to gameData
+            activeGames.set(gameId, gameData); 
 
-            if (i === 0) { // First card (typically one shown, one hidden, but we'll show progress)
+            if (i === 0) { 
                 botDealingMessage += `Bot's first die: <b>${currentRollValue}</b> 🎲\n`;
-            } else { // Second card
+            } else { 
                 botDealingMessage += `Bot's second die: <b>${currentRollValue}</b> 🎲. Total: <b>${gameData.botScore}</b>\n`;
             }
             await updateDice21PvBMessage(gameData, botDealingMessage);
@@ -6630,7 +6625,8 @@ async function processDice21BotTurn(gameData) {
         await updateDice21PvBMessage(gameData, botDealingMessage);
         await sleep(1000);
 
-        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Hit Roll ${gameData.botHandRolls.length + 1}`);
+        // MODIFIED CALL below: Added 'DICE_21_ROLL'
+        const rollResult = await getSingleDiceRollViaHelper(gameId, chatId, null, `D21 Bot Hit Roll ${gameData.botHandRolls.length + 1}`, 'DICE_21_ROLL');
         let hitRollValue;
         if (rollResult.error) {
             console.error(`${logPrefix} Error getting Bot Hit Roll: ${rollResult.message}. Using fallback.`);
@@ -6641,7 +6637,7 @@ async function processDice21BotTurn(gameData) {
 
         gameData.botHandRolls.push(hitRollValue);
         gameData.botScore += hitRollValue;
-        activeGames.set(gameId, gameData); // Save new roll and score
+        activeGames.set(gameId, gameData); 
 
         botDealingMessage += `Bot draws a <b>${hitRollValue}</b> 🎲. Bot total: <b>${gameData.botScore}</b>\n`;
         await updateDice21PvBMessage(gameData, botDealingMessage);
@@ -6651,7 +6647,7 @@ async function processDice21BotTurn(gameData) {
             botDealingMessage += `💥 Bot BUSTED with <b>${gameData.botScore}</b>!\n`;
             await updateDice21PvBMessage(gameData, botDealingMessage);
             await sleep(1000);
-            break;
+            break; 
         }
     }
 
@@ -13472,27 +13468,29 @@ async function getLeaderboardDataDB(type = 'total_wagered', period = 'all_time',
  * @param {string|number} [userId=null] - The user ID associated with this roll, if applicable.
  * @param {string} [emojiType='🎲'] - The emoji type for bot.sendDice.
  * @param {string|null} [notes=null] - Optional notes for the request.
- * @returns {Promise<{success: boolean, requestId?: number, error?: string}>}
+ * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
+ * @returns {Promise<{success: boolean, requestId?: number, error?: string, errorCode?: string}>}
  */
-async function insertDiceRollRequest(dbClient, gameId, chatId, userId = null, emojiType = '🎲', notes = null) {
+async function insertDiceRollRequest(dbClient, gameId, chatId, userId = null, emojiType = '🎲', notes = null, handlerType = null) {
     const stringChatId = String(chatId);
     const stringUserId = userId ? String(userId) : null;
-    const logPrefix = `[InsertDiceReq GID:${gameId} UID:${stringUserId || 'Bot'}]`; // Clarified Bot roll
+    const logPrefix = `[InsertDiceReq GID:${gameId} UID:${stringUserId || 'Bot'} HType:${handlerType || 'ANY'}]`;
 
     if (!dbClient || typeof dbClient.query !== 'function') {
         console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
         return { success: false, error: 'Invalid database client for insertDiceRollRequest.' };
     }
     const query = `
-        INSERT INTO dice_roll_requests (game_id, chat_id, user_id, emoji_type, status, notes, requested_at)
-        VALUES ($1, $2, $3, $4, 'pending', $5, NOW())
+        INSERT INTO dice_roll_requests 
+            (game_id, chat_id, user_id, emoji_type, status, notes, requested_at, handler_type)
+        VALUES ($1, $2, $3, $4, 'pending', $5, NOW(), $6) -- Added $6 for handler_type
         RETURNING request_id;
     `;
     try {
-        const params = [gameId, stringChatId, stringUserId, emojiType, notes];
+        const params = [gameId, stringChatId, stringUserId, emojiType, notes, handlerType]; // Pass handlerType
         const res = await dbClient.query(query, params);
         if (res.rows.length > 0 && res.rows[0].request_id) {
-            // console.log(`${logPrefix} ✅ Dice roll request created. DB ID: ${res.rows[0].request_id}`); // Can be noisy, removed for now
+            // console.log(`${logPrefix} ✅ Dice roll request created. DB ID: ${res.rows[0].request_id}`); // Can be noisy
             return { success: true, requestId: res.rows[0].request_id };
         }
         throw new Error("Dice roll request creation failed to return ID.");
