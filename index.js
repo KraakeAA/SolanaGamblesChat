@@ -4685,23 +4685,45 @@ async function handleDEGoForJackpot(gameId, userWhoClicked, originalMessageId, c
 
 // --- START OF FULL REPLACEMENT for processDiceEscalatorPvBRollByEmoji_New function ---
 async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
-    const logPrefix = `[DE_PvB_Roll_V2_Timeout_Fix UID:${gameData.player.userId} Game:${gameData.gameId}]`;
+    const logPrefix = `[DE_PvB_Roll_V3_ChoiceFix UID:${gameData.player.userId} Game:${gameData.gameId}]`; // V3 for version
 
-    if (gameData.status !== 'player_turn_awaiting_emoji' && gameData.status !== 'player_score_18_plus_awaiting_choice') {
-        console.warn(`${logPrefix} Roll received but game status is '${gameData.status}'. Ignoring.`);
-        return;
+    // --- MODIFIED STATUS CHECK ---
+    if (gameData.status === 'player_score_18_plus_awaiting_choice') {
+        console.warn(`${logPrefix} Roll received via emoji while status is 'player_score_18_plus_awaiting_choice'. Ignoring. Player should use buttons.`);
+        // Optional: Send a message to the user to guide them if you want, though the main handler already deletes their dice.
+        // e.g., await safeSendMessage(gameData.chatId, "Please use the 'Stand Firm' or 'Go for Jackpot!' buttons to make your choice.", {parse_mode: 'HTML'});
+        // The turn timeout for making the choice should still be active.
+        return; // Ignore the dice roll emoji completely in this state
     }
 
-    if (gameData.turnTimeoutId) clearTimeout(gameData.turnTimeoutId);
-    gameData.status = 'player_turn_awaiting_emoji'; // Reset to this as default before checks
+    // Only proceed if actively awaiting a roll emoji for normal turn or jackpot run
+    if (gameData.status !== 'player_turn_awaiting_emoji') {
+        console.warn(`${logPrefix} Roll received but game status is '${gameData.status}' (not 'player_turn_awaiting_emoji'). Ignoring.`);
+        return;
+    }
+    // --- END OF MODIFIED STATUS CHECK ---
+
+    // If we reach here, status was 'player_turn_awaiting_emoji', so a roll is expected.
+    if (gameData.turnTimeoutId) {
+        clearTimeout(gameData.turnTimeoutId);
+        gameData.turnTimeoutId = null; // Clear timeout as player has acted
+    }
+    // gameData.status remains 'player_turn_awaiting_emoji' while processing this roll,
+    // it will be updated below based on the outcome of this roll.
 
     const player = gameData.player;
     const playerRefHTML = escapeHTML(player.displayName);
 
+    // Your existing logic for temporary roll announcement (if you decide to keep it,
+    // otherwise remove this block as discussed for API rate limits)
     const rollAnnounceTextHTML = `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>!`;
     const tempRollMsg = await safeSendMessage(gameData.chatId, rollAnnounceTextHTML, { parse_mode: 'HTML' });
-    await sleep(BUST_MESSAGE_DELAY_MS > 1000 ? 1200 : BUST_MESSAGE_DELAY_MS / 1.5);
-    if (tempRollMsg?.message_id && bot) await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
+    // Decide if you want to keep deleting this temp message or not (based on previous discussion)
+    if (tempRollMsg?.message_id && bot) { // Example: Keeping the delete for now
+         await sleep(BUST_MESSAGE_DELAY_MS > 1000 ? 1200 : BUST_MESSAGE_DELAY_MS / 1.5);
+         await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
+    }
+
 
     player.rolls.push(diceValue);
     gameData.lastPlayerRoll = diceValue;
@@ -4711,7 +4733,7 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
         player.busted = true;
         gameData.status = 'player_busted';
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData);
+        await updateDiceEscalatorPvBMessage_New(gameData); // Update to show bust
         await sleep(BUST_MESSAGE_DELAY_MS);
         await finalizeDiceEscalatorPvBGame_New(gameData, 0);
         return;
@@ -4719,26 +4741,28 @@ async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
 
     player.score += diceValue;
 
-    // MODIFIED: Removed _CONST from TARGET_JACKPOT_SCORE
-    if (player.score >= TARGET_JACKPOT_SCORE) {
-        player.stood = true; // Auto-stand if jackpot score is met or exceeded while aiming for it or normally
-        gameData.status = 'player_stood';
+    if (player.score >= TARGET_JACKPOT_SCORE) { // Check if jackpot score hit
+        player.stood = true; // Auto-stand if jackpot score is met or exceeded
+        gameData.status = 'player_stood'; // Will proceed to bot's turn
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData);
+        await updateDiceEscalatorPvBMessage_New(gameData); // Update to show they stood (at jackpot score)
         await sleep(1000);
         await processDiceEscalatorBotTurnPvB_New(gameData);
         return;
     }
 
-    // If score is 18+ and player is NOT already on a jackpot run, and game is not already in decision state
-    if (player.score >= 18 && !player.isGoingForJackpot && gameData.status !== 'player_score_18_plus_awaiting_choice') {
+    // If not busted and not jackpot score reached yet:
+    if (player.score >= 18 && !player.isGoingForJackpot) {
+        // Player rolled, score is now 18+, and they are NOT already in a jackpot run.
+        // Transition to the choice state.
         gameData.status = 'player_score_18_plus_awaiting_choice';
     } else {
-        // Continue player's turn if still going for jackpot or score < 18
+        // Player is either still under 18, OR they are on a jackpot run (player.isGoingForJackpot is true).
+        // In either of these cases, they are still in 'player_turn_awaiting_emoji' to roll again.
         gameData.status = 'player_turn_awaiting_emoji';
     }
     activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvBMessage_New(gameData);
+    await updateDiceEscalatorPvBMessage_New(gameData); // Update UI, will show choices or next roll prompt
 }
 // --- END OF FULL REPLACEMENT for processDiceEscalatorPvBRollByEmoji_New function ---
 
