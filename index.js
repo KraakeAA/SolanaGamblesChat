@@ -4096,7 +4096,7 @@ async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLam
                 creationTime: Date.now(), timeoutId: null
             };
         } else { // Unified Offer
-            offerId = generateGameId(GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER); // Generate ID with specific type hint
+            offerId = generateGameId("de_uo"); // MODIFIED: Use a shorter prefix
             timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
 
             const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_unified_offer', { custom_offer_id: offerId }, `Dice Escalator Unified Offer`);
