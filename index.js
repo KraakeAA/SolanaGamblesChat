@@ -1073,6 +1073,30 @@ async function initializeDatabaseSchema() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_handler ON dice_roll_requests(status, handler_type, requested_at);`);
     console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
 
+        // NEW: Dice Escalator Jackpot Sessions Table
+    console.log("MainBot_Schema: Creating Dice Escalator Jackpot Sessions table..."); // Adjusted log prefix for clarity
+    await client.query(`CREATE TABLE IF NOT EXISTS de_jackpot_sessions (
+        session_id SERIAL PRIMARY KEY,
+        main_bot_game_id VARCHAR(255) NOT NULL,      -- The original gameId from MainBot's activeGames
+        user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+        chat_id BIGINT NOT NULL,
+        initial_score INTEGER NOT NULL,              -- Score when player entered jackpot mode
+        initial_rolls_json TEXT,                   -- JSON array of rolls made before jackpot mode
+        bet_amount_lamports BIGINT NOT NULL,
+        target_jackpot_score INTEGER NOT NULL,
+        bust_on_value INTEGER NOT NULL,
+        jackpot_pool_at_session_start BIGINT NOT NULL, -- Jackpot amount when this session started
+        status VARCHAR(50) DEFAULT 'pending_pickup', -- e.g., pending_pickup, active_by_helper, completed_bust, completed_target_reached, completed_timeout_forfeit, error_helper
+        final_score INTEGER,                         -- Final score after jackpot run (initial_score + jackpot_run_score from helper)
+        final_rolls_json TEXT,                     -- JSON array of ALL rolls (initial + jackpot run rolls from helper)
+        outcome_notes TEXT,                        -- e.g., "Busted on roll X", "Reached target Y" by helper
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        helper_bot_id VARCHAR(100) NULL            -- Identifier of the helper bot that processed it
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_status_created ON de_jackpot_sessions(status, created_at);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_main_bot_game_id ON de_jackpot_sessions(main_bot_game_id);`);
+    
         // Update function for 'updated_at' columns
         console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
         await client.query(`
@@ -4105,7 +4129,6 @@ async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogConte
 }
 
 // --- START OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
-// --- START OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
 async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
@@ -4666,103 +4689,182 @@ async function handleDiceEscalatorPvBTurnTimeout(gameId) {
 }
 
 async function handleDEGoForJackpot(gameId, userWhoClicked, originalMessageId, callbackQueryId, chatData) {
+    const userId = String(userWhoClicked.telegram_id || userWhoClicked.id);
+    const chatId = String(chatData.id); // Use chatData.id passed from callback router
+    const logPrefix = `[DE_GoForJackpot_V2_HelperHandOff GID:${gameId} UID:${userId}]`;
+
     const gameData = activeGames.get(gameId);
-    if (!gameData || gameData.type !== GAME_IDS.DICE_ESCALATOR_PVB || gameData.status !== 'player_score_18_plus_awaiting_choice' || gameData.player.userId !== userWhoClicked.telegram_id) {
-        if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Action not available.", show_alert: true }).catch(()=>{});
+
+    if (!gameData || gameData.type !== GAME_IDS.DICE_ESCALATOR_PVB || 
+        gameData.status !== 'player_score_18_plus_awaiting_choice' || 
+        gameData.player.userId !== userId) {
+        if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, { text: "Action not available or not your turn.", show_alert: true }).catch(()=>{});
+        console.warn(`${logPrefix} Invalid action. GameData Status: ${gameData?.status}, Type: ${gameData?.type}, Player in game: ${gameData?.player?.userId}`);
         return;
     }
 
-    if (gameData.turnTimeoutId) clearTimeout(gameData.turnTimeoutId); 
+    // Clear MainBot's turn timeout for this game's player choice phase
+    if (gameData.turnTimeoutId) {
+        clearTimeout(gameData.turnTimeoutId);
+        gameData.turnTimeoutId = null;
+    }
+    if (callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Engaging Jackpot Mode! Handing over to Jackpot Roller..."}).catch(()=>{});
 
-    if(callbackQueryId) await bot.answerCallbackQuery(callbackQueryId, {text: "Going for GOLD! Jackpot run active!"}).catch(()=>{});
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-    gameData.player.isGoingForJackpot = true;
-    gameData.status = 'player_turn_awaiting_emoji';
-    gameData.lastInteractionTime = Date.now();
-    activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvBMessage_New(gameData); 
+        const jackpotResultDb = await client.query('SELECT current_amount FROM jackpots WHERE jackpot_id = $1 FOR UPDATE', [MAIN_JACKPOT_ID]);
+        let jackpotPoolAtSessionStart = 0n;
+        if (jackpotResultDb.rows.length > 0 && jackpotResultDb.rows[0].current_amount) {
+            jackpotPoolAtSessionStart = BigInt(jackpotResultDb.rows[0].current_amount);
+        }
+        console.log(`${logPrefix} Jackpot pool amount at start of run: ${jackpotPoolAtSessionStart}`);
+
+        const mainBotGameIdForSession = gameData.gameId; // Use the existing gameId
+        const initialScore = gameData.player.score;
+        const initialRollsJson = JSON.stringify(gameData.player.rolls);
+        const betAmountLamports = gameData.betAmount;
+        const targetJackpotScoreConst = parseInt(process.env.TARGET_JACKPOT_SCORE, 10) || TARGET_JACKPOT_SCORE;
+        const bustOnValueConst = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10) || DICE_ESCALATOR_BUST_ON;
+
+        const insertSessionQuery = `
+            INSERT INTO de_jackpot_sessions 
+                (main_bot_game_id, user_id, chat_id, initial_score, initial_rolls_json, 
+                 bet_amount_lamports, target_jackpot_score, bust_on_value, jackpot_pool_at_session_start, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending_pickup')
+            RETURNING session_id;
+        `;
+        const sessionParams = [
+            mainBotGameIdForSession, userId, chatId, initialScore, initialRollsJson,
+            betAmountLamports.toString(), targetJackpotScoreConst, bustOnValueConst, jackpotPoolAtSessionStart.toString()
+        ];
+        const sessionRes = await client.query(insertSessionQuery, sessionParams);
+        
+        if (!sessionRes.rows[0] || !sessionRes.rows[0].session_id) {
+            throw new Error("Failed to create jackpot session record in DB.");
+        }
+        const jackpotSessionDbId = sessionRes.rows[0].session_id;
+        console.log(`${logPrefix} Created de_jackpot_sessions record ID: ${jackpotSessionDbId} for MainBot GID: ${mainBotGameIdForSession}`);
+
+        // Update MainBot's game status to indicate handoff and store jackpot session DB ID
+        gameData.player.isGoingForJackpot = true; 
+        gameData.status = 'jackpot_run_delegated'; 
+        gameData.jackpotSessionDbId = jackpotSessionDbId; // Store the DB ID of the session
+        gameData.lastInteractionTime = Date.now();
+        // No more turnTimeouts for the MainBot for this game's player turns phase
+        if (gameData.turnTimeoutId) { clearTimeout(gameData.turnTimeoutId); gameData.turnTimeoutId = null; }
+        
+        activeGames.set(gameData.gameId, gameData); 
+
+        await client.query('COMMIT');
+
+        // Inform the user and delete/edit the MainBot's last message
+        if (gameData.gameMessageId && bot) {
+            await bot.deleteMessage(String(chatId), Number(gameData.gameMessageId)).catch(e => {});
+            gameData.gameMessageId = null; 
+            activeGames.set(gameData.gameId, gameData); 
+        }
+
+        const playerRefHTML = escapeHTML(gameData.player.displayName || getPlayerDisplayReference(userWhoClicked));
+        const handoverMessage = `🔥 <b>Jackpot Run Activated for ${playerRefHTML}!</b> 🔥\n\n` +
+                                `You're going for the grand prize! Our specialist Jackpot Roller Bot will now guide your rolls.\n\n` +
+                                `Please send your 🎲 dice emoji to the chat when prompted by the Jackpot Roller. Good luck!`;
+        await safeSendMessage(String(chatId), handoverMessage, { parse_mode: 'HTML' });
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));
+        console.error(`${logPrefix} Error during jackpot handoff: ${error.message}`, error.stack?.substring(0, 500));
+        await safeSendMessage(String(chatId), "⚙️ An error occurred while activating Jackpot Mode. Please try again or contact support.", { parse_mode: 'HTML' });
+        
+        const gameDataOnError = activeGames.get(gameId);
+        if (gameDataOnError && gameDataOnError.status === 'jackpot_run_delegated') { 
+            gameDataOnError.status = 'player_score_18_plus_awaiting_choice'; 
+            gameDataOnError.player.isGoingForJackpot = false;
+            delete gameDataOnError.jackpotSessionDbId; // Clear session id if handoff failed
+            activeGames.set(gameId, gameDataOnError);
+            console.warn(`${logPrefix} Reverted game status for ${gameId} due to handoff error.`);
+            // Optionally resend choice prompt if desired
+            // if (typeof updateDiceEscalatorPvBMessage_New === 'function') await updateDiceEscalatorPvBMessage_New(gameDataOnError);
+        }
+    } finally {
+        if (client) client.release();
+    }
 }
 
 // --- START OF FULL REPLACEMENT for processDiceEscalatorPvBRollByEmoji_New function ---
 async function processDiceEscalatorPvBRollByEmoji_New(gameData, diceValue) {
-    const logPrefix = `[DE_PvB_Roll_V3_ChoiceFix UID:${gameData.player.userId} Game:${gameData.gameId}]`; // V3 for version
+    const logPrefix = `[DE_PvB_Roll_V3_ChoiceFix UID:${gameData.player.userId} Game:${gameData.gameId}]`;
 
     // --- MODIFIED STATUS CHECK ---
     if (gameData.status === 'player_score_18_plus_awaiting_choice') {
         console.warn(`${logPrefix} Roll received via emoji while status is 'player_score_18_plus_awaiting_choice'. Ignoring. Player should use buttons.`);
-        // Optional: Send a message to the user to guide them if you want, though the main handler already deletes their dice.
-        // e.g., await safeSendMessage(gameData.chatId, "Please use the 'Stand Firm' or 'Go for Jackpot!' buttons to make your choice.", {parse_mode: 'HTML'});
-        // The turn timeout for making the choice should still be active.
-        return; // Ignore the dice roll emoji completely in this state
+        // User's dice emoji is typically deleted by the main message handler.
+        // You could optionally send a brief message here if desired, but ignoring is often sufficient.
+        return; 
     }
 
-    // Only proceed if actively awaiting a roll emoji for normal turn or jackpot run
-    if (gameData.status !== 'player_turn_awaiting_emoji') {
+    if (gameData.status !== 'player_turn_awaiting_emoji') { 
         console.warn(`${logPrefix} Roll received but game status is '${gameData.status}' (not 'player_turn_awaiting_emoji'). Ignoring.`);
         return;
     }
     // --- END OF MODIFIED STATUS CHECK ---
-
-    // If we reach here, status was 'player_turn_awaiting_emoji', so a roll is expected.
+    
     if (gameData.turnTimeoutId) {
         clearTimeout(gameData.turnTimeoutId);
-        gameData.turnTimeoutId = null; // Clear timeout as player has acted
+        gameData.turnTimeoutId = null; 
     }
-    // gameData.status remains 'player_turn_awaiting_emoji' while processing this roll,
-    // it will be updated below based on the outcome of this roll.
 
     const player = gameData.player;
     const playerRefHTML = escapeHTML(player.displayName);
 
-    // Your existing logic for temporary roll announcement (if you decide to keep it,
-    // otherwise remove this block as discussed for API rate limits)
+    // Decide on your temporary roll announcement strategy.
+    // If you want to keep it "as is" (meaning the temporary message is still sent and deleted by this MainBot function):
     const rollAnnounceTextHTML = `🎲 ${playerRefHTML} rolled a <b>${escapeHTML(String(diceValue))}</b>!`;
     const tempRollMsg = await safeSendMessage(gameData.chatId, rollAnnounceTextHTML, { parse_mode: 'HTML' });
-    // Decide if you want to keep deleting this temp message or not (based on previous discussion)
-    if (tempRollMsg?.message_id && bot) { // Example: Keeping the delete for now
+    if (tempRollMsg?.message_id && bot) { 
          await sleep(BUST_MESSAGE_DELAY_MS > 1000 ? 1200 : BUST_MESSAGE_DELAY_MS / 1.5);
          await bot.deleteMessage(gameData.chatId, tempRollMsg.message_id).catch(()=>{});
     }
-
+    // If you decided to REMOVE the temporary message based on earlier discussions to reduce API calls,
+    // you would remove the block above.
 
     player.rolls.push(diceValue);
     gameData.lastPlayerRoll = diceValue;
     gameData.lastInteractionTime = Date.now();
 
-    if (diceValue === DICE_ESCALATOR_BUST_ON) {
+    const currentBustOnValue = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10) || DICE_ESCALATOR_BUST_ON;
+    if (diceValue === currentBustOnValue) {
         player.busted = true;
         gameData.status = 'player_busted';
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData); // Update to show bust
-        await sleep(BUST_MESSAGE_DELAY_MS);
-        await finalizeDiceEscalatorPvBGame_New(gameData, 0);
+        await updateDiceEscalatorPvBMessage_New(gameData); 
+        await sleep(BUST_MESSAGE_DELAY_MS); 
+        await finalizeDiceEscalatorPvBGame_New(gameData, 0); 
         return;
     }
 
     player.score += diceValue;
+    const currentTargetJackpotScore = parseInt(process.env.TARGET_JACKPOT_SCORE, 10) || TARGET_JACKPOT_SCORE;
 
-    if (player.score >= TARGET_JACKPOT_SCORE) { // Check if jackpot score hit
-        player.stood = true; // Auto-stand if jackpot score is met or exceeded
-        gameData.status = 'player_stood'; // Will proceed to bot's turn
+    if (player.score >= currentTargetJackpotScore) { 
+        player.stood = true; 
+        gameData.status = 'player_stood'; 
         activeGames.set(gameData.gameId, gameData);
-        await updateDiceEscalatorPvBMessage_New(gameData); // Update to show they stood (at jackpot score)
+        await updateDiceEscalatorPvBMessage_New(gameData); 
         await sleep(1000);
-        await processDiceEscalatorBotTurnPvB_New(gameData);
+        await processDiceEscalatorBotTurnPvB_New(gameData); 
         return;
     }
 
-    // If not busted and not jackpot score reached yet:
     if (player.score >= 18 && !player.isGoingForJackpot) {
-        // Player rolled, score is now 18+, and they are NOT already in a jackpot run.
-        // Transition to the choice state.
         gameData.status = 'player_score_18_plus_awaiting_choice';
     } else {
-        // Player is either still under 18, OR they are on a jackpot run (player.isGoingForJackpot is true).
-        // In either of these cases, they are still in 'player_turn_awaiting_emoji' to roll again.
         gameData.status = 'player_turn_awaiting_emoji';
     }
     activeGames.set(gameData.gameId, gameData);
-    await updateDiceEscalatorPvBMessage_New(gameData); // Update UI, will show choices or next roll prompt
+    await updateDiceEscalatorPvBMessage_New(gameData); 
 }
 // --- END OF FULL REPLACEMENT for processDiceEscalatorPvBRollByEmoji_New function ---
 
@@ -4986,7 +5088,91 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
     });
 }
 
+const JACKPOT_SESSION_POLL_INTERVAL_MS = 7000; // Poll every 7 seconds, adjust as needed
+let jackpotSessionPollIntervalId = null;
 
+async function pollCompletedJackpotSessions() {
+    if (isShuttingDown) return; // isShuttingDown should be global
+
+    const logPrefix = '[MainBot_PollJackpotSessions]';
+    let client = null;
+    try {
+        // console.log(`${logPrefix} Checking for completed jackpot sessions...`); // Can be noisy
+        client = await pool.connect();
+        const completedSessionsRes = await client.query(
+            `SELECT * FROM de_jackpot_sessions 
+             WHERE status LIKE 'completed_%' 
+             ORDER BY updated_at ASC 
+             LIMIT 5` // Process a few at a time
+        );
+
+        if (completedSessionsRes.rowCount === 0) {
+            client.release();
+            return;
+        }
+
+        console.log(`${logPrefix} Found ${completedSessionsRes.rowCount} completed jackpot session(s) to process.`);
+
+        for (const session of completedSessionsRes.rows) {
+            if (isShuttingDown) break;
+            const sessionLogPrefix = `${logPrefix} SID:${session.session_id} MainGID:${session.main_bot_game_id}`;
+            console.log(`${sessionLogPrefix} Processing completed session with status: ${session.status}`);
+
+            const mainGameData = activeGames.get(session.main_bot_game_id);
+            if (!mainGameData || mainGameData.status !== 'jackpot_run_delegated' || mainGameData.jackpotSessionDbId !== session.session_id) {
+                console.warn(`${sessionLogPrefix} Main game data not found, not in delegated state, or session ID mismatch. Main GID status: ${mainGameData?.status}, Main GID session DB ID: ${mainGameData?.jackpotSessionDbId}. Archiving session.`);
+                // Mark as archived to prevent reprocessing
+                await client.query("UPDATE de_jackpot_sessions SET status = 'archived_mismatch' WHERE session_id = $1", [session.session_id]);
+                continue;
+            }
+
+            // Populate mainGameData.player with results from the helper for finalization
+            mainGameData.player.score = session.final_score; // This is the total score (initial + jackpot run)
+            mainGameData.player.rolls = JSON.parse(session.final_rolls_json || '[]'); // All rolls
+
+            if (session.status === 'completed_bust') {
+                mainGameData.player.busted = true;
+                // The last roll that caused the bust should be the last in session.final_rolls_json
+                if (mainGameData.player.rolls.length > 0) {
+                    mainGameData.lastPlayerRoll = mainGameData.player.rolls[mainGameData.player.rolls.length - 1];
+                }
+                gameData.status = 'player_busted'; // Set main game status for finalizeDiceEscalatorPvBGame_New
+            } else if (session.status === 'completed_timeout_forfeit') {
+                mainGameData.status = 'game_over_player_forfeit'; // Or a more specific jackpot run timeout status
+                mainGameData.player.busted = true; // Treat as a bust for payout (loss)
+                 console.log(`${sessionLogPrefix} Player forfeited jackpot run due to timeout according to helper.`);
+            } else if (session.status === 'completed_target_reached') {
+                // Player reached target, not busted. Finalize will compare with bot's original score.
+                mainGameData.player.stood = true; // Effectively stood at this high score
+                gameData.status = 'player_stood'; // Set main game status
+            } else if (session.status === 'error_helper') {
+                 mainGameData.status = 'game_over_error_helper'; // Special status for errors from helper
+                 console.error(`${sessionLogPrefix} Jackpot run ended with an error from the helper: ${session.outcome_notes}`);
+            } else {
+                console.warn(`${sessionLogPrefix} Unknown completed status from helper: ${session.status}. Treating as error.`);
+                mainGameData.status = 'game_over_error_helper';
+            }
+            
+            // The bot's score (mainGameData.botScore) was determined *before* the jackpot run
+            // and should still be in mainGameData.
+            // finalizeDiceEscalatorPvBGame_New will use mainGameData.player.score, mainGameData.player.busted,
+            // and mainGameData.botScore to determine the ultimate winner and if jackpot conditions are met.
+            
+            activeGames.set(session.main_bot_game_id, mainGameData); // Ensure activeGames has the updated state before finalization
+
+            await finalizeDiceEscalatorPvBGame_New(mainGameData, mainGameData.botScore); // Pass bot's original score
+
+            // Mark the jackpot session as fully processed by MainBot
+            await client.query("UPDATE de_jackpot_sessions SET status = 'archived_processed' WHERE session_id = $1", [session.session_id]);
+            console.log(`${sessionLogPrefix} Jackpot session archived as processed by MainBot.`);
+        }
+
+    } catch (error) {
+        console.error(`${logPrefix} Error polling/processing completed jackpot sessions: ${error.message}`, error.stack?.substring(0,500));
+    } finally {
+        if (client) client.release();
+    }
+}
 // --- Dice Escalator Player vs. Player (PvP) Game Logic (HTML Revamp) ---
 async function startDiceEscalatorPvPGame_New(
     initiatorUserObj, 
@@ -12347,11 +12533,11 @@ process.on('unhandledRejection', async (reason, promise) => {
 let expressServerInstance = null; 
 
 async function gracefulShutdown(signal = 'SIGINT') {
-    if (isShuttingDown) { 
+    if (isShuttingDown) {
         console.log("Graceful shutdown already in progress...");
         return;
     }
-    isShuttingDown = true; 
+    isShuttingDown = true;
 
     console.log(`\n🛑 Received signal: ${signal}. Initiating graceful shutdown for ${BOT_NAME} v${BOT_VERSION}...`);
     const adminShutdownMessage = `🔌 *Bot Shutdown Initiated* 🔌\n\n${escapeMarkdownV2(BOT_NAME)} v${escapeMarkdownV2(BOT_VERSION)} is now shutting down due to signal: \`${escapeMarkdownV2(signal)}\`\\. Finalizing operations\\.\\.\\.`;
@@ -12359,78 +12545,89 @@ async function gracefulShutdown(signal = 'SIGINT') {
         await notifyAdmin(adminShutdownMessage).catch(err => console.error("Failed to send admin shutdown initiation notification:", err.message));
     }
 
-    console.log("  ⏳ Stopping Telegram bot polling...");
+    console.log("  ⏳ Stopping Telegram bot polling...");
     if (bot && typeof bot.stopPolling === 'function' && typeof bot.isPolling === 'function' && bot.isPolling()) {
         try {
-            await bot.stopPolling({ cancel: true }); 
-            console.log("  ✅ Telegram bot polling stopped.");
+            await bot.stopPolling({ cancel: true });
+            console.log("  ✅ Telegram bot polling stopped.");
         } catch (e) {
-            console.error("  ❌ Error stopping Telegram bot polling:", e.message);
+            console.error("  ❌ Error stopping Telegram bot polling:", e.message);
         }
     } else {
-        // console.log("  ℹ️ Telegram bot polling was not active or stopPolling not available/needed."); // Reduced log
+        // console.log("  ℹ️ Telegram bot polling was not active or stopPolling not available/needed.");
     }
 
     if (typeof stopDepositMonitoring === 'function') {
-        console.log("  ⏳ Stopping deposit monitoring...");
-        try { await stopDepositMonitoring(); console.log("  ✅ Deposit monitoring stopped."); }
-        catch(e) { console.error("  ❌ Error stopping deposit monitoring:", e.message); }
-    } else { console.warn("  ⚠️ stopDepositMonitoring function not defined.");}
+        console.log("  ⏳ Stopping deposit monitoring...");
+        try { await stopDepositMonitoring(); console.log("  ✅ Deposit monitoring stopped."); }
+        catch(e) { console.error("  ❌ Error stopping deposit monitoring:", e.message); }
+    } else { console.warn("  ⚠️ stopDepositMonitoring function not defined.");}
 
     if (typeof stopSweepingProcess === 'function') {
-        console.log("  ⏳ Stopping sweeping process...");
-        try { await stopSweepingProcess(); console.log("  ✅ Sweeping process stopped."); }
-        catch(e) { console.error("  ❌ Error stopping sweeping process:", e.message); }
-    } else { console.warn("  ⚠️ stopSweepingProcess function not defined.");}
+        console.log("  ⏳ Stopping sweeping process...");
+        try { await stopSweepingProcess(); console.log("  ✅ Sweeping process stopped."); }
+        catch(e) { console.error("  ❌ Error stopping sweeping process:", e.message); }
+    } else { console.warn("  ⚠️ stopSweepingProcess function not defined.");}
+    
+    // ADDED: Stop Jackpot Session Poller
+    if (jackpotSessionPollIntervalId) {
+        clearInterval(jackpotSessionPollIntervalId);
+        jackpotSessionPollIntervalId = null;
+        console.log(" 🛑 [MainBot] Jackpot Session Poller stopped.");
+    } else {
+        // console.log("  ℹ️ [MainBot] Jackpot Session Poller was not active or ID not found.");
+    }
     
     const queuesToStop = { payoutProcessorQueue, depositProcessorQueue }; 
     for (const [queueName, queueInstance] of Object.entries(queuesToStop)) {
         if (queueInstance && typeof queueInstance.onIdle === 'function' && typeof queueInstance.clear === 'function') {
-            console.log(`  ⏳ Waiting for ${queueName} (Size: ${queueInstance.size}, Pending: ${queueInstance.pending}) to idle...`);
+            console.log(`  ⏳ Waiting for ${queueName} (Size: ${queueInstance.size}, Pending: ${queueInstance.pending}) to idle...`);
             try {
                 if (queueInstance.size > 0 || queueInstance.pending > 0) {
                     await Promise.race([queueInstance.onIdle(), sleep(15000)]); // Max 15s wait
                 }
                 queueInstance.clear(); 
-                console.log(`  ✅ ${queueName} is idle and cleared.`);
+                console.log(`  ✅ ${queueName} is idle and cleared.`);
             } catch (qError) {
-                console.warn(`  ⚠️ Error or timeout waiting for ${queueName} to idle: ${qError.message}. Clearing queue.`);
+                console.warn(`  ⚠️ Error or timeout waiting for ${queueName} to idle: ${qError.message}. Clearing queue.`);
                 queueInstance.clear();
             }
         } else {
-            // console.log(`  ⚠️ Queue ${queueName} not defined or does not support onIdle/clear.`); // Reduced log
+            // console.log(`  ⚠️ Queue ${queueName} not defined or does not support onIdle/clear.`);
         }
     }
 
     if (expressServerInstance && typeof expressServerInstance.close === 'function') {
-        console.log("  ⏳ Closing Express webhook server...");
+        console.log("  ⏳ Closing Express webhook server...");
         await new Promise(resolve => expressServerInstance.close(err => {
-            if (err) console.error("  ❌ Error closing Express server:", err.message);
-            else console.log("  ✅ Express server closed.");
+            if (err) console.error("  ❌ Error closing Express server:", err.message);
+            else console.log("  ✅ Express server closed.");
             resolve();
         }));
     } else {
-         // console.log("  ℹ️ Express server not running or not managed by this shutdown process."); // Reduced log
+        // console.log("  ℹ️ Express server not running or not managed by this shutdown process.");
     }
 
-    console.log("  ⏳ Closing PostgreSQL pool...");
+    console.log("  ⏳ Closing PostgreSQL pool...");
     if (pool && typeof pool.end === 'function') {
         try {
             await pool.end();
-            console.log("  ✅ PostgreSQL pool closed.");
+            console.log("  ✅ PostgreSQL pool closed.");
         } catch (e) {
-            console.error("  ❌ Error closing PostgreSQL pool:", e.message);
+            console.error("  ❌ Error closing PostgreSQL pool:", e.message);
         }
     } else {
-        // console.log("  ⚠️ PostgreSQL pool not active or .end() not available."); // Reduced log
+        // console.log("  ⚠️ PostgreSQL pool not active or .end() not available.");
     }
 
     console.log(`🏁 ${BOT_NAME} shutdown sequence complete. Exiting now.`);
     const finalAdminMessage = `✅ *Bot Shutdown Complete* ✅\n\n${escapeMarkdownV2(BOT_NAME)} v${escapeMarkdownV2(BOT_VERSION)} has successfully shut down\\.`;
     if (typeof notifyAdmin === 'function' && signal !== 'test_mode_exit' && signal !== 'initialization_error') {
+        // Intentionally not awaiting this final notification to prevent shutdown delay
         notifyAdmin(finalAdminMessage).catch(err => console.error("Failed to send final admin shutdown notification:", err.message));
     }
     
+    // Allow a brief moment for the final notification to attempt sending
     await sleep(500); 
     process.exit(signal === 'uncaught_exception' || signal === 'initialization_error' ? 1 : 0);
 }
