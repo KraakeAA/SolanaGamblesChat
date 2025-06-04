@@ -1000,8 +1000,8 @@ console.log("DEBUG V9 FINAL: Users table processed.");
         
         
         // Jackpots Table
-        console.log("DEBUG V9 FINAL: Creating Jackpots table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
+console.log("DEBUG V9 FINAL: Creating Jackpots table...");
+await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
     jackpot_id VARCHAR(255) PRIMARY KEY,
     current_amount BIGINT DEFAULT 0,
     last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
@@ -1015,8 +1015,8 @@ console.log("DEBUG V9 FINAL: Users table processed.");
         console.log("DEBUG V9 FINAL: Jackpots table processed.");
 
         // Games Table (Game Log)
-        console.log("DEBUG V9 FINAL: Creating Games table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS games (
+console.log("DEBUG V9 FINAL: Creating Games table...");
+await client.query(`CREATE TABLE IF NOT EXISTS games (
     game_log_id SERIAL PRIMARY KEY,
     game_type VARCHAR(50) NOT NULL,
     chat_id BIGINT,
@@ -1030,8 +1030,8 @@ console.log("DEBUG V9 FINAL: Users table processed.");
         console.log("DEBUG V9 FINAL: Games table processed.");
 
         // User Deposit Wallets Table
-        console.log("DEBUG V9 FINAL: Creating User Deposit Wallets table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
+console.log("DEBUG V9 FINAL: Creating User Deposit Wallets table...");
+await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
     wallet_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     public_key VARCHAR(44) NOT NULL UNIQUE,
@@ -1043,14 +1043,14 @@ console.log("DEBUG V9 FINAL: Users table processed.");
     balance_at_sweep BIGINT,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-        console.log("DEBUG V9 FINAL: User Deposit Wallets table processed.");
+await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
+await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
+await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
+console.log("DEBUG V9 FINAL: User Deposit Wallets table processed.");
 
         // Deposits Table
-        console.log("DEBUG V9 FINAL: Creating Deposits table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
+console.log("DEBUG V9 FINAL: Creating Deposits table...");
+await client.query(`CREATE TABLE IF NOT EXISTS deposits (
     deposit_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
@@ -1065,15 +1065,16 @@ console.log("DEBUG V9 FINAL: Users table processed.");
     notes TEXT,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-        console.log("DEBUG V9 FINAL: Deposits table processed.");
+
+await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
+await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
+await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
+await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
+console.log("DEBUG V9 FINAL: Deposits table processed.");
 
         // Withdrawals Table
-        console.log("DEBUG V9 FINAL: Creating Withdrawals table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
+console.log("DEBUG V9 FINAL: Creating Withdrawals table...");
+await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
     withdrawal_id SERIAL PRIMARY KEY,
     user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     destination_address VARCHAR(44) NOT NULL,
