@@ -310,6 +310,23 @@ const MINES_DIFFICULTY_CONFIG = {
     },
 };
 
+// --- NEW Referral System Configurations ---
+const REFERRAL_QUALIFYING_BET_USD_CONST = 1.00;
+
+const REFERRAL_INITIAL_BET_TIERS_CONFIG = [
+    { upToReferrals: 10, percentage: 0.05 },
+    { upToReferrals: 25, percentage: 0.10 },
+    { upToReferrals: 50, percentage: 0.15 },
+    { upToReferrals: 100, percentage: 0.20 },
+    { upToReferrals: Infinity, percentage: 0.25 }
+];
+
+const REFERRAL_WAGER_MILESTONES_USD_CONFIG = [10, 25, 50, 100, 250, 500, 1000];
+
+const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.005; // 0.5%
+// --- End of NEW Referral System Configurations ---
+
+
 const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
     UNIFIED_OFFERS: { // These keys are for *pending unified offers*
         [GAME_IDS.COINFLIP]: parseInt(process.env.LIMIT_UNIFIED_OFFER_COINFLIP, 10) || 1,
@@ -1122,7 +1139,68 @@ async function initializeDatabaseSchema() {
     );`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_status_created ON de_jackpot_sessions(status, created_at);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_main_bot_game_id ON de_jackpot_sessions(main_bot_game_id);`);
-    
+
+
+        // --- MODIFICATIONS FOR REFERRAL SYSTEM ---
+        console.log("DEBUG V9 FINAL: Applying schema modifications for Referral System...");
+
+        // ---- MODIFICATIONS FOR USERS TABLE ----
+        await client.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='referral_count') THEN
+                    ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0;
+                    RAISE NOTICE 'Column referral_count added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column referral_count already exists in users table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN
+                    ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0;
+                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports already exists in users table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='first_bet_placed_at') THEN
+                    ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ;
+                    RAISE NOTICE 'Column first_bet_placed_at added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column first_bet_placed_at already exists in users table.';
+                END IF;
+            END $$;
+        `);
+        console.log("DEBUG V9 FINAL: Users table checked/modified for Referral System.");
+
+        // ---- MODIFICATIONS FOR REFERRALS TABLE ----
+        await client.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN
+                    ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ;
+                    RAISE NOTICE 'Column qualifying_bet_processed_at added to referrals table.';
+                ELSE
+                    RAISE NOTICE 'Column qualifying_bet_processed_at already exists in referrals table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN
+                    ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb;
+                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved added to referrals table.';
+                ELSE
+                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved already exists in referrals table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN
+                    ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
+                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports added to referrals table.';
+                ELSE
+                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports already exists in referrals table.';
+                END IF;
+            END $$;
+        `);
+        console.log("DEBUG V9 FINAL: Referrals table checked/modified for Referral System.");
+        // --- END OF MODIFICATIONS FOR REFERRAL SYSTEM ---
+
         // Update function for 'updated_at' columns
         console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
         await client.query(`
@@ -1175,14 +1253,14 @@ EXECUTE FUNCTION trigger_set_timestamp();`;
 
 // Replace your entire existing getOrCreateUser function (in Part 2) with this:
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`; // Keep this for entry logging
-    console.log(`${LOG_PREFIX_GOCU_DEBUG} Received telegramId: ${telegramId} (type: ${typeof telegramId}), username: "${username}", firstName: "${firstName}", lastName: "${lastName}", referrerIdInput: ${referrerIdInput}`);
-    try {
-        const argsArray = Array.from(arguments);
-        console.log(`${LOG_PREFIX_GOCU_DEBUG} All arguments received as array: ${JSON.stringify(argsArray)}`);
-    } catch (e) {
-        console.log(`${LOG_PREFIX_GOCU_DEBUG} Could not stringify arguments array: ${e.message}`);
-    }
+    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
+    // console.log(`${LOG_PREFIX_GOCU_DEBUG} Received telegramId: ${telegramId} (type: ${typeof telegramId}), username: "${username}", firstName: "${firstName}", lastName: "${lastName}", referrerIdInput: ${referrerIdInput}`);
+    // try {
+    //     const argsArray = Array.from(arguments);
+    //     console.log(`${LOG_PREFIX_GOCU_DEBUG} All arguments received as array: ${JSON.stringify(argsArray)}`);
+    // } catch (e) {
+    //     console.log(`${LOG_PREFIX_GOCU_DEBUG} Could not stringify arguments array: ${e.message}`);
+    // }
 
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
         console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
@@ -1194,27 +1272,20 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
         return null;
     }
 
-    const stringTelegramId = String(telegramId).trim(); // Added trim here too
+    const stringTelegramId = String(telegramId).trim();
     const LOG_PREFIX_GOCU = `[GetCreateUser TG:${stringTelegramId}]`;
 
-    // Simple sanitization: replace non-printable ASCII, some problematic chars, and trim.
-    // Allow letters, numbers, spaces, common punctuation like .,!?-#@_
-    // This is a basic sanitizer; for extreme cases, a more robust library might be needed.
     const sanitizeString = (str) => {
-        if (typeof str !== 'string') return null; // Or return an empty string like ''
-        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim(); // Remove characters not in the allowed set
-        return cleaned.substring(0, 255); // Ensure it fits VARCHAR(255)
+        if (typeof str !== 'string') return null;
+        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim();
+        return cleaned.substring(0, 255);
     };
 
     const sUsername = username ? sanitizeString(username) : null;
     const sFirstName = firstName ? sanitizeString(firstName) : null;
-    // For lastName "#2", sanitizeString should keep it as "#2" if # is in the allowed set.
-    // If # was causing issues, we could explicitly remove or replace it.
-    // Let's be a bit more aggressive for testing, then can refine the regex.
     const sLastName = lastName ? sanitizeString(lastName) : null;
 
-    console.log(`${LOG_PREFIX_GOCU} Sanitized inputs - Username: "${sUsername}", FirstName: "${sFirstName}", LastName: "${sLastName}"`);
-
+    // console.log(`${LOG_PREFIX_GOCU} Sanitized inputs - Username: "${sUsername}", FirstName: "${sFirstName}", LastName: "${sLastName}"`);
 
     const client = await pool.connect();
     try {
@@ -1237,6 +1308,10 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
             user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
             user.total_won_lamports = BigInt(user.total_won_lamports || '0');
+            user.referral_count = parseInt(user.referral_count || '0', 10); // Ensure referral_count is number
+            user.total_referral_earnings_paid_lamports = BigInt(user.total_referral_earnings_paid_lamports || '0');
+
+
             if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
             let detailsChanged = false;
@@ -1244,7 +1319,6 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             const currentFirstName = user.first_name || '';
             const currentLastName = user.last_name || '';
 
-            // Use sanitized values for comparison and update
             if (sUsername && currentUsername !== sUsername) detailsChanged = true;
             if (sFirstName && currentFirstName !== sFirstName) detailsChanged = true;
             if (sLastName && currentLastName !== sLastName) detailsChanged = true;
@@ -1268,17 +1342,23 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
             finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
             finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
+            finalUser.referral_count = parseInt(finalUser.referral_count || '0', 10);
+            finalUser.total_referral_earnings_paid_lamports = BigInt(finalUser.total_referral_earnings_paid_lamports || '0');
+
             if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
             return finalUser;
         } else {
-            console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user with sanitized details.`);
+            // console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user with sanitized details.`);
             const newReferralCode = generateReferralCode();
             const insertQuery = `
-                INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO users (
+                    telegram_id, username, first_name, last_name, balance, referral_code, 
+                    referrer_telegram_id, last_active_timestamp, created_at, updated_at,
+                    referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL)
                 RETURNING *;
             `;
-            // Use sanitized values for insert
             const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
             result = await client.query(insertQuery, values);
             const newUser = result.rows[0];
@@ -1288,19 +1368,25 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
             newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
             newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
+            newUser.referral_count = parseInt(newUser.referral_count || '0', 10);
+            newUser.total_referral_earnings_paid_lamports = BigInt(newUser.total_referral_earnings_paid_lamports || '0');
+
+
             if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
 
-            console.log(`${LOG_PREFIX_GOCU} New user created: ${newUser.telegram_id}, Bal: ${newUser.balance}, RefCode: ${newUser.referral_code}.`);
+            // console.log(`${LOG_PREFIX_GOCU} New user created: ${newUser.telegram_id}, Bal: ${newUser.balance}, RefCode: ${newUser.referral_code}.`);
 
             if (referrerId) {
                 try {
+                    // *** MODIFIED STATUS HERE ***
                     await client.query(
                         `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_criteria', CURRENT_TIMESTAMP) 
+                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
                          ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Assuming this unique constraint exists on referred_telegram_id
                         [referrerId, newUser.telegram_id]
                     );
+                    // console.log(`${LOG_PREFIX_GOCU} Referral link entry created for ${referrerId} -> ${newUser.telegram_id} with status 'pending_qualifying_bet'.`);
                 } catch (referralError) {
                    console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
                 }
@@ -1999,6 +2085,367 @@ async function updateGroupGameDetails(chatId, gameIdToAddOrRemove, familyActivit
     // groupGameSessions.set(stringChatId, session); // Not strictly necessary if session is a direct reference and activeGamesByTypeInGroup is mutated in place.
 }
 // --- End of REVISED Group Game Session Management Functions ---
+
+// --- NEW Referral System Core Logic Functions ---
+// (Place these in a suitable section, e.g., after database utilities or before command handlers)
+
+/**
+ * Counts the number of successful referrals for a user.
+ * A successful referral is one where the referred user has placed their first qualifying bet.
+ * @param {string|number} referrerUserId - The Telegram ID of the referrer.
+ * @param {import('pg').PoolClient} [dbClient=pool] - Optional database client.
+ * @returns {Promise<number>} The count of successful referrals.
+ */
+async function getReferralCount(referrerUserId, dbClient = pool) {
+    const LOG_PREFIX_GRC = `[GetReferralCount UID:${referrerUserId}]`;
+    try {
+        // Counts referrals where the qualifying bet has been processed.
+        // This assumes 'qualifying_bet_processed_at' is set when the initial bonus is handled.
+        const query = `SELECT COUNT(*) AS referral_count FROM referrals WHERE referrer_telegram_id = $1 AND qualifying_bet_processed_at IS NOT NULL;`;
+        const result = await queryDatabase(query, [String(referrerUserId)], dbClient);
+        if (result.rows.length > 0) {
+            return parseInt(result.rows[0].referral_count, 10) || 0;
+        }
+        return 0;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_GRC} Error fetching referral count: ${error.message}`);
+        return 0; // Return 0 on error to prevent issues in calling functions
+    }
+}
+
+/**
+ * Calculates the Initial Bet Bonus percentage based on the referrer's referral count.
+ * @param {number} referralCount - The number of successful referrals the referrer has.
+ * @param {Array<object>} referralTiersConfig - The configuration for referral tiers (e.g., REFERRAL_INITIAL_BET_TIERS_CONFIG).
+ * @returns {number} The bonus percentage (e.g., 0.05 for 5%).
+ */
+function calculateInitialBetBonusPercentage(referralCount, referralTiersConfig) {
+    let applicablePercentage = 0;
+    // Iterate through tiers to find the highest applicable one
+    for (const tier of referralTiersConfig) {
+        if (referralCount <= tier.upToReferrals) {
+            applicablePercentage = tier.percentage;
+            break; // Found the correct tier
+        }
+    }
+    // If referralCount exceeds all defined 'upToReferrals' (except Infinity), use the last tier's percentage
+    if (applicablePercentage === 0 && referralTiersConfig.length > 0) {
+         const highestFiniteTier = referralTiersConfig.filter(t => t.upToReferrals !== Infinity).pop();
+         const infiniteTier = referralTiersConfig.find(t => t.upToReferrals === Infinity);
+         if (referralCount > (highestFiniteTier?.upToReferrals || 0) && infiniteTier) {
+            applicablePercentage = infiniteTier.percentage;
+         } else if (highestFiniteTier) {
+             applicablePercentage = highestFiniteTier.percentage; // Fallback to highest defined finite tier if something went wrong
+         }
+    }
+    return applicablePercentage;
+}
+
+/**
+ * Processes a referred user's first qualifying bet and triggers the Initial Bet Bonus for the referrer.
+ * This function should be called when a user places any bet, after their balance is debited.
+ * It needs to be called within the same database transaction as the bet placement.
+ * @param {import('pg').PoolClient} dbClient - The active database client for the transaction.
+ * @param {string|number} referredUserTelegramId - The Telegram ID of the user who placed the bet.
+ * @param {bigint} referredUserBetAmountLamports - The amount of the bet in lamports.
+ * @param {string} gameIdForBet - The game ID for which the bet was placed (for ledger notes).
+ * @returns {Promise<{success: boolean, bonusProcessed?: boolean, error?: string}>}
+ */
+async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegramId, referredUserBetAmountLamports, gameIdForBet) {
+    const stringReferredUserId = String(referredUserTelegramId);
+    const LOG_PREFIX_PQB = `[ProcessQualifyingBet UID:${stringReferredUserId}]`;
+
+    try {
+        // 1. Check if this user was referred and if their first bet bonus has already been processed.
+        const referredUserDetails = await dbClient.query(
+            `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
+            [stringReferredUserId]
+        );
+
+        if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
+            // console.log(`${LOG_PREFIX_PQB} User was not referred or no referrer_id. No initial bonus to process.`);
+            return { success: true, bonusProcessed: false, message: "Not a referred user or no referrer." };
+        }
+
+        const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
+        const firstBetPlacedAt = referredUserDetails.rows[0].first_bet_placed_at;
+
+        // If first_bet_placed_at is already set, it means the initial bonus (or attempt) has been handled.
+        if (firstBetPlacedAt) {
+            // console.log(`${LOG_PREFIX_PQB} User has already placed their first bet at ${firstBetPlacedAt}. Initial bonus already handled.`);
+            return { success: true, bonusProcessed: false, message: "Initial bonus already processed previously." };
+        }
+
+        // 2. Check if the bet amount qualifies (convert to USD).
+        const solPrice = await getSolUsdPrice(); // Assumes this function is available
+        const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+
+        if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
+            // console.log(`${LOG_PREFIX_PQB} Bet amount $${betAmountUSD.toFixed(2)} is less than qualifying $${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)}. No initial bonus.`);
+            // Still mark first_bet_placed_at so we don't re-check for non-qualifying small bets.
+            // Or, defer marking if you only want to mark it upon a *qualifying* first bet. For now, mark it.
+            await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+            return { success: true, bonusProcessed: false, message: "Bet amount too small to qualify for initial referral bonus." };
+        }
+
+        // 3. This is the first QUALIFYING bet. Process the bonus for the referrer.
+        // Mark first_bet_placed_at for the referred user.
+        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+
+        // Get referrer's current referral count (BEFORE this one is fully processed for count increment).
+        // The count used for tiering should ideally be based on *already processed* referrals.
+        const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
+        let currentReferrerCount = 0;
+        if (referrerData.rowCount > 0) {
+            currentReferrerCount = referrerData.rows[0].referral_count || 0;
+        }
+
+        const bonusPercentage = calculateInitialBetBonusPercentage(currentReferrerCount, REFERRAL_INITIAL_BET_TIERS_CONFIG);
+        const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
+
+        if (initialBonusAmountLamports <= 0n) {
+            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero or less. No commission created. Percentage: ${bonusPercentage}`);
+            // Mark the referral link as processed for the initial bet bonus to avoid re-checks
+            await dbClient.query(
+                `UPDATE referrals SET qualifying_bet_processed_at = NOW(), status = 'archived_zero_initial_bonus'
+                 WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL`,
+                [referrerId, stringReferredUserId]
+            );
+            // Increment referral_count as the referred user did place a qualifying bet, even if bonus was 0.
+            await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
+            return { success: true, bonusProcessed: true, message: "Qualifying bet made, but bonus amount was zero." };
+        }
+
+        // 4. Record the commission for the referrer.
+        // Upsert logic: If a 'pending_qualifying_bet' record exists, update it. Otherwise, insert.
+        // This assumes a record was created in 'referrals' when the user signed up via link.
+        const commissionRecordResult = await dbClient.query(
+            `UPDATE referrals
+             SET commission_type = 'initial_bet_bonus',
+                 commission_amount_lamports = $1,
+                 status = 'earned', -- Ready for payout queue
+                 qualifying_bet_processed_at = NOW(),
+                 updated_at = NOW()
+             WHERE referrer_telegram_id = $2 AND referred_telegram_id = $3 AND qualifying_bet_processed_at IS NULL
+             RETURNING referral_id;`,
+            [initialBonusAmountLamports.toString(), referrerId, stringReferredUserId]
+        );
+
+        if (commissionRecordResult.rowCount === 0) {
+            // This case might happen if the referral link wasn't properly recorded, or was already processed.
+            // The first_bet_placed_at check should prevent most re-processing.
+            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus, or already processed. Referrer: ${referrerId}, Referred: ${stringReferredUserId}`);
+            // Don't increment referrer's count here if no record was updated, as it implies an issue or prior processing.
+            return { success: false, bonusProcessed: false, error: "No eligible pending referral record found for initial bonus." };
+        }
+        const referralDbId = commissionRecordResult.rows[0].referral_id;
+
+        // 5. Increment the referrer's successful referral count.
+        await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
+
+        console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports (RefDBID: ${referralDbId}) earned for referrer ${referrerId}. Referrer count updated.`);
+
+        // 6. Queue the payout job for this commission.
+        // The actual crediting to referrer's balance will happen via handleReferralPayoutJob -> updateUserBalanceAndLedger
+        if (typeof addPayoutJob === 'function') {
+            addPayoutJob({
+                type: 'payout_referral_commission', // A more generic type for the job queue
+                referralDbId: referralDbId, // Pass the specific DB ID of the commission row
+                commissionType: 'initial_bet_bonus',
+                commissionAmountLamports: initialBonusAmountLamports,
+                referrerUserId: referrerId,
+                referredUserId: stringReferredUserId
+            });
+        } else {
+            console.error(`${LOG_PREFIX_PQB} CRITICAL: addPayoutJob function not defined! Initial bonus for ${referrerId} NOT QUEUED.`);
+            // Potentially notify admin
+        }
+
+        // Notify referrer
+        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient); // Fetch for notification
+        if (referrerUserObj) {
+            const bonusAmountUSDDisplay = await formatBalanceForDisplay(initialBonusAmountLamports, 'USD');
+            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
+            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
+
+            safeSendMessage(referrerId,
+                `🎉 Cha-ching! Your referred friend ${escapeMarkdownV2(referredName)} just placed their first qualifying bet!\n` +
+                `You've earned an Initial Bet Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}*!\n` +
+                `It will be processed to your linked wallet soon. Keep referring to earn more! 🤝`,
+                { parse_mode: 'MarkdownV2' }
+            ).catch(e => console.warn(`${LOG_PREFIX_PQB} Failed to send Initial Bet Bonus notification to referrer ${referrerId}: ${e.message}`));
+        }
+
+        return { success: true, bonusProcessed: true };
+
+    } catch (error) {
+        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack?.substring(0, 700));
+        return { success: false, bonusProcessed: false, error: error.message };
+    }
+}
+
+
+/**
+ * Processes wager milestones for a referred user and creates claimable bonuses for the referrer.
+ * This should be called after a game if the referred user's total_wagered_lamports has increased.
+ * It needs to be called within the same database transaction as the wager update.
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {string|number} referredUserTelegramId - The Telegram ID of the user whose wager is being checked.
+ * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
+ * @returns {Promise<{success: boolean, milestonesProcessed: number, error?: string}>}
+ */
+async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred) {
+    const stringReferredUserId = String(referredUserTelegramId);
+    const LOG_PREFIX_PWM = `[ProcessWagerMilestone UID:${stringReferredUserId}]`;
+    let milestonesProcessedThisCall = 0;
+
+    try {
+        // 1. Find who referred this user and the existing referral link details.
+        const referralLinkDetailsQuery = await dbClient.query(
+            `SELECT r.referral_id, r.referrer_telegram_id, r.referred_user_wager_milestones_achieved, r.last_milestone_bonus_check_wager_lamports
+             FROM referrals r
+             JOIN users u ON r.referred_telegram_id = u.telegram_id
+             WHERE r.referred_telegram_id = $1 AND u.referrer_telegram_id = r.referrer_telegram_id
+             LIMIT 1;`, // Should only be one primary link.
+            [stringReferredUserId]
+        );
+
+        if (referralLinkDetailsQuery.rowCount === 0) {
+            // console.log(`${LOG_PREFIX_PWM} No active referral link found for user ${stringReferredUserId} to process milestones.`);
+            return { success: true, milestonesProcessed: 0 };
+        }
+
+        const referralLink = referralLinkDetailsQuery.rows[0];
+        const referrerId = String(referralLink.referrer_telegram_id);
+        let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {}; // JSONB field
+        const lastCheckedWager = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
+
+        // If wager hasn't increased since last check, no need to re-evaluate milestones.
+        if (newTotalWageredLamportsByReferred <= lastCheckedWager) {
+            // console.log(`${LOG_PREFIX_PWM} Total wagered has not increased significantly since last check. Current: ${newTotalWageredLamportsByReferred}, LastChecked: ${lastCheckedWager}`);
+            return { success: true, milestonesProcessed: 0 };
+        }
+
+        const solPrice = await getSolUsdPrice();
+        const totalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
+
+        for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
+            const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
+            if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
+                // Milestone reached and not yet processed!
+                const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
+
+                if (milestoneBonusAmountLamports > 0n) {
+                    // Create a new commission record for this milestone, making it claimable
+                    const milestoneCommissionInsert = await dbClient.query(
+                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, commission_type, commission_amount_lamports, status, notes, created_at, updated_at)
+                         VALUES ($1, $2, $3, $4, 'milestone_bonus_claimable', $5, NOW(), NOW())
+                         RETURNING referral_id;`,
+                        [
+                            referrerId,
+                            stringReferredUserId,
+                            `wager_milestone_${milestoneUSD}_usd`,
+                            milestoneBonusAmountLamports.toString(),
+                            `Referred user ${stringReferredUserId} reached $${milestoneUSD} wager milestone.`
+                        ]
+                    );
+                    const newMilestoneReferralId = milestoneCommissionInsert.rows[0]?.referral_id;
+
+                    if (newMilestoneReferralId) {
+                        console.log(`${LOG_PREFIX_PWM} Milestone $${milestoneUSD} bonus of ${milestoneBonusAmountLamports} lamports (RefDBID: ${newMilestoneReferralId}) now claimable for referrer ${referrerId}.`);
+                        milestonesProcessedThisCall++;
+
+                        // Notify referrer about the claimable bonus
+                        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient);
+                        if (referrerUserObj) {
+                            const bonusAmountUSDDisplay = await formatBalanceForDisplay(milestoneBonusAmountLamports, 'USD');
+                             const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
+                            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
+
+                            safeSendMessage(referrerId,
+                                `🌟 Milestone Alert! Your referral ${escapeMarkdownV2(referredName)} has wagered over *${milestoneUSD} USD*!\n` +
+                                `You have a Wager Milestone Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* ready to be claimed from your \`/referral\` dashboard.`,
+                                { parse_mode: 'MarkdownV2' }
+                            ).catch(e => console.warn(`${LOG_PREFIX_PWM} Failed to send Milestone Bonus claimable notification to referrer ${referrerId}: ${e.message}`));
+                        }
+                    }
+                }
+                achievedMilestonesData[milestoneKey] = new Date().toISOString(); // Mark as processed
+            }
+        }
+
+        // Update the referral link record with new achieved milestones and the last checked wager amount
+        if (milestonesProcessedThisCall > 0 || newTotalWageredLamportsByReferred > lastCheckedWager) {
+            await dbClient.query(
+                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW()
+                 WHERE referral_id = $3;`,
+                [achievedMilestonesData, newTotalWageredLamportsByReferred.toString(), referralLink.referral_id]
+            );
+        }
+        return { success: true, milestonesProcessed: milestonesProcessedThisCall };
+
+    } catch (error) {
+        console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack?.substring(0,700));
+        return { success: false, milestonesProcessed: 0, error: error.message };
+    }
+}
+
+/**
+ * Handles the callback when a referrer clicks to claim a milestone bonus.
+ * @param {string} userIdClicking - Telegram ID of the user clicking the button (should be the referrer).
+ * @param {number} commissionReferralId - The specific ID from the 'referrals' table for this milestone bonus entry.
+ * @param {import('pg').PoolClient} dbClient - An active DB client for transaction.
+ * @returns {Promise<{success: boolean, messageForUser?: string, error?: string}>}
+ */
+async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, dbClient) {
+    const LOG_PREFIX_HCMB = `[ClaimMilestoneBonus UID:${userIdClicking} CommID:${commissionReferralId}]`;
+
+    try {
+        // 1. Fetch the specific milestone bonus record.
+        const commissionRes = await dbClient.query(
+            `SELECT * FROM referrals WHERE referral_id = $1 AND referrer_telegram_id = $2 AND status = 'milestone_bonus_claimable' FOR UPDATE`,
+            [commissionReferralId, userIdClicking]
+        );
+
+        if (commissionRes.rowCount === 0) {
+            return { success: false, error: "This milestone bonus is not available, already claimed, or does not belong to you." };
+        }
+        const commissionData = commissionRes.rows[0];
+        const commissionAmountLamports = BigInt(commissionData.commission_amount_lamports);
+
+        // 2. Update its status to 'earned' (ready for payout queue).
+        await dbClient.query(
+            `UPDATE referrals SET status = 'earned', updated_at = NOW() WHERE referral_id = $1`,
+            [commissionReferralId]
+        );
+
+        console.log(`${LOG_PREFIX_HCMB} Milestone bonus ${commissionReferralId} status changed to 'earned'. Amount: ${commissionAmountLamports}`);
+
+        // 3. Queue the payout job for this 'earned' commission.
+        if (typeof addPayoutJob === 'function') {
+            addPayoutJob({
+                type: 'payout_referral_commission',
+                referralDbId: commissionReferralId,
+                commissionType: commissionData.commission_type,
+                commissionAmountLamports: commissionAmountLamports,
+                referrerUserId: userIdClicking,
+                referredUserId: commissionData.referred_telegram_id // For logging if needed
+            });
+        } else {
+            console.error(`${LOG_PREFIX_HCMB} CRITICAL: addPayoutJob function not defined! Milestone bonus for CommID ${commissionReferralId} NOT QUEUED.`);
+            // This is a critical failure; the bonus is marked 'earned' but not queued. Admin needs to be alerted.
+            throw new Error("Payout system unavailable. Bonus claim processed but not queued. Contact support.");
+        }
+        const bonusAmountUSDDisplay = await formatBalanceForDisplay(commissionAmountLamports, 'USD');
+        return { success: true, messageForUser: `Milestone bonus of approx. ${bonusAmountUSDDisplay} claimed! It's now queued for payout to your linked wallet.` };
+
+    } catch (error) {
+        console.error(`${LOG_PREFIX_HCMB} Error claiming milestone bonus: ${error.message}`);
+        return { success: false, error: error.message || "Could not claim bonus at this time." };
+    }
+}
+
+// --- End of NEW Referral System Core Logic Functions ---
 
 // --- End of Part 3 (REVISED for new Group Session Lock Management) ---
 // --- Start of Part 4 --- (Ensure this is placed correctly in your file structure)
@@ -10863,38 +11310,58 @@ async function handleStartCommand(msg, args) {
 
         if (deepLinkParam.startsWith('ref_')) {
             const refCode = deepLinkParam.substring(4);
-            const referrerUserRecord = await getUserByReferralCode(refCode);
+            const referrerUserRecord = await getUserByReferralCode(refCode); // from Part 2
             let refByDisplayHTML = "a fellow player";
 
             if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
                 const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
                 if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
+                
+                // Check if the current user *already* has a referrer_telegram_id from the latest userObject
                 if (!userObject.referrer_telegram_id) {
                     let clientRefLink = null;
                     try {
                         clientRefLink = await pool.connect();
                         await clientRefLink.query('BEGIN');
-                        await clientRefLink.query('UPDATE users SET referrer_telegram_id = $1 WHERE telegram_id = $2 AND referrer_telegram_id IS NULL', [referrerUserRecord.telegram_id, userId]);
+                        // Update users table
+                        await clientRefLink.query(
+                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        // *** MODIFIED STATUS HERE ***
                         await clientRefLink.query(
                             `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
-                             VALUES ($1, $2, 'pending_criteria', NOW(), NOW())
+                             VALUES ($1, $2, 'pending_qualifying_bet', NOW(), NOW())
                              ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Assuming this unique constraint exists
                             [referrerUserRecord.telegram_id, userId]
                         );
                         await clientRefLink.query('COMMIT');
-                        userObject = await getOrCreateUser(userId); 
+                        userObject = await getOrCreateUser(userId); // Re-fetch userObject to reflect the change
+                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
                     } catch (refError) {
-                        if(clientRefLink) await clientRefLink.query('ROLLBACK');
+                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
                         console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
                     } finally {
                         if(clientRefLink) clientRefLink.release();
                     }
+                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
+                    // console.log(`${LOG_PREFIX_START_V2} User ${userId} already referred by ${referrerUserRecord.telegram_id}.`);
+                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord)); // Show who they were already referred by
+                } else {
+                    // User already has a different referrer, cannot change.
+                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
+                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
+                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
                 }
             } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
                 refByDisplayHTML = "yourself (clever try! 😉)";
+            } else if (!referrerUserRecord) {
+                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
+                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
             }
-            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You joined via ${refByDisplayHTML}.<br>Explore the casino using the menu I've just displayed!`;
+            
+            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.<br>Explore the casino using the menu I've just displayed!`;
             if (chatType !== 'private') {
                 if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
                 await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
@@ -10910,7 +11377,9 @@ async function handleStartCommand(msg, args) {
             const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!<br>Taking you to the requested section.`;
             await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
             if (typeof handleMenuAction === 'function') {
-                await handleMenuAction(userId, userId, null, actionName, actionParams, true, 'private');
+                // Ensure handleMenuAction gets correct parameters. It expects userId, originalChatId, originalMessageId, menuType, params, isFromCallback, originalChatType
+                // For a deep link, originalMessageId in DM is effectively null for a new interaction.
+                await handleMenuAction(userId, userId, null, actionName, actionParams, false, 'private'); // isFromCallback is false, as it's a command
             } else {
                 const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
                 await handleHelpCommand(dmMsgContext);
@@ -10927,8 +11396,9 @@ async function handleStartCommand(msg, args) {
         const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
         await handleHelpCommand(dmMsgContext);
     } else { 
+        // Private chat, msg.message_id might be the /start command itself, ok to delete before sending menu
         if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
-        const privateStartMsgContext = { ...msg, message_id: null, from: userObject }; 
+        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} }; // Ensure chat context is correct for DM
         await handleHelpCommand(privateStartMsgContext);
     }
 }
@@ -12403,6 +12873,21 @@ bot.on('callback_query', async (callbackQuery) => {
                     }
                     await bot.answerCallbackQuery(callbackQueryId).catch(()=>{});
                     break;
+                case 'claim_milestone_bonus': // New case
+            const commissionReferralIdToClaim = params[0];
+            if (typeof handleClaimMilestoneBonusCallback === 'function') {
+                await handleClaimMilestoneBonusCallback(
+                    callbackQueryId,
+                    userObjectForCallback, // This is the user who clicked
+                    commissionReferralIdToClaim,
+                    originalMessageId, // ID of the referral dashboard message
+                    originalChatId     // Chat ID of the referral dashboard message (should be DM)
+                );
+            } else {
+                console.error(`${LOG_PREFIX_CBQ} Missing handler: handleClaimMilestoneBonusCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Claim feature unavailable.", show_alert: true });
+            }
+            break;
                 default:
                     console.warn(`${LOG_PREFIX_CBQ} Unknown callback action: "${action}"`);
                     await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
@@ -12414,6 +12899,88 @@ bot.on('callback_query', async (callbackQuery) => {
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CB Router System Error 🚨\nAction: \`${escapeMarkdownV2(action)}\`\nUser: ${userId}\nError: \`${escapeMarkdownV2(String(callbackError.message || callbackError))}\``);
     }
 });
+
+// --- NEW Callback Handler for Claiming Milestone Bonuses ---
+// (Place this where other callback query handlers are routed, e.g., within or called by your main bot.on('callback_query', ...) logic)
+
+/**
+ * Handles the callback query when a user clicks to claim a specific milestone bonus.
+ * @param {string} callbackQueryId - The ID of the callback query.
+ * @param {object} userWhoClicked - The user object of the person who clicked the button.
+ * @param {string} commissionReferralIdStr - The referral_id of the specific commission to claim, as a string.
+ * @param {string} originalMessageId - The ID of the message (the referral dashboard) that had the button.
+ * @param {string} originalChatId - The chat ID (should be the user's DM).
+ */
+async function handleClaimMilestoneBonusCallback(callbackQueryId, userWhoClicked, commissionReferralIdStr, originalMessageId, originalChatId) {
+    const userId = String(userWhoClicked.id || userWhoClicked.telegram_id);
+    const commissionReferralId = parseInt(commissionReferralIdStr, 10);
+    const LOG_PREFIX_CLAIM_CB = `[ClaimMilestoneBonusCB UID:${userId} CommID:${commissionReferralId}]`;
+
+    if (isNaN(commissionReferralId)) {
+        console.error(`${LOG_PREFIX_CLAIM_CB} Invalid commissionReferralId: ${commissionReferralIdStr}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid bonus ID.", show_alert: true }).catch(() => {});
+        return;
+    }
+
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN'); // Start transaction for the claim process
+
+        // Call the helper function that contains the core logic
+        const claimResult = await handleClaimMilestoneBonus(userId, commissionReferralId, client);
+
+        if (claimResult.success) {
+            await client.query('COMMIT');
+            console.log(`${LOG_PREFIX_CLAIM_CB} Successfully claimed bonus. Message: ${claimResult.messageForUser}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.messageForUser || "Bonus claimed and queued for payout!", show_alert: false }).catch(() => {});
+
+            // Refresh the referral dashboard for the user in DM
+            // Construct a mock msgOrCbMsg object for handleReferralCommand
+            const mockMsgForDashboardRefresh = {
+                from: userWhoClicked, // User object
+                chat: { id: originalChatId, type: 'private' }, // Should be DM
+                message_id: originalMessageId, // The message to be edited/replaced
+                isCallbackRedirect: false // Not a redirect, it's an action within DM
+            };
+            if (typeof handleReferralCommand === 'function') {
+                await handleReferralCommand(mockMsgForDashboardRefresh);
+            } else {
+                console.error(`${LOG_PREFIX_CLAIM_CB} CRITICAL: handleReferralCommand is not defined. Cannot refresh dashboard.`);
+                // Send a simple success if dashboard can't be refreshed
+                await safeSendMessage(originalChatId, claimResult.messageForUser || "Bonus claimed and queued!", {parse_mode: 'MarkdownV2'});
+            }
+        } else {
+            await client.query('ROLLBACK');
+            console.warn(`${LOG_PREFIX_CLAIM_CB} Failed to claim bonus: ${claimResult.error}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.error || "Could not claim bonus at this time.", show_alert: true }).catch(() => {});
+            // Optionally, refresh the dashboard even on failure to show the current state
+             const mockMsgForDashboardRefresh = {
+                from: userWhoClicked,
+                chat: { id: originalChatId, type: 'private' },
+                message_id: originalMessageId,
+                isCallbackRedirect: false
+            };
+            if (typeof handleReferralCommand === 'function') {
+                 await handleReferralCommand(mockMsgForDashboardRefresh);
+            }
+        }
+    } catch (error) {
+        if (client) {
+            try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_CLAIM_CB} Rollback error: ${rbErr.message}`); }
+        }
+        console.error(`${LOG_PREFIX_CLAIM_CB} Critical error during claim processing: ${error.message}`, error.stack);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Server error while claiming bonus. Please try again later.", show_alert: true }).catch(() => {});
+        if (typeof notifyAdmin === 'function') {
+            notifyAdmin(`🚨 CRITICAL Error Claiming Milestone Bonus\nUID: ${userId}, CommID: ${commissionReferralId}\nError: ${error.message}`, {parse_mode: 'MarkdownV2'});
+        }
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
 
 // --- Centralized Handler for Direct Challenge Responses (Accept/Decline/Cancel) ---
 // --- START OF FULL REPLACEMENT for handleDirectChallengeResponse function ---
@@ -13446,10 +14013,13 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
 
     const relDepositId = (relatedIds?.deposit_id && Number.isInteger(relatedIds.deposit_id)) ? relatedIds.deposit_id : null;
     const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(relatedIds.withdrawal_id)) ? relatedIds.withdrawal_id : null;
-    const relGameLogId = (relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null;
+    // Use game_id_custom_field if present for game related logs, otherwise fallback to game_log_id
+    const relGameLogId = (relatedIds?.game_id_custom_field && (Number.isInteger(relatedIds.game_id_custom_field) || typeof relatedIds.game_id_custom_field === 'string'))
+        ? relatedIds.game_id_custom_field // Could be string like gameId from activeGames map
+        : ((relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null);
     const relReferralId = (relatedIds?.referral_id && Number.isInteger(relatedIds.referral_id)) ? relatedIds.referral_id : null;
     const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(relatedIds.related_sweep_id)) ? relatedIds.related_sweep_id : null;
-    let oldBalanceLamports; 
+    let oldBalanceLamports;
 
     try {
         const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
@@ -13460,11 +14030,10 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
             return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
         }
         const userData = balanceRes.rows[0];
-        oldBalanceLamports = BigInt(userData.balance); 
+        oldBalanceLamports = BigInt(userData.balance);
         const balanceAfter = oldBalanceLamports + changeAmount;
 
-        // Allow admin grants to make balance negative, but normal operations should not.
-        if (balanceAfter < 0n && transactionType !== 'admin_grant' && transactionType !== 'admin_adjustment_debit' && transactionType !== 'admin_grant_debit') { 
+        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_') && transactionType !== 'admin_adjustment_debit') {
             console.warn(`${logPrefix} ⚠️ Insufficient balance. Current: ${oldBalanceLamports}, Change: ${changeAmount}, Would be: ${balanceAfter}.`);
             return { success: false, error: 'Insufficient balance for this transaction.', oldBalanceLamports: oldBalanceLamports, newBalanceLamportsWouldBe: balanceAfter, errorCode: 'INSUFFICIENT_FUNDS' };
         }
@@ -13472,23 +14041,36 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
         let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
         let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
-        let newTotalWon = BigInt(userData.total_won_lamports || '0'); 
+        let newTotalWon = BigInt(userData.total_won_lamports || '0');
+        let actualBetAmountForBonusProcessing = 0n; // For referral bonus processing
 
         if (transactionType === 'deposit' && changeAmount > 0n) {
             newTotalDeposited += changeAmount;
-        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) { 
-            newTotalWithdrawn -= changeAmount; 
+        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) {
+            newTotalWithdrawn -= changeAmount; // changeAmount is negative, so subtract it
         } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
-            newTotalWagered -= changeAmount; 
-        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_')) && changeAmount > 0n) { 
+            actualBetAmountForBonusProcessing = -changeAmount; // Bet amount is positive value
+            newTotalWagered += actualBetAmountForBonusProcessing;
+        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_')) && changeAmount > 0n) {
+            // Winnings/refunds typically cover original stake + profit, or just stake.
+            // If the 'changeAmount' for a win *includes* the original bet return, total_won should reflect net winnings or total payout.
+            // The current description "total_won_lamports" suggests it's the sum of amounts won.
+            // If a "win" transaction type means "net profit", this is fine.
+            // If "win" means "total payout (stake + profit)", then total_won_lamports should track this.
+            // For simplicity, assume changeAmount for 'win_' is the total credited back to user (stake + profit).
             newTotalWon += changeAmount;
-        } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) { 
-           newTotalWon += changeAmount; // Or a new category like total_referral_credits
+        } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) {
+             // This is when a referral commission is credited to the *referrer's* game balance.
+             // (The new system pays out to external wallet, so this might be less used or for other bonus types)
+            newTotalWon += changeAmount; // Could also be a separate "total_bonuses_credited_lamports"
+        } else if (transactionType === 'level_up_bonus_claimed' && changeAmount > 0n) {
+            newTotalWon += changeAmount; // Add level up bonus to total won or a dedicated bonus field
         }
+
 
         const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
         const updateUserParams = [
-            balanceAfter.toString(), 
+            balanceAfter.toString(),
             newTotalDeposited.toString(),
             newTotalWithdrawn.toString(),
             newTotalWagered.toString(),
@@ -13511,11 +14093,57 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         
         const ledgerId = ledgerRes.rows[0]?.ledger_id;
         console.log(`${logPrefix} ✅ Balance updated: ${oldBalanceLamports} -> ${balanceAfter}. Ledger: ${ledgerId}.`);
+
+        // --- NEW: Referral Bonus Processing ---
+        if (transactionType.startsWith('bet_placed_') && actualBetAmountForBonusProcessing > 0n) {
+            console.log(`${logPrefix} Bet placed. Processing referral bonuses for user ${stringUserId}. Bet Amount: ${actualBetAmountForBonusProcessing}`);
+            
+            // 1. Process Initial Bet Bonus (for the user who placed the bet, if they were referred)
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(
+                    dbClient,
+                    stringUserId, // The user who placed the bet (the referred user)
+                    actualBetAmountForBonusProcessing,
+                    String(relGameLogId || relatedIds?.custom_offer_id || 'N/A') // Game context for the bet
+                );
+                if (!initialBonusResult.success) {
+                    console.warn(`${logPrefix} Non-critical: Failed to process initial referral bonus for referred user ${stringUserId}. Error: ${initialBonusResult.error}`);
+                    // Do not rollback main transaction for this, but log it. Admin might need to check.
+                    if (typeof notifyAdmin === 'function') {
+                        notifyAdmin(`⚠️ Initial Referral Bonus Processing Issue\nReferred User: ${stringUserId}\nError: ${initialBonusResult.error}\nBet transaction still committed.`, {parse_mode: 'MarkdownV2'});
+                    }
+                } else if (initialBonusResult.bonusProcessed) {
+                    console.log(`${logPrefix} Initial referral bonus processed successfully for referred user ${stringUserId}.`);
+                }
+            } else {
+                console.error(`${logPrefix} CRITICAL: processQualifyingBetAndInitialBonus function is undefined!`);
+            }
+
+            // 2. Process Wager Milestone Bonus (for the user who placed the bet, if they were referred)
+            if (typeof processWagerMilestoneBonus === 'function') {
+                const milestoneBonusResult = await processWagerMilestoneBonus(
+                    dbClient,
+                    stringUserId, // The user whose wager total increased
+                    newTotalWagered  // Their new total wagered amount
+                );
+                if (!milestoneBonusResult.success) {
+                    console.warn(`${logPrefix} Non-critical: Failed to process wager milestone bonus for referred user ${stringUserId}. Error: ${milestoneBonusResult.error}`);
+                     if (typeof notifyAdmin === 'function') {
+                        notifyAdmin(`⚠️ Wager Milestone Bonus Processing Issue\nReferred User: ${stringUserId}\nError: ${milestoneBonusResult.error}\nBet transaction still committed.`, {parse_mode: 'MarkdownV2'});
+                    }
+                } else if (milestoneBonusResult.milestonesProcessed > 0) {
+                    console.log(`${logPrefix} ${milestoneBonusResult.milestonesProcessed} wager milestone bonus(es) processed for referred user ${stringUserId}.`);
+                }
+            } else {
+                console.error(`${logPrefix} CRITICAL: processWagerMilestoneBonus function is undefined!`);
+            }
+        }
+        // --- END OF NEW: Referral Bonus Processing ---
+
         return { success: true, newBalanceLamports: balanceAfter, oldBalanceLamports: oldBalanceLamports, ledgerId };
 
     } catch (err) {
         console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message} (Code: ${err.code || 'N/A'})`, err.stack?.substring(0,500));
-        // console.error(`${logPrefix} [DEBUG_PARAMS_FAILURE] Called with: telegramId=${telegramId}, changeAmountLamports=${changeAmountLamports}, transactionType=${transactionType}, relatedIds=${JSON.stringify(relatedIds)}, notes=${notes}`); // Optionally re-enable for deep debug
         let errMsg = `Database error during balance/ledger update (Code: ${err.code || 'N/A'})`;
         if (err.message && err.message.toLowerCase().includes('violates check constraint') && err.message.toLowerCase().includes('balance')) {
             errMsg = 'Insufficient balance (check constraint violation).';
@@ -14730,61 +15358,121 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
 
 
 async function handleReferralCommand(msgOrCbMsg) {
-    const userId = String(msgOrCbMsg.from.id);
+    const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id); // Ensure correct ID extraction
     const commandChatId = String(msgOrCbMsg.chat.id);
     const originalMessageId = msgOrCbMsg.message_id;
-    const isFromMenuAction = msgOrCbMsg.isCallbackRedirect !== undefined || !!(correctUserIdFromCb && correctUserIdFromCb === userId); // A way to check if it's from menu
+    // Determine if the command was triggered from a menu callback, potentially in a DM already
+    const isFromMenuAction = msgOrCbMsg.message && msgOrCbMsg.message.chat && msgOrCbMsg.message.chat.id === userId;
+
+    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V2 UID:${userId} Chat:${commandChatId}]`;
 
     let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!user) {
-        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for referral info\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for referral info. Please try `/start`.", { parse_mode: 'MarkdownV2' });
         return;
     }
-    const playerRef = getPlayerDisplayReference(user);
-    let botUsername = "our bot";
-    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
+    const playerRef = getPlayerDisplayReference(user); // This should return MarkdownV2 safe name
+    let botUsername = BOT_NAME || "ourbot"; // Use global BOT_NAME
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) {
+        console.warn(`${LOG_PREFIX_REF_CMD} Could not fetch bot username: ${e.message}`);
+    }
 
     clearUserState(userId);
-    const targetDmChatId = userId;
+    const targetDmChatId = userId; // Referral dashboard is always in DM
 
+    // If command was in group, delete it and notify user to check DM
     if (commandChatId !== targetDmChatId) {
         if (originalMessageId) await bot.deleteMessage(commandChatId, originalMessageId).catch(() => {});
-        await safeSendMessage(commandChatId, `${playerRef}, I've sent your referral details and earnings to our private chat: @${escapeMarkdownV2(botUsername)} 🤝`, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(commandChatId, `${playerRef}, your Referral Dashboard has been sent to our private chat: @${escapeMarkdownV2(botUsername)} 🤝`, { parse_mode: 'MarkdownV2' });
     }
-    
-    if (commandChatId === targetDmChatId && originalMessageId && (isFromMenuAction || !msgOrCbMsg.isCallbackRedirect) ) { // If it's from menu in DM OR typed command in DM
-        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
+
+    // Delete the original message in DM if this is a callback editing a previous menu
+    if (commandChatId === targetDmChatId && originalMessageId && isFromMenuAction) {
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
+    } else if (commandChatId === targetDmChatId && originalMessageId && !isFromMenuAction && msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) {
+        // If it was a typed /referral command in DM, delete the command message
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
     }
+
 
     let referralCode = user.referral_code;
     if (!referralCode) {
         referralCode = generateReferralCode();
         try {
-            await queryDatabase("UPDATE users SET referral_code = $1 WHERE telegram_id = $2", [referralCode, userId]);
-            user.referral_code = referralCode;
+            await queryDatabase("UPDATE users SET referral_code = $1, updated_at = NOW() WHERE telegram_id = $2", [referralCode, userId]);
+            user.referral_code = referralCode; // Update in-memory object
         } catch (dbErr) {
-            console.error(`[ReferralCmd] Failed to save new referral code for user ${userId}: ${dbErr.message}`);
+            console.error(`${LOG_PREFIX_REF_CMD} Failed to save new referral code for user ${userId}: ${dbErr.message}`);
             referralCode = "ErrorGenerating";
         }
     }
     const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
 
-    let messageText = `🤝 *Your Referral Zone, ${playerRef}\\!*\n\n` +
-                      `Invite friends to ${escapeMarkdownV2(BOT_NAME)} and earn rewards\\!\n\n` +
-                      `🔗 Your Unique Referral Link:\n\`${escapeMarkdownV2(referralLink)}\`\n` +
-                      `_\\(Tap to copy or share\\)_\\n\n` +
-                      `Share this link with friends\\. When they join using your link and meet criteria \\(e\\.g\\., make a deposit or play games\\), you could earn commissions\\! Details of the current referral program can be found on our official channel/group\\.`;
+    // Stats
+    const successfulReferralsCount = user.referral_count || 0; // From users.referral_count (updated by initial bonus processing)
+    const totalEarningsPaidLamports = user.total_referral_earnings_paid_lamports || 0n; // From users.total_referral_earnings_paid_lamports (updated by payout job)
+    const totalEarningsPaidUSDDisplay = await formatBalanceForDisplay(totalEarningsPaidLamports, 'USD');
 
-    const earnings = await getTotalReferralEarningsDB(userId);
-    const totalEarnedPaidDisplay = await formatBalanceForDisplay(earnings.total_earned_paid_lamports, 'USD');
-    const pendingPayoutDisplay = await formatBalanceForDisplay(earnings.total_pending_payout_lamports, 'USD');
+    let messageText = `🤝 *Your Referral Dashboard* 🤝\n\n` +
+                      `Invite Friends & Earn USD!\n\n` +
+                      `🔗 *Your Unique Referral Link:*\n` +
+                      `\`${escapeMarkdownV2(referralLink)}\`\n` +
+                      `_(Tap link or button below to share! Keep it handy!)_\n\n` +
+                      `📊 *Your Stats:*\n` +
+                      `  ▫️ Referrals (who made 1st qualifying bet): *${successfulReferralsCount}*\n` +
+                      `  ▫️ Total Earnings Paid Out: *${escapeMarkdownV2(totalEarningsPaidUSDDisplay)}*\n\n` +
+                      `🎁 *How You Earn:*\n\n` +
+                      `  1️⃣ *Initial Bet Bonus:*\n` +
+                      `     When your friend places their first qualifying bet (min. *${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)} USD*), you earn a percentage of their bet amount! The more friends you refer, the higher your percentage:\n`;
 
-    messageText += `\n\n*Your Referral Stats:*\n` +
-                   `▫️ Total Earned & Paid Out: *${escapeMarkdownV2(totalEarnedPaidDisplay)}*\n` +
-                   `▫️ Commissions Earned \\(Pending Payout\\): *${escapeMarkdownV2(pendingPayoutDisplay)}*\n\n` +
-                   `_\\(Payouts are processed periodically to your linked wallet once they meet a minimum threshold or per program rules\\)_`;
+    REFERRAL_INITIAL_BET_TIERS_CONFIG.forEach(tier => {
+        const upTo = tier.upToReferrals === Infinity ? "100+" : `Up to ${tier.upToReferrals}`;
+        messageText += `     ▫️ ${upTo} Referrals: *${(tier.percentage * 100).toFixed(1)}%*\n`;
+    });
 
-    const keyboard = {inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]]};
+    messageText += `\n  2️⃣ *Wager Milestone Bonus:*\n` +
+                   `     As your referred friends play and reach wagering milestones (e.g., they've wagered a total of *${REFERRAL_WAGER_MILESTONES_USD_CONFIG[0]} USD*, *${REFERRAL_WAGER_MILESTONES_USD_CONFIG[1]} USD*, etc.), you'll receive *${(REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST * 100).toFixed(1)}%* of that milestone amount that you can collect from here.\n\n`;
+
+    // Fetch claimable milestone bonuses
+    const keyboardRows = [];
+    let claimableBonusesMessage = "";
+    try {
+        const claimableRes = await queryDatabase(
+            `SELECT referral_id, commission_type, commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name 
+             FROM referrals r
+             LEFT JOIN users ru ON r.referred_telegram_id = ru.telegram_id
+             WHERE r.referrer_telegram_id = $1 AND r.status = 'milestone_bonus_claimable'`,
+            [userId]
+        );
+        if (claimableRes.rows.length > 0) {
+            claimableBonusesMessage = "✨ *Claimable Milestone Bonuses:*\n";
+            for (const bonus of claimableRes.rows) {
+                const bonusAmountDisplay = await formatBalanceForDisplay(BigInt(bonus.commission_amount_lamports), 'USD');
+                const referredUserTempObj = { username: bonus.referred_username, first_name: bonus.referred_first_name, telegram_id: null }; // For display only
+                const referredUserDisplay = getPlayerDisplayReference(referredUserTempObj); // MarkdownV2 safe
+                const milestoneType = bonus.commission_type.replace('wager_milestone_', '').replace('_usd', ' USD Wagered');
+                
+                claimableBonusesMessage += `  ▫️ Approx. *${escapeMarkdownV2(bonusAmountDisplay)}* from ${escapeMarkdownV2(referredUserDisplay)} (${escapeMarkdownV2(milestoneType)})\n`;
+                keyboardRows.push([{ text: `💰 Claim ~${bonusAmountDisplay} (from ${referredUserDisplay.substring(0,15)}...)`, callback_data: `claim_milestone_bonus:${bonus.referral_id}` }]);
+            }
+            claimableBonusesMessage += "\n";
+        }
+    } catch (e) {
+        console.error(`${LOG_PREFIX_REF_CMD} Error fetching claimable bonuses: ${e.message}`);
+        claimableBonusesMessage = "Error fetching claimable bonuses.\n";
+    }
+
+    messageText += claimableBonusesMessage;
+    messageText += `Keep sharing and earning! ✨`;
+
+    // Add standard buttons
+    keyboardRows.push([{ text: "🔗 Share Your Link!", switch_inline_query: `${referralLink}` }]);
+    keyboardRows.push([{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]);
+    const keyboard = { inline_keyboard: keyboardRows };
+
     await safeSendMessage(targetDmChatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
 }
 
@@ -15925,38 +16613,77 @@ async function handleWithdrawalPayoutJob(withdrawalId) {
 }
 
 
-async function handleReferralPayoutJob(referralId) { // Changed payoutId to referralId for clarity
-    const logPrefix = `[ReferralJob ID:${referralId}]`;
-    console.log(`⚙️ ${logPrefix} Processing referral payout...`);
+async function handleReferralPayoutJob(referralDbIdFromJob) { // Renamed parameter for clarity
+    const referralId = referralDbIdFromJob; // Use the passed ID directly
+    const logPrefix = `[ReferralPayoutJob ID:${referralId}]`;
+    console.log(`⚙️ ${logPrefix} Processing referral payout for referral_id: ${referralId}...`);
+    
     let clientForDb = null;
-    let sendSolResult = { success: false, error: "Send SOL not initiated for referral", isRetryable: false };
-    const payerKeypair = REFERRAL_PAYOUT_KEYPAIR || MAIN_BOT_KEYPAIR; 
+    // Initialize sendSolResult to ensure error.isRetryable can be checked
+    let sendSolResult = { success: false, error: "Send SOL not initiated for referral", isRetryable: false, signature: null };
+    const payerKeypair = REFERRAL_PAYOUT_KEYPAIR || MAIN_BOT_KEYPAIR;
+
+    if (!payerKeypair) {
+        const criticalError = new Error("CRITICAL: Payer keypair (REFERRAL_PAYOUT_KEYPAIR or MAIN_BOT_KEYPAIR) is not configured. Cannot process referral payout.");
+        console.error(`❌ ${logPrefix} ${criticalError.message}`);
+        criticalError.isRetryable = false; // This is a config error, not retryable by the job
+        // Update status to failed in DB
+        const errClient = await pool.connect();
+        try {
+            await updateReferralPayoutStatusDB(errClient, referralId, 'failed', null, "Referral payout system keypair missing.");
+        } catch(e){ console.error(`${logPrefix} DB error marking payout as failed due to missing keypair: ${e.message}`);}
+        finally { errClient.release(); }
+        throw criticalError;
+    }
 
     const details = await getReferralDetailsDB(referralId); // from Part P2
     if (!details) {
-        const error = new Error(`Referral payout details not found for ID ${referralId}.`); error.isRetryable = false; throw error;
+        const error = new Error(`Referral payout details not found for ID ${referralId}. Job cannot proceed.`);
+        error.isRetryable = false; // If details are gone, retrying won't help
+        console.error(`${logPrefix} ${error.message}`);
+        throw error;
     }
-    if (details.status === 'paid_out') { return; }
-    if (details.status === 'failed') { return; } // Don't retry if manually marked failed or permanently failed previously
-    if (details.status !== 'earned') {
-        console.warn(`ℹ️ ${logPrefix} Referral payout ID ${referralId} not 'earned' (current: ${details.status}). Skipping for now.`);
-        const error = new Error(`Referral payout ID ${referralId} not in 'earned' state.`); error.isRetryable = false; throw error;
+
+    // Check status before proceeding
+    if (details.status === 'paid_out') {
+        console.log(`ℹ️ ${logPrefix} Referral ID ${referralId} already marked 'paid_out'. Skipping.`);
+        return; // Successfully completed previously
+    }
+    if (details.status === 'processing' && (Date.now() - new Date(details.updated_at).getTime()) < (10 * 60 * 1000) ) {
+        // If recently marked as processing (e.g. < 10 mins ago by another attempt), skip to avoid race.
+        console.log(`ℹ️ ${logPrefix} Referral ID ${referralId} currently 'processing' (updated recently). Skipping this attempt.`);
+        return;
+    }
+    // Allow retrying if 'earned' or if 'failed'/'processing' (but old)
+    if (details.status !== 'earned' && details.status !== 'failed' && details.status !== 'processing') {
+        const statusError = `Referral payout ID ${referralId} is not in 'earned', 'failed', or 'processing' state (current: ${details.status}). Cannot process.`;
+        console.warn(`${logPrefix} ${statusError}`);
+        const error = new Error(statusError);
+        error.isRetryable = false; // Status issue, not typically retryable by job queue unless status can change back to earned
+        // No DB update here, as the status is unexpected.
+        throw error;
     }
 
     const referrerUserId = String(details.referrer_telegram_id);
     const amountToPay = BigInt(details.commission_amount_lamports || '0');
+
     if (amountToPay <= 0n) {
-        const zeroErr = `Referral commission for ID ${referralId} is zero or less.`;
-        console.warn(`${logPrefix} ${zeroErr}`);
-        const zeroClient = await pool.connect();
-        try { await updateReferralPayoutStatusDB(zeroClient, referralId, 'failed', null, zeroErr.substring(0,250)); } // from Part P2
-        catch(e){ console.error(`${logPrefix} DB error marking zero commission as failed: ${e.message}`);}
-        finally { zeroClient.release(); }
-        const error = new Error(zeroErr); error.isRetryable = false; throw error;
+        const zeroErrMsg = `Referral commission for ID ${referralId} is zero or less. Cannot pay.`;
+        console.warn(`${logPrefix} ${zeroErrMsg}`);
+        const zeroErrClient = await pool.connect();
+        try {
+            await zeroErrClient.query('BEGIN');
+            await updateReferralPayoutStatusDB(zeroErrClient, referralId, 'failed', null, zeroErrMsg.substring(0, 250));
+            await zeroErrClient.query('COMMIT');
+        } catch(e){
+            if(zeroErrClient) await zeroErrClient.query('ROLLBACK');
+            console.error(`${logPrefix} DB error marking zero commission as failed: ${e.message}`);
+        } finally { if(zeroErrClient) zeroErrClient.release(); }
+        const error = new Error(zeroErrMsg); error.isRetryable = false; throw error;
     }
 
     const userForNotif = await getOrCreateUser(referrerUserId);
-    const playerRefForNotif = getPlayerDisplayReference(userForNotif || {id: referrerUserId, first_name:"Referrer"});
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userForNotif || {id: referrerUserId, first_name:"Referrer"}));
 
     try {
         clientForDb = await pool.connect();
@@ -15964,82 +16691,112 @@ async function handleReferralPayoutJob(referralId) { // Changed payoutId to refe
 
         const referrerDetails = await getPaymentSystemUserDetails(referrerUserId, clientForDb); // from Part P2
         if (!referrerDetails?.solana_wallet_address) {
-            const noWalletMsg = `Referrer ${playerRefForNotif} (${escapeMarkdownV2(referrerUserId)}) has no linked SOL wallet for referral payout ID ${referralId}.`;
+            const noWalletMsg = `Referrer ${playerRefHTML} (ID: ${referrerUserId}) has no linked SOL wallet for referral payout (Commission ID: ${referralId}). Payout cannot proceed.`;
             console.error(`❌ ${logPrefix} ${noWalletMsg}`);
-            await updateReferralPayoutStatusDB(clientForDb, referralId, 'failed', null, noWalletMsg.substring(0, 250));
-            await clientForDb.query('COMMIT');
+            await updateReferralPayoutStatusDB(clientForDb, referralId, 'failed', null, "Referrer has no linked wallet.".substring(0, 250));
+            await clientForDb.query('COMMIT'); // Commit the 'failed' status
+            safeSendMessage(referrerUserId, `⚠️ Action Required: We tried to send you a referral bonus, but you don't have a withdrawal wallet linked. Please link one via \`/setwallet YOUR_ADDRESS\` in DM, then contact support regarding referral ID ${referralId}.`, {parse_mode:'MarkdownV2'}).catch(()=>{});
             const error = new Error(noWalletMsg); error.isRetryable = false; throw error;
         }
         const recipientAddress = referrerDetails.solana_wallet_address;
 
+        // Mark as 'processing' before attempting sendSol
         await updateReferralPayoutStatusDB(clientForDb, referralId, 'processing');
-        await clientForDb.query('COMMIT');
-    } catch(dbProcError) {
-        if(clientForDb) await clientForDb.query('ROLLBACK').catch(()=>{});
+        await clientForDb.query('COMMIT'); // Commit 'processing' state
+    } catch (dbProcError) {
+        if (clientForDb) await clientForDb.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} DB Rollback Error setting 'processing': ${rbErr.message}`));
         console.error(`${logPrefix} DB error setting status to 'processing': ${dbProcError.message}`);
-        jobError.isRetryable = true; // DB errors often retryable
-        throw dbProcError;
-    }
-    finally {
+        const jobError = new Error(`DB error pre-send for referral payout: ${dbProcError.message}`);
+        jobError.isRetryable = true; // DB errors are often retryable
+        throw jobError;
+    } finally {
         if (clientForDb) clientForDb.release();
-        clientForDb = null;
+        clientForDb = null; // Nullify to re-acquire for next transaction block
     }
 
-
+    // Attempt SOL transfer
     try {
-        sendSolResult = await sendSol(payerKeypair, recipientAddress, amountToPay, `Referral Commission - ${BOT_NAME} - ID ${referralId}`);
+        sendSolResult = await sendSol(
+            payerKeypair,
+            recipientAddress,
+            amountToPay,
+            `Referral Bonus - ${BOT_NAME} - Commission ID: ${referralId}`
+            // Assuming sendSol uses default priority fees from env for referrals
+        );
 
-        clientForDb = await pool.connect(); 
+        clientForDb = await pool.connect();
         await clientForDb.query('BEGIN');
+
         if (sendSolResult.success && sendSolResult.signature) {
             console.log(`✅ ${logPrefix} sendSol successful for referral ID ${referralId}. TX: ${sendSolResult.signature}.`);
             await updateReferralPayoutStatusDB(clientForDb, referralId, 'paid_out', sendSolResult.signature);
+
+            // NEW: Update total_referral_earnings_paid_lamports for the referrer
+            await clientForDb.query(
+                `UPDATE users SET total_referral_earnings_paid_lamports = total_referral_earnings_paid_lamports + $1, updated_at = NOW() WHERE telegram_id = $2`,
+                [amountToPay.toString(), referrerUserId]
+            );
+            console.log(`${logPrefix} Updated total_referral_earnings_paid_lamports for referrer ${referrerUserId} by ${amountToPay}.`);
+
             await clientForDb.query('COMMIT');
 
-            await safeSendMessage(referrerUserId,
-                `🎁 *Referral Bonus Paid, ${playerRefForNotif}!* 🎁\n\n` +
-                `Your referral commission of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* has been sent to your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\`.\n` + // Escaped .
-                `🧾 Transaction ID: \`${escapeMarkdownV2(sendSolResult.signature)}\`\n\nThanks for spreading the word about ${escapeMarkdownV2(BOT_NAME)}!`, // Escaped !
-                { parse_mode: 'MarkdownV2' }
-            );
-            return; 
+            safeSendMessage(referrerUserId,
+                `🎁 *Referral Bonus Paid Out!* 🎁\n\n` +
+                `Hey ${playerRefHTML}, your referral commission of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* (approx. ${escapeMarkdownV2(await formatBalanceForDisplay(amountToPay, 'USD'))}) has been sent to your linked wallet: \`${escapeMarkdownV2(recipientAddress)}\`.\n` +
+                `🧾 Transaction: [View on Solscan](https://solscan.io/tx/${escapeMarkdownV2(sendSolResult.signature)})\n\n` +
+                `Keep up the great work! ✨`,
+                { parse_mode: 'MarkdownV2', disable_web_page_preview: true }
+            ).catch(e => console.warn(`${LOG_PREFIX_PAYOUT} Failed to send successful referral payout DM to ${referrerUserId}: ${e.message}`));
+            return; // Job successful
         } else {
+            // sendSol failed
             const sendErrorMsg = sendSolResult.error || 'Unknown sendSol failure for referral payout.';
             console.error(`❌ ${logPrefix} sendSol FAILED for referral payout ID ${referralId}. Reason: ${sendErrorMsg}`);
+            
+            // Mark as failed in DB (still within this new transaction block)
             await updateReferralPayoutStatusDB(clientForDb, referralId, 'failed', null, sendErrorMsg.substring(0, 250));
-            await clientForDb.query('COMMIT'); // Commit the 'failed' status
+            await clientForDb.query('COMMIT'); // Commit the 'failed' status update
 
-            await safeSendMessage(referrerUserId,
-                `⚠️ *Referral Payout Issue* ⚠️\n\n${playerRefForNotif}, we encountered an issue sending your referral reward of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* (Details: \`${escapeMarkdownV2(sendErrorMsg)}\`). Please ensure your linked wallet is correct or contact support. This payout will be re-attempted if possible, or an admin will review.`, // Escaped . and ()
-                {parse_mode: 'MarkdownV2'}
-            );
+            safeSendMessage(referrerUserId,
+                `⚠️ *Referral Payout Issue*\n\n${playerRefHTML}, we encountered an issue sending your referral reward of *${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}* (Details: \`${escapeMarkdownV2(sendErrorMsg)}\`).\n`+
+                `Our team will review this. If the issue persists, please contact support with Commission ID \`${referralId}\`.`,
+                { parse_mode: 'MarkdownV2' }
+            ).catch(e => console.warn(`${LOG_PREFIX_PAYOUT} Failed to send referral payout failure DM to ${referrerUserId}: ${e.message}`));
+
             if (typeof notifyAdmin === 'function') {
-                notifyAdmin(`🚨 *REFERRAL PAYOUT FAILED* 🚨\nReferrer: ${playerRefForNotif} (\`${escapeMarkdownV2(referrerUserId)}\`)\nPayout ID: \`${referralId}\`\nAmount: \`${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}\`\n*Error:* \`${escapeMarkdownV2(sendErrorMsg)}\`.`, {parse_mode:'MarkdownV2'});
+                notifyAdmin(`🚨 *REFERRAL PAYOUT FAILED (Send Error)* 🚨\nReferrer: ${playerRefHTML} (\`${escapeMarkdownV2(referrerUserId)}\`)\nComm. ID: \`${referralId}\`\nAmount: \`${escapeMarkdownV2(formatCurrency(amountToPay, 'SOL'))}\`\nError: \`${escapeMarkdownV2(sendErrorMsg)}\`.`, { parse_mode: 'MarkdownV2' });
             }
+            
             const errorToThrowForRetry = new Error(sendErrorMsg);
             errorToThrowForRetry.isRetryable = sendSolResult.isRetryable === true;
-            throw errorToThrowForRetry;
+            throw errorToThrowForRetry; // Let addPayoutJob handle retry logic
         }
-    } catch (jobError) { // Catches errors from sendSol or DB ops after sendSol
-        if(clientForDb && clientForDb.release) { // If it was connected for the second DB op
-            try { await clientForDb.query('ROLLBACK');} catch(rbErr) {console.error(`${logPrefix} Final rollback error on jobError: ${rbErr.message}`);}
-        } else if (!clientForDb) { // If sendSol failed and we didn't even get to re-connect clientForDb
-            // Ensure status is marked as failed if not already done.
-             const updateClient = await pool.connect();
-             try {
-                 const currentDetailsAfterJobError = await getReferralDetailsDB(referralId, updateClient);
-                 if (currentDetailsAfterJobError && currentDetailsAfterJobError.status !== 'paid_out' && currentDetailsAfterJobError.status !== 'failed') {
-                     await updateReferralPayoutStatusDB(updateClient, referralId, 'failed', null, `Job error (non-retryable): ${String(jobError.message || jobError)}`.substring(0,250));
-                 }
-             } catch (finalStatusUpdateError) { console.error(`${logPrefix} Failed to mark referral as 'failed': ${finalStatusUpdateError.message}`);}
-             finally { updateClient.release(); }
+    } catch (jobError) {
+        if (clientForDb) {
+            try { await clientForDb.query('ROLLBACK'); } catch (rbErr) { console.error(`${logPrefix} Final rollback error: ${rbErr.message}`); }
         }
+        console.error(`❌ ${logPrefix} Error during referral payout job (send/post-send DB) for ID ${referralId}: ${jobError.message}`, jobError.stack?.substring(0, 500));
 
-        console.error(`❌ ${logPrefix} Error during referral payout job ID ${referralId}: ${jobError.message}`, jobError.stack?.substring(0,500));
-        if (jobError.isRetryable === undefined) jobError.isRetryable = sendSolResult.isRetryable || false;
-        throw jobError; 
+        // Attempt to mark as 'failed' if not already done and status is still 'processing'
+        const updateFailClient = await pool.connect();
+        try {
+            const currentDetailsAfterJobError = await getReferralDetailsDB(referralId, updateFailClient);
+            if (currentDetailsAfterJobError && currentDetailsAfterJobError.status === 'processing') {
+                 await updateReferralPayoutStatusDB(updateFailClient, referralId, 'failed', null, `Job error: ${String(jobError.message || jobError).substring(0,200)}`);
+            }
+        } catch (finalStatusUpdateError) {
+            console.error(`${logPrefix} Failed to update referral status to 'failed' after job error: ${finalStatusUpdateError.message}`);
+        } finally {
+            if (updateFailClient) updateFailClient.release();
+        }
+        
+        // Ensure the error re-thrown to the job queue has the correct retry flag
+        if (jobError.isRetryable === undefined) {
+            jobError.isRetryable = sendSolResult?.isRetryable || false; // Default to sendSolResult's flag
+        }
+        throw jobError;
     } finally {
-        if (clientForDb && clientForDb.release) clientForDb.release();
+        if (clientForDb) clientForDb.release();
     }
 }
 
