@@ -169,8 +169,8 @@ const PAYMENT_ENV_DEFAULTS = {
   'PAYMENT_WEBHOOK_PORT': '3000',
   'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
   'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-  'SOL_USD_PRICE_CACHE_TTL_MS': (3 * 60 * 1000).toString(),
-  'MIN_BET_USD': '0.50',
+  'SOL_USD_PRICE_CACHE_TTL_MS': (60 * 60 * 1000).toString(),
+  'MIN_BET_USD': '1.00',
   'MAX_BET_USD': '100.00',
 };
 
@@ -841,55 +841,144 @@ async function notifyAdmin(message, options = {}) {
     }
 }
 
-async function fetchSolUsdPriceFromAPI() {
-    const apiUrl = process.env.SOL_PRICE_API_URL;
-    const logPrefix = '[PriceFeed API]';
+async function fetchSolUsdPriceFromCoinCapAPI() {
+    const apiUrl = 'https://api.coincap.io/v2/assets/solana';
+    const logPrefix = '[PriceFeed CoinCap]';
+
     try {
+        // console.log(`${logPrefix} Attempting to fetch SOL/USD price from CoinCap...`); // Less verbose
         const response = await axios.get(apiUrl, { timeout: 8000 });
-        if (response.data && response.data.solana && typeof response.data.solana.usd === 'number') {
-            const price = parseFloat(response.data.solana.usd);
+
+        if (response.data && response.data.data && typeof response.data.data.priceUsd === 'string') {
+            const price = parseFloat(response.data.data.priceUsd);
             if (isNaN(price) || price <= 0) {
-                throw new Error('Invalid or non-positive price data from API.');
+                throw new Error('Invalid or non-positive price data from CoinCap API.');
             }
+            // console.log(`${logPrefix} Successfully fetched SOL/USD price: $${price.toFixed(4)}`); // Less verbose
             return price;
         } else {
-            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in API response:`, stringifyWithBigInt(response.data).substring(0,300));
-            throw new Error('SOL price not found or invalid structure in API response.');
+            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in CoinCap API response:`, stringifyWithBigInt(response.data).substring(0,300));
+            throw new Error('SOL price not found or invalid structure in CoinCap API response.');
         }
     } catch (error) {
         const errMsg = error.isAxiosError ? error.message : String(error);
-        console.error(`${logPrefix} ❌ Error fetching SOL/USD price: ${errMsg}`);
+        let detailedError = errMsg;
         if (error.response) {
-            console.error(`${logPrefix} API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(error.response.data).substring(0,300));
+            // console.error(`${logPrefix} CoinCap API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(error.response.data).substring(0,300)); // Less verbose
+            if (error.response.status === 429) {
+                detailedError = `Request failed with status code 429 (Rate Limit Exceeded with CoinCap).`;
+            } else if (error.response.data && error.response.data.error) {
+                detailedError = `API Error: ${error.response.data.error}`;
+            }
+        } else {
+             console.error(`${logPrefix} ❌ Error fetching SOL/USD price from CoinCap: ${detailedError}`);
         }
-        throw new Error(`Failed to fetch SOL/USD price: ${errMsg}`);
+        // Add a property to the error if it's a rate limit error, so getSolUsdPrice can know
+        if (error.response && error.response.status === 429) {
+            const rateLimitError = new Error(`Failed to fetch SOL/USD price from CoinCap: ${detailedError}`);
+            rateLimitError.isRateLimitError = true;
+            throw rateLimitError;
+        }
+        throw new Error(`Failed to fetch SOL/USD price from CoinCap: ${detailedError}`);
+    }
+}
+
+// --- NEW: Price Fetching from CoinGecko (Backup) ---
+async function fetchSolUsdPriceFromCoinGeckoAPI() {
+    const apiUrl = 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd';
+    const logPrefix = '[PriceFeed CoinGecko]';
+
+    try {
+        // console.log(`${logPrefix} Attempting to fetch SOL/USD price from CoinGecko (backup)...`); // Less verbose
+        const response = await axios.get(apiUrl, { timeout: 8000 });
+
+        if (response.data && response.data.solana && typeof response.data.solana.usd === 'number') {
+            const price = parseFloat(response.data.solana.usd);
+            if (isNaN(price) || price <= 0) {
+                throw new Error('Invalid or non-positive price data from CoinGecko API.');
+            }
+            // console.log(`${logPrefix} Successfully fetched SOL/USD price: $${price.toFixed(4)}`); // Less verbose
+            return price;
+        } else {
+            console.error(`${logPrefix} ⚠️ SOL price not found or invalid structure in CoinGecko API response:`, stringifyWithBigInt(response.data).substring(0,300));
+            throw new Error('SOL price not found or invalid structure in CoinGecko API response.');
+        }
+    } catch (error) {
+        const errMsg = error.isAxiosError ? error.message : String(error);
+        let detailedError = errMsg;
+        if (error.response) {
+            // console.error(`${logPrefix} CoinGecko API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(response.response.data).substring(0,300)); // Less verbose
+             if (error.response.status === 429) {
+                detailedError = `Request failed with status code 429 (Rate Limit Exceeded with CoinGecko).`;
+            } else if (error.response.data && error.response.data.error) { // Some APIs put error message in data.error
+                detailedError = `API Error: ${error.response.data.error}`;
+            }
+        } else {
+             console.error(`${logPrefix} ❌ Error fetching SOL/USD price from CoinGecko: ${detailedError}`);
+        }
+        if (error.response && error.response.status === 429) {
+            const rateLimitError = new Error(`Failed to fetch SOL/USD price from CoinGecko: ${detailedError}`);
+            rateLimitError.isRateLimitError = true;
+            throw rateLimitError;
+        }
+        throw new Error(`Failed to fetch SOL/USD price from CoinGecko: ${detailedError}`);
     }
 }
 
 async function getSolUsdPrice() {
-    const logPrefix = '[GetSolUsdPrice]';
-    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10);
+    const logPrefix = '[GetSolUsdPrice V2]'; // V2 for new version
+    const cacheTtl = parseInt(process.env.SOL_USD_PRICE_CACHE_TTL_MS, 10); // Ensure this is set to a reasonable value (e.g., 15-30 mins)
     const cachedEntry = solPriceCache.get(SOL_PRICE_CACHE_KEY);
 
     if (cachedEntry && (Date.now() - cachedEntry.timestamp < cacheTtl)) {
+        // console.log(`${logPrefix} Returning cached price: $${cachedEntry.price.toFixed(2)}`); // Can be noisy
         return cachedEntry.price;
     }
+
+    let price;
+    let primaryError = null;
+
+    // Attempt 1: Primary API (CoinCap)
     try {
-        const price = await fetchSolUsdPriceFromAPI();
+        console.log(`${logPrefix} Cache stale or empty. Attempting fetch from Primary (CoinCap)...`);
+        price = await fetchSolUsdPriceFromCoinCapAPI();
         solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
+        console.log(`${logPrefix} Successfully fetched and cached price from CoinCap: $${price.toFixed(2)}`);
         return price;
     } catch (error) {
-        if (cachedEntry) {
-            console.warn(`${logPrefix} ⚠️ API fetch failed ('${error.message}'), using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)}`);
-            return cachedEntry.price;
-        }
-        const criticalErrorMessage = `🚨 *CRITICAL PRICE FEED FAILURE* (${escapeMarkdownV2(BOT_NAME)}) 🚨\n\nUnable to fetch SOL/USD price and no cache available. USD conversions will be severely impacted.\n*Error:* \`${escapeMarkdownV2(error.message)}\``;
-        console.error(`${logPrefix} ❌ CRITICAL: ${criticalErrorMessage.replace(/\n/g, ' ')}`);
-        if (typeof notifyAdmin === 'function') {
-            await notifyAdmin(criticalErrorMessage);
-        }
-        throw new Error(`Critical: Could not retrieve SOL/USD price. Error: ${error.message}`);
+        console.warn(`${logPrefix} ⚠️ Primary API (CoinCap) failed: ${error.message}`);
+        primaryError = error; // Store primary error
     }
+
+    // Attempt 2: Backup API (CoinGecko) - if primary failed
+    if (price === undefined) { // Only try backup if primary definitely failed to return a price
+        console.log(`${logPrefix} Primary API failed. Attempting fetch from Backup (CoinGecko)...`);
+        try {
+            price = await fetchSolUsdPriceFromCoinGeckoAPI();
+            solPriceCache.set(SOL_PRICE_CACHE_KEY, { price, timestamp: Date.now() });
+            console.log(`${logPrefix} Successfully fetched and cached price from CoinGecko (backup): $${price.toFixed(2)}`);
+            return price;
+        } catch (backupError) {
+            console.warn(`${logPrefix} ⚠️ Backup API (CoinGecko) also failed: ${backupError.message}`);
+            // Both primary and backup failed. Now check for stale cache.
+            if (cachedEntry) { // Use stale cache if available
+                console.warn(`${logPrefix} Both live fetches failed. Using stale cached SOL/USD price: $${cachedEntry.price.toFixed(2)} from ${new Date(cachedEntry.timestamp).toLocaleTimeString()}`);
+                return cachedEntry.price;
+            }
+            // No live price, no stale cache - critical failure
+            const finalErrorMessage = primaryError ? primaryError.message : backupError.message; // Prefer primary error message if available
+            const criticalAdminMsg = `🚨 *CRITICAL PRICE FEED FAILURE* \\(${escapeMarkdownV2(BOT_NAME)}\\) 🚨\n\nUnable to fetch SOL/USD price from ALL sources and no cache available. USD conversions will be SEVERELY impacted.\n*Primary Error:* \`${escapeMarkdownV2(primaryError ? primaryError.message : "N/A")}\`\n*Backup Error:* \`${escapeMarkdownV2(backupError.message)}\``;
+            
+            console.error(`${logPrefix} ❌ CRITICAL: ${criticalAdminMsg.replace(/\n/g, ' ')}`);
+            if (typeof notifyAdmin === 'function') {
+                await notifyAdmin(criticalAdminMsg); // MarkdownV2 handled by notifyAdmin
+            }
+            throw new Error(`Critical: Could not retrieve SOL/USD price from any source. Last error: ${finalErrorMessage}`);
+        }
+    }
+    // Should not be reached if logic is correct, but as a failsafe:
+    if (cachedEntry) return cachedEntry.price;
+    throw new Error (`Critical: Price fetch logic ended unexpectedly without price or error throw.`);
 }
 
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
