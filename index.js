@@ -16199,53 +16199,43 @@ async function handleHistoryCommand(msgOrCbMsg) {
 
 // REVISED handleMenuAction with DEBUG logs (essential for Issue 1 diagnosis)
 async function handleMenuAction(userId, originalChatId, originalMessageId, menuType, params = [], isFromCallback = true, originalChatType = 'private') {
-    // --- BEGIN DEBUG LOGS for handleMenuAction ---
-    // console.log(`[DEBUG handleMenuAction ENTER] RAW userId param: ${userId} (type: ${typeof userId})`); // Kept for reference, can be removed if not debugging this part
     const stringUserId = String(userId);
-    // console.log(`[DEBUG handleMenuAction AFTER String()] stringUserId: ${stringUserId} (type: ${typeof stringUserId})`);
-    // --- END DEBUG LOGS ---
-
     const logPrefix = `[MenuAction UID:${stringUserId} Type:${menuType} OrigChat:${originalChatId}]`;
     console.log(`${logPrefix} Processing menu action. Params: [${params.join(',')}]`);
-
 
     if (stringUserId === "undefined" || stringUserId === "") {
         console.error(`${logPrefix} CRITICAL: stringUserId is problematic before calling getOrCreateUser: '${stringUserId}'`);
         // Attempt to answer callback if possible, then return
-        if (isFromCallback && callbackQueryId) { // callbackQueryId would need to be passed into handleMenuAction if used here
-             bot.answerCallbackQuery(callbackQueryId, {text: "User ID error.", show_alert: true}).catch(()=>{});
-        }
+        // callbackQueryId would need to be passed into handleMenuAction if used here and if this function is directly invoked by a callbackQuery event.
+        // For now, assuming the main callback router handles answering the raw callback.
         return;
     }
-    // console.log(`${logPrefix} About to CALL getOrCreateUser with stringUserId: '${stringUserId}' (type: ${typeof stringUserId})`);
-    let userObject = await getOrCreateUser(stringUserId); // Basic fetch, specific handlers re-fetch if they need more fields not in default getOrCreateUser return for just ID
+    let userObject = await getOrCreateUser(stringUserId);
 
     if(!userObject) {
         console.error(`${logPrefix} Could not fetch user profile for menu action (userObject is null after getOrCreateUser). User ID: ${stringUserId}`);
-        if (isFromCallback && callbackQueryId) {
-             bot.answerCallbackQuery(callbackQueryId, {text: "Error fetching profile.", show_alert: true}).catch(()=>{});
-        } else if (originalChatId) { // If not from callback, originalChatId is where the problem might be reported
-             safeSendMessage(originalChatId, "Error fetching your player profile. Please try <code>/start</code> again.", {parse_mode:'HTML'});
+        // Similar to above, direct callback answering might be done by the main router.
+        // Sending a message if possible.
+        if (originalChatId) {
+            await safeSendMessage(originalChatId, "Error fetching your player profile. Please try <code>/start</code> again.", {parse_mode:'HTML'});
         }
         return;
     }
 
-    let botUsername = BOT_NAME || "our bot"; // Assuming BOT_NAME is globally available
+    let botUsername = BOT_NAME || "our bot";
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
-    let targetChatIdForAction = stringUserId; // Default to DM
-    let messageIdToEdit = (isFromCallback && originalChatType === 'private') ? originalMessageId : null; // Only allow editing if callback was in DM
+    let targetChatIdForAction = stringUserId;
+    let messageIdToEdit = (isFromCallback && originalChatType === 'private' && originalMessageId) ? originalMessageId : null;
     let isGroupActionRedirect = false;
     
-    const sensitiveMenuTypes = ['deposit', 'quick_deposit', 'withdraw', 'history', 'link_wallet_prompt', 'referral', 'wallet'];
-    // Add new menu types that should also primarily be in DM
-    const dmPreferredMenuTypes = [...sensitiveMenuTypes, 'rules_list', 'games_overview', 'games_pvp_list', 'games_pve_list', 'games_all_list'];
-
+    const sensitiveMenuTypes = ['deposit', 'quick_deposit', 'withdraw', 'menu:wallet', 'menu:history', 'menu:link_wallet_prompt', 'menu:referral', 'process_withdrawal_confirm'];
+    const dmPreferredMenuTypes = [...sensitiveMenuTypes, 'rules_list', 'games_overview', 'games_pvp_list', 'games_pve_list', 'games_all_list', 'levels_info', 'main']; // Added 'levels_info' and 'main'
 
     if ((originalChatType === 'group' || originalChatType === 'supergroup') && dmPreferredMenuTypes.includes(menuType)) {
         console.log(`${logPrefix} Sensitive/DM-preferred menu action '${menuType}' in group. Redirecting user ${stringUserId} to DM.`);
         isGroupActionRedirect = true;
-        const playerRefForRedirect = escapeHTML(getPlayerDisplayReference(userObject)); // Use HTML escape
+        const playerRefForRedirect = escapeHTML(getPlayerDisplayReference(userObject));
         const redirectText = `${playerRefForRedirect}, for the best experience and privacy, please continue this action in our direct message. I've sent you a prompt there: @${escapeHTML(botUsername)}`;
         const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
         
@@ -16264,32 +16254,28 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
         } else {
             await safeSendMessage(originalChatId, redirectText, {parse_mode: 'HTML'});
         }
-        messageIdToEdit = null; // Action will be a new message in DM if not already there
+        messageIdToEdit = null; 
     } else if (originalChatType === 'private') {
-        targetChatIdForAction = originalChatId; // Action happens in the current DM
-        // messageIdToEdit is already set if isFromCallback and originalMessageId was provided
+        targetChatIdForAction = originalChatId;
     }
     
-    // If a menu navigation is happening, clear any pending input state
-    if (menuType !== 'link_wallet_prompt_confirm_address' && menuType !== 'withdraw_amount_confirm') { // Example states to preserve
-        console.log(`${logPrefix} Clearing user state for ${stringUserId} due to menu navigation: ${menuType}`);
+    if (menuType !== 'link_wallet_prompt_confirm_address' && menuType !== 'withdraw_amount_confirm') {
+        // console.log(`${logPrefix} Clearing user state for ${stringUserId} due to menu navigation: ${menuType}`); // Can be noisy
         if (typeof clearUserState === 'function') clearUserState(stringUserId); else userStateCache.delete(stringUserId);
     }
 
     const actionMsgContext = {
-        from: userObject, // Contains full user details from getOrCreateUser
-        chat: { id: targetChatIdForAction, type: 'private' }, // Assume actions are now in DM
-        message_id: messageIdToEdit, // Will be null if new message needed in DM, or if original was group
-        isCallbackRedirect: isGroupActionRedirect, // True if we just redirected from a group
+        from: userObject,
+        chat: { id: targetChatIdForAction, type: 'private' },
+        message_id: messageIdToEdit,
+        isCallbackRedirect: isGroupActionRedirect,
         originalChatInfo: isGroupActionRedirect ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null
     };
     
-    // For actions that always send a new message in DM, ensure message_id is null
-    const alwaysNewMessageInDM = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main', 'rules_list', 'games_overview'];
+    const alwaysNewMessageInDM = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main', 'rules_list', 'games_overview', 'levels_info']; // Added levels_info
     if (targetChatIdForAction === stringUserId && actionMsgContext.message_id && alwaysNewMessageInDM.includes(menuType)) {
-        // If an old bot message exists in DM and we want to send a fresh menu, delete old first
         await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
-        actionMsgContext.message_id = null; // Force sending a new message
+        actionMsgContext.message_id = null;
     }
 
     switch(menuType) {
@@ -16314,71 +16300,69 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
             else console.error(`${logPrefix} Missing handler: handleHistoryCommand`);
             break;
         case 'leaderboards':
-            // Leaderboards can often be shown in group or DM, let's assume handleLeaderboardsCommand handles context
             const leaderboardsContext = isGroupActionRedirect ?
                 {...actionMsgContext, chat: {id: stringUserId, type: 'private'}, message_id: null } :
-                {...actionMsgContext, chat: {id: originalChatId, type: originalChatType}, message_id: originalMessageId}; // Pass original context if not redirected
+                {...actionMsgContext, chat: {id: originalChatId, type: originalChatType}, message_id: originalMessageId};
             if (typeof handleLeaderboardsCommand === 'function') await handleLeaderboardsCommand(leaderboardsContext, params);
             else console.error(`${logPrefix} Missing handler: handleLeaderboardsCommand`);
             break;
         case 'link_wallet_prompt':
-            // This action specifically sets up a state, ensure it's in DM
-            if (typeof handleSetWalletCommand === 'function') { // Assuming handleSetWalletCommand can also just show prompt if no args
-                // Simplified: Call a dedicated prompter or ensure handleSetWalletCommand handles no-args case by prompting
-                // For now, directly implementing the prompt logic here as it's a menu action.
-                clearUserState(stringUserId);
-                if (actionMsgContext.message_id && targetChatIdForAction === stringUserId) {
-                    await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
-                }
-                const promptText = `🔗 <b>Link/Update Your Withdrawal Wallet</b>\n\nPlease reply to this message with your personal Solana wallet address where you'd like to receive withdrawals.\nEnsure it's correct as transactions are irreversible.\n\nExample: <code>SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD</code>`;
-                const kbd = { inline_keyboard: [ [{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }] ] };
-                const sentDmPrompt = await safeSendMessage(stringUserId, promptText, { parse_mode: 'HTML', reply_markup: kbd });
+            clearUserState(stringUserId);
+            if (actionMsgContext.message_id && targetChatIdForAction === stringUserId) {
+                await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
+            }
+            const promptText = `🔗 <b>Link/Update Your Withdrawal Wallet</b>\n\nPlease reply to this message with your personal Solana wallet address where you'd like to receive withdrawals.\nEnsure it's correct as transactions are irreversible.\n\nExample: <code>SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD</code>`;
+            const kbd = { inline_keyboard: [ [{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }] ] };
+            const sentDmPrompt = await safeSendMessage(stringUserId, promptText, { parse_mode: 'HTML', reply_markup: kbd });
 
-                if (sentDmPrompt?.message_id) {
-                    userStateCache.set(stringUserId, {
-                        state: 'awaiting_withdrawal_address', chatId: stringUserId, messageId: sentDmPrompt.message_id,
-                        data: {
-                            originalPromptMessageId: sentDmPrompt.message_id,
-                            originalGroupChatId: isGroupActionRedirect ? originalChatId : null,
-                            originalGroupMessageId: isGroupActionRedirect ? originalMessageId : null
-                        },
-                        timestamp: Date.now()
-                    });
-                } else {
-                    await safeSendMessage(stringUserId, "Failed to send the wallet address prompt. Please try again from the Wallet menu.", {parse_mode: 'HTML'});
-                }
-            } else console.error(`${logPrefix} Missing handler or logic for: link_wallet_prompt`);
+            if (sentDmPrompt?.message_id) {
+                userStateCache.set(stringUserId, {
+                    state: 'awaiting_withdrawal_address', chatId: stringUserId, messageId: sentDmPrompt.message_id,
+                    data: {
+                        originalPromptMessageId: sentDmPrompt.message_id,
+                        originalGroupChatId: isGroupActionRedirect ? originalChatId : null,
+                        originalGroupMessageId: isGroupActionRedirect ? originalMessageId : null
+                    },
+                    timestamp: Date.now()
+                });
+            } else {
+                await safeSendMessage(stringUserId, "Failed to send the wallet address prompt. Please try again from the Wallet menu.", {parse_mode: 'HTML'});
+            }
             break;
-        case 'main': // For "Back to Main Menu" buttons
-            if (typeof handleHelpCommand === 'function') await handleHelpCommand(actionMsgContext); // handleHelpCommand now shows the main menu
+        case 'main': 
+            if (typeof handleHelpCommand === 'function') await handleHelpCommand(actionMsgContext);
             else console.error(`${logPrefix} Missing handler: handleHelpCommand`);
             break;
         
-        // --- NEW CASES ---
-        case 'rules_list': // From "📖 Game Rules" button on main menu
+        case 'rules_list': 
             if (typeof handleRulesCommand === 'function') {
-                // handleRulesCommand expects: (invokedInChatIdStr, userObj, msgIdInInvokedChatStr, isEditAttempt, invokedChatType)
-                // actionMsgContext.chat.id is DM ID, actionMsgContext.from is userObj, 
-                // actionMsgContext.message_id is the ID of the main menu message (so we edit it)
                 await handleRulesCommand(actionMsgContext.chat.id, actionMsgContext.from, actionMsgContext.message_id, true, 'private');
             } else {
                 console.error(`${logPrefix} Missing handler: handleRulesCommand for menu:rules_list`);
                 await safeSendMessage(actionMsgContext.chat.id, "The Game Rules section is currently unavailable.", { parse_mode: 'HTML', reply_markup: createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu') });
             }
             break;
-        case 'games_overview': // From "🎲 Play Games" button on main menu
+        case 'games_overview': 
             if (typeof handleGamesOverviewMenu === 'function') {
-                await handleGamesOverviewMenu(actionMsgContext); // Pass the context, it will edit or send new
+                await handleGamesOverviewMenu(actionMsgContext);
             } else {
                 console.error(`${logPrefix} Missing handler: handleGamesOverviewMenu for menu:games_overview`);
                 await safeSendMessage(actionMsgContext.chat.id, "The Game Selection menu is currently unavailable.", { parse_mode: 'HTML', reply_markup: createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu') });
             }
             break;
-        // --- END OF NEW CASES ---
+        // You will need to add a case for 'levels_info' if you want that button to work
+        case 'levels_info':
+            // Placeholder - You need to implement handleLevelsInfoDisplay or similar
+            console.warn(`${logPrefix} Menu action 'levels_info' is not yet implemented.`);
+            await safeSendMessage(stringUserId, `📜 The detailed Levels Information page is under construction.\nFor now, you can see your current level and next steps via the \`/bonus\` command.`, {parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:bonus_dashboard_back', '✨ Back to Bonus Dashboard')}); // Assuming menu:bonus_dashboard_back exists or use menu:main
+            // To actually make it work, you would call a new function here, e.g.:
+            // await handleDisplayLevelsInfo(actionMsgContext);
+            break;
 
         default:
             console.warn(`${logPrefix} Unrecognized menu type in handleMenuAction: ${menuType}`);
-            await safeSendMessage(stringUserId, `❓ Unrecognized menu option: <code>${escapeHTML(menuType)}</code>.<br>Please try again or use <code>/help</code>.`, {parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu')});
+            // FIX: Replaced <br> with \n for HTML compatibility
+            await safeSendMessage(stringUserId, `❓ Unrecognized menu option: <code>${escapeHTML(menuType)}</code>.\nPlease try again or use <code>/help</code>.`, {parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu')});
     }
 }
 
