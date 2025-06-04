@@ -11620,120 +11620,118 @@ function startJackpotSessionPolling() {
 // --- Command Handler Functions (General Casino Bot Commands) ---
 
 async function handleStartCommand(msg, args) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_START_V2 = `[StartCmd_V2 UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_START_V2 = `[StartCmd_V2 UID:${userId} CH:${chatId}]`;
 
-    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
+    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsernameToUse = selfInfo.username;
-    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
-    const botUsernameHTML = escapeHTML(botUsernameToUse);
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    let botUsernameToUse = BOT_NAME || "our bot";
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsernameToUse = selfInfo.username;
+    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
+    const botUsernameHTML = escapeHTML(botUsernameToUse);
 
-    if (args && args[0]) {
-        const deepLinkParam = args[0];
-        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
+    if (args && args[0]) {
+        const deepLinkParam = args[0];
+        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
 
-        if (deepLinkParam.startsWith('ref_')) {
-            const refCode = deepLinkParam.substring(4);
-            const referrerUserRecord = await getUserByReferralCode(refCode); // from Part 2
-            let refByDisplayHTML = "a fellow player";
+        if (deepLinkParam.startsWith('ref_')) {
+            const refCode = deepLinkParam.substring(4);
+            const referrerUserRecord = await getUserByReferralCode(refCode);
+            let refByDisplayHTML = "a fellow player";
 
-            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
-                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
-                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
-                
-                // Check if the current user *already* has a referrer_telegram_id from the latest userObject
-                if (!userObject.referrer_telegram_id) {
-                    let clientRefLink = null;
-                    try {
-                        clientRefLink = await pool.connect();
-                        await clientRefLink.query('BEGIN');
-                        // Update users table
-                        await clientRefLink.query(
-                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        // *** MODIFIED STATUS HERE ***
-                        await clientRefLink.query(
-                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
-                             VALUES ($1, $2, 'pending_qualifying_bet', NOW(), NOW())
-                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Assuming this unique constraint exists
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        await clientRefLink.query('COMMIT');
-                        userObject = await getOrCreateUser(userId); // Re-fetch userObject to reflect the change
-                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
-                    } catch (refError) {
-                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
-                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
-                    } finally {
-                        if(clientRefLink) clientRefLink.release();
-                    }
-                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
-                    // console.log(`${LOG_PREFIX_START_V2} User ${userId} already referred by ${referrerUserRecord.telegram_id}.`);
-                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord)); // Show who they were already referred by
-                } else {
-                    // User already has a different referrer, cannot change.
-                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
-                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
-                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
-                }
-            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
-                refByDisplayHTML = "yourself (clever try! 😉)";
-            } else if (!referrerUserRecord) {
-                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
-                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
-            }
-            
-            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.<br>Explore the casino using the menu I've just displayed!`;
-            if (chatType !== 'private') {
-                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
-            }
-            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
-            const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-            await handleHelpCommand(dmMsgContext); 
-            return;
-        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
-            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
-            const [actionName, ...actionParams] = actionDetails.split('_');
-            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!<br>Taking you to the requested section.`;
-            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
-            if (typeof handleMenuAction === 'function') {
-                await handleMenuAction(userId, userId, null, actionName, actionParams, false, 'private', msg); // Added msg
-            } else {
-                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-                await handleHelpCommand(dmMsgContext);
-            }
-            return;
-        }
-    }
+            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
+                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
+                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
+                
+                if (!userObject.referrer_telegram_id) {
+                    let clientRefLink = null;
+                    try {
+                        clientRefLink = await pool.connect();
+                        await clientRefLink.query('BEGIN');
+                        await clientRefLink.query(
+                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        await clientRefLink.query(
+                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
+                             VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
+                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        await clientRefLink.query('COMMIT');
+                        userObject = await getOrCreateUser(userId); 
+                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
+                    } catch (refError) {
+                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
+                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
+                    } finally {
+                        if(clientRefLink) clientRefLink.release();
+                    }
+                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
+                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord));
+                } else {
+                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
+                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
+                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
+                }
+            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
+                refByDisplayHTML = "yourself (clever try! 😉)";
+            } else if (!referrerUserRecord) {
+                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
+                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
+            }
+            
+            // Corrected: \n instead of <br>
+            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.\nExplore the casino using the menu I've just displayed!`;
+            if (chatType !== 'private') {
+                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
+            }
+            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
+            const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+            await handleHelpCommand(dmMsgContext); 
+            return;
+        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
+            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
+            const [actionName, ...actionParams] = actionDetails.split('_');
+            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+            // Corrected: \n instead of <br>
+            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!\nTaking you to the requested section.`;
+            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
+            if (typeof handleMenuAction === 'function') {
+                // Pass the original msg object from handleStartCommand as the last argument to handleMenuAction
+                await handleMenuAction(userId, userId, null, actionName, actionParams, false, 'private', msg);
+            } else {
+                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+                await handleHelpCommand(dmMsgContext);
+            }
+            return;
+        }
+    }
 
-    if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+    if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
 
-    if (chatType === 'group' || chatType === 'supergroup') {
-        if (msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
-        const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-        await handleHelpCommand(dmMsgContext);
-    } else { 
-        if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
-        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} };
-        await handleHelpCommand(privateStartMsgContext);
-    }
+    if (chatType === 'group' || chatType === 'supergroup') {
+        if (msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
+        const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+        await handleHelpCommand(dmMsgContext);
+    } else { 
+        if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
+        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} };
+        await handleHelpCommand(privateStartMsgContext);
+    }
 }
 
 async function handleHelpCommand(msg) {
@@ -15439,14 +15437,14 @@ async function routeStatefulInput(msg, currentState) {
 
 async function handleWalletAddressInput(msg, currentState) {
     const userId = String(msg.from.id);
-    const dmChatId = String(msg.chat.id); // Should be same as userId for DM states
+    const dmChatId = String(msg.chat.id); 
     const potentialNewAddress = msg.text ? msg.text.trim() : '';
     const logPrefix = `[WalletAddrInput UID:${userId}]`;
 
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_address' || dmChatId !== userId) {
         console.error(`${logPrefix} Invalid state or context for wallet address input. State ChatID: ${currentState?.chatId}, Msg ChatID: ${dmChatId}, State: ${currentState?.state}`);
         clearUserState(userId);
-        await safeSendMessage(dmChatId, "⚙️ There was an issue processing your address input.<br>Please try linking your wallet again via the <code>/wallet</code> menu or <code>/setwallet</code> command.", { parse_mode: 'HTML' });
+        await safeSendMessage(dmChatId, "⚙️ There was an issue processing your address input.\nPlease restart from the <code>/wallet</code> menu or use <code>/setwallet YOUR_ADDRESS</code>.", { parse_mode: 'HTML' });
         return;
     }
 
@@ -15454,14 +15452,13 @@ async function handleWalletAddressInput(msg, currentState) {
     if (originalPromptMessageId && bot) { await bot.deleteMessage(dmChatId, originalPromptMessageId).catch(() => {}); }
     clearUserState(userId);
 
-    const linkingMsgText = `🔗 Validating and attempting to link wallet: <code>${escapeHTML(potentialNewAddress)}</code>...<br>Please hold on a moment.`;
-
+    const linkingMsgText = `🔗 Validating and attempting to link wallet: <code>${escapeHTML(potentialNewAddress)}</code>...\nPlease hold on a moment.`;
     const linkingMsg = await safeSendMessage(dmChatId, linkingMsgText, { parse_mode: 'HTML' });
     const displayMsgIdInDm = linkingMsg ? linkingMsg.message_id : null;
 
     try {
         if (!isValidSolanaAddress(potentialNewAddress)) {
-            throw new Error("The provided address has an invalid Solana address format.<br>Please double-check and try again.");
+            throw new Error("The provided address has an invalid Solana address format.\nPlease double-check and try again.");
         }
 
         const linkResult = await linkUserWallet(userId, potentialNewAddress); 
@@ -15469,13 +15466,15 @@ async function handleWalletAddressInput(msg, currentState) {
         const finalKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
 
         if (linkResult.success) {
-            feedbackText = linkResult.message || `✅ Success! Wallet <code>${escapeHTML(potentialNewAddress)}</code> has been successfully linked to your account.`;
-            if (originalGroupChatId && originalGroupMessageId && bot) {
-                const userForGroupMsg = await getOrCreateUser(userId); 
-                await bot.editMessageText(`${escapeHTML(getPlayerDisplayReference(userForGroupMsg || msg.from))} has successfully updated their linked wallet.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'HTML', reply_markup: {}}).catch(()=>{});
-            }
+            // linkResult.message should ideally be HTML safe or use MarkdownV2 internally
+            // Forcing HTML safe display here:
+            feedbackText = linkResult.message ? escapeHTML(linkResult.message.replace(/\\([\`*_~()])/g, '$1')) : `✅ Success! Wallet <code>${escapeHTML(potentialNewAddress)}</code> has been successfully linked to your account.`;
+             if (originalGroupChatId && originalGroupMessageId && bot) {
+                 const userForGroupMsg = await getOrCreateUser(userId); 
+                 await bot.editMessageText(`${escapeHTML(getPlayerDisplayReference(userForGroupMsg || msg.from))} has successfully updated their linked wallet.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'HTML', reply_markup: {}}).catch(()=>{});
+             }
         } else {
-            feedbackText = `⚠️ Wallet Link Failed for <code>${escapeHTML(potentialNewAddress)}</code>.<br><b>Reason:</b> ${escapeHTML(linkResult.error || "Please ensure the address is valid and not already in use.")}`;
+            feedbackText = `⚠️ Wallet Link Failed for <code>${escapeHTML(potentialNewAddress)}</code>.\n<b>Reason:</b> ${escapeHTML((linkResult.error || "Please ensure the address is valid and not already in use.").replace(/\\([\`*_~()])/g, '$1'))}`;
             if (originalGroupChatId && originalGroupMessageId && bot) {
                 const userForGroupMsg = await getOrCreateUser(userId);
                 await bot.editMessageText(`${escapeHTML(getPlayerDisplayReference(userForGroupMsg || msg.from))}, there was an issue linking your wallet. Please check my DM for details and try again.`, {chat_id: originalGroupChatId, message_id: originalGroupMessageId, parse_mode: 'HTML', reply_markup: {}}).catch(()=>{});
@@ -15489,7 +15488,9 @@ async function handleWalletAddressInput(msg, currentState) {
         }
     } catch (e) {
         console.error(`${logPrefix} Error linking wallet ${potentialNewAddress}: ${e.message}`);
-        const errorTextToDisplay = `⚠️ Error with wallet address: <code>${escapeHTML(potentialNewAddress)}</code>.<br><b>Details:</b> ${escapeHTML(String(e.message || "An unexpected error occurred."))}<br>Please ensure it's a valid Solana public key and try again.`;
+        // Ensure e.message (which might contain <br>) is processed
+        const errorMessageContent = String(e.message || "An unexpected error occurred.").replace(/<br\s*\/?>/gi, '\n');
+        const errorTextToDisplay = `⚠️ Error with wallet address: <code>${escapeHTML(potentialNewAddress)}</code>.\n<b>Details:</b> ${escapeHTML(errorMessageContent)}\nPlease ensure it's a valid Solana public key and try again.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Try Again (Wallet Menu)', callback_data: 'menu:wallet' }]] };
         
         if (displayMsgIdInDm && bot) {
@@ -15508,21 +15509,20 @@ async function handleWithdrawalAmountInput(msg, currentState) {
     const userId = String(msg.from.id);
     const dmChatId = String(msg.chat.id); 
     const textAmount = msg.text ? msg.text.trim() : '';
-    const logPrefix = `[WithdrawAmountInput_HTML_V3_Newline UID:${userId}]`; 
+    const logPrefix = `[WithdrawAmountInput_HTML_V4_NoBR UID:${userId}]`; // V4_NoBR
 
-    // This initial check should now pass given previous fixes, but the log inside it is important if it ever triggers again.
     if (!currentState || !currentState.data || currentState.state !== 'awaiting_withdrawal_amount' || dmChatId !== userId ||
         !currentState.data.linkedWallet || typeof currentState.data.currentBalanceLamportsStr !== 'string') {
-        console.error(`${logPrefix} Invalid state or data at START of handleWithdrawalAmountInput. State: ${stringifyWithBigInt(currentState).substring(0,300)}`);
+        console.error(`${logPrefix} Invalid state or data at START. State: ${stringifyWithBigInt(currentState).substring(0,300)}`);
         clearUserState(userId);
-        await safeSendMessage(dmChatId, "⚙️ Error: Withdrawal context lost or invalid (Initial Check).<br>Please restart the withdrawal process from the <code>/wallet</code> menu.", { parse_mode: 'HTML' });
+        await safeSendMessage(dmChatId, "⚙️ Error: Withdrawal context lost or invalid.\nPlease restart the withdrawal process from the <code>/wallet</code> menu.", { parse_mode: 'HTML' });
         return;
     }
 
     const { linkedWallet, originalPromptMessageId, currentBalanceLamportsStr, originalGroupChatId, originalGroupMessageId } = currentState.data;
     const currentBalanceLamports = BigInt(currentBalanceLamportsStr);
     if (originalPromptMessageId && bot) { await bot.deleteMessage(dmChatId, originalPromptMessageId).catch(() => {}); }
-    clearUserState(userId); // Clear the 'awaiting_withdrawal_amount' state
+    clearUserState(userId); 
 
     try {
         const solPrice = await getSolUsdPrice(); 
@@ -15535,22 +15535,22 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         if (textAmount.toLowerCase() === 'max') {
             const availableToWithdrawAfterFee = currentBalanceLamports - WITHDRAWAL_FEE_LAMPORTS;
             if (availableToWithdrawAfterFee < effectiveMinWithdrawalLamports) {
-                 throw new Error(`Your balance is too low to withdraw the maximum after fees.<br>You need at least <b>${minWithdrawDisplayUSD_HTML}</b> (plus fee) to make a withdrawal.`);
+                throw new Error(`Your balance is too low to withdraw the maximum after fees.\nYou need at least <b>${minWithdrawDisplayUSD_HTML}</b> (plus fee) to make a withdrawal.`);
             }
             amountLamports = availableToWithdrawAfterFee; 
             amountUSD = parseFloat(Number(amountLamports) / Number(LAMPORTS_PER_SOL) * solPrice);
         } else {
             amountUSD = parseFloat(String(textAmount).replace(/[^0-9.]/g, ''));
             if (isNaN(amountUSD) || amountUSD <= 0) {
-                throw new Error("Invalid number format or non-positive amount.<br>Please enter a value like <code>50</code> or <code>75.50</code>, or type <code>max</code>.");
+                throw new Error("Invalid number format or non-positive amount.\nPlease enter a value like <code>50</code> or <code>75.50</code>, or type <code>max</code>.");
             }
             amountLamports = convertUSDToLamports(amountUSD, solPrice); 
         }
         
         const feeLamports = WITHDRAWAL_FEE_LAMPORTS; 
-        const totalDeductionLamports = amountLamports + feeLamports;
+        const totalDeductionLamports = amountLamports + feeLamports; 
         
-        const currentBalanceDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'USD'));
+        const currentBalanceDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'USD')); 
         const amountToWithdrawDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(amountLamports, 'USD')); 
         const feeDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(feeLamports, 'USD'));
         const totalDeductionDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(totalDeductionLamports, 'USD')); 
@@ -15563,12 +15563,12 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         }
 
         const confirmationTextHTML = `⚜️ <b>Withdrawal Confirmation</b> ⚜️\n\n` +
-                                 `Please review and confirm your withdrawal:\n\n` +
-                                 `🔹 Amount You Will Receive: <b>${amountToWithdrawDisplayUSD_HTML}</b>\n` +
-                                 `🔹 Withdrawal Fee: <b>${feeDisplayUSD_HTML}</b>\n` +
-                                 `🔹 Total Deducted From Your Balance: <b>${totalDeductionDisplayUSD_HTML}</b>\n` +
-                                 `🔹 Recipient Wallet: <code>${escapeHTML(linkedWallet)}</code>\n\n` +
-                                 `⚠️ Double-check the recipient address! Transactions are irreversible. Proceed?`;
+                                     `Please review and confirm your withdrawal:\n\n` +
+                                     `🔹 Amount You Will Receive: <b>${amountToWithdrawDisplayUSD_HTML}</b>\n` +
+                                     `🔹 Withdrawal Fee: <b>${feeDisplayUSD_HTML}</b>\n` +
+                                     `🔹 Total Deducted From Your Balance: <b>${totalDeductionDisplayUSD_HTML}</b>\n` +
+                                     `🔹 Recipient Wallet: <code>${escapeHTML(linkedWallet)}</code>\n\n` +
+                                     `⚠️ Double-check the recipient address! Transactions are irreversible. Proceed?`;
 
         const sentConfirmMsg = await safeSendMessage(dmChatId, confirmationTextHTML, {
             parse_mode: 'HTML',
@@ -15581,21 +15581,19 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         if (sentConfirmMsg?.message_id) {
             const stateToSetForConfirmation = {
                 state: 'awaiting_withdrawal_confirmation',
-                chatId: dmChatId, // Should be the DM chat ID (same as userId)
-                messageId: sentConfirmMsg.message_id, // ID of the Yes/No prompt message
+                chatId: dmChatId,
+                messageId: sentConfirmMsg.message_id,
                 data: { 
                     linkedWallet: linkedWallet, 
-                    amountLamportsStr: amountLamports.toString(), // Amount user receives
-                    feeLamportsStr: feeLamports.toString(),      // Fee
+                    amountLamportsStr: amountLamports.toString(),
+                    feeLamportsStr: feeLamports.toString(), 
                     originalGroupChatId, 
                     originalGroupMessageId 
                 },
                 timestamp: Date.now()
             };
             userStateCache.set(userId, stateToSetForConfirmation);
-            // --- ADDED DIAGNOSTIC LOG ---
-            console.log(`${logPrefix} State SET for awaiting_withdrawal_confirmation. Content: ${stringifyWithBigInt(userStateCache.get(userId))}`);
-            // --- END OF ADDED DIAGNOSTIC LOG ---
+            console.log(`${logPrefix} State SET for awaiting_withdrawal_confirmation. MsgID: ${sentConfirmMsg.message_id}`);
             
             if (originalGroupChatId && originalGroupMessageId && bot) { 
                 const userForGroupMsg = await getOrCreateUser(userId);
@@ -15606,10 +15604,17 @@ async function handleWithdrawalAmountInput(msg, currentState) {
         }
     } catch (e) {
         console.error(`${logPrefix} Error processing withdrawal amount: ${e.message}`);
-        const errorText = `⚠️ <b>Withdrawal Amount Error:</b>\n${e.message}\n\nPlease restart the withdrawal process from the <code>/wallet</code> menu.`;
+        // Ensure e.message (which might contain <br>) is processed for HTML by replacing <br> with \n
+        const errorMessageContent = String(e.message || "An unexpected error occurred.").replace(/<br\s*\/?>/gi, '\n');
+        const errorText = `⚠️ <b>Withdrawal Amount Error:</b>\n${escapeHTML(errorMessageContent)}\nPlease restart the withdrawal process from the <code>/wallet</code> menu.`;
+        
+        // Send error message to DM. originalPromptMessageId was already deleted or wasn't set if this is the first message.
+        // We don't have a 'workingMessageId' in this catch block that refers to a message we can edit, 
+        // as originalPromptMessageId was deleted. So, send a new message for the error.
         await safeSendMessage(dmChatId, errorText, {
             parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]] }
         });
+        
         if (originalGroupChatId && originalGroupMessageId && bot) { 
             const userForGroupMsg = await getOrCreateUser(userId);
             await bot.editMessageText(`${escapeHTML(getPlayerDisplayReference(userForGroupMsg || {id: userId, first_name: "Player"}))}, there was an error with your withdrawal amount. Please check my DM.`, {chat_id: originalGroupChatId, message_id: Number(originalGroupMessageId), parse_mode:'HTML', reply_markup:{}}).catch(()=>{});
@@ -15754,51 +15759,54 @@ async function handleSetWalletCommand(msg, args) {
     const userId = String(msg.from.id);
     const commandChatId = String(msg.chat.id);
     const chatType = msg.chat.type;
+    const LOG_PREFIX_SETWALLET = `[SetWalletCmd UID:${userId}]`;
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) { 
-        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try \`/start\`\\.", {parse_mode: 'MarkdownV2'});
+        await safeSendMessage(commandChatId, "Error fetching your player profile\\. Please try `/start`\\.", {parse_mode: 'MarkdownV2'});
         return; 
     }
-    const playerRef = getPlayerDisplayReference(userObject);
+    const playerRef = getPlayerDisplayReference(userObject); // MarkdownV2 safe by default
     clearUserState(userId);
 
-    let botUsername = "our bot";
+    let botUsername = BOT_NAME || "our bot"; // Ensure BOT_NAME is available
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* Reduced log */ }
 
     if (chatType !== 'private') {
         if(msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
         const dmPrompt = `${playerRef}, for your security, please set your wallet address by sending the command \`/setwallet YOUR_ADDRESS\` directly to me in our private chat: @${escapeMarkdownV2(botUsername)} 💳`;
         await safeSendMessage(commandChatId, dmPrompt, { parse_mode: 'MarkdownV2' });
-        await safeSendMessage(userId, `Hi ${playerRef}, to set or update your withdrawal wallet, please reply here with the command: \`/setwallet YOUR_SOLANA_ADDRESS\`\nExample: \`/setwallet YourSoLaddressHere\\.\\.\\.\``, {parse_mode: 'MarkdownV2'}); // Escaped ellipsis
+        // Send a more direct instruction to DM
+        await safeSendMessage(userId, `Hi ${playerRef}, to set or update your withdrawal wallet, please reply here with the command: \n\`/setwallet YOUR_SOLANA_ADDRESS\`\n\nExample: \`/setwallet YourSoLaddressHere123...\``, {parse_mode: 'MarkdownV2'});
         return;
     }
 
     if (args.length < 1 || !args[0].trim()) {
-        await safeSendMessage(userId, `💡 To link your Solana wallet for withdrawals, please use the format: \`/setwallet YOUR_SOLANA_ADDRESS\`\nExample: \`/setwallet SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD\``, { parse_mode: 'MarkdownV2' });
+        await safeSendMessage(userId, `💡 To link your Solana wallet for withdrawals, please use the format: \`/setwallet YOUR_SOLANA_ADDRESS\`\n\nExample: \`/setwallet YourSoLaddressHere123...\``, { parse_mode: 'MarkdownV2' });
         return;
     }
     const potentialNewAddress = args[0].trim();
 
+    // Delete the user's /setwallet command message in DM
     if(msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
 
-    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on\\.`; // Escaped punctuation
+    const linkingMsgText = `🔗 Validating and attempting to link wallet: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\\.\\. Please hold on\\.`;
     const linkingMsg = await safeSendMessage(userId, linkingMsgText, { parse_mode: 'MarkdownV2' });
     const displayMsgIdInDm = linkingMsg ? linkingMsg.message_id : null;
 
     try {
         if (!isValidSolanaAddress(potentialNewAddress)) {
-            throw new Error("The provided address has an invalid Solana address format\\.");
+            throw new Error("The provided address has an invalid Solana address format\\. Please double\\-check and try again\\."); // MarkdownV2 escaped error
         }
-        const linkResult = await linkUserWallet(userId, potentialNewAddress); // Ensure linkUserWallet returns MarkdownV2 safe messages
+        // linkUserWallet returns messages already formatted for MarkdownV2
+        const linkResult = await linkUserWallet(userId, potentialNewAddress); 
         let feedbackText;
         const finalKeyboard = { inline_keyboard: [[{ text: '💳 Back to Wallet Menu', callback_data: 'menu:wallet' }]] };
 
         if (linkResult.success) {
-            // linkUserWallet messages should already be safe (e.g. "linked\\!")
             feedbackText = linkResult.message || `✅ Success\\! Wallet \`${escapeMarkdownV2(potentialNewAddress)}\` is now linked\\.`;
         } else {
-            feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Reason:* ${escapeMarkdownV2(linkResult.error || "Please check the address and try again\\.")}`;
+            feedbackText = `⚠️ Wallet Link Failed for \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Reason:* ${linkResult.error || "Please check the address and try again\\."}`;
         }
 
         if (displayMsgIdInDm && bot) {
@@ -15807,9 +15815,12 @@ async function handleSetWalletCommand(msg, args) {
             await safeSendMessage(userId, feedbackText, { parse_mode: 'MarkdownV2', reply_markup: finalKeyboard });
         }
     } catch (e) {
-        console.error(`[SetWalletCmd UID:${userId}] Error linking wallet ${potentialNewAddress}: ${e.message}`);
-        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Details:* ${escapeMarkdownV2(e.message || "An unexpected error occurred\\.")}\nPlease ensure it's a valid Solana public key\\.`;
+        console.error(`${LOG_PREFIX_SETWALLET} Error linking wallet ${potentialNewAddress}: ${e.message}`);
+        // Ensure error messages are MarkdownV2 safe
+        const errorMessageContent = String(e.message || "An unexpected error occurred\\.").replace(/\n/g, '\\n'); // Escape newlines for MD string
+        const errorTextToDisplay = `⚠️ Error with wallet address: \`${escapeMarkdownV2(potentialNewAddress)}\`\\.\n*Details:* ${escapeMarkdownV2(errorMessageContent)}\nPlease ensure it's a valid Solana public key\\.`;
         const errorKeyboard = { inline_keyboard: [[{ text: '💳 Try Again (Wallet Menu)', callback_data: 'menu:wallet' }]] };
+        
         if (displayMsgIdInDm && bot) {
             await bot.editMessageText(errorTextToDisplay, { chat_id: userId, message_id: displayMsgIdInDm, parse_mode: 'MarkdownV2', reply_markup: errorKeyboard });
         } else {
