@@ -5154,46 +5154,62 @@ let jackpotSessionPollIntervalId = null;
 
 async function pollCompletedJackpotSessions() {
     if (isShuttingDown) {
-        console.log("[MainBot_PollJackpotSessions] Shutdown detected, not polling.");
+        console.log("[MainBot_PollJackpotSessions_V2] Shutdown detected, not polling.");
         return;
     }
 
-    const logPrefix = '[MainBot_PollJackpotSessions]';
+    const logPrefix = '[MainBot_PollJackpotSessions_V2]'; // V2 for version
     let client = null;
     try {
         client = await pool.connect();
-        const completedSessionsRes = await client.query(
-            `SELECT * FROM de_jackpot_sessions 
-             WHERE (status LIKE 'completed_%' OR status = 'error_helper') 
-             AND status NOT LIKE 'archived_%' -- Make sure not to reprocess archived ones
-             ORDER BY updated_at ASC 
-             LIMIT 5`
-        );
+        const selectQuery = `
+            SELECT * FROM de_jackpot_sessions 
+            WHERE (status LIKE 'completed_%' OR status LIKE 'error_%') 
+              AND status NOT LIKE 'archived_%'
+            ORDER BY updated_at ASC 
+            LIMIT 5`;
+        const completedSessionsRes = await client.query(selectQuery);
 
         if (completedSessionsRes.rowCount === 0) {
             client.release();
             return;
         }
 
-        console.log(`${logPrefix} Found ${completedSessionsRes.rowCount} completed/errored jackpot session(s) to process.`);
+        console.log(`${logPrefix} Found ${completedSessionsRes.rowCount} potentially completed/errored jackpot session(s) to process.`);
 
         for (const session of completedSessionsRes.rows) {
-            if (isShuttingDown) break;
+            if (isShuttingDown) {
+                console.log(`${logPrefix} Shutdown during session processing loop for SID:${session.session_id}.`);
+                break;
+            }
             const sessionLogPrefix = `${logPrefix} SID:${session.session_id} MainGID:${session.main_bot_game_id}`;
-            console.log(`${sessionLogPrefix} Processing session with status: ${session.status}`);
+            console.log(`${sessionLogPrefix} Processing session with DB status: '${session.status}'`);
 
             const mainGameData = activeGames.get(session.main_bot_game_id);
 
-            if (!mainGameData || mainGameData.status !== 'jackpot_run_delegated' || mainGameData.jackpotSessionDbId !== session.session_id) {
-                console.warn(`${sessionLogPrefix} Main game data not found, not in delegated state, or session ID mismatch. Archiving helper session.`);
-                await client.query("UPDATE de_jackpot_sessions SET status = 'archived_mismatch' WHERE session_id = $1", [session.session_id]);
+            // --- Detailed check for mainGameData validity ---
+            if (!mainGameData) {
+                console.warn(`${sessionLogPrefix} Main game data (GID: ${session.main_bot_game_id}) NOT FOUND in activeGames. Archiving helper session.`);
+                await client.query("UPDATE de_jackpot_sessions SET status = 'archived_no_main_game_found' WHERE session_id = $1", [session.session_id]);
                 continue;
             }
+            if (mainGameData.status !== 'jackpot_run_delegated') {
+                console.warn(`${sessionLogPrefix} Main game GID ${session.main_bot_game_id} status is '${mainGameData.status}', NOT 'jackpot_run_delegated'. Archiving helper session.`);
+                await client.query("UPDATE de_jackpot_sessions SET status = 'archived_main_game_wrong_status' WHERE session_id = $1", [session.session_id]);
+                continue;
+            }
+            if (mainGameData.jackpotSessionDbId !== session.session_id) {
+                console.warn(`${sessionLogPrefix} Main game GID ${session.main_bot_game_id} has jackpotSessionDbId '${mainGameData.jackpotSessionDbId}', but helper session ID is '${session.session_id}'. Mismatch. Archiving helper session.`);
+                await client.query("UPDATE de_jackpot_sessions SET status = 'archived_session_id_mismatch' WHERE session_id = $1", [session.session_id]);
+                continue;
+            }
+            // --- End of detailed check ---
 
-            // Restore player's final state from the helper's session outcome
-            mainGameData.player.score = session.final_score !== null ? session.final_score : mainGameData.player.score;
+            console.log(`${sessionLogPrefix} Main game data found and validated. Status: '${mainGameData.status}', jackpotSessionDbId: ${mainGameData.jackpotSessionDbId}`);
+
+            mainGameData.player.score = session.final_score !== null ? parseInt(session.final_score, 10) : mainGameData.player.score;
             mainGameData.player.rolls = JSON.parse(session.final_rolls_json || JSON.stringify(mainGameData.player.rolls));
-            mainGameData.player.isGoingForJackpot = true; // Confirm this state
+            mainGameData.player.isGoingForJackpot = true;
 
             let proceedToBotTurn = false;
 
@@ -5203,50 +5219,43 @@ async function pollCompletedJackpotSessions() {
                 if (mainGameData.player.rolls.length > 0) {
                     mainGameData.lastPlayerRoll = mainGameData.player.rolls[mainGameData.player.rolls.length - 1];
                 }
+                console.log(`${sessionLogPrefix} Player BUSTED during jackpot run. Player busted: ${mainGameData.player.busted}, Game status for finalize: ${mainGameData.status}`);
             } else if (session.status === 'completed_timeout_forfeit') {
                 mainGameData.status = 'game_over_player_forfeit'; 
-                mainGameData.player.busted = true; // Treat as loss
-                console.log(`${sessionLogPrefix} Player forfeited jackpot run (timeout reported by helper).`);
+                mainGameData.player.busted = true; 
+                console.log(`${sessionLogPrefix} Player FORFEITED jackpot run (timeout by helper). Player busted: ${mainGameData.player.busted}, Game status for finalize: ${mainGameData.status}`);
             } else if (session.status === 'completed_target_reached') {
                 mainGameData.player.busted = false;
-                mainGameData.player.stood = true; // Player effectively stands with this high score
+                mainGameData.player.stood = true; 
                 mainGameData.status = 'player_stood'; 
-                proceedToBotTurn = true; // Player succeeded in their run, now bot must play
-            } else if (session.status === 'error_helper') {
+                proceedToBotTurn = true;
+                console.log(`${sessionLogPrefix} Player TARGET REACHED in jackpot run. Player stood: ${mainGameData.player.stood}, Game status for finalize: ${mainGameData.status}`);
+            } else if (session.status.startsWith('error_')) { // Catch all helper errors like 'error_helper', 'error_sending_message', 'error_helper_init_prompt'
                 mainGameData.status = 'game_over_error_helper'; 
-                mainGameData.player.busted = true; // Treat as loss
-                console.error(`${sessionLogPrefix} Jackpot run ended with an error from helper: ${session.outcome_notes}`);
+                mainGameData.player.busted = true; 
+                console.error(`${sessionLogPrefix} Jackpot run ended with an error from the helper: '${session.status}' - Notes: ${session.outcome_notes}`);
                 const playerRefForError = escapeHTML(mainGameData.player.displayName || getPlayerDisplayReference(mainGameData.player.userObj || {id: mainGameData.player.userId}));
                 await safeSendMessage(String(mainGameData.chatId), 
-                    `⚠️ ${playerRefForError}, there was an issue during the Jackpot Run with the helper bot: ${escapeHTML(session.outcome_notes || "Unknown error")}.\nThe game will be resolved based on this.`, 
+                    `⚠️ ${playerRefForError}, an issue occurred with the Jackpot Helper Bot: ${escapeHTML(session.outcome_notes || session.status)}.\nThe game will be resolved based on this.`, 
                     {parse_mode: 'HTML'});
             } else {
-                console.warn(`${sessionLogPrefix} Unknown completed status from helper: ${session.status}. Treating as error/bust.`);
-                mainGameData.status = 'game_over_error_helper';
+                console.warn(`${sessionLogPrefix} Unknown completed status from helper: '${session.status}'. Treating as error/bust.`);
+                mainGameData.status = 'game_over_error_helper'; // Default to an error state for MainBot
                 mainGameData.player.busted = true;
             }
             
             activeGames.set(session.main_bot_game_id, mainGameData);
 
-            // --- CRUCIAL CHANGE: Trigger bot's turn IF player successfully completed jackpot run ---
             if (proceedToBotTurn) {
-                console.log(`${sessionLogPrefix} Player completed jackpot run successfully (Score: ${mainGameData.player.score}). Proceeding to MainBot's turn.`);
-                // Bot's score needs to be determined now.
-                // processDiceEscalatorBotTurnPvB_New internally calls finalizeDiceEscalatorPvBGame_New
+                console.log(`${sessionLogPrefix} Player completed jackpot run successfully. Proceeding to MainBot's turn.`);
                 await processDiceEscalatorBotTurnPvB_New(mainGameData); 
             } else {
-                // Player busted, forfeited, or helper error during jackpot run. Bot does not need to play.
-                // Finalize directly with current botScore (which should be 0 or its pre-jackpot-run score if applicable,
-                // but for DE, bot usually plays *after* player).
-                // If player busts, bot wins by default.
-                // We pass mainGameData.botScore (which is likely 0 if bot hasn't played yet in this game's lifecycle for DE)
-                // finalizeDiceEscalatorPvBGame_New needs to handle this logic correctly.
-                console.log(`${sessionLogPrefix} Player did not complete jackpot run successfully (bust/forfeit/error). Finalizing game.`);
+                console.log(`${sessionLogPrefix} Player did not complete jackpot run successfully (bust/forfeit/error) or bot turn not needed. Finalizing game directly.`);
                 await finalizeDiceEscalatorPvBGame_New(mainGameData, mainGameData.botScore || 0);
             }
 
             await client.query("UPDATE de_jackpot_sessions SET status = 'archived_processed_by_mainbot' WHERE session_id = $1", [session.session_id]);
-            console.log(`${sessionLogPrefix} Jackpot session archived as processed by MainBot.`);
+            console.log(`${sessionLogPrefix} Jackpot session archived as 'archived_processed_by_mainbot'.`);
         }
 
     } catch (error) {
