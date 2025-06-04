@@ -1,4 +1,4 @@
-// --- Start of Part 1 (FINAL CORRECTION - Original Constant Names Restored, All Declarations Fixed, All Original Code Included, Retains Granular Active Game Limits) ---
+// --- Start of Part 1 (FINAL CORRECTION - Original Constant Names Restored, All Declarations Fixed, All Original Code Included, Retains Granular Active Game Limits - WITH JACKPOT POLLER VARS INTEGRATED) ---
 // index.js - Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
 
@@ -41,7 +41,7 @@ function stringifyWithBigInt(obj) {
       return `[Function: ${value.name || 'anonymous'}]`;
     }
     if (value === undefined) {
-      return 'undefined_value'; 
+      return 'undefined_value';
     }
     return value;
   }, 2);
@@ -56,17 +56,17 @@ const CASINO_ENV_DEFAULTS = {
   'DB_SSL': 'true',
   'DB_REJECT_UNAUTHORIZED': 'true',
   'SHUTDOWN_FAIL_TIMEOUT_MS': '10000',
-  'JACKPOT_CONTRIBUTION_PERCENT': '0.01', 
-  'MIN_BET_AMOUNT_LAMPORTS': '5000000',  
-  'MAX_BET_AMOUNT_LAMPORTS': '1000000000', 
+  'JACKPOT_CONTRIBUTION_PERCENT': '0.01',
+  'MIN_BET_AMOUNT_LAMPORTS': '5000000',
+  'MAX_BET_AMOUNT_LAMPORTS': '1000000000',
   'COMMAND_COOLDOWN_MS': '1500',
-  'UNIFIED_OFFER_TIMEOUT_MS': '30000', 
-  'DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS': '45000', 
-  'ACTIVE_GAME_TURN_TIMEOUT_MS': '45000', 
-  'INSTANT_GAME_ACTION_TIMEOUT_MS': '60000', 
-  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000', 
-  'TARGET_JACKPOT_SCORE': '100', 
-  'DICE_ESCALATOR_BUST_ON': '1', 
+  'UNIFIED_OFFER_TIMEOUT_MS': '30000',
+  'DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS': '45000',
+  'ACTIVE_GAME_TURN_TIMEOUT_MS': '45000',
+  'INSTANT_GAME_ACTION_TIMEOUT_MS': '60000',
+  'DEFAULT_STARTING_BALANCE_LAMPORTS': '10000000',
+  'TARGET_JACKPOT_SCORE': '100',
+  'DICE_ESCALATOR_BUST_ON': '1',
   'DICE_21_TARGET_SCORE': '21',
   'DICE_21_BOT_STAND_SCORE': '17',
   'OU7_DICE_COUNT': '2',
@@ -81,46 +81,47 @@ const CASINO_ENV_DEFAULTS = {
   'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
   'MAX_RETRY_POLLING_DELAY': '60000',
   'INITIAL_RETRY_POLLING_DELAY': '5000',
-  'BOT_NAME': 'Solana Casino Royale', 
+  'BOT_NAME': 'Solana Casino Royale',
   'DICE_ROLL_POLL_INTERVAL_MS': '2500',
   'DICE_ROLL_POLL_ATTEMPTS': '24',
   'MINES_DEFAULT_ROWS': '5',
   'MINES_DEFAULT_COLS': '5',
-  'MINES_FALLBACK_DEFAULT_MINES': '3', 
+  'MINES_FALLBACK_DEFAULT_MINES': '3',
   'MINES_MIN_MINES': '1',
-  'MINES_MAX_MINES_PERCENT': '0.6', 
+  'MINES_MAX_MINES_PERCENT': '0.6',
   'MINES_EDIT_THROTTLE_MS': '1200',
   'LIMIT_UNIFIED_OFFER_COINFLIP': '1',
   'LIMIT_DIRECT_CHALLENGE_COINFLIP_OFFER': '1', // For pending direct challenge offers
   'LIMIT_UNIFIED_OFFER_RPS': '1',
-  'LIMIT_DIRECT_CHALLENGE_RPS_OFFER': '1',      
-  'LIMIT_UNIFIED_OFFER_MINES': '1', 
+  'LIMIT_DIRECT_CHALLENGE_RPS_OFFER': '1',
+  'LIMIT_UNIFIED_OFFER_MINES': '1',
   'LIMIT_UNIFIED_OFFER_DICE_ESCALATOR': '1',
-  'LIMIT_DIRECT_CHALLENGE_DICE_ESCALATOR_OFFER': '1', 
+  'LIMIT_DIRECT_CHALLENGE_DICE_ESCALATOR_OFFER': '1',
   'LIMIT_UNIFIED_OFFER_DICE_21': '1',
-  'LIMIT_DIRECT_CHALLENGE_DICE_21_OFFER': '1',      
+  'LIMIT_DIRECT_CHALLENGE_DICE_21_OFFER': '1',
   'LIMIT_UNIFIED_OFFER_DUEL': '1',
-  'LIMIT_DIRECT_CHALLENGE_DUEL_OFFER': '1',         
+  'LIMIT_DIRECT_CHALLENGE_DUEL_OFFER': '1',
   'LIMIT_ACTIVE_GAME_COINFLIP_PVB': '1',
-  'LIMIT_ACTIVE_GAME_COINFLIP_PVP_UNIFIED': '1', 
-  'LIMIT_ACTIVE_GAME_COINFLIP_PVP_DIRECT': '1',  
+  'LIMIT_ACTIVE_GAME_COINFLIP_PVP_UNIFIED': '1',
+  'LIMIT_ACTIVE_GAME_COINFLIP_PVP_DIRECT': '1',
   'LIMIT_ACTIVE_GAME_RPS_PVB': '1',
   'LIMIT_ACTIVE_GAME_RPS_PVP_UNIFIED': '1',
   'LIMIT_ACTIVE_GAME_RPS_PVP_DIRECT': '1',
   'LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVB': '1',
   'LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_UNIFIED': '1',
   'LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_DIRECT': '1',
-  'LIMIT_ACTIVE_GAME_DICE_21_PVB': '1', 
+  'LIMIT_ACTIVE_GAME_DICE_21_PVB': '1',
   'LIMIT_ACTIVE_GAME_DICE_21_PVP_UNIFIED': '1',
   'LIMIT_ACTIVE_GAME_DICE_21_PVP_DIRECT': '1',
   'LIMIT_ACTIVE_GAME_DUEL_PVB': '1',
   'LIMIT_ACTIVE_GAME_DUEL_PVP_UNIFIED': '1',
   'LIMIT_ACTIVE_GAME_DUEL_PVP_DIRECT': '1',
-  'LIMIT_ACTIVE_GAME_MINES': '1',          
-  'LIMIT_ACTIVE_GAME_OVER_UNDER_7': '1', 
-  'LIMIT_ACTIVE_GAME_LADDER': '1',         
+  'LIMIT_ACTIVE_GAME_MINES': '1',
+  'LIMIT_ACTIVE_GAME_OVER_UNDER_7': '1',
+  'LIMIT_ACTIVE_GAME_LADDER': '1',
   'LIMIT_ACTIVE_GAME_SLOT_FRENZY': '1',
-  'LIMIT_ACTIVE_GAME_LUCKY_SUM': '1', 
+  'LIMIT_ACTIVE_GAME_LUCKY_SUM': '1',
+  'JACKPOT_SESSION_POLL_INTERVAL_MS_MAINBOT': '7000', // Default for MainBot's Dice Escalator jackpot session poller
 };
 
 const PAYMENT_ENV_DEFAULTS = {
@@ -175,13 +176,13 @@ const PAYMENT_ENV_DEFAULTS = {
 
 const tempOptionalDefaults = { ...CASINO_ENV_DEFAULTS, ...PAYMENT_ENV_DEFAULTS };
 if (!tempOptionalDefaults.hasOwnProperty('MIN_WITHDRAWAL_LAMPORTS')) {
-    tempOptionalDefaults['MIN_WITHDRAWAL_LAMPORTS'] = '0'; 
+    tempOptionalDefaults['MIN_WITHDRAWAL_LAMPORTS'] = '0';
 }
 if (!tempOptionalDefaults.hasOwnProperty('JOIN_GAME_TIMEOUT_MS')) {
-    tempOptionalDefaults['JOIN_GAME_TIMEOUT_MS'] = '120000'; 
+    tempOptionalDefaults['JOIN_GAME_TIMEOUT_MS'] = '120000';
 }
 if (!tempOptionalDefaults.hasOwnProperty('PVP_TURN_TIMEOUT_MS')) {
-    tempOptionalDefaults['PVP_TURN_TIMEOUT_MS'] = '60000'; 
+    tempOptionalDefaults['PVP_TURN_TIMEOUT_MS'] = '60000';
 }
 
 const OPTIONAL_ENV_DEFAULTS = tempOptionalDefaults;
@@ -205,48 +206,48 @@ const REFERRAL_PAYOUT_PRIVATE_KEY_BS58 = process.env.REFERRAL_PAYOUT_PRIVATE_KEY
 
 // --- GAME_IDS Constant (UPDATED for Granular Active Game Tracking & Distinct Offer Keys) ---
 const GAME_IDS = {
-    COINFLIP: 'coinflip', 
+    COINFLIP: 'coinflip',
     COINFLIP_UNIFIED_OFFER: 'coinflip_unified_offer', // For pending unified offers
     COINFLIP_DIRECT_CHALLENGE_OFFER: 'coinflip_direct_challenge_offer', // For pending direct challenge offers
-    COINFLIP_PVB: 'coinflip_pvb', 
+    COINFLIP_PVB: 'coinflip_pvb',
     COINFLIP_PVP: 'coinflip_pvp', // Represents active PvP from Direct Challenge
-    COINFLIP_PVP_FROM_UNIFIED: 'coinflip_pvp_from_unified', 
+    COINFLIP_PVP_FROM_UNIFIED: 'coinflip_pvp_from_unified',
 
-    RPS: 'rps', 
+    RPS: 'rps',
     RPS_UNIFIED_OFFER: 'rps_unified_offer',
-    RPS_DIRECT_CHALLENGE_OFFER: 'rps_direct_challenge_offer', 
+    RPS_DIRECT_CHALLENGE_OFFER: 'rps_direct_challenge_offer',
     RPS_PVB: 'rps_pvb',
     RPS_PVP: 'rps_pvp',
     RPS_PVP_FROM_UNIFIED: 'rps_pvp_from_unified',
 
-    DICE_ESCALATOR: 'dice_escalator', 
+    DICE_ESCALATOR: 'dice_escalator',
     DICE_ESCALATOR_UNIFIED_OFFER: 'dice_escalator_unified_offer',
-    DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER: 'dice_escalator_direct_challenge_offer', 
+    DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER: 'dice_escalator_direct_challenge_offer',
     DICE_ESCALATOR_PVB: 'dice_escalator_pvb',
     DICE_ESCALATOR_PVP: 'dice_escalator_pvp',
     DICE_ESCALATOR_PVP_FROM_UNIFIED: 'dice_escalator_pvp_from_unified',
 
-    DICE_21: 'dice21', 
+    DICE_21: 'dice21',
     DICE_21_UNIFIED_OFFER: 'dice21_unified_offer',
-    DICE_21_DIRECT_CHALLENGE_OFFER: 'dice21_direct_challenge_offer', 
-    DICE_21_PVP: 'dice21_pvp', 
-    DICE_21_PVP_FROM_UNIFIED: 'dice21_pvp_from_unified', 
+    DICE_21_DIRECT_CHALLENGE_OFFER: 'dice21_direct_challenge_offer',
+    DICE_21_PVP: 'dice21_pvp',
+    DICE_21_PVP_FROM_UNIFIED: 'dice21_pvp_from_unified',
 
-    DUEL: 'duel', 
+    DUEL: 'duel',
     DUEL_UNIFIED_OFFER: 'duel_unified_offer',
-    DUEL_DIRECT_CHALLENGE_OFFER: 'duel_direct_challenge_offer', 
+    DUEL_DIRECT_CHALLENGE_OFFER: 'duel_direct_challenge_offer',
     DUEL_PVB: 'duel_pvb',
     DUEL_PVP: 'duel_pvp',
     DUEL_PVP_FROM_UNIFIED: 'duel_pvp_from_unified',
 
-    OVER_UNDER_7: 'ou7', 
-    LADDER: 'ladder',       
-    SEVEN_OUT: 'sevenout',  
+    OVER_UNDER_7: 'ou7',
+    LADDER: 'ladder',
+    SEVEN_OUT: 'sevenout',
     SLOT_FRENZY: 'slotfrenzy',
-    MINES: 'mines',         
-    MINES_OFFER: 'mines_offer', 
+    MINES: 'mines',
+    MINES_OFFER: 'mines_offer',
 
-    DIRECT_PVP_CHALLENGE: 'direct_pvp_challenge', 
+    DIRECT_PVP_CHALLENGE: 'direct_pvp_challenge',
 };
 
 // Game Specific Constants
@@ -315,7 +316,7 @@ const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
         [GAME_IDS.RPS]: parseInt(process.env.LIMIT_UNIFIED_OFFER_RPS, 10) || 1,
         [GAME_IDS.MINES_OFFER]: parseInt(process.env.LIMIT_UNIFIED_OFFER_MINES, 10) || 1,
         [GAME_IDS.DICE_ESCALATOR]: parseInt(process.env.LIMIT_UNIFIED_OFFER_DICE_ESCALATOR, 10) || 1,
-        [GAME_IDS.DICE_21]: parseInt(process.env.LIMIT_UNIFIED_OFFER_DICE_21, 10) || 1, 
+        [GAME_IDS.DICE_21]: parseInt(process.env.LIMIT_UNIFIED_OFFER_DICE_21, 10) || 1,
         [GAME_IDS.DUEL]: parseInt(process.env.LIMIT_UNIFIED_OFFER_DUEL, 10) || 1,
     },
     DIRECT_CHALLENGES: { // These keys are for *pending direct challenge offers*
@@ -329,23 +330,23 @@ const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
         [GAME_IDS.COINFLIP_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVB, 10) || 1,
         [GAME_IDS.COINFLIP_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVP_UNIFIED, 10) || 1,
         [GAME_IDS.COINFLIP_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_COINFLIP_PVP_DIRECT, 10) || 1, // Active PvP from Direct
-        
+
         [GAME_IDS.RPS_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVB, 10) || 1,
         [GAME_IDS.RPS_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVP_UNIFIED, 10) || 1,
         [GAME_IDS.RPS_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_RPS_PVP_DIRECT, 10) || 1, // Active PvP from Direct
-        
+
         [GAME_IDS.DICE_ESCALATOR_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVB, 10) || 1,
         [GAME_IDS.DICE_ESCALATOR_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_UNIFIED, 10) || 1,
         [GAME_IDS.DICE_ESCALATOR_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_ESCALATOR_PVP_DIRECT, 10) || 1, // Active PvP from Direct
-        
-        [GAME_IDS.DICE_21]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVB, 10) || 1, 
+
+        [GAME_IDS.DICE_21]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVB, 10) || 1,
         [GAME_IDS.DICE_21_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVP_UNIFIED, 10) || 1,
         [GAME_IDS.DICE_21_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DICE_21_PVP_DIRECT, 10) || 1, // Active PvP from Direct
-        
+
         [GAME_IDS.DUEL_PVB]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVB, 10) || 1,
         [GAME_IDS.DUEL_PVP_FROM_UNIFIED]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVP_UNIFIED, 10) || 1,
         [GAME_IDS.DUEL_PVP]: parseInt(process.env.LIMIT_ACTIVE_GAME_DUEL_PVP_DIRECT, 10) || 1, // Active PvP from Direct
-        
+
         [GAME_IDS.MINES]: parseInt(process.env.LIMIT_ACTIVE_GAME_MINES, 10) || 1,
         [GAME_IDS.OVER_UNDER_7]: parseInt(process.env.LIMIT_ACTIVE_GAME_OVER_UNDER_7, 10) || 1,
         [GAME_IDS.LADDER]: parseInt(process.env.LIMIT_ACTIVE_GAME_LADDER, 10) || 1,
@@ -356,7 +357,7 @@ const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
 const GAME_ACTIVITY_LIMITS = DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS;
 
 // Keypair Initializations
-let MAIN_BOT_KEYPAIR = null; 
+let MAIN_BOT_KEYPAIR = null;
 if (MAIN_BOT_PRIVATE_KEY_BS58) {
     try {
         MAIN_BOT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(MAIN_BOT_PRIVATE_KEY_BS58));
@@ -370,7 +371,7 @@ if (MAIN_BOT_PRIVATE_KEY_BS58) {
     process.exit(1);
 }
 
-let REFERRAL_PAYOUT_KEYPAIR = null; 
+let REFERRAL_PAYOUT_KEYPAIR = null;
 if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
     try {
         REFERRAL_PAYOUT_KEYPAIR = Keypair.fromSecretKey(bs58.decode(REFERRAL_PAYOUT_PRIVATE_KEY_BS58));
@@ -382,7 +383,7 @@ if (REFERRAL_PAYOUT_PRIVATE_KEY_BS58) {
 } else {
     console.log("ℹ️ INFO: REFERRAL_PAYOUT_PRIVATE_KEY not set. Main bot wallet will be used for referral payouts.");
 }
-if (!REFERRAL_PAYOUT_KEYPAIR) { 
+if (!REFERRAL_PAYOUT_KEYPAIR) {
     REFERRAL_PAYOUT_KEYPAIR = MAIN_BOT_KEYPAIR;
 }
 
@@ -421,14 +422,27 @@ const DEPOSIT_CALLBACK_ACTION_CONST = process.env.DEPOSIT_CALLBACK_ACTION; // MO
 const WITHDRAW_CALLBACK_ACTION_CONST = process.env.WITHDRAW_CALLBACK_ACTION; // MODIFIED
 const QUICK_DEPOSIT_CALLBACK_ACTION_CONST = process.env.QUICK_DEPOSIT_CALLBACK_ACTION; // MODIFIED
 
+// Dice Escalator Jackpot Session Poller Interval (for MainBot)
+const JACKPOT_SESSION_POLL_INTERVAL_MS = parseInt(process.env.JACKPOT_SESSION_POLL_INTERVAL_MS_MAINBOT, 10);
+if (isNaN(JACKPOT_SESSION_POLL_INTERVAL_MS) || JACKPOT_SESSION_POLL_INTERVAL_MS < 2000) {
+    // This console.warn will use the default if the env var is bad or missing, as per CASINO_ENV_DEFAULTS handling.
+    // The actual value of JACKPOT_SESSION_POLL_INTERVAL_MS will be the parsed default if this path is taken.
+    // If you want to force exit or have a hardcoded fallback *here* different from the default, you can add it.
+    // For now, relying on the CASINO_ENV_DEFAULTS mechanism.
+    console.warn(`⚠️ WARNING: JACKPOT_SESSION_POLL_INTERVAL_MS_MAINBOT ('${process.env.JACKPOT_SESSION_POLL_INTERVAL_MS_MAINBOT}') is invalid or too low after parsing. Check .env or defaults. Using effective value: ${JACKPOT_SESSION_POLL_INTERVAL_MS}ms.`);
+    // If after defaults and parsing, it's still bad (e.g., default was bad), you might force a safe value:
+    // if (isNaN(JACKPOT_SESSION_POLL_INTERVAL_MS) || JACKPOT_SESSION_POLL_INTERVAL_MS < 2000) JACKPOT_SESSION_POLL_INTERVAL_MS = 7000;
+}
+
+
 const SOL_DECIMALS = 9;
 const DEPOSIT_ADDRESS_EXPIRY_MINUTES = parseInt(process.env.DEPOSIT_ADDRESS_EXPIRY_MINUTES, 10);
 const DEPOSIT_ADDRESS_EXPIRY_MS = DEPOSIT_ADDRESS_EXPIRY_MINUTES * 60 * 1000;
 const DEPOSIT_CONFIRMATION_LEVEL = process.env.DEPOSIT_CONFIRMATIONS?.toLowerCase() || 'confirmed';
 const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 
-const MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS || '0'); 
-const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD); 
+const MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS || '0');
+const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD);
 
 // Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
@@ -467,6 +481,13 @@ for (const key in MINES_DIFFICULTY_CONFIG) {
     if (!Array.isArray(config.multipliers) || config.multipliers.length !== (config.rows * config.cols - config.mines + 1)) { console.error(`FATAL: MINES_DIFFICULTY_CONFIG.${key}.multipliers array is missing or has incorrect length. Expected ${config.rows * config.cols - config.mines + 1} entries (0 gems + N gems).`); process.exit(1); }
 }
 
+// Critical validation for JACKPOT_SESSION_POLL_INTERVAL_MS
+if (isNaN(JACKPOT_SESSION_POLL_INTERVAL_MS) || JACKPOT_SESSION_POLL_INTERVAL_MS < 2000) {
+    console.error(`🚨 FATAL ERROR: JACKPOT_SESSION_POLL_INTERVAL_MS_MAINBOT ('${process.env.JACKPOT_SESSION_POLL_INTERVAL_MS_MAINBOT}') is invalid or less than 2000ms. Effective value: ${JACKPOT_SESSION_POLL_INTERVAL_MS}. Bot cannot start reliably.`);
+    process.exit(1);
+}
+
+
 if (ADMIN_USER_ID) console.log(`ℹ️ Admin User ID: ${ADMIN_USER_ID} loaded.`);
 
 function formatLamportsToSolStringForLog(lamports) {
@@ -497,6 +518,7 @@ console.log(`--- ⚙️ Key Game & Bot Configurations Loaded ---
   Deposit Address Expiry: ${DEPOSIT_ADDRESS_EXPIRY_MINUTES} minutes
   SOL/USD Price API: ${process.env.SOL_PRICE_API_URL}
   Dice Roll Polling (Helper Bot System): Interval ${DICE_ROLL_POLLING_INTERVAL_MS}ms, Max Attempts ${DICE_ROLL_POLLING_MAX_ATTEMPTS}
+  MainBot Jackpot Session Poller Interval: ${JACKPOT_SESSION_POLL_INTERVAL_MS / 1000}s 
   Sweep Fee Buffer (for TX cost): ${formatLamportsToSolStringForLog(BigInt(process.env.SWEEP_FEE_BUFFER_LAMPORTS))} SOL
   --- Game Activity Limits (Per Group, Defaults) ---
   Coinflip: Unified Offers=${GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.COINFLIP]}, Pending Direct Challenges=${GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER]}
@@ -573,7 +595,7 @@ const solanaConnection = new RateLimitedConnection(
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-let app = null; 
+let app = null;
 if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
     app = express();
     app.use(express.json({
@@ -585,92 +607,96 @@ if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
 
 const BOT_VERSION = process.env.BOT_VERSION || '3.4.0-de-rewrite';
 const MAX_MARKDOWN_V2_MESSAGE_LENGTH = 4096;
-let isShuttingDown = false; 
-let activeGames = new Map(); 
-let userCooldowns = new Map(); 
-let groupGameSessions = new Map(); 
-const walletCache = new Map(); 
-const activeDepositAddresses = new Map(); 
-const processedDepositTxSignatures = new Set(); 
-const userStateCache = new Map(); 
+let isShuttingDown = false;
+let activeGames = new Map();
+let userCooldowns = new Map();
+let groupGameSessions = new Map();
+const walletCache = new Map();
+const activeDepositAddresses = new Map();
+const processedDepositTxSignatures = new Set();
+const userStateCache = new Map();
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
-const solPriceCache = new Map(); 
+const solPriceCache = new Map();
+
+// For MainBot's Dice Escalator Jackpot Session Poller
+let jackpotSessionPollIntervalId = null;
+
 
 async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectChallengeOffer = false, gameIdBeingActioned = null) {
-    const userIdStr = String(userIdToCheck);
-    let activeInvolvementFound = null; // Renamed for clarity
+    const userIdStr = String(userIdToCheck);
+    let activeInvolvementFound = null; // Renamed for clarity
 
-    const PURE_PVB_GAME_TYPES = [ 
-        GAME_IDS.COINFLIP_PVB, GAME_IDS.RPS_PVB, GAME_IDS.DICE_ESCALATOR_PVB,
-        GAME_IDS.DICE_21, 
-        GAME_IDS.MINES, GAME_IDS.LADDER, GAME_IDS.OVER_UNDER_7, GAME_IDS.SLOT_FRENZY,
-        GAME_IDS.DUEL_PVB, GAME_IDS.SEVEN_OUT 
-    ];
+    const PURE_PVB_GAME_TYPES = [
+        GAME_IDS.COINFLIP_PVB, GAME_IDS.RPS_PVB, GAME_IDS.DICE_ESCALATOR_PVB,
+        GAME_IDS.DICE_21,
+        GAME_IDS.MINES, GAME_IDS.LADDER, GAME_IDS.OVER_UNDER_7, GAME_IDS.SLOT_FRENZY,
+        GAME_IDS.DUEL_PVB, GAME_IDS.SEVEN_OUT
+    ];
 
-    for (const [gameIdInLoop, gameData] of activeGames.entries()) {
-        // If the current gameData in the loop is the specific game/offer the user is trying to action 
+    for (const [gameIdInLoop, gameData] of activeGames.entries()) {
+        // If the current gameData in the loop is the specific game/offer the user is trying to action
         // (e.g., accept this offer, cancel this offer), then it should NOT block itself.
         if (gameIdBeingActioned && gameIdInLoop === gameIdBeingActioned) {
             // console.log(`[checkUserActiveGameLimit UID:${userIdStr}] Skipping check for gameId '${gameIdInLoop}' as it's the one being actioned.`);
-            continue;
-        }
+            continue;
+        }
 
-        let isUserInThisGame = false;
+        let isUserInThisGame = false;
         // Comprehensive check for user involvement
-        if (gameData.userId === userIdStr || gameData.playerId === userIdStr || gameData.initiatorId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.player?.userId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.initiator?.userId === userIdStr || gameData.opponent?.userId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.p1?.userId === userIdStr || gameData.p2?.userId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (Array.isArray(gameData.participants) && gameData.participants.some(p => String(p.userId) === userIdStr)) {
-            isUserInThisGame = true;
-        } else if (gameData.type === GAME_IDS.MINES_OFFER && gameData.initiatorId === userIdStr) {
-            isUserInThisGame = true;
-        } else if (gameData.targetUserId === userIdStr && // Check if user is the target of a direct challenge
-                   (gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE || 
-                    gameData.type.endsWith('_direct_challenge_offer'))) {
-            isUserInThisGame = true;
-        }
+        if (gameData.userId === userIdStr || gameData.playerId === userIdStr || gameData.initiatorId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.player?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.initiator?.userId === userIdStr || gameData.opponent?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.p1?.userId === userIdStr || gameData.p2?.userId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (Array.isArray(gameData.participants) && gameData.participants.some(p => String(p.userId) === userIdStr)) {
+            isUserInThisGame = true;
+        } else if (gameData.type === GAME_IDS.MINES_OFFER && gameData.initiatorId === userIdStr) {
+            isUserInThisGame = true;
+        } else if (gameData.targetUserId === userIdStr && // Check if user is the target of a direct challenge
+                     (gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE ||
+                      gameData.type.endsWith('_direct_challenge_offer'))) {
+            isUserInThisGame = true;
+        }
 
-        if (isUserInThisGame) {
+        if (isUserInThisGame) {
             // Defines states that are truly over and should not block.
             // Pending offers (like 'pending_offer', 'pending_direct_challenge_response') are NOT in this list anymore.
-            const trulyTerminatedStates = [
+            const trulyTerminatedStates = [
                 // All game_over_ states are implicitly handled by startsWith('game_over_')
-                'cancelled', 
-                'expired', 
+                'cancelled',
+                'expired',
                 'resolved', // For unified offers that found a match and became a game
                 // 'bot_game_accepted', 'pvp_accepted' could be here if the offer object is immediately deleted and replaced by a game object.
                 // For this stricter check, any pending offer state is an active involvement.
-            ];
+            ];
 
-            const isEngagementTerminated = gameData.status && 
-                (gameData.status.startsWith('game_over_') || trulyTerminatedStates.includes(gameData.status));
+            const isEngagementTerminated = gameData.status &&
+                (gameData.status.startsWith('game_over_') || trulyTerminatedStates.includes(gameData.status));
 
-            if (!isEngagementTerminated) { // If the game/offer is NOT truly terminated
-                // The old "isUserOwnPendingOffer" broad `continue` is removed.
+            if (!isEngagementTerminated) { // If the game/offer is NOT truly terminated
+                // The old "isUserOwnPendingOffer" broad `continue` is removed.
                 // Any active involvement (pending offer made, pending offer received, active game) now generally counts.
 
-                // Exception: Allow creating a direct challenge offer if the user's ONLY other involvement is a simple PvB game.
-                if (gameBeingStartedIsDirectChallengeOffer && PURE_PVB_GAME_TYPES.includes(gameData.type)) {
-                    console.log(`[checkUserActiveGameLimit UID:${userIdStr}] User attempting to start a direct challenge offer. Current involvement is PvB game '${gameData.type}'. Allowing this specific creation.`);
-                    continue; 
-                }
+                // Exception: Allow creating a direct challenge offer if the user's ONLY other involvement is a simple PvB game.
+                if (gameBeingStartedIsDirectChallengeOffer && PURE_PVB_GAME_TYPES.includes(gameData.type)) {
+                    console.log(`[checkUserActiveGameLimit UID:${userIdStr}] User attempting to start a direct challenge offer. Current involvement is PvB game '${gameData.type}'. Allowing this specific creation.`);
+                    continue;
+                }
                 // Otherwise, this is a blocking involvement.
-                activeInvolvementFound = { type: gameData.type, status: gameData.status, id: gameIdInLoop.slice(-6) };
-                break; // Found a blocking involvement
-            }
-        }
-    }
-    if (activeInvolvementFound) { 
-      console.log(`[checkUserActiveGameLimit UID:${userIdStr}] Limit reached. Active involvement found: Type=${activeInvolvementFound.type}, Status=${activeInvolvementFound.status}, ID=${activeInvolvementFound.id}`);
-      return { limitReached: true, details: activeInvolvementFound }; 
+                activeInvolvementFound = { type: gameData.type, status: gameData.status, id: gameIdInLoop.slice(-6) };
+                break; // Found a blocking involvement
+            }
+        }
     }
-    console.log(`[checkUserActiveGameLimit UID:${userIdStr}] No blocking active involvement found. Limit not reached.`);
-    return { limitReached: false };
+    if (activeInvolvementFound) {
+      console.log(`[checkUserActiveGameLimit UID:${userIdStr}] Limit reached. Active involvement found: Type=${activeInvolvementFound.type}, Status=${activeInvolvementFound.status}, ID=${activeInvolvementFound.id}`);
+      return { limitReached: true, details: activeInvolvementFound };
+    }
+    console.log(`[checkUserActiveGameLimit UID:${userIdStr}] No blocking active involvement found. Limit not reached.`);
+    return { limitReached: false };
 }
 
 const escapeMarkdownV2 = (text) => {
@@ -687,7 +713,7 @@ async function safeSendMessage(chatId, text, options = {}) {
 
     let messageToSend = text;
     let finalOptions = { ...options };
-    
+
     if (finalOptions.parse_mode === 'MarkdownV2' && messageToSend.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
         const ellipsisBase = ` \\.\\.\\. (_message truncated by ${escapeMarkdownV2(BOT_NAME)}_)`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisBase.length);
@@ -696,7 +722,7 @@ async function safeSendMessage(chatId, text, options = {}) {
         const ellipsisPlain = `... (message truncated by ${BOT_NAME})`;
         const truncateAt = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlain.length);
         messageToSend = messageToSend.substring(0, truncateAt) + ellipsisPlain;
-    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) { 
+    } else if (finalOptions.parse_mode === 'HTML' && messageToSend.length > 4096) {
         const escapeHTMLFunc = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         const ellipsisBase = ` ... (<i>message truncated by ${escapeHTMLFunc(BOT_NAME)}</i>)`;
         const truncateAt = Math.max(0, 4096 - ellipsisBase.length);
@@ -720,8 +746,8 @@ async function safeSendMessage(chatId, text, options = {}) {
                 try {
                     let plainTextFallbackOptions = { ...options };
                     delete plainTextFallbackOptions.parse_mode;
-                    let plainTextForFallback = text; 
-                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) { 
+                    let plainTextForFallback = text;
+                    if (plainTextForFallback.length > MAX_MARKDOWN_V2_MESSAGE_LENGTH) {
                         const ellipsisPlainFallback = `... (message truncated by ${BOT_NAME}, original was parse error)`;
                         const truncateAtPlain = Math.max(0, MAX_MARKDOWN_V2_MESSAGE_LENGTH - ellipsisPlainFallback.length);
                         plainTextForFallback = plainTextForFallback.substring(0, truncateAtPlain) + ellipsisPlainFallback;
@@ -838,14 +864,14 @@ const depositProcessorQueue = new PQueue({
     throwOnTimeout: true
 });
 
-const SLOT_PAYOUTS = { 
+const SLOT_PAYOUTS = {
     64: { multiplier: 25, symbols: "7️⃣7️⃣7️⃣", label: "TRIPLE SEVEN!" },
     1:  { multiplier: 15, symbols: "BAR-BAR-BAR", label: "Triple Bar!" },
     22: { multiplier: 10, symbols: "🍋🍋🍋", label: "Triple Lemon!" },
-    43: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" } 
+    43: { multiplier: 5, symbols: "🍒🍒🍒", label: "Triple Cherry!" }
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
-// --- End of Part 1 (FINAL CORRECTION) ---
+// --- End of Part 1 (FINAL CORRECTION - WITH JACKPOT POLLER VARS INTEGRATED) ---
 // --- Start of Part 2 (Modified for dice_roll_requests table) ---
 // index.js - Part 2: Database Schema Initialization & Core User Management
 //---------------------------------------------------------------------------
