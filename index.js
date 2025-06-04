@@ -12124,21 +12124,17 @@ async function handleBonusCommand(msg) {
     }
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); // HTML safe
 
-    // Ensure this command is primarily handled in DM for a cleaner experience
     let botUsername = BOT_NAME || "our bot";
     try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* ignore */ }
     
     if (msg.chat.type !== 'private') {
         if (msg.message_id) await bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
         await safeSendMessage(msg.chat.id, `${playerRefHTML}, I've sent your Level Up Bonus dashboard to our private chat: @${escapeHTML(botUsername)} 🌟`, { parse_mode: 'HTML' });
-        // Send a new "message" to the DM context to trigger the display there
         const dmMsgContext = { from: msg.from, chat: { id: userId, type: 'private' }, message_id: null };
-        // Call this function again but with the DM context
         await handleBonusCommand(dmMsgContext); 
         return;
     }
     
-    // If in DM, delete the original /bonus command message
     if (msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
         await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
     }
@@ -12146,12 +12142,24 @@ async function handleBonusCommand(msg) {
     const loadingMsg = await safeSendMessage(chatId, "⏳ Fetching your Level Up Bonus status...", { parse_mode: 'HTML' });
     const workingMessageId = loadingMsg?.message_id;
 
+    let client = null; // <<<< MODIFIED: Declare client outside the try block
+
     try {
-        const client = await pool.connect(); // Use a single client for all DB ops in this handler
+        client = await pool.connect(); // <<<< MODIFIED: Assign client here
+        // It's good practice to start a transaction if you're doing multiple reads that need consistency 
+        // or if any helper function called with this client might perform writes.
+        // For now, we assume reads are fine without explicit BEGIN for this specific handler,
+        // but calculateUserRank using this client should be noted.
+        // If calculateUserRank or other internal functions start their own transactions with this client,
+        // it can get complex. Simpler if they use global pool or are purely read-only.
+        // The original did have a COMMIT, implying a transaction might have been expected.
+        // Let's add BEGIN for safety if FOR UPDATE is used by calculateUserRank or for consistency.
+        // However, the primary error is scope, not transaction management itself in this function.
+        // For now, assuming calculateUserRank is read-only on the passed client or manages its own tx.
+
         let messageTextHTML = `🌟 <b>Level Up Bonus</b> 🌟\n\nPlay games, level up and get even more bonuses!\n\n`;
         const keyboardRows = [];
 
-        // Fetch current user details including level and wagered amounts
         const currentUserDetails = await client.query(
             `SELECT u.total_wagered_lamports, u.current_level_id, ul.level_name AS current_level_name, ul.wager_threshold_usd AS current_level_threshold_usd, ul.order_index AS current_level_order_index
              FROM users u
@@ -12170,13 +12178,11 @@ async function handleBonusCommand(msg) {
         const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
         const currentLevelName = userData.current_level_name || "Newcomer";
-        const currentLevelThresholdUSD = parseFloat(userData.current_level_threshold_usd || '0.00');
+        // const currentLevelThresholdUSD = parseFloat(userData.current_level_threshold_usd || '0.00'); // Not directly used in this exact display string part
         const currentLevelOrderIndex = userData.current_level_order_index || 0;
         
-        // For "Your current level: Bronze IV - $2,623 wagered", we'll show their total wagered.
         messageTextHTML += `Your current level:\n🏆 <b>${escapeHTML(currentLevelName)}</b> - ${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))} wagered\n\n`;
 
-        // Find the next level
         const nextLevelData = await client.query(
             `SELECT level_name, wager_threshold_usd, bonus_amount_usd
              FROM user_levels
@@ -12187,7 +12193,7 @@ async function handleBonusCommand(msg) {
         );
 
         let nextLevelName = "Max Level Reached!";
-        let nextLevelThresholdUSD = Infinity; // Effectively
+        let nextLevelThresholdUSD = Infinity; 
         let wagerNeededUSD = 0;
 
         if (nextLevelData.rowCount > 0) {
@@ -12200,8 +12206,7 @@ async function handleBonusCommand(msg) {
             messageTextHTML += `Next Level:\n🏅 ${escapeHTML(nextLevelName)}\n\n`;
         }
         
-        // Calculate Rank
-        const rank = await calculateUserRank(userId, client); // Pass client
+        const rank = await calculateUserRank(userId, client); 
         messageTextHTML += `You are ranked: <b>#${rank !== null ? rank : 'N/A'}</b>\n`;
 
         if (nextLevelData.rowCount > 0) {
@@ -12210,17 +12215,16 @@ async function handleBonusCommand(msg) {
             messageTextHTML += `You've reached the pinnacle! Well done!\n\n`;
         }
 
-        // Check for claimable bonuses: highest achieved level not yet claimed
         const claimableBonusesRes = await client.query(
             `SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd
              FROM user_levels ul
-             WHERE ul.order_index <= $1  -- Levels user has achieved or surpassed
+             WHERE ul.order_index <= $1
              AND ul.bonus_amount_usd > 0
              AND NOT EXISTS (
                  SELECT 1 FROM user_claimed_level_bonuses uclb
                  WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
              )
-             ORDER BY ul.order_index DESC -- Get the highest eligible unclaimed bonus first
+             ORDER BY ul.order_index DESC 
              LIMIT 1;`,
             [currentLevelOrderIndex, userId]
         );
@@ -12233,19 +12237,22 @@ async function handleBonusCommand(msg) {
             keyboardRows.push([{ text: "🔒 No Bonuses to Claim Now 🔒", callback_data: "noop" }]);
         }
 
-        keyboardRows.push([{ text: "📜 Levels List & Info", callback_data: "menu:levels_info" }]); // Placeholder for a future detailed levels list
+        keyboardRows.push([{ text: "📜 Levels List & Info", callback_data: "menu:levels_info" }]);
         keyboardRows.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
         
         const keyboard = { inline_keyboard: keyboardRows };
         if (workingMessageId && bot) {
             await bot.editMessageText(messageTextHTML, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
-        } else {
+        } else { // Should not happen if loadingMsg was sent successfully
             await safeSendMessage(chatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
         }
-        await client.query('COMMIT'); // Commit if any FOR UPDATE locks were implicitly held by selects on user.
+        // Removed explicit COMMIT as this function now primarily does reads after client acquisition.
+        // If calculateUserRank or other functions called with `client` perform writes without their own tx management,
+        // this might need reconsideration, or those functions should manage their own tx.
     } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(()=>{}); // Rollback on error
         console.error(`${LOG_PREFIX_BONUS_CMD} Error: ${error.message}`, error.stack);
+        // Removed explicit ROLLBACK as we are not explicitly starting a transaction with BEGIN in this function's try block.
+        // The release in finally is the main cleanup for the client.
         const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message)}`;
         const errorKbd = { inline_keyboard: [[{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]] };
         if (workingMessageId && bot) {
@@ -12254,7 +12261,9 @@ async function handleBonusCommand(msg) {
             await safeSendMessage(chatId, errorText, { parse_mode: 'HTML', reply_markup: errorKbd });
         }
     } finally {
-        if (client) client.release();
+        if (client) { // Now client is accessible here
+            client.release();
+        }
     }
 }
 // --- End of Part 5a, Section 2 ---
@@ -13822,6 +13831,20 @@ async function main() {
         }
         await initializeDatabaseSchema();
         console.log("✅ Database schema initialized successfully.");
+
+        // --- NEW: Initialize User Levels Table from Config ---
+        console.log("⚙️ Step 1b: Initializing User Levels from Config...");
+        if (typeof initializeLevelsDB === 'function') {
+            await initializeLevelsDB(); // Call the function here
+            // The initializeLevelsDB function handles its own console logs for success/failure
+        } else {
+            console.warn("⚠️ initializeLevelsDB function not defined. User levels may not be populated from config.");
+            // You might want to notify admin here if this is critical
+            if (typeof notifyAdmin === 'function') {
+                notifyAdmin("⚠️ ALERT: `initializeLevelsDB` function is missing. Level definitions from `LEVEL_CONFIG` cannot be populated into the database. Leveling system might not work correctly.", { parse_mode: 'MarkdownV2' });
+            }
+        }
+        // --- END OF NEW: Initialize User Levels Table ---
 
         console.log("⚙️ Step 2: Connecting to Telegram & Starting Bot...");
         if (!bot || typeof bot.getMe !== 'function') {
