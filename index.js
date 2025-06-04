@@ -14620,40 +14620,54 @@ async function sendSol(payerKeypair, recipientPublicKeyString, amountLamports, m
  * @returns {Promise<object|null>} User details with BigInt conversions or null if not found/error.
  */
 async function getPaymentSystemUserDetails(telegramId, client = pool) {
-    const stringUserId = String(telegramId);
-    const LOG_PREFIX_GPSUD = `[GetUserPayDetails TG:${stringUserId}]`; // Shortened
-    const query = `
-        SELECT
-            telegram_id, username, first_name, last_name, balance, solana_wallet_address,
-            referral_code, referrer_telegram_id, can_generate_deposit_address,
-            last_deposit_address, last_deposit_address_generated_at,
-            total_deposited_lamports, total_withdrawn_lamports,
-            total_wagered_lamports, total_won_lamports, notes,
-            created_at, updated_at
-        FROM users
-        WHERE telegram_id = $1;
-    `;
-    try {
-        const res = await queryDatabase(query, [stringUserId], client);
-        if (res.rows.length > 0) {
-            const details = res.rows[0];
-            details.telegram_id = String(details.telegram_id); 
-            details.balance = BigInt(details.balance || '0');
-            details.total_deposited_lamports = BigInt(details.total_deposited_lamports || '0');
-            details.total_withdrawn_lamports = BigInt(details.total_withdrawn_lamports || '0');
-            details.total_wagered_lamports = BigInt(details.total_wagered_lamports || '0');
-            details.total_won_lamports = BigInt(details.total_won_lamports || '0');
-            if (details.referrer_telegram_id) {
-                details.referrer_telegram_id = String(details.referrer_telegram_id);
-            }
-            return details;
-        }
-        // console.warn(`${LOG_PREFIX_GPSUD} User not found.`); // Can be noisy, remove if not essential for normal ops
-        return null;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GPSUD} ❌ Error fetching user details: ${err.message}`, err.stack?.substring(0,500));
-        return null;
-    }
+    const stringUserId = String(telegramId);
+    const LOG_PREFIX_GPSUD = `[GetUserPayDetails TG:${stringUserId}]`;
+    // Carefully re-typed SQL query string
+    const query = `
+SELECT
+    telegram_id,
+    username,
+    first_name,
+    last_name,
+    balance,
+    solana_wallet_address,
+    referral_code,
+    referrer_telegram_id,
+    can_generate_deposit_address,
+    last_deposit_address,
+    last_deposit_address_generated_at,
+    total_deposited_lamports,
+    total_withdrawn_lamports,
+    total_wagered_lamports,
+    total_won_lamports,
+    notes,
+    created_at,
+    updated_at
+FROM users
+WHERE telegram_id = $1;
+`; // Ensure no trailing/leading hidden characters around this backtick or within the string
+
+    try {
+        const res = await queryDatabase(query, [stringUserId], client);
+        if (res.rows.length > 0) {
+            const details = res.rows[0];
+            details.telegram_id = String(details.telegram_id); 
+            details.balance = BigInt(details.balance || '0');
+            details.total_deposited_lamports = BigInt(details.total_deposited_lamports || '0');
+            details.total_withdrawn_lamports = BigInt(details.total_withdrawn_lamports || '0');
+            details.total_wagered_lamports = BigInt(details.total_wagered_lamports || '0');
+            details.total_won_lamports = BigInt(details.total_won_lamports || '0');
+            if (details.referrer_telegram_id) {
+                details.referrer_telegram_id = String(details.referrer_telegram_id);
+            }
+            return details;
+        }
+        return null;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GPSUD} ❌ Error fetching user details: ${err.message}`, err.stack?.substring(0,500));
+        // Re-throw the error so the caller (handleWalletCommand) can catch it and inform the user appropriately
+        throw err; 
+    }
 }
 
 /**
