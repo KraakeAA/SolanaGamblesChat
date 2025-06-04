@@ -939,7 +939,7 @@ const SLOT_PAYOUTS = {
 };
 const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 // --- End of Part 1 (FINAL CORRECTION - WITH JACKPOT POLLER VARS INTEGRATED) ---
-// --- Start of Part 2 (Modified for dice_roll_requests table) ---
+// --- Start of Part 2 (Modified for dice_roll_requests table, and with NEW initializeLevelsDB and checkAndUpdateUserLevel functions) ---
 // index.js - Part 2: Database Schema Initialization & Core User Management
 //---------------------------------------------------------------------------
 // Assumed necessary functions and constants from Part 1 are available.
@@ -948,6 +948,7 @@ const SLOT_DEFAULT_LOSS_MULTIPLIER = -1;
 // activeGames, userCooldowns, groupGameSessions, activeDepositAddresses,
 // pendingReferrals, userStateCache, GAME_IDS (if used for activeGames clearing).
 // notifyAdmin and ADMIN_USER_ID are used for critical error reporting.
+// LEVEL_CONFIG, getSolUsdPrice, LAMPORTS_PER_SOL, convertUSDToLamports, safeSendMessage, getPlayerDisplayReference (for checkAndUpdateUserLevel)
 
 // --- Helper function for referral code generation ---
 const generateReferralCode = (length = 8) => {
@@ -964,394 +965,394 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ V9 FINAL CLEAN WHITESPACE: Initializing FULL database schema (All Tables & Triggers)..."); // Changed log slightly for clarity
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        console.log("DEBUG V9 FINAL: BEGIN executed.");
+    console.log("⚙️ V9 FINAL CLEAN WHITESPACE: Initializing FULL database schema (All Tables & Triggers)..."); // Changed log slightly for clarity
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        console.log("DEBUG V9 FINAL: BEGIN executed.");
 
-        // Users Table
-        console.log("DEBUG V9 FINAL: Creating Users table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS users (
-    telegram_id BIGINT PRIMARY KEY,
-    username VARCHAR(255),
-    first_name VARCHAR(255),
-    last_name VARCHAR(255),
-    balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
-    last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    is_banned BOOLEAN DEFAULT FALSE,
-    ban_reason TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    solana_wallet_address VARCHAR(44) UNIQUE,
-    referral_code VARCHAR(12) UNIQUE,
-    referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-    can_generate_deposit_address BOOLEAN DEFAULT TRUE,
-    last_deposit_address VARCHAR(44),
-    last_deposit_address_generated_at TIMESTAMPTZ,
-    total_deposited_lamports BIGINT DEFAULT 0,
-    total_withdrawn_lamports BIGINT DEFAULT 0,
-    total_wagered_lamports BIGINT DEFAULT 0,
-    total_won_lamports BIGINT DEFAULT 0,
-    notes TEXT
+        // Users Table
+        console.log("DEBUG V9 FINAL: Creating Users table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS users (
+    telegram_id BIGINT PRIMARY KEY,
+    username VARCHAR(255),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    balance BIGINT DEFAULT ${DEFAULT_STARTING_BALANCE_LAMPORTS.toString()},
+    last_active_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    is_banned BOOLEAN DEFAULT FALSE,
+    ban_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    solana_wallet_address VARCHAR(44) UNIQUE,
+    referral_code VARCHAR(12) UNIQUE,
+    referrer_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    can_generate_deposit_address BOOLEAN DEFAULT TRUE,
+    last_deposit_address VARCHAR(44),
+    last_deposit_address_generated_at TIMESTAMPTZ,
+    total_deposited_lamports BIGINT DEFAULT 0,
+    total_withdrawn_lamports BIGINT DEFAULT 0,
+    total_wagered_lamports BIGINT DEFAULT 0,
+    total_won_lamports BIGINT DEFAULT 0,
+    notes TEXT
 );`);
-        console.log("DEBUG V9 FINAL: Users table processed.");
+        console.log("DEBUG V9 FINAL: Users table processed.");
 
-        // Jackpots Table
-        console.log("DEBUG V9 FINAL: Creating Jackpots table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
-    jackpot_id VARCHAR(255) PRIMARY KEY,
-    current_amount BIGINT DEFAULT 0,
-    last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-    last_won_timestamp TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Jackpots Table
+        console.log("DEBUG V9 FINAL: Creating Jackpots table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
+    jackpot_id VARCHAR(255) PRIMARY KEY,
+    current_amount BIGINT DEFAULT 0,
+    last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    last_won_timestamp TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(
-            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID]
-        );
-        console.log("DEBUG V9 FINAL: Jackpots table processed.");
+        await client.query(
+            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
+            [MAIN_JACKPOT_ID]
+        );
+        console.log("DEBUG V9 FINAL: Jackpots table processed.");
 
-        // Games Table (Game Log)
-        console.log("DEBUG V9 FINAL: Creating Games table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS games (
-    game_log_id SERIAL PRIMARY KEY,
-    game_type VARCHAR(50) NOT NULL,
-    chat_id BIGINT,
-    initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-    participants_ids BIGINT[],
-    bet_amount_lamports BIGINT,
-    outcome TEXT,
-    jackpot_contribution_lamports BIGINT,
-    game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Games Table (Game Log)
+        console.log("DEBUG V9 FINAL: Creating Games table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS games (
+    game_log_id SERIAL PRIMARY KEY,
+    game_type VARCHAR(50) NOT NULL,
+    chat_id BIGINT,
+    initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    participants_ids BIGINT[],
+    bet_amount_lamports BIGINT,
+    outcome TEXT,
+    jackpot_contribution_lamports BIGINT,
+    game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        console.log("DEBUG V9 FINAL: Games table processed.");
+        console.log("DEBUG V9 FINAL: Games table processed.");
 
-        // User Deposit Wallets Table
-        console.log("DEBUG V9 FINAL: Creating User Deposit Wallets table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
-    wallet_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    public_key VARCHAR(44) NOT NULL UNIQUE,
-    derivation_path VARCHAR(255) NOT NULL UNIQUE,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMPTZ,
-    swept_at TIMESTAMPTZ,
-    balance_at_sweep BIGINT,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // User Deposit Wallets Table
+        console.log("DEBUG V9 FINAL: Creating User Deposit Wallets table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
+    wallet_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    public_key VARCHAR(44) NOT NULL UNIQUE,
+    derivation_path VARCHAR(255) NOT NULL UNIQUE,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ,
+    swept_at TIMESTAMPTZ,
+    balance_at_sweep BIGINT,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-        console.log("DEBUG V9 FINAL: User Deposit Wallets table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
+        console.log("DEBUG V9 FINAL: User Deposit Wallets table processed.");
 
-        // Deposits Table
-        console.log("DEBUG V9 FINAL: Creating Deposits table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
-    deposit_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
-    transaction_signature VARCHAR(88) NOT NULL UNIQUE,
-    source_address VARCHAR(44),
-    deposit_address VARCHAR(44) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    confirmation_status VARCHAR(20) DEFAULT 'pending',
-    block_time BIGINT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMPTZ,
-    notes TEXT,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Deposits Table
+        console.log("DEBUG V9 FINAL: Creating Deposits table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS deposits (
+    deposit_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
+    transaction_signature VARCHAR(88) NOT NULL UNIQUE,
+    source_address VARCHAR(44),
+    deposit_address VARCHAR(44) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    confirmation_status VARCHAR(20) DEFAULT 'pending',
+    block_time BIGINT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ,
+    notes TEXT,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-        console.log("DEBUG V9 FINAL: Deposits table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
+        console.log("DEBUG V9 FINAL: Deposits table processed.");
 
-        // Withdrawals Table
-        console.log("DEBUG V9 FINAL: Creating Withdrawals table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
-    withdrawal_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    destination_address VARCHAR(44) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    fee_lamports BIGINT NOT NULL,
-    transaction_signature VARCHAR(88) UNIQUE,
-    status VARCHAR(30) DEFAULT 'pending_verification',
-    error_message TEXT,
-    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMPTZ,
-    block_time BIGINT,
-    priority_fee_microlamports INT,
-    compute_unit_price_microlamports INT,
-    compute_unit_limit INT,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Withdrawals Table
+        console.log("DEBUG V9 FINAL: Creating Withdrawals table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
+    withdrawal_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    destination_address VARCHAR(44) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    fee_lamports BIGINT NOT NULL,
+    transaction_signature VARCHAR(88) UNIQUE,
+    status VARCHAR(30) DEFAULT 'pending_verification',
+    error_message TEXT,
+    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ,
+    block_time BIGINT,
+    priority_fee_microlamports INT,
+    compute_unit_price_microlamports INT,
+    compute_unit_limit INT,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
-        console.log("DEBUG V9 FINAL: Withdrawals table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
+        console.log("DEBUG V9 FINAL: Withdrawals table processed.");
 
-        // Referrals Table
-        console.log("DEBUG V9 FINAL: Creating Referrals table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
-    referral_id SERIAL PRIMARY KEY,
-    referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
-    commission_type VARCHAR(20),
-    commission_amount_lamports BIGINT,
-    transaction_signature VARCHAR(88),
-    status VARCHAR(20) DEFAULT 'pending_criteria',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
+        // Referrals Table
+        console.log("DEBUG V9 FINAL: Creating Referrals table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
+    referral_id SERIAL PRIMARY KEY,
+    referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
+    commission_type VARCHAR(20),
+    commission_amount_lamports BIGINT,
+    transaction_signature VARCHAR(88),
+    status VARCHAR(20) DEFAULT 'pending_criteria',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
-        console.log("DEBUG V9 FINAL: Referrals table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
+        console.log("DEBUG V9 FINAL: Referrals table processed.");
 
-        // Processed Sweeps Table
-        console.log("DEBUG V9 FINAL: Creating Processed Sweeps table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
-    sweep_id SERIAL PRIMARY KEY,
-    source_deposit_address VARCHAR(44) NOT NULL,
-    destination_main_address VARCHAR(44) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    transaction_signature VARCHAR(88) UNIQUE NOT NULL,
-    swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Processed Sweeps Table
+        console.log("DEBUG V9 FINAL: Creating Processed Sweeps table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
+    sweep_id SERIAL PRIMARY KEY,
+    source_deposit_address VARCHAR(44) NOT NULL,
+    destination_main_address VARCHAR(44) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    transaction_signature VARCHAR(88) UNIQUE NOT NULL,
+    swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-        console.log("DEBUG V9 FINAL: Processed Sweeps table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
+        console.log("DEBUG V9 FINAL: Processed Sweeps table processed.");
 
-        // Ledger Table
-        console.log("DEBUG V9 FINAL: Creating Ledger table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
-    ledger_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    transaction_type VARCHAR(50) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    balance_before_lamports BIGINT NOT NULL,
-    balance_after_lamports BIGINT NOT NULL,
-    deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
-    withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
-    game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
-    referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
-    related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Ledger Table
+        console.log("DEBUG V9 FINAL: Creating Ledger table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
+    ledger_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    transaction_type VARCHAR(50) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    balance_before_lamports BIGINT NOT NULL,
+    balance_after_lamports BIGINT NOT NULL,
+    deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
+    withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
+    game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
+    referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
+    related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
-        console.log("DEBUG V9 FINAL: Ledger table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
+        console.log("DEBUG V9 FINAL: Ledger table processed.");
 
-        // Dice Roll Requests Table
-        console.log("DEBUG V9 FINAL: Creating Dice Roll Requests table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
-    request_id SERIAL PRIMARY KEY,
-    game_id VARCHAR(255) NULL,
-    chat_id BIGINT NOT NULL,
-    user_id BIGINT NULL,
-    emoji_type VARCHAR(50) DEFAULT '🎲',
-    status VARCHAR(50) DEFAULT 'pending',
-    roll_value INTEGER NULL,
-    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMPTZ NULL,
-    notes TEXT NULL,
-    handler_type VARCHAR(50) NULL, -- <<<< THIS LINE IS CRITICAL AND MUST BE PRESENT
-    helper_id VARCHAR(100) NULL     -- <<<< Optional, but good to have if you added it
-    );`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
-    // Optional but recommended new index if you use handler_type frequently in queries by helpers:
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_handler ON dice_roll_requests(status, handler_type, requested_at);`);
-    console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
+        // Dice Roll Requests Table
+        console.log("DEBUG V9 FINAL: Creating Dice Roll Requests table...");
+        await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
+    request_id SERIAL PRIMARY KEY,
+    game_id VARCHAR(255) NULL,
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NULL,
+    emoji_type VARCHAR(50) DEFAULT '🎲',
+    status VARCHAR(50) DEFAULT 'pending',
+    roll_value INTEGER NULL,
+    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ NULL,
+    notes TEXT NULL,
+    handler_type VARCHAR(50) NULL, -- <<<< THIS LINE IS CRITICAL AND MUST BE PRESENT
+    helper_id VARCHAR(100) NULL     -- <<<< Optional, but good to have if you added it
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
+    // Optional but recommended new index if you use handler_type frequently in queries by helpers:
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_handler ON dice_roll_requests(status, handler_type, requested_at);`);
+    console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
 
-        // NEW: Dice Escalator Jackpot Sessions Table
-    console.log("MainBot_Schema: Creating Dice Escalator Jackpot Sessions table..."); // Adjusted log prefix for clarity
-    await client.query(`CREATE TABLE IF NOT EXISTS de_jackpot_sessions (
-        session_id SERIAL PRIMARY KEY,
-        main_bot_game_id VARCHAR(255) NOT NULL,      -- The original gameId from MainBot's activeGames
-        user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-        chat_id BIGINT NOT NULL,
-        initial_score INTEGER NOT NULL,              -- Score when player entered jackpot mode
-        initial_rolls_json TEXT,                   -- JSON array of rolls made before jackpot mode
-        bet_amount_lamports BIGINT NOT NULL,
-        target_jackpot_score INTEGER NOT NULL,
-        bust_on_value INTEGER NOT NULL,
-        jackpot_pool_at_session_start BIGINT NOT NULL, -- Jackpot amount when this session started
-        status VARCHAR(50) DEFAULT 'pending_pickup', -- e.g., pending_pickup, active_by_helper, completed_bust, completed_target_reached, completed_timeout_forfeit, error_helper
-        final_score INTEGER,                         -- Final score after jackpot run (initial_score + jackpot_run_score from helper)
-        final_rolls_json TEXT,                     -- JSON array of ALL rolls (initial + jackpot run rolls from helper)
-        outcome_notes TEXT,                        -- e.g., "Busted on roll X", "Reached target Y" by helper
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        helper_bot_id VARCHAR(100) NULL            -- Identifier of the helper bot that processed it
-    );`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_status_created ON de_jackpot_sessions(status, created_at);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_main_bot_game_id ON de_jackpot_sessions(main_bot_game_id);`);
-
-
-        // --- MODIFICATIONS FOR REFERRAL SYSTEM ---
-        console.log("DEBUG V9 FINAL: Applying schema modifications for Referral System...");
-
-        // ---- MODIFICATIONS FOR USERS TABLE ----
-        await client.query(`
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='referral_count') THEN
-                    ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0;
-                    RAISE NOTICE 'Column referral_count added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column referral_count already exists in users table.';
-                END IF;
-
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN
-                    ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0;
-                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports already exists in users table.';
-                END IF;
-
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='first_bet_placed_at') THEN
-                    ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ;
-                    RAISE NOTICE 'Column first_bet_placed_at added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column first_bet_placed_at already exists in users table.';
-                END IF;
-            END $$;
-        `);
-        console.log("DEBUG V9 FINAL: Users table checked/modified for Referral System.");
-
-        // ---- MODIFICATIONS FOR REFERRALS TABLE ----
-        await client.query(`
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN
-                    ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ;
-                    RAISE NOTICE 'Column qualifying_bet_processed_at added to referrals table.';
-                ELSE
-                    RAISE NOTICE 'Column qualifying_bet_processed_at already exists in referrals table.';
-                END IF;
-
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN
-                    ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb;
-                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved added to referrals table.';
-                ELSE
-                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved already exists in referrals table.';
-                END IF;
-
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN
-                    ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
-                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports added to referrals table.';
-                ELSE
-                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports already exists in referrals table.';
-                END IF;
-            END $$;
-        `);
-        console.log("DEBUG V9 FINAL: Referrals table checked/modified for Referral System.");
-        // --- END OF MODIFICATIONS FOR REFERRAL SYSTEM ---
-
-        // --- NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
-        console.log("DEBUG V9 FINAL: Applying schema modifications for Level Up Bonus System...");
-
-        // ---- CREATE user_levels TABLE ----
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_levels (
-                level_id SERIAL PRIMARY KEY,
-                level_name VARCHAR(50) NOT NULL UNIQUE,
-                wager_threshold_usd DECIMAL(12, 2) NOT NULL, -- Wager requirement in USD
-                bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0, -- Bonus amount in USD for reaching this level
-                order_index INT UNIQUE NOT NULL, -- To define the progression of levels
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_levels_order_index ON user_levels(order_index);`);
-        console.log("DEBUG V9 FINAL: user_levels table checked/created.");
-
-        // ---- CREATE user_claimed_level_bonuses TABLE ----
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
-                claim_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                level_id INT NOT NULL REFERENCES user_levels(level_id) ON DELETE CASCADE,
-                claimed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                bonus_amount_claimed_lamports BIGINT DEFAULT 0, -- Store the actual lamports claimed at the time
-                notes TEXT,
-                CONSTRAINT uq_user_level_claim UNIQUE (user_telegram_id, level_id) -- Ensure a user can claim bonus for a level only once
-            );
-        `);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_claimed_level_bonuses_user_level ON user_claimed_level_bonuses(user_telegram_id, level_id);`);
-        console.log("DEBUG V9 FINAL: user_claimed_level_bonuses table checked/created.");
-
-        // ---- MODIFICATIONS FOR USERS TABLE (for Level Up System) ----
-        await client.query(`
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='current_level_id') THEN
-                    ALTER TABLE users ADD COLUMN current_level_id INT REFERENCES user_levels(level_id) DEFAULT NULL;
-                    RAISE NOTICE 'Column current_level_id added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column current_level_id already exists in users table.';
-                END IF;
-
-                -- The rank (#751) shown in the screenshot seems like a global rank based on wager.
-                -- We can calculate this dynamically or store it if performance becomes an issue.
-                -- For now, we won't add a dedicated rank column, as it can be derived.
-                -- If you decide to store it later:
-                -- IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='overall_rank') THEN
-                --     ALTER TABLE users ADD COLUMN overall_rank INT DEFAULT NULL;
-                -- END IF;
-            END $$;
-        `);
-        console.log("DEBUG V9 FINAL: Users table checked/modified for Level Up Bonus System.");
-        // --- END OF NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
+        // NEW: Dice Escalator Jackpot Sessions Table
+    console.log("MainBot_Schema: Creating Dice Escalator Jackpot Sessions table..."); // Adjusted log prefix for clarity
+    await client.query(`CREATE TABLE IF NOT EXISTS de_jackpot_sessions (
+        session_id SERIAL PRIMARY KEY,
+        main_bot_game_id VARCHAR(255) NOT NULL,      -- The original gameId from MainBot's activeGames
+        user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+        chat_id BIGINT NOT NULL,
+        initial_score INTEGER NOT NULL,              -- Score when player entered jackpot mode
+        initial_rolls_json TEXT,                   -- JSON array of rolls made before jackpot mode
+        bet_amount_lamports BIGINT NOT NULL,
+        target_jackpot_score INTEGER NOT NULL,
+        bust_on_value INTEGER NOT NULL,
+        jackpot_pool_at_session_start BIGINT NOT NULL, -- Jackpot amount when this session started
+        status VARCHAR(50) DEFAULT 'pending_pickup', -- e.g., pending_pickup, active_by_helper, completed_bust, completed_target_reached, completed_timeout_forfeit, error_helper
+        final_score INTEGER,                         -- Final score after jackpot run (initial_score + jackpot_run_score from helper)
+        final_rolls_json TEXT,                     -- JSON array of ALL rolls (initial + jackpot run rolls from helper)
+        outcome_notes TEXT,                        -- e.g., "Busted on roll X", "Reached target Y" by helper
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        helper_bot_id VARCHAR(100) NULL            -- Identifier of the helper bot that processed it
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_status_created ON de_jackpot_sessions(status, created_at);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_main_bot_game_id ON de_jackpot_sessions(main_bot_game_id);`);
 
 
-        // Update function for 'updated_at' columns
-        console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
-        await client.query(`
+        // --- MODIFICATIONS FOR REFERRAL SYSTEM ---
+        console.log("DEBUG V9 FINAL: Applying schema modifications for Referral System...");
+
+        // ---- MODIFICATIONS FOR USERS TABLE ----
+        await client.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='referral_count') THEN
+                    ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0;
+                    RAISE NOTICE 'Column referral_count added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column referral_count already exists in users table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN
+                    ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0;
+                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports already exists in users table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='first_bet_placed_at') THEN
+                    ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ;
+                    RAISE NOTICE 'Column first_bet_placed_at added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column first_bet_placed_at already exists in users table.';
+                END IF;
+            END $$;
+        `);
+        console.log("DEBUG V9 FINAL: Users table checked/modified for Referral System.");
+
+        // ---- MODIFICATIONS FOR REFERRALS TABLE ----
+        await client.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN
+                    ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ;
+                    RAISE NOTICE 'Column qualifying_bet_processed_at added to referrals table.';
+                ELSE
+                    RAISE NOTICE 'Column qualifying_bet_processed_at already exists in referrals table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN
+                    ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb;
+                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved added to referrals table.';
+                ELSE
+                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved already exists in referrals table.';
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN
+                    ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
+                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports added to referrals table.';
+                ELSE
+                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports already exists in referrals table.';
+                END IF;
+            END $$;
+        `);
+        console.log("DEBUG V9 FINAL: Referrals table checked/modified for Referral System.");
+        // --- END OF MODIFICATIONS FOR REFERRAL SYSTEM ---
+
+        // --- NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
+        console.log("DEBUG V9 FINAL: Applying schema modifications for Level Up Bonus System...");
+
+        // ---- CREATE user_levels TABLE ----
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_levels (
+                level_id SERIAL PRIMARY KEY,
+                level_name VARCHAR(50) NOT NULL UNIQUE,
+                wager_threshold_usd DECIMAL(12, 2) NOT NULL, -- Wager requirement in USD
+                bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0, -- Bonus amount in USD for reaching this level
+                order_index INT UNIQUE NOT NULL, -- To define the progression of levels
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_levels_order_index ON user_levels(order_index);`);
+        console.log("DEBUG V9 FINAL: user_levels table checked/created.");
+
+        // ---- CREATE user_claimed_level_bonuses TABLE ----
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
+                claim_id SERIAL PRIMARY KEY,
+                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                level_id INT NOT NULL REFERENCES user_levels(level_id) ON DELETE CASCADE,
+                claimed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                bonus_amount_claimed_lamports BIGINT DEFAULT 0, -- Store the actual lamports claimed at the time
+                notes TEXT,
+                CONSTRAINT uq_user_level_claim UNIQUE (user_telegram_id, level_id) -- Ensure a user can claim bonus for a level only once
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_claimed_level_bonuses_user_level ON user_claimed_level_bonuses(user_telegram_id, level_id);`);
+        console.log("DEBUG V9 FINAL: user_claimed_level_bonuses table checked/created.");
+
+        // ---- MODIFICATIONS FOR USERS TABLE (for Level Up System) ----
+        await client.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='current_level_id') THEN
+                    ALTER TABLE users ADD COLUMN current_level_id INT REFERENCES user_levels(level_id) DEFAULT NULL;
+                    RAISE NOTICE 'Column current_level_id added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column current_level_id already exists in users table.';
+                END IF;
+
+                -- The rank (#751) shown in the screenshot seems like a global rank based on wager.
+                -- We can calculate this dynamically or store it if performance becomes an issue.
+                -- For now, we won't add a dedicated rank column, as it can be derived.
+                -- If you decide to store it later:
+                -- IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='overall_rank') THEN
+                --     ALTER TABLE users ADD COLUMN overall_rank INT DEFAULT NULL;
+                -- END IF;
+            END $$;
+        `);
+        console.log("DEBUG V9 FINAL: Users table checked/modified for Level Up Bonus System.");
+        // --- END OF NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
+
+
+        // Update function for 'updated_at' columns
+        console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
+        await client.query(`
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
+    NEW.updated_at = NOW();
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;`);
-        console.log("DEBUG V9 FINAL: Trigger function processed. Applying triggers to tables...");
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
-        for (const tableName of tablesWithUpdatedAt) {
-            console.log(`DEBUG V9 FINAL: Checking/Setting trigger for ${tableName}...`);
-            const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
-            const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
+        console.log("DEBUG V9 FINAL: Trigger function processed. Applying triggers to tables...");
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
+        for (const tableName of tablesWithUpdatedAt) {
+            console.log(`DEBUG V9 FINAL: Checking/Setting trigger for ${tableName}...`);
+            const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
+            const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
 
-            if (triggerExistsRes.rowCount === 0) {
-                const createTriggerQuery = `
+            if (triggerExistsRes.rowCount === 0) {
+                const createTriggerQuery = `
 CREATE TRIGGER set_timestamp
 BEFORE UPDATE ON ${tableName}
 FOR EACH ROW
 EXECUTE FUNCTION trigger_set_timestamp();`;
-                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
-            }
-        }
-        console.log("DEBUG V9 FINAL: Triggers processed.");
+                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
+            }
+        }
+        console.log("DEBUG V9 FINAL: Triggers processed.");
 
-        await client.query('COMMIT');
-        console.log("✅ V9 FINAL CLEAN WHITESPACE: Database schema initialization complete (ALL TABLES & TRIGGERS).");
+        await client.query('COMMIT');
+        console.log("✅ V9 FINAL CLEAN WHITESPACE: Database schema initialization complete (ALL TABLES & TRIGGERS).");
 
-    } catch (e) {
-        try {
-            console.log("DEBUG V9 FINAL: Error caught, attempting ROLLBACK...");
-            await client.query('ROLLBACK');
-            console.log("DEBUG V9 FINAL: ROLLBACK executed.");
-        } catch (rbError) {
-            console.error("DEBUG V9 FINAL: Error during ROLLBACK attempt:", rbError);
-        }
-        console.error('❌ V9 FINAL CLEAN WHITESPACE: Error during database schema initialization:', e);
-        throw e; // Re-throw the original error to be caught by the main init error handler
-    } finally {
-        client.release();
-    }
+    } catch (e) {
+        try {
+            console.log("DEBUG V9 FINAL: Error caught, attempting ROLLBACK...");
+            await client.query('ROLLBACK');
+            console.log("DEBUG V9 FINAL: ROLLBACK executed.");
+        } catch (rbError) {
+            console.error("DEBUG V9 FINAL: Error during ROLLBACK attempt:", rbError);
+        }
+        console.error('❌ V9 FINAL CLEAN WHITESPACE: Error during database schema initialization:', e);
+        throw e; // Re-throw the original error to be caught by the main init error handler
+    } finally {
+        client.release();
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -1360,140 +1361,140 @@ EXECUTE FUNCTION trigger_set_timestamp();`;
 
 // Replace your entire existing getOrCreateUser function (in Part 2) with this:
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
+    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
 
-    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
-        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
-        console.trace("Trace for undefined telegramId call");
-        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
-            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
-                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
-        }
-        return null;
-    }
+    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
+        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
+        console.trace("Trace for undefined telegramId call");
+        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
+            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
+                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
+        }
+        return null;
+    }
 
-    const stringTelegramId = String(telegramId).trim();
-    const LOG_PREFIX_GOCU = `[GetCreateUser_Lvl TG:${stringTelegramId}]`; // Added _Lvl
+    const stringTelegramId = String(telegramId).trim();
+    const LOG_PREFIX_GOCU = `[GetCreateUser_Lvl TG:${stringTelegramId}]`; // Added _Lvl
 
-    const sanitizeString = (str) => {
-        if (typeof str !== 'string') return null;
-        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim();
-        return cleaned.substring(0, 255);
-    };
+    const sanitizeString = (str) => {
+        if (typeof str !== 'string') return null;
+        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim();
+        return cleaned.substring(0, 255);
+    };
 
-    const sUsername = username ? sanitizeString(username) : null;
-    const sFirstName = firstName ? sanitizeString(firstName) : null;
-    const sLastName = lastName ? sanitizeString(lastName) : null;
+    const sUsername = username ? sanitizeString(username) : null;
+    const sFirstName = firstName ? sanitizeString(firstName) : null;
+    const sLastName = lastName ? sanitizeString(lastName) : null;
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-        let referrerId = null;
-        if (referrerIdInput !== null && referrerIdInput !== undefined) {
-            try { referrerId = BigInt(referrerIdInput); } catch (parseError) { referrerId = null; }
-        }
+        let referrerId = null;
+        if (referrerIdInput !== null && referrerIdInput !== undefined) {
+            try { referrerId = BigInt(referrerIdInput); } catch (parseError) { referrerId = null; }
+        }
 
-        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0) {
-            const user = result.rows[0];
-            user.balance = BigInt(user.balance);
-            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
-            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
-            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
-            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
-            user.referral_count = parseInt(user.referral_count || '0', 10);
-            user.total_referral_earnings_paid_lamports = BigInt(user.total_referral_earnings_paid_lamports || '0');
-            user.current_level_id = user.current_level_id !== null ? parseInt(user.current_level_id, 10) : null; // Handle current_level_id
+        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
+            user.balance = BigInt(user.balance);
+            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
+            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
+            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
+            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
+            user.referral_count = parseInt(user.referral_count || '0', 10);
+            user.total_referral_earnings_paid_lamports = BigInt(user.total_referral_earnings_paid_lamports || '0');
+            user.current_level_id = user.current_level_id !== null ? parseInt(user.current_level_id, 10) : null; // Handle current_level_id
 
-            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
+            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
-            let detailsChanged = false;
-            const currentUsername = user.username || '';
-            const currentFirstName = user.first_name || '';
-            const currentLastName = user.last_name || '';
+            let detailsChanged = false;
+            const currentUsername = user.username || '';
+            const currentFirstName = user.first_name || '';
+            const currentLastName = user.last_name || '';
 
-            if (sUsername && currentUsername !== sUsername) detailsChanged = true;
-            if (sFirstName && currentFirstName !== sFirstName) detailsChanged = true;
-            if (sLastName && currentLastName !== sLastName) detailsChanged = true;
-            if (!currentUsername && sUsername) detailsChanged = true;
-            if (!currentFirstName && sFirstName) detailsChanged = true;
-            if (!currentLastName && sLastName && sLastName !== '') detailsChanged = true;
+            if (sUsername && currentUsername !== sUsername) detailsChanged = true;
+            if (sFirstName && currentFirstName !== sFirstName) detailsChanged = true;
+            if (sLastName && currentLastName !== sLastName) detailsChanged = true;
+            if (!currentUsername && sUsername) detailsChanged = true;
+            if (!currentFirstName && sFirstName) detailsChanged = true;
+            if (!currentLastName && sLastName && sLastName !== '') detailsChanged = true;
 
-            if (detailsChanged) {
-                await client.query(
-                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
-                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
-                );
-            } else {
-                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
-            }
-            await client.query('COMMIT');
-            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-            const finalUser = updatedUserRow.rows[0];
-            // Reparse all necessary fields including new ones
-            finalUser.balance = BigInt(finalUser.balance);
-            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
-            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
-            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
-            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
-            finalUser.referral_count = parseInt(finalUser.referral_count || '0', 10);
-            finalUser.total_referral_earnings_paid_lamports = BigInt(finalUser.total_referral_earnings_paid_lamports || '0');
-            finalUser.current_level_id = finalUser.current_level_id !== null ? parseInt(finalUser.current_level_id, 10) : null;
-            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
-            return finalUser;
-        } else {
-            const newReferralCode = generateReferralCode();
-            // *** MODIFIED INSERT to include current_level_id (as NULL) and other referral defaults ***
-            const insertQuery = `
-                INSERT INTO users (
-                    telegram_id, username, first_name, last_name, balance, referral_code, 
-                    referrer_telegram_id, last_active_timestamp, created_at, updated_at,
-                    referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at,
-                    current_level_id 
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL)
-                RETURNING *;
-            `;
-            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
-            result = await client.query(insertQuery, values);
-            const newUser = result.rows[0];
+            if (detailsChanged) {
+                await client.query(
+                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
+                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
+                );
+            } else {
+                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+            }
+            await client.query('COMMIT');
+            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+            const finalUser = updatedUserRow.rows[0];
+            // Reparse all necessary fields including new ones
+            finalUser.balance = BigInt(finalUser.balance);
+            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
+            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
+            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
+            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
+            finalUser.referral_count = parseInt(finalUser.referral_count || '0', 10);
+            finalUser.total_referral_earnings_paid_lamports = BigInt(finalUser.total_referral_earnings_paid_lamports || '0');
+            finalUser.current_level_id = finalUser.current_level_id !== null ? parseInt(finalUser.current_level_id, 10) : null;
+            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
+            return finalUser;
+        } else {
+            const newReferralCode = generateReferralCode();
+            // *** MODIFIED INSERT to include current_level_id (as NULL) and other referral defaults ***
+            const insertQuery = `
+                INSERT INTO users (
+                    telegram_id, username, first_name, last_name, balance, referral_code, 
+                    referrer_telegram_id, last_active_timestamp, created_at, updated_at,
+                    referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at,
+                    current_level_id 
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL)
+                RETURNING *;
+            `;
+            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
+            result = await client.query(insertQuery, values);
+            const newUser = result.rows[0];
 
-            // Reparse all necessary fields including new ones
-            newUser.balance = BigInt(newUser.balance);
-            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
-            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
-            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
-            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
-            newUser.referral_count = parseInt(newUser.referral_count || '0', 10);
-            newUser.total_referral_earnings_paid_lamports = BigInt(newUser.total_referral_earnings_paid_lamports || '0');
-            newUser.current_level_id = newUser.current_level_id !== null ? parseInt(newUser.current_level_id, 10) : null;
+            // Reparse all necessary fields including new ones
+            newUser.balance = BigInt(newUser.balance);
+            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
+            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
+            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
+            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
+            newUser.referral_count = parseInt(newUser.referral_count || '0', 10);
+            newUser.total_referral_earnings_paid_lamports = BigInt(newUser.total_referral_earnings_paid_lamports || '0');
+            newUser.current_level_id = newUser.current_level_id !== null ? parseInt(newUser.current_level_id, 10) : null;
 
-            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
+            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
 
-            if (referrerId) {
-                try {
-                    await client.query(
-                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
-                         ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
-                        [referrerId, newUser.telegram_id]
-                    );
-                } catch (referralError) {
-                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
-                }
-            }
-            await client.query('COMMIT');
-            return newUser;
-        }
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message} (SQL State: ${error.code})`, error.stack?.substring(0,700));
-        return null;
-    } finally {
-        client.release();
-    }
+            if (referrerId) {
+                try {
+                    await client.query(
+                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
+                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
+                         ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                        [referrerId, newUser.telegram_id]
+                    );
+                } catch (referralError) {
+                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
+                }
+            }
+            await client.query('COMMIT');
+            return newUser;
+        }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message} (SQL State: ${error.code})`, error.stack?.substring(0,700));
+        return null;
+    } finally {
+        client.release();
+    }
 }
 
 async function updateUserActivity(telegramId) {
@@ -1641,92 +1642,92 @@ async function getUserLinkedWallet(telegramId) {
 
 // --- Start of new findRecipientUser function ---
 /**
- * Finds a user by their Telegram ID or username.
- * @param {string} identifier - The user's Telegram ID or @username.
- * @param {import('pg').PoolClient} [dbClient=pool] - Optional database client.
- * @returns {Promise<object|null>} User object from getOrCreateUser if found, otherwise null.
- */
+ * Finds a user by their Telegram ID or username.
+ * @param {string} identifier - The user's Telegram ID or @username.
+ * @param {import('pg').PoolClient} [dbClient=pool] - Optional database client.
+ * @returns {Promise<object|null>} User object from getOrCreateUser if found, otherwise null.
+ */
 async function findRecipientUser(identifier, dbClient = pool) {
-    const logPrefix = `[FindRecipientUser Ident:${identifier}]`;
-    let recipientUser = null;
+    const logPrefix = `[FindRecipientUser Ident:${identifier}]`;
+    let recipientUser = null;
 
-    if (!identifier || typeof identifier !== 'string') {
-        console.warn(`${logPrefix} Invalid identifier provided.`);
-        return null;
-    }
+    if (!identifier || typeof identifier !== 'string') {
+        console.warn(`${logPrefix} Invalid identifier provided.`);
+        return null;
+    }
 
-    try {
-        if (identifier.startsWith('@')) {
-            const usernameToFind = identifier.substring(1);
-            if (!usernameToFind) {
-                console.warn(`${logPrefix} Empty username provided after @ symbol.`);
-                return null;
-            }
-            // Ensure queryDatabase is available in this scope
-            const userRes = await queryDatabase('SELECT telegram_id, username, first_name, last_name FROM users WHERE LOWER(username) = LOWER($1)', [usernameToFind], dbClient);
-            if (userRes.rows.length > 0) {
-                // Ensure getOrCreateUser is available in this scope
-                recipientUser = await getOrCreateUser(userRes.rows[0].telegram_id, userRes.rows[0].username, userRes.rows[0].first_name, userRes.rows[0].last_name);
-            } else {
-                console.log(`${logPrefix} User with username "${usernameToFind}" not found.`);
-            }
-        } else if (/^\d+$/.test(identifier)) {
-            // Ensure getOrCreateUser is available in this scope
-            // Attempt to fetch the user. If they don't exist, getOrCreateUser will return null if it can't create based on ID alone (which is fine for tipping, recipient should exist).
-            recipientUser = await getOrCreateUser(identifier); // Pass only ID, other params are for creation if needed
-            if (!recipientUser) {
-                 console.log(`${logPrefix} User with ID "${identifier}" not found (getOrCreateUser returned null).`);
-            }
-        } else {
-            console.warn(`${logPrefix} Identifier "${identifier}" is not a valid Telegram ID or @username format.`);
-        }
-    } catch (error) {
-        console.error(`${logPrefix} Error finding recipient user: ${error.message}`, error.stack?.substring(0, 500));
-        return null; // Return null on error
-    }
+    try {
+        if (identifier.startsWith('@')) {
+            const usernameToFind = identifier.substring(1);
+            if (!usernameToFind) {
+                console.warn(`${logPrefix} Empty username provided after @ symbol.`);
+                return null;
+            }
+            // Ensure queryDatabase is available in this scope
+            const userRes = await queryDatabase('SELECT telegram_id, username, first_name, last_name FROM users WHERE LOWER(username) = LOWER($1)', [usernameToFind], dbClient);
+            if (userRes.rows.length > 0) {
+                // Ensure getOrCreateUser is available in this scope
+                recipientUser = await getOrCreateUser(userRes.rows[0].telegram_id, userRes.rows[0].username, userRes.rows[0].first_name, userRes.rows[0].last_name);
+            } else {
+                console.log(`${logPrefix} User with username "${usernameToFind}" not found.`);
+            }
+        } else if (/^\d+$/.test(identifier)) {
+            // Ensure getOrCreateUser is available in this scope
+            // Attempt to fetch the user. If they don't exist, getOrCreateUser will return null if it can't create based on ID alone (which is fine for tipping, recipient should exist).
+            recipientUser = await getOrCreateUser(identifier); // Pass only ID, other params are for creation if needed
+            if (!recipientUser) {
+                 console.log(`${logPrefix} User with ID "${identifier}" not found (getOrCreateUser returned null).`);
+            }
+        } else {
+            console.warn(`${logPrefix} Identifier "${identifier}" is not a valid Telegram ID or @username format.`);
+        }
+    } catch (error) {
+        console.error(`${logPrefix} Error finding recipient user: ${error.message}`, error.stack?.substring(0, 500));
+        return null; // Return null on error
+    }
 
-    if (!recipientUser) {
-         console.log(`${logPrefix} No recipient user found for identifier: ${identifier}`);
-    }
-    return recipientUser;
+    if (!recipientUser) {
+         console.log(`${logPrefix} No recipient user found for identifier: ${identifier}`);
+    }
+    return recipientUser;
 }
 // --- End of new findRecipientUser function ---
 
 // From Part 2: Database Schema Initialization & Core User Management
 
 async function getNextAddressIndexForUserDB(userId, dbClient = pool) {
-    const stringUserId = String(userId);
-    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`;
-    try {
-        // SQL query (ensure this is also clean from previous fix)
-        const query = `SELECT derivation_path FROM user_deposit_wallets WHERE user_telegram_id = $1 ORDER BY created_at DESC;`;
+    const stringUserId = String(userId);
+    const LOG_PREFIX_GNAI = `[NextAddrIdx TG:${stringUserId}]`;
+    try {
+        // SQL query (ensure this is also clean from previous fix)
+        const query = `SELECT derivation_path FROM user_deposit_wallets WHERE user_telegram_id = $1 ORDER BY created_at DESC;`;
 
-        const res = await queryDatabase(query, [stringUserId], dbClient);
-        let maxIndex = -1;
+        const res = await queryDatabase(query, [stringUserId], dbClient);
+        let maxIndex = -1;
 
-        if (res.rows.length > 0) {
-            for (const row of res.rows) {
-                const path = row.derivation_path;
-                const parts = path.split('/');
-                if (parts.length >= 6) { 
-                    const lastPart = parts[parts.length - 1];
-                    if (lastPart.endsWith("'")) {
-                        const indexStr = lastPart.substring(0, lastPart.length - 1);
-                        const currentIndex = parseInt(indexStr, 10);
-                        if (!isNaN(currentIndex) && currentIndex > maxIndex) {
-                            maxIndex = currentIndex;
-                        }
-                    }
-                }
-            }
-        }
-        const nextIndex = maxIndex + 1;
-        return nextIndex;
-    } catch (error) {
-        // CORRECTED LINE: Ensure this uses backticks (`) for the template literal
-        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack?.substring(0,300));
-        throw error; 
-    }
+        if (res.rows.length > 0) {
+            for (const row of res.rows) {
+                const path = row.derivation_path;
+                const parts = path.split('/');
+                if (parts.length >= 6) { 
+                    const lastPart = parts[parts.length - 1];
+                    if (lastPart.endsWith("'")) {
+                        const indexStr = lastPart.substring(0, lastPart.length - 1);
+                        const currentIndex = parseInt(indexStr, 10);
+                        if (!isNaN(currentIndex) && currentIndex > maxIndex) {
+                            maxIndex = currentIndex;
+                        }
+                    }
+                }
+            }
+        }
+        const nextIndex = maxIndex + 1;
+        return nextIndex;
+    } catch (error) {
+        // CORRECTED LINE: Ensure this uses backticks (`) for the template literal
+        console.error(`${LOG_PREFIX_GNAI} Error calculating next address index: ${error.message}`, error.stack?.substring(0,300));
+        throw error; 
+    }
 }
 
 async function deleteUserAccount(telegramId) {
@@ -1801,6 +1802,168 @@ async function deleteUserAccount(telegramId) {
         client.release();
     }
 }
+
+// --- NEW Function to Initialize/Update User Levels from Config ---
+/**
+ * Populates or updates the user_levels table from the LEVEL_CONFIG.
+ * Should be called once during bot initialization after DB schema is ready.
+ * @param {import('pg').PoolClient} [extClient=null] - Optional external DB client.
+ */
+async function initializeLevelsDB(extClient = null) {
+    const LOG_PREFIX_INIT_LVL = "[InitLevelsDB]";
+    console.log(`${LOG_PREFIX_INIT_LVL} ⚙️ Starting population/verification of 'user_levels' table from LEVEL_CONFIG...`);
+
+    const client = extClient || await pool.connect();
+
+    try {
+        if (!extClient) { // Only begin/commit if we connected our own client
+            await client.query('BEGIN');
+        }
+
+        if (!LEVEL_CONFIG || LEVEL_CONFIG.length === 0) {
+            console.warn(`${LOG_PREFIX_INIT_LVL} LEVEL_CONFIG is empty or not defined. No levels to populate.`);
+            if (!extClient) await client.query('COMMIT'); // Commit if no levels, table is just empty
+            return;
+        }
+
+        let levelsProcessed = 0;
+
+        for (const level of LEVEL_CONFIG) {
+            if (typeof level.order_index !== 'number' || !level.name || typeof level.wager_threshold_usd !== 'number' || typeof level.bonus_amount_usd !== 'number') {
+                console.warn(`${LOG_PREFIX_INIT_LVL} ⚠️ Skipping invalid level config entry: ${JSON.stringify(level)}`);
+                continue;
+            }
+
+            const upsertQuery = `
+                INSERT INTO user_levels (order_index, level_name, wager_threshold_usd, bonus_amount_usd, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, NOW(), NOW())
+                ON CONFLICT (order_index) DO UPDATE SET
+                    level_name = EXCLUDED.level_name,
+                    wager_threshold_usd = EXCLUDED.wager_threshold_usd,
+                    bonus_amount_usd = EXCLUDED.bonus_amount_usd,
+                    updated_at = NOW()
+                RETURNING xmax;
+            `;
+            
+            await client.query(upsertQuery, [
+                level.order_index,
+                level.name,
+                level.wager_threshold_usd.toFixed(2),
+                level.bonus_amount_usd.toFixed(2)
+            ]);
+            levelsProcessed++;
+        }
+
+        console.log(`${LOG_PREFIX_INIT_LVL} ✅ Processed ${levelsProcessed} level configurations. 'user_levels' table synchronized with LEVEL_CONFIG.`);
+
+        if (!extClient) {
+            await client.query('COMMIT');
+        }
+    } catch (error) {
+        if (!extClient) {
+            await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_INIT_LVL} Rollback error: ${rbErr.message}`));
+        }
+        console.error(`${LOG_PREFIX_INIT_LVL} ❌ Error initializing/updating user_levels table: ${error.message}`, error.stack);
+        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') { // Added escapeMarkdownV2 check
+            notifyAdmin(`🚨 CRITICAL DB Error: Failed to initialize user_levels table from config. Leveling system may be broken.\nError: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
+        }
+    } finally {
+        if (!extClient) {
+            client.release();
+        }
+    }
+}
+
+// --- NEW Function to Check and Update User Level ---
+/**
+ * Checks if a user has reached a new level based on their total wagers
+ * and updates their current_level_id in the users table.
+ * This should be called within the same DB transaction as wager updates.
+ * @param {import('pg').PoolClient} dbClient - The active database client for the transaction.
+ * @param {string} userId - The user's Telegram ID.
+ * @param {bigint} newTotalWageredLamports - The user's new total wagered amount in lamports.
+ */
+async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports) {
+    const LOG_PREFIX_CHECK_LVL = `[CheckUserLevel UID:${userId}]`;
+    // console.log(`${LOG_PREFIX_CHECK_LVL} Checking level eligibility. Total wagered lamports: ${newTotalWageredLamports}`); // Can be noisy
+
+    try {
+        const solPrice = await getSolUsdPrice(); // Assumes getSolUsdPrice is available
+        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice; // Assumes LAMPORTS_PER_SOL is available
+
+        const currentUserData = await dbClient.query(
+            `SELECT u.current_level_id, ul.order_index AS current_order_index, ul.level_name AS current_level_name
+             FROM users u
+             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+             WHERE u.telegram_id = $1 FOR UPDATE OF u`,
+            [userId]
+        );
+
+        if (currentUserData.rowCount === 0) {
+            console.warn(`${LOG_PREFIX_CHECK_LVL} User not found. Cannot update level.`);
+            return;
+        }
+
+        const currentLevelId = currentUserData.rows[0].current_level_id;
+        const currentOrderIndex = currentUserData.rows[0].current_order_index || 0;
+        const currentLevelName = currentUserData.rows[0].current_level_name || "Newcomer";
+
+        const allLevelsRes = await dbClient.query(
+            `SELECT level_id, level_name, wager_threshold_usd, bonus_amount_usd, order_index
+             FROM user_levels
+             ORDER BY order_index ASC`
+        );
+
+        let newPotentialLevelId = currentLevelId;
+        let newPotentialLevelName = currentLevelName;
+        let newPotentialOrderIndex = currentOrderIndex;
+        let newLevelReachedNotification = null;
+        let newLevelDataForNotification = null;
+
+
+        for (const level of allLevelsRes.rows) {
+            if (totalWageredUSD >= parseFloat(level.wager_threshold_usd)) {
+                if (level.order_index > newPotentialOrderIndex) {
+                    newPotentialLevelId = level.level_id;
+                    newPotentialLevelName = level.level_name;
+                    newPotentialOrderIndex = level.order_index;
+                    newLevelDataForNotification = level; // Store the whole level data for bonus info
+                }
+            } else {
+                break;
+            }
+        }
+
+        if (newPotentialLevelId !== currentLevelId && newPotentialOrderIndex > currentOrderIndex) {
+            await dbClient.query(
+                `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
+                [newPotentialLevelId, userId]
+            );
+            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From ${currentLevelName} (Order: ${currentOrderIndex}) to ${newPotentialLevelName} (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
+
+            const bonusAmountForNewLevelUSD = parseFloat(newLevelDataForNotification?.bonus_amount_usd || '0.00');
+            // Ensure getPlayerDisplayReference and escapeMarkdownV2 are available
+            const playerRef = typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({telegram_id: userId, username: currentUserData.rows[0].username, first_name: currentUserData.rows[0].first_name}) : `User ${userId}`;
+            
+            newLevelReachedNotification = `🎉 **LEVEL UP, ${playerRef}!** 🎉\n\nCongratulations, you've reached **${escapeMarkdownV2(newPotentialLevelName)}**!`;
+            if (bonusAmountForNewLevelUSD > 0) {
+                newLevelReachedNotification += `\nA new bonus of approx. *\$${bonusAmountForNewLevelUSD.toFixed(2)}* is now available for you to claim from the \`/bonus\` menu! 💰`;
+            }
+            newLevelReachedNotification += `\n\nKeep playing to reach new heights! 🚀`;
+        }
+
+        if (newLevelReachedNotification && typeof safeSendMessage === 'function') {
+            safeSendMessage(userId, newLevelReachedNotification, { parse_mode: 'MarkdownV2' }).catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send level up DM: ${e.message}`));
+        }
+
+    } catch (error) {
+        console.error(`${LOG_PREFIX_CHECK_LVL} ❌ Error checking/updating user level: ${error.message}`, error.stack);
+        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
+            notifyAdmin(`⚠️ Error in Level Up Check for User ${userId}: ${escapeMarkdownV2(error.message)}. Balance update likely succeeded, but level up may have failed.`, { parse_mode: 'MarkdownV2' });
+        }
+    }
+}
+
 
 // --- End of Part 2 ---
 // --- Start of Part 3 (REVISED for new Group Session Lock Management) ---
@@ -11360,408 +11523,406 @@ function startJackpotSessionPolling() {
     }, initialPollDelay);
 }
 // --- End of 5e Background Task Initializers ---
-// --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations) ---
+// --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
 // index.js - Part 5a, Section 2: General Casino Bot Command Implementations
 //----------------------------------------------------------------------------------
 // Assumed dependencies from previous Parts:
 // Part 1: safeSendMessage, escapeMarkdownV2, escapeHTML, bot, BOT_NAME, BOT_VERSION, ADMIN_USER_ID, pool,
-//         MIN_BET_USD_val, MAX_BET_USD_val, TARGET_JACKPOT_SCORE_CONST, 
-//         MAIN_JACKPOT_ID, GAME_IDS,
-//         RULES_CALLBACK_PREFIX_CONST, QUICK_DEPOSIT_CALLBACK_ACTION_CONST, WITHDRAW_CALLBACK_ACTION_CONST, LAMPORTS_PER_SOL,
-//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, userStateCache
+//         MIN_BET_USD_val, MAX_BET_USD_val, TARGET_JACKPOT_SCORE_CONST, TARGET_JACKPOT_SCORE, // Added TARGET_JACKPOT_SCORE
+//         MAIN_JACKPOT_ID, GAME_IDS, LEVEL_CONFIG, // Added LEVEL_CONFIG for handleClaimLevelBonus
+//         RULES_CALLBACK_PREFIX_CONST, QUICK_DEPOSIT_CALLBACK_ACTION_CONST, WITHDRAW_CALLBACK_ACTION_CONST, LAMPORTS_PER_SOL,
+//         getSolUsdPrice, convertUSDToLamports, convertLamportsToUSDString, userStateCache
 // Part 2: getOrCreateUser, getUserBalance, queryDatabase, getUserByReferralCode, generateReferralCode, findRecipientUser
 // Part 3: getPlayerDisplayReference, formatCurrency, formatBalanceForDisplay
-// Part P3: clearUserState, handleMenuAction
+// Part P2: updateUserBalanceAndLedger (for handleClaimLevelBonus)
+// Part P3: clearUserState, handleMenuAction, handleWithdrawalConfirmation
 // (Other game-specific constants like LADDER_PAYOUTS, SLOT_PAYOUTS, etc., are assumed to be available from Part 1 if used directly here)
 
 // --- Command Handler Functions (General Casino Bot Commands) ---
 
 async function handleStartCommand(msg, args) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_START_V2 = `[StartCmd_V2 UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_START_V2 = `[StartCmd_V2 UID:${userId} CH:${chatId}]`;
 
-    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
+    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsernameToUse = selfInfo.username;
-    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
-    const botUsernameHTML = escapeHTML(botUsernameToUse);
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsernameToUse = selfInfo.username;
+    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
+    const botUsernameHTML = escapeHTML(botUsernameToUse);
 
-    if (args && args[0]) {
-        const deepLinkParam = args[0];
-        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
+    if (args && args[0]) {
+        const deepLinkParam = args[0];
+        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
 
-        if (deepLinkParam.startsWith('ref_')) {
-            const refCode = deepLinkParam.substring(4);
-            const referrerUserRecord = await getUserByReferralCode(refCode); // from Part 2
-            let refByDisplayHTML = "a fellow player";
+        if (deepLinkParam.startsWith('ref_')) {
+            const refCode = deepLinkParam.substring(4);
+            const referrerUserRecord = await getUserByReferralCode(refCode); // from Part 2
+            let refByDisplayHTML = "a fellow player";
 
-            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
-                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
-                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
-                
-                // Check if the current user *already* has a referrer_telegram_id from the latest userObject
-                if (!userObject.referrer_telegram_id) {
-                    let clientRefLink = null;
-                    try {
-                        clientRefLink = await pool.connect();
-                        await clientRefLink.query('BEGIN');
-                        // Update users table
-                        await clientRefLink.query(
-                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        // *** MODIFIED STATUS HERE ***
-                        await clientRefLink.query(
-                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
-                             VALUES ($1, $2, 'pending_qualifying_bet', NOW(), NOW())
-                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Assuming this unique constraint exists
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        await clientRefLink.query('COMMIT');
-                        userObject = await getOrCreateUser(userId); // Re-fetch userObject to reflect the change
-                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
-                    } catch (refError) {
-                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
-                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
-                    } finally {
-                        if(clientRefLink) clientRefLink.release();
-                    }
-                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
-                    // console.log(`${LOG_PREFIX_START_V2} User ${userId} already referred by ${referrerUserRecord.telegram_id}.`);
-                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord)); // Show who they were already referred by
-                } else {
-                    // User already has a different referrer, cannot change.
-                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
-                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
-                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
-                }
-            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
-                refByDisplayHTML = "yourself (clever try! 😉)";
-            } else if (!referrerUserRecord) {
-                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
-                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
-            }
-            
-            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.<br>Explore the casino using the menu I've just displayed!`;
-            if (chatType !== 'private') {
-                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
-            }
-            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
-            const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-            await handleHelpCommand(dmMsgContext); 
-            return;
-        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
-            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
-            const [actionName, ...actionParams] = actionDetails.split('_');
-            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!<br>Taking you to the requested section.`;
-            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
-            if (typeof handleMenuAction === 'function') {
-                // Ensure handleMenuAction gets correct parameters. It expects userId, originalChatId, originalMessageId, menuType, params, isFromCallback, originalChatType
-                // For a deep link, originalMessageId in DM is effectively null for a new interaction.
-                await handleMenuAction(userId, userId, null, actionName, actionParams, false, 'private'); // isFromCallback is false, as it's a command
-            } else {
-                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-                await handleHelpCommand(dmMsgContext);
-            }
-            return;
-        }
-    }
+            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
+                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
+                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
+                
+                // Check if the current user *already* has a referrer_telegram_id from the latest userObject
+                if (!userObject.referrer_telegram_id) {
+                    let clientRefLink = null;
+                    try {
+                        clientRefLink = await pool.connect();
+                        await clientRefLink.query('BEGIN');
+                        // Update users table
+                        await clientRefLink.query(
+                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        // *** MODIFIED STATUS HERE ***
+                        await clientRefLink.query(
+                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status, created_at, updated_at)
+                             VALUES ($1, $2, 'pending_qualifying_bet', NOW(), NOW())
+                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Assuming this unique constraint exists
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        await clientRefLink.query('COMMIT');
+                        userObject = await getOrCreateUser(userId); // Re-fetch userObject to reflect the change
+                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
+                    } catch (refError) {
+                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
+                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
+                    } finally {
+                        if(clientRefLink) clientRefLink.release();
+                    }
+                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
+                    // console.log(`${LOG_PREFIX_START_V2} User ${userId} already referred by ${referrerUserRecord.telegram_id}.`);
+                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord)); // Show who they were already referred by
+                } else {
+                    // User already has a different referrer, cannot change.
+                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
+                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
+                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
+                }
+            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
+                refByDisplayHTML = "yourself (clever try! 😉)";
+            } else if (!referrerUserRecord) {
+                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
+                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
+            }
+            
+            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.<br>Explore the casino using the menu I've just displayed!`;
+            if (chatType !== 'private') {
+                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
+            }
+            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
+            const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+            await handleHelpCommand(dmMsgContext); 
+            return;
+        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
+            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
+            const [actionName, ...actionParams] = actionDetails.split('_');
+            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!<br>Taking you to the requested section.`;
+            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
+            if (typeof handleMenuAction === 'function') {
+                await handleMenuAction(userId, userId, null, actionName, actionParams, false, 'private');
+            } else {
+                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+                await handleHelpCommand(dmMsgContext);
+            }
+            return;
+        }
+    }
 
-    if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+    if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
 
-    if (chatType === 'group' || chatType === 'supergroup') {
-        if (msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
-        const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-        await handleHelpCommand(dmMsgContext);
-    } else { 
-        // Private chat, msg.message_id might be the /start command itself, ok to delete before sending menu
-        if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
-        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} }; // Ensure chat context is correct for DM
-        await handleHelpCommand(privateStartMsgContext);
-    }
+    if (chatType === 'group' || chatType === 'supergroup') {
+        if (msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
+        const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+        await handleHelpCommand(dmMsgContext);
+    } else { 
+        if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
+        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} };
+        await handleHelpCommand(privateStartMsgContext);
+    }
 }
 
 async function handleHelpCommand(msg) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const dmChatId = String(msg.chat.id); 
-    const originalMessageIdToEdit = (msg.chat.type === 'private' && msg.message_id && msg.message?.from?.is_bot) ? msg.message_id : null;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const dmChatId = String(msg.chat.id); 
+    const originalMessageIdToEdit = (msg.chat.type === 'private' && msg.message_id && msg.message?.from?.is_bot) ? msg.message_id : null;
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    const botNameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    const botNameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
 
-    const helpMessageHTML = `🎉 Welcome to <b>${escapeHTML(botNameToUse)}</b>, ${playerRefHTML}!\n\n` +
-                            `Your casino adventure starts here. What would you like to do?`;
-    const helpKeyboard = {
-        inline_keyboard: [
-            [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
-            [{ text: "🎲 Play Games", callback_data: "menu:games_overview" }],
-            [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],
-            [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
-        ]
-    };
+    const helpMessageHTML = `🎉 Welcome to <b>${escapeHTML(botNameToUse)}</b>, ${playerRefHTML}!\n\n` +
+                            `Your casino adventure starts here. What would you like to do?`;
+    const helpKeyboard = {
+        inline_keyboard: [
+            [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
+            [{ text: "🎲 Play Games", callback_data: "menu:games_overview" }],
+            [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],
+            [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
+        ]
+    };
 
-    if (originalMessageIdToEdit) {
-        try {
-            await bot.editMessageText(helpMessageHTML, {
-                chat_id: dmChatId, message_id: Number(originalMessageIdToEdit),
-                parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true
-            });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
-            }
-        }
-    } else {
-        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
-    }
+    if (originalMessageIdToEdit) {
+        try {
+            await bot.editMessageText(helpMessageHTML, {
+                chat_id: dmChatId, message_id: Number(originalMessageIdToEdit),
+                parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true
+            });
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+            }
+        }
+    } else {
+        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+    }
 }
 
 async function handleRulesCommand(invokedInChatIdStr, userObj, msgIdInInvokedChatStr = null, isEditAttempt = false, invokedChatType = 'private') {
-    const invokedInChatId = String(invokedInChatIdStr);
-    const msgIdInInvokedChat = msgIdInInvokedChatStr ? Number(msgIdInInvokedChatStr) : null;
-    const userIdAsDmChatId = String(userObj.telegram_id);
-    
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
-    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsernameToUse = selfInfo.username; } catch (e) {}
-    const botUsernameHTML = escapeHTML(botUsernameToUse); // escape for HTML
+    const invokedInChatId = String(invokedInChatIdStr);
+    const msgIdInInvokedChat = msgIdInInvokedChatStr ? Number(msgIdInInvokedChatStr) : null;
+    const userIdAsDmChatId = String(userObj.telegram_id);
+    
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
+    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsernameToUse = selfInfo.username; } catch (e) {}
+    const botUsernameHTML = escapeHTML(botUsernameToUse); // escape for HTML
 
-    if (invokedChatType !== 'private') {
-        const redirectMsgHTML = `${playerRefHTML}, I've sent the Game Rules menu to our private chat: @${botUsernameHTML} 📖 Please check your DMs.`;
-        if (isEditAttempt && msgIdInInvokedChat) {
-            try {
-                await bot.editMessageText(redirectMsgHTML, {
-                    chat_id: invokedInChatId, message_id: msgIdInInvokedChat, parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: `📬 Open DM @${botUsernameHTML}`, url: `https://t.me/${botUsernameToUse}?start=menu_rules_list` }]]}
-                });
-            } catch (e) {
-                 if (!e.message?.toLowerCase().includes("message is not modified")) {
-                    await safeSendMessage(invokedInChatId, redirectMsgHTML, { parse_mode: 'HTML' });
-                }
-            }
-        } else {
-            if(msgIdInInvokedChat) await bot.deleteMessage(invokedInChatId, msgIdInInvokedChat).catch(()=>{});
-            await safeSendMessage(invokedInChatId, redirectMsgHTML, { parse_mode: 'HTML' });
-        }
-    }
+    if (invokedChatType !== 'private') {
+        const redirectMsgHTML = `${playerRefHTML}, I've sent the Game Rules menu to our private chat: @${botUsernameHTML} 📖 Please check your DMs.`;
+        if (isEditAttempt && msgIdInInvokedChat) {
+            try {
+                await bot.editMessageText(redirectMsgHTML, {
+                    chat_id: invokedInChatId, message_id: msgIdInInvokedChat, parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: [[{ text: `📬 Open DM @${botUsernameHTML}`, url: `https://t.me/${botUsernameToUse}?start=menu_rules_list` }]]}
+                });
+            } catch (e) {
+                 if (!e.message?.toLowerCase().includes("message is not modified")) {
+                    await safeSendMessage(invokedInChatId, redirectMsgHTML, { parse_mode: 'HTML' });
+                }
+            }
+        } else {
+            if(msgIdInInvokedChat) await bot.deleteMessage(invokedInChatId, msgIdInInvokedChat).catch(()=>{});
+            await safeSendMessage(invokedInChatId, redirectMsgHTML, { parse_mode: 'HTML' });
+        }
+    }
 
-    const rulesIntroTextHTML = `📚 <b>${escapeHTML(BOT_NAME)} Gamepedia Central</b> 📚\n\n` + // Use global BOT_NAME
-                               `Hey ${playerRefHTML}, welcome! Select a game to learn its rules. 👇`;
+    const rulesIntroTextHTML = `📚 <b>${escapeHTML(BOT_NAME)} Gamepedia Central</b> 📚\n\n` + // Use global BOT_NAME
+                               `Hey ${playerRefHTML}, welcome! Select a game to learn its rules. 👇`;
 
-    const gameRuleButtons = Object.entries(GAME_IDS)
-        .filter(([key, gameCode]) => 
-            (gameCode === GAME_IDS.COINFLIP || 
-             gameCode === GAME_IDS.RPS || 
-             gameCode === GAME_IDS.DICE_ESCALATOR || 
-             gameCode === GAME_IDS.DICE_21 ||        
-             gameCode === GAME_IDS.DUEL ||           
-             gameCode === GAME_IDS.MINES ||          
-             gameCode === GAME_IDS.OVER_UNDER_7 ||
-             gameCode === GAME_IDS.LADDER ||
-             gameCode === GAME_IDS.SEVEN_OUT ||      
-             gameCode === GAME_IDS.SLOT_FRENZY) &&
-            !key.endsWith("_PVB") && !key.endsWith("_PVP") && !key.includes("_FROM_") 
-            && gameCode !== GAME_IDS.DIRECT_PVP_CHALLENGE 
-            && !key.endsWith("_UNIFIED_OFFER") && gameCode !== GAME_IDS.MINES_OFFER // Simpler filter: target base game IDs for rules menu
-        )
-        .map(([key, gameCode]) => {
-            let gameName = gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-            let ruleCallbackKey = gameCode; 
-            let emoji = '❓';
-            
-            if (gameCode === GAME_IDS.COINFLIP) { gameName = "Coinflip"; emoji = '🪙'; }
-            else if (gameCode === GAME_IDS.RPS) { gameName = "Rock Paper Scissors"; emoji = '✂️'; }
-            else if (gameCode === GAME_IDS.DICE_ESCALATOR) { gameName = "Dice Escalator"; emoji = '🎲'; ruleCallbackKey = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER;}
-            else if (gameCode === GAME_IDS.DICE_21) { gameName = "Dice 21 (Blackjack)"; emoji = '🃏'; }
-            else if (gameCode === GAME_IDS.DUEL) { gameName = "Duel / Highroller"; emoji = '⚔️'; ruleCallbackKey = GAME_IDS.DUEL_UNIFIED_OFFER; }
-            else if (gameCode === GAME_IDS.MINES) { gameName = "Mines"; emoji = '💣';}
-            else if (gameCode === GAME_IDS.OVER_UNDER_7) { gameName = "Over/Under 7"; emoji = '🎲'; }
-            else if (gameCode === GAME_IDS.LADDER) { gameName = "Greed's Ladder"; emoji = '🪜'; }
-            else if (gameCode === GAME_IDS.SEVEN_OUT) { gameName = "Lucky Sum"; emoji = '🎲'; }
-            else if (gameCode === GAME_IDS.SLOT_FRENZY) { gameName = "Slot Frenzy"; emoji = '🎰'; }
-            
-            return { text: `${emoji} ${escapeHTML(gameName)}`, callback_data: `${RULES_CALLBACK_PREFIX_CONST}${ruleCallbackKey}` };
-        })
-        .filter((button, index, self) => index === self.findIndex((b) => b.callback_data === button.callback_data));
+    const gameRuleButtons = Object.entries(GAME_IDS)
+        .filter(([key, gameCode]) => 
+            (gameCode === GAME_IDS.COINFLIP || 
+             gameCode === GAME_IDS.RPS || 
+             gameCode === GAME_IDS.DICE_ESCALATOR || 
+             gameCode === GAME_IDS.DICE_21 ||        
+             gameCode === GAME_IDS.DUEL ||           
+             gameCode === GAME_IDS.MINES ||          
+             gameCode === GAME_IDS.OVER_UNDER_7 ||
+             gameCode === GAME_IDS.LADDER ||
+             gameCode === GAME_IDS.SEVEN_OUT ||      
+             gameCode === GAME_IDS.SLOT_FRENZY) &&
+            !key.endsWith("_PVB") && !key.endsWith("_PVP") && !key.includes("_FROM_") 
+            && gameCode !== GAME_IDS.DIRECT_PVP_CHALLENGE 
+            && !key.endsWith("_UNIFIED_OFFER") && gameCode !== GAME_IDS.MINES_OFFER
+        )
+        .map(([key, gameCode]) => {
+            let gameName = gameCode.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            let ruleCallbackKey = gameCode; 
+            let emoji = '❓';
+            
+            if (gameCode === GAME_IDS.COINFLIP) { gameName = "Coinflip"; emoji = '🪙'; }
+            else if (gameCode === GAME_IDS.RPS) { gameName = "Rock Paper Scissors"; emoji = '✂️'; }
+            else if (gameCode === GAME_IDS.DICE_ESCALATOR) { gameName = "Dice Escalator"; emoji = '🎲'; ruleCallbackKey = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER;}
+            else if (gameCode === GAME_IDS.DICE_21) { gameName = "Dice 21 (Blackjack)"; emoji = '🃏'; }
+            else if (gameCode === GAME_IDS.DUEL) { gameName = "Duel / Highroller"; emoji = '⚔️'; ruleCallbackKey = GAME_IDS.DUEL_UNIFIED_OFFER; }
+            else if (gameCode === GAME_IDS.MINES) { gameName = "Mines"; emoji = '💣';}
+            else if (gameCode === GAME_IDS.OVER_UNDER_7) { gameName = "Over/Under 7"; emoji = '🎲'; }
+            else if (gameCode === GAME_IDS.LADDER) { gameName = "Greed's Ladder"; emoji = '🪜'; }
+            else if (gameCode === GAME_IDS.SEVEN_OUT) { gameName = "Lucky Sum"; emoji = '🎲'; }
+            else if (gameCode === GAME_IDS.SLOT_FRENZY) { gameName = "Slot Frenzy"; emoji = '🎰'; }
+            
+            return { text: `${emoji} ${escapeHTML(gameName)}`, callback_data: `${RULES_CALLBACK_PREFIX_CONST}${ruleCallbackKey}` };
+        })
+        .filter((button, index, self) => index === self.findIndex((b) => b.callback_data === button.callback_data));
 
 
-    const rows = [];
-    for (let i = 0; i < gameRuleButtons.length; i += 2) rows.push(gameRuleButtons.slice(i, i + 2));
-    rows.push([{ text: '⬅️ Back to Main Menu', callback_data: 'menu:main' }]);
+    const rows = [];
+    for (let i = 0; i < gameRuleButtons.length; i += 2) rows.push(gameRuleButtons.slice(i, i + 2));
+    rows.push([{ text: '⬅️ Back to Main Menu', callback_data: 'menu:main' }]);
 
-    const keyboard = { inline_keyboard: rows };
-    const options = { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true };
+    const keyboard = { inline_keyboard: rows };
+    const options = { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true };
 
-    let messageIdToOperateOn = (invokedChatType === 'private' && isEditAttempt && msgIdInInvokedChat) ? msgIdInInvokedChat : null;
-    if (invokedChatType === 'private' && !isEditAttempt && msgIdInInvokedChat) {
-        await bot.deleteMessage(userIdAsDmChatId, msgIdInInvokedChat).catch(()=>{});
-        messageIdToOperateOn = null; 
-    }
+    let messageIdToOperateOn = (invokedChatType === 'private' && isEditAttempt && msgIdInInvokedChat) ? msgIdInInvokedChat : null;
+    if (invokedChatType === 'private' && !isEditAttempt && msgIdInInvokedChat) {
+        await bot.deleteMessage(userIdAsDmChatId, msgIdInInvokedChat).catch(()=>{});
+        messageIdToOperateOn = null; 
+    }
 
-    if (messageIdToOperateOn) {
-        try {
-            await bot.editMessageText(rulesIntroTextHTML, { chat_id: userIdAsDmChatId, message_id: messageIdToOperateOn, ...options });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(userIdAsDmChatId, rulesIntroTextHTML, options);
-            }
-        }
-    } else {
-        await safeSendMessage(userIdAsDmChatId, rulesIntroTextHTML, options);
-    }
+    if (messageIdToOperateOn) {
+        try {
+            await bot.editMessageText(rulesIntroTextHTML, { chat_id: userIdAsDmChatId, message_id: messageIdToOperateOn, ...options });
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                await safeSendMessage(userIdAsDmChatId, rulesIntroTextHTML, options);
+            }
+        }
+    } else {
+        await safeSendMessage(userIdAsDmChatId, rulesIntroTextHTML, options);
+    }
 }
 
-async function handleGamesOverviewMenu(msg) { 
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const dmChatId = String(msg.chat.id); 
-    const messageIdToEdit = msg.message_id; 
-    
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(msg.from));
-    const messageTextHTML = `<b>Choose Your Challenge, ${playerRefHTML}!</b> 🎯\n\n` +
-                            `Select a game category or explore all our exciting offerings below. Good luck!`;
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "🎰 View All Games & Rules", callback_data: "menu:rules_list" }],
-            [{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]
-        ]
-    };
+async function handleGamesOverviewMenu(msg) { 
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const dmChatId = String(msg.chat.id); 
+    const messageIdToEdit = msg.message_id; 
+    
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(msg.from));
+    const messageTextHTML = `<b>Choose Your Challenge, ${playerRefHTML}!</b> 🎯\n\n` +
+                            `Select a game category or explore all our exciting offerings below. Good luck!`;
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🎰 View All Games & Rules", callback_data: "menu:rules_list" }],
+            [{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]
+        ]
+    };
 
-    if (messageIdToEdit) {
-        try {
-            await bot.editMessageText(messageTextHTML, {
-                chat_id: dmChatId, message_id: Number(messageIdToEdit),
-                parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true
-            });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(dmChatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
-            }
-        }
-    } else {
-        await safeSendMessage(dmChatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
-    }
+    if (messageIdToEdit) {
+        try {
+            await bot.editMessageText(messageTextHTML, {
+                chat_id: dmChatId, message_id: Number(messageIdToEdit),
+                parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true
+            });
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                await safeSendMessage(dmChatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+            }
+        }
+    } else {
+        await safeSendMessage(dmChatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+    }
 }
 
 async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageIdStr, gameCode, userObj, originalInvokedChatType = 'private') {
-    const originalInvokedChatId = String(originalInvokedChatIdStr);
-    const originalMessageId = originalMessageIdStr ? Number(originalMessageIdStr) : null;
-    const userIdAsDmChatId = String(userObj.telegram_id);
-    
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-    const botNameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
+    const originalInvokedChatId = String(originalInvokedChatIdStr);
+    const originalMessageId = originalMessageIdStr ? Number(originalMessageIdStr) : null;
+    const userIdAsDmChatId = String(userObj.telegram_id);
+    
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    const botNameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
 
-    const targetDmChatId = userIdAsDmChatId; 
-    let messageIdToEditInDm = (originalInvokedChatType === 'private' && originalMessageId) ? originalMessageId : null;
+    const targetDmChatId = userIdAsDmChatId; 
+    let messageIdToEditInDm = (originalInvokedChatType === 'private' && originalMessageId) ? originalMessageId : null;
 
-    let generalBettingInfoHTML = "<i>General betting information is currently unavailable.</i>\n\n";
-    try {
-        const solPrice = await getSolUsdPrice();
-        const minBetInLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice);
-        const minBetDisplayHTML = escapeHTML(await formatBalanceForDisplay(minBetInLamports, 'USD'));
-        const maxBetDisplayHTML = escapeHTML(`$${MAX_BET_USD_val.toFixed(2)}`);
-        const defaultBetDisplayHTML = minBetDisplayHTML; 
-        generalBettingInfoHTML = `<b>💰 General Betting Info:</b>\n` +
-            ` • Place bets in USD (e.g., <code>5</code>, <code>10.50</code>).\n` +
-            ` • Current Bet Limits (USD Equivalent): <b>${minBetDisplayHTML}</b> to <b>${maxBetDisplayHTML}</b>.\n` +
-            ` • If no bet amount is specified, it defaults to min bet (approx. <b>${defaultBetDisplayHTML}</b>).\n\n`;
-    } catch (priceError) { generalBettingInfoHTML = "Error loading bet limit info.\n\n"; }
+    let generalBettingInfoHTML = "<i>General betting information is currently unavailable.</i>\n\n";
+    try {
+        const solPrice = await getSolUsdPrice();
+        const minBetInLamports = convertUSDToLamports(MIN_BET_USD_val, solPrice);
+        const minBetDisplayHTML = escapeHTML(await formatBalanceForDisplay(minBetInLamports, 'USD'));
+        const maxBetDisplayHTML = escapeHTML(`$${MAX_BET_USD_val.toFixed(2)}`);
+        const defaultBetDisplayHTML = minBetDisplayHTML; 
+        generalBettingInfoHTML = `<b>💰 General Betting Info:</b>\n` +
+            ` • Place bets in USD (e.g., <code>5</code>, <code>10.50</code>).\n` +
+            ` • Current Bet Limits (USD Equivalent): <b>${minBetDisplayHTML}</b> to <b>${maxBetDisplayHTML}</b>.\n` +
+            ` • If no bet amount is specified, it defaults to min bet (approx. <b>${defaultBetDisplayHTML}</b>).\n\n`;
+    } catch (priceError) { generalBettingInfoHTML = "Error loading bet limit info.\n\n"; }
 
-    let rulesTitle = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
-    let gameEmoji = '📜';
-    let rulesTextHTML = "";
+    let rulesTitle = gameCode.replace(/_/g, ' ').replace(' Unified Offer', '').replace(/\b\w/g, l => l.toUpperCase());
+    let gameEmoji = '📜';
+    let rulesTextHTML = "";
 
-    switch (gameCode) {
-        case GAME_IDS.COINFLIP:
-            gameEmoji = '🪙'; rulesTitle = "Coinflip Challenge";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Correctly predict Heads or Tails.\n\n<b>How to Play:</b>\n• <code>/coinflip &lt;bet&gt; [@user]</code> in a group.\n• Play vs Bot or PvP.\n• Caller predicts, coin is flipped.\n\n<b>Payout:</b> 2x bet for winner.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.RPS:
-            gameEmoji = '✂️'; rulesTitle = "Rock Paper Scissors";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Outsmart opponent with Rock, Paper, or Scissors.\n\n<b>How to Play:</b>\n• <code>/rps &lt;bet&gt; [@user]</code> in a group.\n• Play vs Bot or PvP (secret choices via DM).\n• Winner determined by classic rules.\n\n<b>Payout:</b> Winner takes 2x bet. Draw is a Push.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER:
-        case GAME_IDS.DICE_ESCALATOR: 
-            gameEmoji = '🎲'; rulesTitle = "Dice Escalator";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Higher score than opponent without busting.\n\n<b>How to Play:</b>\n• <code>/de &lt;bet&gt; [@user]</code> in a group.\n• Send 🎲 emoji to roll.\n• Bust: Rolling <b>${escapeHTML(String(DICE_ESCALATOR_BUST_ON))}</b> scores 0 for that die & ends turn.\n• Stand: Keep current score.\n\n<b>PvB:</b> Bot rolls ${DE_PVB_BOT_ROLL_COUNT} dice. Win 2x. Tie is Push. Jackpot: Score <b>${escapeHTML(String(TARGET_JACKPOT_SCORE_CONST))}+</b> & beat Bot. Jackpot Run at 18+.\n<b>PvP:</b> P1 rolls then P2. Highest score wins 2x. Tie is Push. No Jackpot.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.DICE_21: 
-        case GAME_IDS.DICE_21_UNIFIED_OFFER: 
-            gameEmoji = '🃏'; rulesTitle = "Dice 21 (Blackjack)";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Sum closer to <b>${escapeHTML(String(DICE_21_TARGET_SCORE))}</b> than opponent, no bust.\n\n<b>How to Play:</b>\n• <code>/d21 &lt;bet&gt; [@user]</code> in a group.\n• Two initial dice. Send 🎲 to Hit. Click Stand.\n• Bust: Score > ${escapeHTML(String(DICE_21_TARGET_SCORE))}.\n\n<b>PvB:</b> Bot stands on <b>${escapeHTML(String(DICE_21_BOT_STAND_SCORE))}+</b>.\n<b>Payouts:</b> Win 2x. Blackjack (21 on first 2 dice) 2.5x. Push returns bet.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.OVER_UNDER_7:
-            gameEmoji = '🎲'; rulesTitle = "Over/Under 7";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Predict if sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b> is Over 7, Under 7, or Exactly 7.\n\n<b>How to Play:</b>\n• <code>/ou7 &lt;bet&gt;</code>.\n• Choose prediction: Under 7 (2-6), Exactly 7, Over 7 (8-12).\n\n<b>Payouts (Total Return):</b>\n• Under/Over 7: <b>${escapeHTML(String(OU7_PAYOUT_NORMAL + 1))}x</b> bet.\n• Exactly 7: <b>${escapeHTML(String(OU7_PAYOUT_SEVEN + 1))}x</b> bet!\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.DUEL_UNIFIED_OFFER: 
-        case GAME_IDS.DUEL: 
-            gameEmoji = '⚔️'; rulesTitle = "Duel / Highroller";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Higher sum with <b>${escapeHTML(String(DUEL_DICE_COUNT))} dice</b> than opponent.\n\n<b>How to Play:</b>\n• <code>/duel &lt;bet&gt; [@user]</code> in a group.\n• Each player (or player & bot) rolls ${escapeHTML(String(DUEL_DICE_COUNT))} dice (send 🎲 when prompted).\n\n<b>Winning:</b> Highest sum wins.\n<b>Payouts:</b> Winner 2x bet. Tie is Push.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.LADDER:
-            gameEmoji = '🪜'; rulesTitle = "Greed's Ladder";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> High sum with <b>${escapeHTML(String(LADDER_ROLL_COUNT))} dice</b>. Beware the bust!\n\n<b>How to Play:</b>\n• <code>/ladder &lt;bet&gt;</code>. All dice rolled at once.\n• Bust: Rolling <b>${escapeHTML(String(LADDER_BUST_ON))}</b> on ANY die means you bust!\n\n<b>Payouts (Total Sum if NO Bust; includes stake):</b>\n`;
-            LADDER_PAYOUTS.forEach(p => { rulesTextHTML += ` • Sum <b>${escapeHTML(String(p.min))}-${escapeHTML(String(p.max))}</b>: <b>${escapeHTML(String(p.multiplier + 1))}x</b> <i>(${escapeHTML(p.label)})</i>\n`; });
-            rulesTextHTML += `\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.SEVEN_OUT:
-            gameEmoji = '🎲'; rulesTitle = "Lucky Sum (Fast Sevens)";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Roll two dice. Certain sums win, others lose!\n\n<b>How to Play:</b>\n• <code>/s7 &lt;bet&gt;</code>.\n• Two dice are rolled by the bot.\n\n<b>Outcomes & Payouts (Total Return):</b>\n`;
-            for (const sumKey in LUCKY_SUM_PAYOUTS) { rulesTextHTML += ` • Sum <b>${escapeHTML(sumKey)}</b> (${escapeHTML(LUCKY_SUM_PAYOUTS[sumKey].label)}): <b>${escapeHTML(String(LUCKY_SUM_PAYOUTS[sumKey].multiplier + 1))}x</b>\n`; }
-            rulesTextHTML += ` • Sums <b>${LUCKY_SUM_LOSING_NUMBERS.map(n => escapeHTML(String(n))).join(', ')}</b>: Loss.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.SLOT_FRENZY:
-            gameEmoji = '🎰'; rulesTitle = "Slot Frenzy";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Match symbols for wins! Outcome via Helper Bot value (1-64).\n\n<b>How to Play:</b>\n• <code>/slot &lt;bet&gt;</code>.\n• Helper Bot spin determines win.\n\n<b>Payouts (Total Return):</b>\n`;
-            for (const key in SLOT_PAYOUTS) { if (SLOT_PAYOUTS[key].multiplier >= 0) rulesTextHTML += ` • ${escapeHTML(SLOT_PAYOUTS[key].symbols)} (${escapeHTML(SLOT_PAYOUTS[key].label)}): <b>${escapeHTML(String(SLOT_PAYOUTS[key].multiplier + 1))}x</b>\n`; }
-            rulesTextHTML += ` • Others: Loss.\n\n${generalBettingInfoHTML}`;
-            break;
-        case GAME_IDS.MINES: // Covers MINES_OFFER too
-            gameEmoji = '💣'; rulesTitle = "Mines Field Sweeper";
-            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Reveal gems 💎, avoid mines 💣. Each gem increases multiplier. Cash out anytime or find all gems!\n\n<b>How to Play:</b>\n• <code>/mines &lt;bet&gt;</code> in group.\n• Select difficulty.\n• Click tiles. Mine 💣 = loss. Gem 💎 = payout increases.\n• Click "Cash Out" to take current winnings.\n\n<b>Payouts:</b> Vary by difficulty and gems found. Max payout for all gems!\n\n${generalBettingInfoHTML}`;
-            break;
-        default:
-            if (!rulesTextHTML) { 
-                rulesTitle = "Unknown Game";
-                rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} Rules</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n📜 Rules for "<code>${escapeHTML(gameCode)}</code>" are under construction.`;
-            }
-    }
-    rulesTextHTML += `\n\nPlay smart, play responsibly! 🍀`;
+    switch (gameCode) {
+        case GAME_IDS.COINFLIP:
+            gameEmoji = '🪙'; rulesTitle = "Coinflip Challenge";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Correctly predict Heads or Tails.\n\n<b>How to Play:</b>\n• <code>/coinflip &lt;bet&gt; [@user]</code> in a group.\n• Play vs Bot or PvP.\n• Caller predicts, coin is flipped.\n\n<b>Payout:</b> 2x bet for winner.\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.RPS:
+            gameEmoji = '✂️'; rulesTitle = "Rock Paper Scissors";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Outsmart opponent with Rock, Paper, or Scissors.\n\n<b>How to Play:</b>\n• <code>/rps &lt;bet&gt; [@user]</code> in a group.\n• Play vs Bot or PvP (secret choices via DM).\n• Winner determined by classic rules.\n\n<b>Payout:</b> Winner takes 2x bet. Draw is a Push.\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER:
+        case GAME_IDS.DICE_ESCALATOR: 
+            gameEmoji = '🎲'; rulesTitle = "Dice Escalator";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Higher score than opponent without busting.\n\n<b>How to Play:</b>\n• <code>/de &lt;bet&gt; [@user]</code> in a group.\n• Send 🎲 emoji to roll.\n• Bust: Rolling <b>${escapeHTML(String(DICE_ESCALATOR_BUST_ON))}</b> scores 0 for that die & ends turn.\n• Stand: Keep current score.\n\n<b>PvB:</b> Bot rolls ${DE_PVB_BOT_ROLL_COUNT} dice. Win 2x. Tie is Push. Jackpot: Score <b>${escapeHTML(String(TARGET_JACKPOT_SCORE))}</b>+ & beat Bot. Jackpot Run at 18+.\n<b>PvP:</b> P1 rolls then P2. Highest score wins 2x. Tie is Push. No Jackpot.\n\n${generalBettingInfoHTML}`; // Used TARGET_JACKPOT_SCORE
+            break;
+        case GAME_IDS.DICE_21: 
+        case GAME_IDS.DICE_21_UNIFIED_OFFER: 
+            gameEmoji = '🃏'; rulesTitle = "Dice 21 (Blackjack)";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Sum closer to <b>${escapeHTML(String(DICE_21_TARGET_SCORE))}</b> than opponent, no bust.\n\n<b>How to Play:</b>\n• <code>/d21 &lt;bet&gt; [@user]</code> in a group.\n• Two initial dice. Send 🎲 to Hit. Click Stand.\n• Bust: Score > ${escapeHTML(String(DICE_21_TARGET_SCORE))}.\n\n<b>PvB:</b> Bot stands on <b>${escapeHTML(String(DICE_21_BOT_STAND_SCORE))}+</b>.\n<b>Payouts:</b> Win 2x. Blackjack (21 on first 2 dice) 2.5x. Push returns bet.\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.OVER_UNDER_7:
+            gameEmoji = '🎲'; rulesTitle = "Over/Under 7";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Predict if sum of <b>${escapeHTML(String(OU7_DICE_COUNT))} dice</b> is Over 7, Under 7, or Exactly 7.\n\n<b>How to Play:</b>\n• <code>/ou7 &lt;bet&gt;</code>.\n• Choose prediction: Under 7 (2-6), Exactly 7, Over 7 (8-12).\n\n<b>Payouts (Total Return):</b>\n• Under/Over 7: <b>${escapeHTML(String(OU7_PAYOUT_NORMAL + 1))}x</b> bet.\n• Exactly 7: <b>${escapeHTML(String(OU7_PAYOUT_SEVEN + 1))}x</b> bet!\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.DUEL_UNIFIED_OFFER: 
+        case GAME_IDS.DUEL: 
+            gameEmoji = '⚔️'; rulesTitle = "Duel / Highroller";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Higher sum with <b>${escapeHTML(String(DUEL_DICE_COUNT))} dice</b> than opponent.\n\n<b>How to Play:</b>\n• <code>/duel &lt;bet&gt; [@user]</code> in a group.\n• Each player (or player & bot) rolls ${escapeHTML(String(DUEL_DICE_COUNT))} dice (send 🎲 when prompted).\n\n<b>Winning:</b> Highest sum wins.\n<b>Payouts:</b> Winner 2x bet. Tie is Push.\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.LADDER:
+            gameEmoji = '🪜'; rulesTitle = "Greed's Ladder";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> High sum with <b>${escapeHTML(String(LADDER_ROLL_COUNT))} dice</b>. Beware the bust!\n\n<b>How to Play:</b>\n• <code>/ladder &lt;bet&gt;</code>. All dice rolled at once.\n• Bust: Rolling <b>${escapeHTML(String(LADDER_BUST_ON))}</b> on ANY die means you bust!\n\n<b>Payouts (Total Sum if NO Bust; includes stake):</b>\n`;
+            LADDER_PAYOUTS.forEach(p => { rulesTextHTML += ` • Sum <b>${escapeHTML(String(p.min))}-${escapeHTML(String(p.max))}</b>: <b>${escapeHTML(String(p.multiplier + 1))}x</b> <i>(${escapeHTML(p.label)})</i>\n`; });
+            rulesTextHTML += `\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.SEVEN_OUT:
+            gameEmoji = '🎲'; rulesTitle = "Lucky Sum (Fast Sevens)";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Roll two dice. Certain sums win, others lose!\n\n<b>How to Play:</b>\n• <code>/s7 &lt;bet&gt;</code>.\n• Two dice are rolled by the bot.\n\n<b>Outcomes & Payouts (Total Return):</b>\n`;
+            for (const sumKey in LUCKY_SUM_PAYOUTS) { rulesTextHTML += ` • Sum <b>${escapeHTML(sumKey)}</b> (${escapeHTML(LUCKY_SUM_PAYOUTS[sumKey].label)}): <b>${escapeHTML(String(LUCKY_SUM_PAYOUTS[sumKey].multiplier + 1))}x</b>\n`; }
+            rulesTextHTML += ` • Sums <b>${LUCKY_SUM_LOSING_NUMBERS.map(n => escapeHTML(String(n))).join(', ')}</b>: Loss.\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.SLOT_FRENZY:
+            gameEmoji = '🎰'; rulesTitle = "Slot Frenzy";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Match symbols for wins! Outcome via Helper Bot value (1-64).\n\n<b>How to Play:</b>\n• <code>/slot &lt;bet&gt;</code>.\n• Helper Bot spin determines win.\n\n<b>Payouts (Total Return):</b>\n`;
+            for (const key in SLOT_PAYOUTS) { if (SLOT_PAYOUTS[key].multiplier >= 0) rulesTextHTML += ` • ${escapeHTML(SLOT_PAYOUTS[key].symbols)} (${escapeHTML(SLOT_PAYOUTS[key].label)}): <b>${escapeHTML(String(SLOT_PAYOUTS[key].multiplier + 1))}x</b>\n`; }
+            rulesTextHTML += ` • Others: Loss.\n\n${generalBettingInfoHTML}`;
+            break;
+        case GAME_IDS.MINES: // Covers MINES_OFFER too
+            gameEmoji = '💣'; rulesTitle = "Mines Field Sweeper";
+            rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)}</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n<b>Objective:</b> Reveal gems 💎, avoid mines 💣. Each gem increases multiplier. Cash out anytime or find all gems!\n\n<b>How to Play:</b>\n• <code>/mines &lt;bet&gt;</code> in group.\n• Select difficulty.\n• Click tiles. Mine 💣 = loss. Gem 💎 = payout increases.\n• Click "Cash Out" to take current winnings.\n\n<b>Payouts:</b> Vary by difficulty and gems found. Max payout for all gems!\n\n${generalBettingInfoHTML}`;
+            break;
+        default:
+            if (!rulesTextHTML) { 
+                rulesTitle = "Unknown Game";
+                rulesTextHTML = `${gameEmoji} <b>${escapeHTML(rulesTitle)} Rules</b> ${gameEmoji}\n\nHey ${playerRefHTML}!\n\n📜 Rules for "<code>${escapeHTML(gameCode)}</code>" are under construction.`;
+            }
+    }
+    rulesTextHTML += `\n\nPlay smart, play responsibly! 🍀`;
 
-    const keyboard = { inline_keyboard: [[{ text: "📚 Back to Rules List", callback_data: "menu:rules_list" }]] };
-    const options = { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true };
+    const keyboard = { inline_keyboard: [[{ text: "📚 Back to Rules List", callback_data: "menu:rules_list" }]] };
+    const options = { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true };
 
-    if (messageIdToEditInDm) {
-        try {
-            await bot.editMessageText(rulesTextHTML, { chat_id: userIdAsDmChatId, message_id: Number(messageIdToEditInDm), ...options });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(userIdAsDmChatId, rulesTextHTML, options);
-            }
-        }
-    } else {
-        await safeSendMessage(userIdAsDmChatId, rulesTextHTML, options);
-    }
+    if (messageIdToEditInDm) {
+        try {
+            await bot.editMessageText(rulesTextHTML, { chat_id: userIdAsDmChatId, message_id: Number(messageIdToEditInDm), ...options });
+        } catch (e) {
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                await safeSendMessage(userIdAsDmChatId, rulesTextHTML, options);
+            }
+        }
+    } else {
+        await safeSendMessage(userIdAsDmChatId, rulesTextHTML, options);
+    }
 }
 
 /*
@@ -11775,497 +11936,577 @@ async function handleStartMinesCommand(msg, args, userObj) { ... }
 */
 
 async function handleBalanceCommand(msg) {
-    const userId = String(msg.from.id || msg.from.telegram_id);    
-    const commandChatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    
-    const user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!user) {
-        await safeSendMessage(commandChatId, "😕 Apologies! We couldn't fetch your player profile to show your balance. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const playerRef = getPlayerDisplayReference(user); 
-    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsernameToUse = selfInfo.username;
-    } catch (e) { /* ignore error fetching bot username */ }    
+    const userId = String(msg.from.id || msg.from.telegram_id);    
+    const commandChatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    
+    const user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!user) {
+        await safeSendMessage(commandChatId, "😕 Apologies! We couldn't fetch your player profile to show your balance. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    const playerRef = getPlayerDisplayReference(user); 
+    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsernameToUse = selfInfo.username;
+    } catch (e) { /* ignore error fetching bot username */ }    
 
-    const balanceLamports = await getUserBalance(userId);
-    if (balanceLamports === null) {
-        const errorMsgDm = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual. Please try again in a moment, or contact support if this issue persists.";
-        await safeSendMessage(userId, errorMsgDm, { parse_mode: 'MarkdownV2' });    
-        if (chatType !== 'private') {
-            if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
-            await safeSendMessage(commandChatId, `${playerRef}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeMarkdownV2(botUsernameToUse)}.`, { parse_mode: 'MarkdownV2' });
-        }
-        return;
-    }
+    const balanceLamports = await getUserBalance(userId);
+    if (balanceLamports === null) {
+        const errorMsgDm = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual. Please try again in a moment, or contact support if this issue persists.";
+        await safeSendMessage(userId, errorMsgDm, { parse_mode: 'MarkdownV2' });    
+        if (chatType !== 'private') {
+            if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
+            await safeSendMessage(commandChatId, `${playerRef}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeMarkdownV2(botUsernameToUse)}.`, { parse_mode: 'MarkdownV2' });
+        }
+        return;
+    }
 
-    const balanceUSDShort = await formatBalanceForDisplay(balanceLamports, 'USD');
-    const balanceSOLShort = formatCurrency(balanceLamports, 'SOL');
+    const balanceUSDShort = await formatBalanceForDisplay(balanceLamports, 'USD');
+    const balanceSOLShort = formatCurrency(balanceLamports, 'SOL');
 
-    if (chatType !== 'private') {
-        if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
-        const groupBalanceMessage = `${playerRef}, your current war chest holds approx. *${escapeMarkdownV2(balanceUSDShort)}* / *${escapeMarkdownV2(balanceSOLShort)}*. 💰\nFor a detailed breakdown and wallet actions, please check your DMs with me: @${escapeMarkdownV2(botUsernameToUse)} 📬`;
-        await safeSendMessage(commandChatId, groupBalanceMessage, { parse_mode: 'MarkdownV2' });
-    }
-    
-    const balanceMessageDm = `🏦 **Your Casino Royale Account Statement** 🏦\n\n` +
-        `Player: ${playerRef}\n` + 
-        `-------------------------------\n` +    
-        `💰 Approx. Total Value: *${escapeMarkdownV2(balanceUSDShort)}*\n` +
-        `🪙 SOL Balance: *${escapeMarkdownV2(balanceSOLShort)}*\n` +
-        `⚙️ Lamports: \`${escapeMarkdownV2(String(balanceLamports))}\`\n` +
-        `-------------------------------\n\n` +    
-        `Manage your funds or dive into the games using the buttons below! May luck be your ally! ✨`;
+    if (chatType !== 'private') {
+        if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
+        const groupBalanceMessage = `${playerRef}, your current war chest holds approx. *${escapeMarkdownV2(balanceUSDShort)}* / *${escapeMarkdownV2(balanceSOLShort)}*. 💰\nFor a detailed breakdown and wallet actions, please check your DMs with me: @${escapeMarkdownV2(botUsernameToUse)} 📬`;
+        await safeSendMessage(commandChatId, groupBalanceMessage, { parse_mode: 'MarkdownV2' });
+    }
+    
+    const balanceMessageDm = `🏦 **Your Casino Royale Account Statement** 🏦\n\n` +
+        `Player: ${playerRef}\n` + 
+        `-------------------------------\n` +    
+        `💰 Approx. Total Value: *${escapeMarkdownV2(balanceUSDShort)}*\n` +
+        `🪙 SOL Balance: *${escapeMarkdownV2(balanceSOLShort)}*\n` +
+        `⚙️ Lamports: \`${escapeMarkdownV2(String(balanceLamports))}\`\n` +
+        `-------------------------------\n\n` +    
+        `Manage your funds or dive into the games using the buttons below! May luck be your ally! ✨`;
 
-    const keyboardDm = {
-        inline_keyboard: [
-            [{ text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }, { text: "💸 Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION_CONST }],
-            [{ text: "📜 Transaction History", callback_data: "menu:history" }, { text: "🔗 Link/Update Wallet", callback_data: "menu:link_wallet_prompt" }],
-            [{ text: "🎲 View Games & Rules", callback_data: "menu:rules_list" }, { text: "🤝 Referrals", callback_data: "menu:referral" }] 
-        ]
-    };
-    await safeSendMessage(userId, balanceMessageDm, { parse_mode: 'MarkdownV2', reply_markup: keyboardDm });
+    const keyboardDm = {
+        inline_keyboard: [
+            [{ text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }, { text: "💸 Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION_CONST }],
+            [{ text: "📜 Transaction History", callback_data: "menu:history" }, { text: "🔗 Link/Update Wallet", callback_data: "menu:link_wallet_prompt" }],
+            [{ text: "🎲 View Games & Rules", callback_data: "menu:rules_list" }, { text: "🤝 Referrals", callback_data: "menu:referral" }] 
+        ]
+    };
+    await safeSendMessage(userId, balanceMessageDm, { parse_mode: 'MarkdownV2', reply_markup: keyboardDm });
 }
 
 async function handleTipCommand(msg, args, tipperUserObj) {
-    const chatId = String(msg.chat.id);
-    const tipperId = String(tipperUserObj.telegram_id);
-    const logPrefix = `[TipCmd UID:${tipperId} CH:${chatId}]`;
+    const chatId = String(msg.chat.id);
+    const tipperId = String(tipperUserObj.telegram_id);
+    const logPrefix = `[TipCmd UID:${tipperId} CH:${chatId}]`;
 
-    console.log(`${logPrefix} Initiated. Tipper: ${tipperUserObj.username || tipperId}, Args: [${args.join(', ')}]`);
+    console.log(`${logPrefix} Initiated. Tipper: ${tipperUserObj.username || tipperId}, Args: [${args.join(', ')}]`);
 
-    if (args.length < 2) {
-        await safeSendMessage(chatId, "💡 Usage: `/tip <@username_or_id> <amount_usd> [message]`\nExample: `/tip @LuckyWinner 5 Great game!`", { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    if (args.length < 2) {
+        await safeSendMessage(chatId, "💡 Usage: `/tip <@username_or_id> <amount_usd> [message]`\nExample: `/tip @LuckyWinner 5 Great game!`", { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    const recipientIdentifier = args[0];
-    const amountUSDStr = args[1];
-    const tipMessage = args.slice(2).join(' ').trim() || null;
+    const recipientIdentifier = args[0];
+    const amountUSDStr = args[1];
+    const tipMessage = args.slice(2).join(' ').trim() || null;
 
-    const recipientUserObj = await findRecipientUser(recipientIdentifier);
+    const recipientUserObj = await findRecipientUser(recipientIdentifier);
 
-    if (!recipientUserObj) {
-        await safeSendMessage(chatId, `😕 Player "${escapeMarkdownV2(recipientIdentifier)}" not found. Please check the username or Telegram ID and ensure they have interacted with the bot before.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const recipientId = String(recipientUserObj.telegram_id);
+    if (!recipientUserObj) {
+        await safeSendMessage(chatId, `😕 Player "${escapeMarkdownV2(recipientIdentifier)}" not found. Please check the username or Telegram ID and ensure they have interacted with the bot before.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    const recipientId = String(recipientUserObj.telegram_id);
 
-    if (tipperId === recipientId) {
-        await safeSendMessage(chatId, "😜 You can't tip yourself, generous soul!", { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    if (tipperId === recipientId) {
+        await safeSendMessage(chatId, "😜 You can't tip yourself, generous soul!", { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    let tipAmountUSD;
-    try {
-        tipAmountUSD = parseFloat(amountUSDStr);
-        if (isNaN(tipAmountUSD) || tipAmountUSD <= 0) {
-            throw new Error("Tip amount must be a positive number.");
-        }
-    } catch (e) {
-        await safeSendMessage(chatId, `⚠️ Invalid tip amount: "${escapeMarkdownV2(amountUSDStr)}". Please specify a valid USD amount (e.g., \`5\` or \`2.50\`).`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    let tipAmountUSD;
+    try {
+        tipAmountUSD = parseFloat(amountUSDStr);
+        if (isNaN(tipAmountUSD) || tipAmountUSD <= 0) {
+            throw new Error("Tip amount must be a positive number.");
+        }
+    } catch (e) {
+        await safeSendMessage(chatId, `⚠️ Invalid tip amount: "${escapeMarkdownV2(amountUSDStr)}". Please specify a valid USD amount (e.g., \`5\` or \`2.50\`).`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    let tipAmountLamports;
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-        tipAmountLamports = convertUSDToLamports(tipAmountUSD, solPrice);
-    } catch (priceError) {
-        console.error(`${logPrefix} Error getting SOL price or converting tip to lamports: ${priceError.message}`);
-        await safeSendMessage(chatId, "⚙️ Apologies, there was an issue fetching the current SOL price to process your tip. Please try again in a moment.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    let tipAmountLamports;
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+        tipAmountLamports = convertUSDToLamports(tipAmountUSD, solPrice);
+    } catch (priceError) {
+        console.error(`${logPrefix} Error getting SOL price or converting tip to lamports: ${priceError.message}`);
+        await safeSendMessage(chatId, "⚙️ Apologies, there was an issue fetching the current SOL price to process your tip. Please try again in a moment.", { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    if (tipAmountLamports <= 0n) {
-        await safeSendMessage(chatId, `⚠️ Tip amount is too small after conversion. Please try a slightly larger USD amount.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    if (tipAmountLamports <= 0n) {
+        await safeSendMessage(chatId, `⚠️ Tip amount is too small after conversion. Please try a slightly larger USD amount.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    const currentTipperDetails = await getOrCreateUser(tipperId); 
-    if (!currentTipperDetails) {
-         await safeSendMessage(chatId, `⚙️ Error fetching your profile for tipping. Please try \`/start\` and then tip again.`, { parse_mode: 'MarkdownV2' });
-         return;
-    }
-    const tipperCurrentBalance = BigInt(currentTipperDetails.balance);
+    const currentTipperDetails = await getOrCreateUser(tipperId); 
+    if (!currentTipperDetails) {
+         await safeSendMessage(chatId, `⚙️ Error fetching your profile for tipping. Please try \`/start\` and then tip again.`, { parse_mode: 'MarkdownV2' });
+         return;
+    }
+    const tipperCurrentBalance = BigInt(currentTipperDetails.balance);
 
-    if (tipperCurrentBalance < tipAmountLamports) {
-        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(tipAmountLamports - tipperCurrentBalance, 'USD', solPrice)); 
-        await safeSendMessage(chatId, `💰 Oops! Your balance is too low to send a *${escapeMarkdownV2(tipAmountUSD.toFixed(2))} USD* tip. You need about *${neededDisplay}* more.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    if (tipperCurrentBalance < tipAmountLamports) {
+        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(tipAmountLamports - tipperCurrentBalance, 'USD', solPrice)); 
+        await safeSendMessage(chatId, `💰 Oops! Your balance is too low to send a *${escapeMarkdownV2(tipAmountUSD.toFixed(2))} USD* tip. You need about *${neededDisplay}* more.`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    let client = null;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-        const tipperName = getPlayerDisplayReference(currentTipperDetails); 
-        const recipientName = getPlayerDisplayReference(recipientUserObj); 
-        const ledgerNoteTipper = `Tip sent to ${recipientName}${tipMessage ? ` (Msg: ${tipMessage.substring(0, 50)})` : ''}`;
-        const ledgerNoteRecipient = `Tip received from ${tipperName}${tipMessage ? ` (Msg: ${tipMessage.substring(0, 50)})` : ''}`;
+        const tipperName = getPlayerDisplayReference(currentTipperDetails); 
+        const recipientName = getPlayerDisplayReference(recipientUserObj); 
+        const ledgerNoteTipper = `Tip sent to ${recipientName}${tipMessage ? ` (Msg: ${tipMessage.substring(0, 50)})` : ''}`;
+        const ledgerNoteRecipient = `Tip received from ${tipperName}${tipMessage ? ` (Msg: ${tipMessage.substring(0, 50)})` : ''}`;
 
-        const debitResult = await updateUserBalanceAndLedger(client,tipperId,BigInt(-tipAmountLamports),'tip_sent',{},ledgerNoteTipper); 
-        if (!debitResult.success) throw new Error(debitResult.error || "Failed to debit your balance for the tip.");
-        const creditResult = await updateUserBalanceAndLedger(client,recipientId,tipAmountLamports,'tip_received',{},ledgerNoteRecipient);
-        if (!creditResult.success) {
-            console.error(`${logPrefix} CRITICAL: Debited tipper ${tipperId} but failed to credit recipient ${recipientId}. Amount: ${tipAmountLamports}. Error: ${creditResult.error}`);
-            throw new Error(creditResult.error || "Failed to credit recipient's balance after debiting yours. The transaction has been reversed."); 
-        }
-        await client.query('COMMIT');
+        const debitResult = await updateUserBalanceAndLedger(client,tipperId,BigInt(-tipAmountLamports),'tip_sent',{},ledgerNoteTipper); 
+        if (!debitResult.success) throw new Error(debitResult.error || "Failed to debit your balance for the tip.");
+        const creditResult = await updateUserBalanceAndLedger(client,recipientId,tipAmountLamports,'tip_received',{},ledgerNoteRecipient);
+        if (!creditResult.success) {
+            console.error(`${logPrefix} CRITICAL: Debited tipper ${tipperId} but failed to credit recipient ${recipientId}. Amount: ${tipAmountLamports}. Error: ${creditResult.error}`);
+            throw new Error(creditResult.error || "Failed to credit recipient's balance after debiting yours. The transaction has been reversed."); 
+        }
+        await client.query('COMMIT');
 
-        const tipAmountDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(tipAmountLamports, 'USD', solPrice));
-        const tipperNewBalanceDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(debitResult.newBalanceLamports, 'USD', solPrice));
-        const recipientNewBalanceDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(creditResult.newBalanceLamports, 'USD', solPrice));
+        const tipAmountDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(tipAmountLamports, 'USD', solPrice));
+        const tipperNewBalanceDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(debitResult.newBalanceLamports, 'USD', solPrice));
+        const recipientNewBalanceDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(creditResult.newBalanceLamports, 'USD', solPrice));
 
-        await safeSendMessage(chatId, `✅ Success! You tipped *${tipAmountDisplayUSD}* to ${recipientName}. Your new balance is approx. *${tipperNewBalanceDisplayUSD}*.`, { parse_mode: 'MarkdownV2' });
-        let recipientNotification = `🎁 You've received a tip of *${tipAmountDisplayUSD}* from ${tipperName}!`;
-        if (tipMessage) { recipientNotification += `\nMessage: "_${escapeMarkdownV2(tipMessage)}_"`;}
-        recipientNotification += `\nYour new balance is approx. *${recipientNewBalanceDisplayUSD}*.`;
-        await safeSendMessage(recipientId, recipientNotification, { parse_mode: 'MarkdownV2' });
-    } catch (error) {
-        if (client) { await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));}
-        console.error(`${logPrefix} Error processing tip: ${error.message}`, error.stack?.substring(0, 700));
-        await safeSendMessage(chatId, `⚙️ An error occurred while processing your tip: \`${escapeMarkdownV2(error.message)}\`. Please try again.`, { parse_mode: 'MarkdownV2' });
-        if (error.message.includes("Failed to credit recipient")) {
-             if(typeof notifyAdmin === 'function' && ADMIN_USER_ID) {    
-                 notifyAdmin(`🚨 CRITICAL TIP FAILURE 🚨\nTipper: ${tipperId} (${tipperUserObj.username || 'N/A'})\nRecipient: ${recipientId} (${recipientUserObj.username || 'N/A'})\nAmount: ${tipAmountLamports} lamports.\nTipper was likely debited but recipient NOT credited. MANUAL VERIFICATION & CORRECTION REQUIRED.\nError: ${escapeMarkdownV2(error.message)}`,{parse_mode: 'MarkdownV2'}).catch(err => console.error("Failed to notify admin about critical tip failure:", err));
-             }
-        }
-    } finally {
-        if (client) { client.release(); }
-    }
+        await safeSendMessage(chatId, `✅ Success! You tipped *${tipAmountDisplayUSD}* to ${recipientName}. Your new balance is approx. *${tipperNewBalanceDisplayUSD}*.`, { parse_mode: 'MarkdownV2' });
+        let recipientNotification = `🎁 You've received a tip of *${tipAmountDisplayUSD}* from ${tipperName}!`;
+        if (tipMessage) { recipientNotification += `\nMessage: "_${escapeMarkdownV2(tipMessage)}_"`;}
+        recipientNotification += `\nYour new balance is approx. *${recipientNewBalanceDisplayUSD}*.`;
+        await safeSendMessage(recipientId, recipientNotification, { parse_mode: 'MarkdownV2' });
+    } catch (error) {
+        if (client) { await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));}
+        console.error(`${logPrefix} Error processing tip: ${error.message}`, error.stack?.substring(0, 700));
+        await safeSendMessage(chatId, `⚙️ An error occurred while processing your tip: \`${escapeMarkdownV2(error.message)}\`. Please try again.`, { parse_mode: 'MarkdownV2' });
+        if (error.message.includes("Failed to credit recipient")) {
+             if(typeof notifyAdmin === 'function' && ADMIN_USER_ID) {    
+                 notifyAdmin(`🚨 CRITICAL TIP FAILURE 🚨\nTipper: ${tipperId} (${tipperUserObj.username || 'N/A'})\nRecipient: ${recipientId} (${recipientUserObj.username || 'N/A'})\nAmount: ${tipAmountLamports} lamports.\nTipper was likely debited but recipient NOT credited. MANUAL VERIFICATION & CORRECTION REQUIRED.\nError: ${escapeMarkdownV2(error.message)}`,{parse_mode: 'MarkdownV2'}).catch(err => console.error("Failed to notify admin about critical tip failure:", err));
+             }
+        }
+    } finally {
+        if (client) { client.release(); }
+    }
 }
 
 async function handleJackpotCommand(chatId, userObj, chatType) {
-    const LOG_PREFIX_JACKPOT = `[JackpotCmd UID:${userObj.telegram_id} Chat:${chatId}]`;
-    const playerRef = getPlayerDisplayReference(userObj); 
+    const LOG_PREFIX_JACKPOT = `[JackpotCmd UID:${userObj.telegram_id} Chat:${chatId}]`;
+    const playerRef = getPlayerDisplayReference(userObj); 
 
-    try {
-        const result = await queryDatabase('SELECT current_amount FROM jackpots WHERE jackpot_id = $1', [MAIN_JACKPOT_ID]);
-        let jackpotAmountLamports = 0n;
-        if (result.rows.length > 0 && result.rows[0].current_amount) {
-            jackpotAmountLamports = BigInt(result.rows[0].current_amount);
-        }
+    try {
+        const result = await queryDatabase('SELECT current_amount FROM jackpots WHERE jackpot_id = $1', [MAIN_JACKPOT_ID]);
+        let jackpotAmountLamports = 0n;
+        if (result.rows.length > 0 && result.rows[0].current_amount) {
+            jackpotAmountLamports = BigInt(result.rows[0].current_amount);
+        }
 
-        const jackpotUSD = await formatBalanceForDisplay(jackpotAmountLamports, 'USD');
-        const jackpotSOL = formatCurrency(jackpotAmountLamports, 'SOL');
-        const jackpotTargetScoreDisplay = escapeMarkdownV2(String(TARGET_JACKPOT_SCORE_CONST));    
+        const jackpotUSD = await formatBalanceForDisplay(jackpotAmountLamports, 'USD');
+        const jackpotSOL = formatCurrency(jackpotAmountLamports, 'SOL');
+        const jackpotTargetScoreDisplay = escapeMarkdownV2(String(TARGET_JACKPOT_SCORE)); // Used TARGET_JACKPOT_SCORE
 
-        const jackpotMessage = `🏆 **Dice Escalator (PvB) Super Jackpot Alert!** 🏆\n\n` +
-            `Hey ${playerRef}, the current Super Jackpot for the Player vs Bot Dice Escalator game is a shimmering mountain of riches:\n\n` +
-            `💰 Approx. Value: *${escapeMarkdownV2(jackpotUSD)}*\n` +    
-            `🪙 SOL Amount: *${escapeMarkdownV2(jackpotSOL)}*\n\n` +
-            `To claim this colossal prize, you must win a round of Dice Escalator (PvB Mode) with a score of *${jackpotTargetScoreDisplay} or higher* AND beat the Bot Dealer! Do you have what it takes? ✨\n\nType \`/de <bet>\` to try your luck in a group chat!`;    
+        const jackpotMessage = `🏆 **Dice Escalator (PvB) Super Jackpot Alert!** 🏆\n\n` +
+            `Hey ${playerRef}, the current Super Jackpot for the Player vs Bot Dice Escalator game is a shimmering mountain of riches:\n\n` +
+            `💰 Approx. Value: *${escapeMarkdownV2(jackpotUSD)}*\n` +    
+            `🪙 SOL Amount: *${escapeMarkdownV2(jackpotSOL)}*\n\n` +
+            `To claim this colossal prize, you must win a round of Dice Escalator (PvB Mode) with a score of *${jackpotTargetScoreDisplay} or higher* AND beat the Bot Dealer! Do you have what it takes? ✨\n\nType \`/de <bet>\` to try your luck in a group chat!`;    
 
-        await safeSendMessage(chatId, jackpotMessage, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
+        await safeSendMessage(chatId, jackpotMessage, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
 
-    } catch (error) {
-        console.error(`${LOG_PREFIX_JACKPOT} Error fetching jackpot: ${error.message}`);
-        await safeSendMessage(chatId, "⚙️ Apologies, there was a momentary glitch fetching the current Jackpot amount. Please try `/jackpot` again soon.", { parse_mode: 'MarkdownV2' });    
-    }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_JACKPOT} Error fetching jackpot: ${error.message}`);
+        await safeSendMessage(chatId, "⚙️ Apologies, there was a momentary glitch fetching the current Jackpot amount. Please try `/jackpot` again soon.", { parse_mode: 'MarkdownV2' });    
+    }
 }
 
 async function handleLeaderboardsCommand(msg, args) {
-    const userId = String(msg.from.id || msg.from.telegram_id);    
-    const chatId = String(msg.chat.id);
-    const user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!user) {
-         await safeSendMessage(chatId, "Error fetching your profile. Please try `/start`.", {});    
-         return;
-    }
-    const playerRef = getPlayerDisplayReference(user); 
-    const typeArg = args[0] || 'overall_wagered';
-    const typeDisplay = escapeMarkdownV2(typeArg.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()));
-    const botNameToUse = BOT_NAME || "Solana Casino Royale"; // Use global BOT_NAME
+    const userId = String(msg.from.id || msg.from.telegram_id);    
+    const chatId = String(msg.chat.id);
+    const user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!user) {
+         await safeSendMessage(chatId, "Error fetching your profile. Please try `/start`.", {});    
+         return;
+    }
+    const playerRef = getPlayerDisplayReference(user); 
+    const typeArg = args[0] || 'overall_wagered';
+    const typeDisplay = escapeMarkdownV2(typeArg.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()));
+    const botNameToUse = BOT_NAME || "Solana Casino Royale"; // Use global BOT_NAME
 
-    const leaderboardMessage = `🏆 **${escapeMarkdownV2(botNameToUse)} Hall of Fame** 🏆 - _Coming Soon!_\n\n` +    
-        `Greetings, ${playerRef}! Our legendary leaderboards for categories like *${typeDisplay}* are currently under meticulous construction by our top casino architects. 🏗️\n\n` +    
-        `Soon, you'll be able to see who's dominating the casino floor, raking in the biggest wins, and making the boldest wagers!\n\n` +    
-        `Keep playing, sharpen your skills, and prepare to etch your name in ${escapeMarkdownV2(botNameToUse)} history! Check back soon for the grand unveiling! ✨`;    
-    await safeSendMessage(chatId, leaderboardMessage, { parse_mode: 'MarkdownV2' });
+    const leaderboardMessage = `🏆 **${escapeMarkdownV2(botNameToUse)} Hall of Fame** 🏆 - _Coming Soon!_\n\n` +    
+        `Greetings, ${playerRef}! Our legendary leaderboards for categories like *${typeDisplay}* are currently under meticulous construction by our top casino architects. 🏗️\n\n` +    
+        `Soon, you'll be able to see who's dominating the casino floor, raking in the biggest wins, and making the boldest wagers!\n\n` +    
+        `Keep playing, sharpen your skills, and prepare to etch your name in ${escapeMarkdownV2(botNameToUse)} history! Check back soon for the grand unveiling! ✨`;    
+    await safeSendMessage(chatId, leaderboardMessage, { parse_mode: 'MarkdownV2' });
 }
 
 async function handleGrantCommand(msg, args, adminUserObj) {
-    const LOG_PREFIX_GRANT = `[GrantCmd UID:${adminUserObj.telegram_id}]`;
-    const chatId = String(msg.chat.id);
-    const adminUserIdStr = String(adminUserObj.telegram_id);
+    const LOG_PREFIX_GRANT = `[GrantCmd UID:${adminUserObj.telegram_id}]`;
+    const chatId = String(msg.chat.id);
+    const adminUserIdStr = String(adminUserObj.telegram_id);
 
-    if (!ADMIN_USER_ID || adminUserIdStr !== ADMIN_USER_ID) {
-        return;    
-    }
+    if (!ADMIN_USER_ID || adminUserIdStr !== ADMIN_USER_ID) {
+        return;    
+    }
 
-    if (args.length < 2) {
-        await safeSendMessage(chatId, "⚙️ **Admin Grant Usage:** `/grant <target_user_id_or_@username> <amount_SOL_or_Lamports> [Optional: reason]`\n*Examples:*\n`/grant @LuckyPlayer 10 SOL Welcome Bonus`\n`/grant 123456789 50000000 lamports Correction`\n`/grant @RiskTaker -2 SOL BetSettleFix`", { parse_mode: 'MarkdownV2' });    
-        return;
-    }
+    if (args.length < 2) {
+        await safeSendMessage(chatId, "⚙️ **Admin Grant Usage:** `/grant <target_user_id_or_@username> <amount_SOL_or_Lamports> [Optional: reason]`\n*Examples:*\n`/grant @LuckyPlayer 10 SOL Welcome Bonus`\n`/grant 123456789 50000000 lamports Correction`\n`/grant @RiskTaker -2 SOL BetSettleFix`", { parse_mode: 'MarkdownV2' });    
+        return;
+    }
 
-    const targetUserIdentifier = args[0];
-    const amountArg = args[1];
-    const reason = args.slice(2).join(' ') || `Admin grant by ${adminUserObj.username || adminUserIdStr}`;
-    let amountToGrantLamports;
-    let targetUser;
+    const targetUserIdentifier = args[0];
+    const amountArg = args[1];
+    const reason = args.slice(2).join(' ') || `Admin grant by ${adminUserObj.username || adminUserIdStr}`;
+    let amountToGrantLamports;
+    let targetUser;
 
-    try {
-        if (targetUserIdentifier.startsWith('@')) {
-            const usernameToFind = targetUserIdentifier.substring(1);
-            const userRes = await queryDatabase('SELECT telegram_id, username, first_name FROM users WHERE LOWER(username) = LOWER($1)', [usernameToFind]);
-            if (userRes.rowCount === 0) throw new Error(`User not found: \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
-            targetUser = await getOrCreateUser(userRes.rows[0].telegram_id, userRes.rows[0].username, userRes.rows[0].first_name);
-        } else if (/^\d+$/.test(targetUserIdentifier)) {
-            targetUser = await getOrCreateUser(targetUserIdentifier);
-        } else {
-            throw new Error(`Invalid target: \`${escapeMarkdownV2(targetUserIdentifier)}\`. Use Telegram ID or @username.`);
-        }
-        if (!targetUser) throw new Error(`Could not find or create target user \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
-        
-        const amountArgLower = String(amountArg).toLowerCase();
-        let parsedAmount; // Can be float or BigInt depending on suffix
-        // let isNegative = String(amountArg).startsWith('-'); // Not needed with BigInt directly
+    try {
+        if (targetUserIdentifier.startsWith('@')) {
+            const usernameToFind = targetUserIdentifier.substring(1);
+            const userRes = await queryDatabase('SELECT telegram_id, username, first_name FROM users WHERE LOWER(username) = LOWER($1)', [usernameToFind]);
+            if (userRes.rowCount === 0) throw new Error(`User not found: \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
+            targetUser = await getOrCreateUser(userRes.rows[0].telegram_id, userRes.rows[0].username, userRes.rows[0].first_name);
+        } else if (/^\d+$/.test(targetUserIdentifier)) {
+            targetUser = await getOrCreateUser(targetUserIdentifier);
+        } else {
+            throw new Error(`Invalid target: \`${escapeMarkdownV2(targetUserIdentifier)}\`. Use Telegram ID or @username.`);
+        }
+        if (!targetUser) throw new Error(`Could not find or create target user \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
+        
+        const amountArgLower = String(amountArg).toLowerCase();
+        let parsedAmount;
 
-        if (amountArgLower.endsWith('sol')) {
-            parsedAmount = parseFloat(amountArgLower.replace('sol', '').trim());
-            if (isNaN(parsedAmount)) throw new Error("Invalid SOL amount.");
-            amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
-        } else if (amountArgLower.endsWith('lamports')) {
-            // Remove 'lamports' and then parse as BigInt
-            const lamportsStr = amountArgLower.replace('lamports','').trim();
-            try {
-                amountToGrantLamports = BigInt(lamportsStr);
-            } catch (bigIntError){
-                 throw new Error("Invalid lamports amount: not a whole number.");
-            }
-        } else { // Try to parse as number, could be USD-like (for SOL conversion) or direct lamports
-            try {
-                // Attempt to parse as a float first, assuming it might be USD or SOL without suffix
-                parsedAmount = parseFloat(amountArg);
-                if (isNaN(parsedAmount)) throw new Error("Invalid numeric amount.");
+        if (amountArgLower.endsWith('sol')) {
+            parsedAmount = parseFloat(amountArgLower.replace('sol', '').trim());
+            if (isNaN(parsedAmount)) throw new Error("Invalid SOL amount.");
+            amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
+        } else if (amountArgLower.endsWith('lamports')) {
+            const lamportsStr = amountArgLower.replace('lamports','').trim();
+            try {
+                amountToGrantLamports = BigInt(lamportsStr);
+            } catch (bigIntError){
+                 throw new Error("Invalid lamports amount: not a whole number.");
+            }
+        } else {
+            try {
+                parsedAmount = parseFloat(amountArg);
+                if (isNaN(parsedAmount)) throw new Error("Invalid numeric amount.");
+                if (String(amountArg).includes('.') || (Number.isInteger(parsedAmount) && Math.abs(parsedAmount) < 1000000) ) {
+                    amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
+                } else {
+                    amountToGrantLamports = BigInt(amountArg);
+                }
+            } catch (e) {
+                 throw new Error("Could not parse grant amount. Use SOL (e.g., 10 or 10.5 sol) or lamports (e.g., 10000000 lamports).");
+            }
+        }
 
-                // Heuristic: if it includes a decimal, or is a "smallish" integer, treat as SOL to convert
-                // Otherwise, if it's a large integer, treat as lamports directly
-                if (String(amountArg).includes('.') || (Number.isInteger(parsedAmount) && Math.abs(parsedAmount) < 1000000) ) { // Heuristic: small integers likely SOL units
-                    amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
-                } else { // Assume large integer is lamports
-                    amountToGrantLamports = BigInt(amountArg); // Try BigInt directly
-                }
-            } catch (e) {
-                 throw new Error("Could not parse grant amount. Use SOL (e.g., 10 or 10.5 sol) or lamports (e.g., 10000000 lamports).");
-            }
-        }
+        if (isNaN(Number(amountToGrantLamports))) throw new Error("Could not resolve grant amount to a valid number of lamports.");
 
-        if (isNaN(Number(amountToGrantLamports))) throw new Error("Could not resolve grant amount to a valid number of lamports.");
-        // Allow zero amount for corrections if explicitly '0' or '0sol' etc.
-        // The check `amountToGrantLamports === 0n && String(amountArg) !== "0"` from previous was a bit complex.
-        // If `amountToGrantLamports` is `0n`, it's a zero grant, which is fine.
+    } catch (e) {
+        await safeSendMessage(chatId, `⚠️ **Grant Parameter Error:**\n${escapeMarkdownV2(e.message)}`, { parse_mode: 'MarkdownV2' });
+        return;
+    }
 
-    } catch (e) {
-        await safeSendMessage(chatId, `⚠️ **Grant Parameter Error:**\n${escapeMarkdownV2(e.message)}`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
+    let grantClient = null;
+    try {
+        grantClient = await pool.connect();
+        await grantClient.query('BEGIN');
 
-    let grantClient = null;
-    try {
-        grantClient = await pool.connect();
-        await grantClient.query('BEGIN');
+        if (typeof updateUserBalanceAndLedger !== 'function') {
+            console.error(`${LOG_PREFIX_GRANT} FATAL: updateUserBalanceAndLedger is undefined for grant.`);
+            await safeSendMessage(chatId, "🛠️ **Internal System Error:** Grant functionality is offline. Core balance function missing.", { parse_mode: 'MarkdownV2' });    
+            await grantClient.query('ROLLBACK'); return;
+        }
+        const transactionType = amountToGrantLamports >= 0n ? 'admin_grant_credit' : 'admin_grant_debit';
+        const grantNotes = `Admin Action: ${reason}. By: ${adminUserObj.username || adminUserIdStr} (${adminUserIdStr}). To: ${targetUser.username || targetUser.telegram_id} (${targetUser.telegram_id}). Amount: ${formatCurrency(amountToGrantLamports, 'SOL')}`;
+        
+        const grantResult = await updateUserBalanceAndLedger(
+            grantClient, targetUser.telegram_id, amountToGrantLamports, transactionType, {}, grantNotes
+        );
 
-        if (typeof updateUserBalanceAndLedger !== 'function') {
-            console.error(`${LOG_PREFIX_GRANT} FATAL: updateUserBalanceAndLedger is undefined for grant.`);
-            await safeSendMessage(chatId, "🛠️ **Internal System Error:** Grant functionality is offline. Core balance function missing.", { parse_mode: 'MarkdownV2' });    
-            await grantClient.query('ROLLBACK'); return;
-        }
-        const transactionType = amountToGrantLamports >= 0n ? 'admin_grant_credit' : 'admin_grant_debit';
-        const grantNotes = `Admin Action: ${reason}. By: ${adminUserObj.username || adminUserIdStr} (${adminUserIdStr}). To: ${targetUser.username || targetUser.telegram_id} (${targetUser.telegram_id}). Amount: ${formatCurrency(amountToGrantLamports, 'SOL')}`;
-        
-        const grantResult = await updateUserBalanceAndLedger(
-            grantClient, targetUser.telegram_id, amountToGrantLamports, transactionType, {}, grantNotes
-        );
+        if (grantResult.success) {
+            await grantClient.query('COMMIT');
+            const grantAmountDisplay = escapeMarkdownV2(formatCurrency(amountToGrantLamports, 'SOL'));
+            const newBalanceDisplay = escapeMarkdownV2(await formatBalanceForDisplay(grantResult.newBalanceLamports, 'USD')); 
+            const targetUserDisplay = getPlayerDisplayReference(targetUser); 
+            const verb = amountToGrantLamports >= 0n ? "credited to" : "debited from";
 
-        if (grantResult.success) {
-            await grantClient.query('COMMIT');
-            const grantAmountDisplay = escapeMarkdownV2(formatCurrency(amountToGrantLamports, 'SOL'));
-            const newBalanceDisplay = escapeMarkdownV2(await formatBalanceForDisplay(grantResult.newBalanceLamports, 'USD')); 
-            const targetUserDisplay = getPlayerDisplayReference(targetUser); 
-            const verb = amountToGrantLamports >= 0n ? "credited to" : "debited from";
-
-            await safeSendMessage(chatId, `✅ **Admin Action Successful!**\n*${grantAmountDisplay}* has been ${verb} ${targetUserDisplay} (ID: \`${targetUser.telegram_id}\`).\nNew balance for user: *${newBalanceDisplay}*.`, { parse_mode: 'MarkdownV2' });    
-            
-            const userNotifText = amountToGrantLamports >= 0n
-                ? `🎉 Good news! You have received an admin credit of *${grantAmountDisplay}* from the Casino Royale team! Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`
-                : `⚖️ Admin Adjustment: Your account has been debited by *${grantAmountDisplay}* by the Casino Royale team. Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`;
-            await safeSendMessage(targetUser.telegram_id, userNotifText, { parse_mode: 'MarkdownV2' });
-        } else {
-            await grantClient.query('ROLLBACK');
-            await safeSendMessage(chatId, `❌ **Admin Action Failed:** Failed to ${amountToGrantLamports >= 0n ? 'credit' : 'debit'} funds. Reason: \`${escapeMarkdownV2(grantResult.error || "Unknown balance update error.")}\``, { parse_mode: 'MarkdownV2' });    
-        }
-    } catch (grantError) {
-        if (grantClient) await grantClient.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_GRANT} Admin Grant DB Transaction Error: ${grantError.message}`, grantError.stack?.substring(0,500));
-        await safeSendMessage(chatId, `❌ **Database Error During Grant:** \`${escapeMarkdownV2(grantError.message)}\`. The action was not completed.`, { parse_mode: 'MarkdownV2' });    
-    } finally {
-        if (grantClient) grantClient.release();
-    }
+            await safeSendMessage(chatId, `✅ **Admin Action Successful!**\n*${grantAmountDisplay}* has been ${verb} ${targetUserDisplay} (ID: \`${targetUser.telegram_id}\`).\nNew balance for user: *${newBalanceDisplay}*.`, { parse_mode: 'MarkdownV2' });    
+            
+            const userNotifText = amountToGrantLamports >= 0n
+                ? `🎉 Good news! You have received an admin credit of *${grantAmountDisplay}* from the Casino Royale team! Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`
+                : `⚖️ Admin Adjustment: Your account has been debited by *${grantAmountDisplay}* by the Casino Royale team. Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`;
+            await safeSendMessage(targetUser.telegram_id, userNotifText, { parse_mode: 'MarkdownV2' });
+        } else {
+            await grantClient.query('ROLLBACK');
+            await safeSendMessage(chatId, `❌ **Admin Action Failed:** Failed to ${amountToGrantLamports >= 0n ? 'credit' : 'debit'} funds. Reason: \`${escapeMarkdownV2(grantResult.error || "Unknown balance update error.")}\``, { parse_mode: 'MarkdownV2' });    
+        }
+    } catch (grantError) {
+        if (grantClient) await grantClient.query('ROLLBACK').catch(() => {});
+        console.error(`${LOG_PREFIX_GRANT} Admin Grant DB Transaction Error: ${grantError.message}`, grantError.stack?.substring(0,500));
+        await safeSendMessage(chatId, `❌ **Database Error During Grant:** \`${escapeMarkdownV2(grantError.message)}\`. The action was not completed.`, { parse_mode: 'MarkdownV2' });    
+    } finally {
+        if (grantClient) grantClient.release();
+    }
 }
 
 // --- NEW Command Handler for /bonus (Place in Part 5a, Section 2) ---
 
 async function handleBonusCommand(msg) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id); // This will be the user's DM chat if called correctly
-    const LOG_PREFIX_BONUS_CMD = `[BonusCmd UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd UID:${userId} CH:${chatId}]`;
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(chatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); // HTML safe
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(chatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
 
-    let botUsername = BOT_NAME || "our bot";
-    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* ignore */ }
-    
-    if (msg.chat.type !== 'private') {
-        if (msg.message_id) await bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        await safeSendMessage(msg.chat.id, `${playerRefHTML}, I've sent your Level Up Bonus dashboard to our private chat: @${escapeHTML(botUsername)} 🌟`, { parse_mode: 'HTML' });
-        const dmMsgContext = { from: msg.from, chat: { id: userId, type: 'private' }, message_id: null };
-        await handleBonusCommand(dmMsgContext); 
-        return;
-    }
-    
-    if (msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
-        await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-    }
+    let botUsername = BOT_NAME || "our bot";
+    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* ignore */ }
+    
+    if (msg.chat.type !== 'private') {
+        if (msg.message_id) await bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        await safeSendMessage(msg.chat.id, `${playerRefHTML}, I've sent your Level Up Bonus dashboard to our private chat: @${escapeHTML(botUsername)} 🌟`, { parse_mode: 'HTML' });
+        const dmMsgContext = { from: msg.from, chat: { id: userId, type: 'private' }, message_id: null };
+        await handleBonusCommand(dmMsgContext); 
+        return;
+    }
+    
+    if (msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
+        await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    }
 
-    const loadingMsg = await safeSendMessage(chatId, "⏳ Fetching your Level Up Bonus status...", { parse_mode: 'HTML' });
-    const workingMessageId = loadingMsg?.message_id;
+    const loadingMsg = await safeSendMessage(chatId, "⏳ Fetching your Level Up Bonus status...", { parse_mode: 'HTML' });
+    const workingMessageId = loadingMsg?.message_id;
 
-    let client = null; // <<<< MODIFIED: Declare client outside the try block
+    let client = null;
+
+    try {
+        client = await pool.connect();
+
+        let messageTextHTML = `🌟 <b>Level Up Bonus</b> 🌟\n\nPlay games, level up and get even more bonuses!\n\n`;
+        const keyboardRows = [];
+
+        const currentUserDetails = await client.query(
+            `SELECT u.total_wagered_lamports, u.current_level_id, ul.level_name AS current_level_name, ul.wager_threshold_usd AS current_level_threshold_usd, ul.order_index AS current_level_order_index
+             FROM users u
+             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+             WHERE u.telegram_id = $1`,
+            [userId]
+        );
+
+        if (currentUserDetails.rowCount === 0) {
+            throw new Error("User profile not found in database for bonus check.");
+        }
+
+        const userData = currentUserDetails.rows[0];
+        const totalWageredLamports = BigInt(userData.total_wagered_lamports || '0');
+        const solPrice = await getSolUsdPrice();
+        const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+
+        const currentLevelName = userData.current_level_name || "Newcomer";
+        const currentLevelOrderIndex = userData.current_level_order_index || 0;
+        
+        messageTextHTML += `Your current level:\n🏆 <b>${escapeHTML(currentLevelName)}</b> - ${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))} wagered\n\n`;
+
+        const nextLevelData = await client.query(
+            `SELECT level_name, wager_threshold_usd, bonus_amount_usd
+             FROM user_levels
+             WHERE order_index > $1
+             ORDER BY order_index ASC
+             LIMIT 1`,
+            [currentLevelOrderIndex]
+        );
+
+        let nextLevelName = "Max Level Reached!";
+        let nextLevelThresholdUSD = Infinity; 
+        let wagerNeededUSD = 0;
+
+        if (nextLevelData.rowCount > 0) {
+            const nl = nextLevelData.rows[0];
+            nextLevelName = nl.level_name;
+            nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
+            wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
+             messageTextHTML += `Next Level:\n🏅 <b>${escapeHTML(nextLevelName)}</b> - $${nextLevelThresholdUSD.toFixed(2)} wagered\n\n`;
+        } else {
+            messageTextHTML += `Next Level:\n🏅 ${escapeHTML(nextLevelName)}\n\n`;
+        }
+        
+        const rank = await calculateUserRank(userId, client); // Assumes calculateUserRank is defined and available
+        messageTextHTML += `You are ranked: <b>#${rank !== null ? rank : 'N/A'}</b>\n`;
+
+        if (nextLevelData.rowCount > 0) {
+            messageTextHTML += `Wager <b>$${wagerNeededUSD.toFixed(2)}</b> more to upgrade your level!\n\n`;
+        } else {
+            messageTextHTML += `You've reached the pinnacle! Well done!\n\n`;
+        }
+
+        const claimableBonusesRes = await client.query(
+            `SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd
+             FROM user_levels ul
+             WHERE ul.order_index <= $1
+             AND ul.bonus_amount_usd > 0
+             AND NOT EXISTS (
+                 SELECT 1 FROM user_claimed_level_bonuses uclb
+                 WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+             )
+             ORDER BY ul.order_index DESC 
+             LIMIT 1;`,
+            [currentLevelOrderIndex, userId]
+        );
+
+        if (claimableBonusesRes.rowCount > 0) {
+            const bonusToClaim = claimableBonusesRes.rows[0];
+            const bonusAmountToClaimUSD = parseFloat(bonusToClaim.bonus_amount_usd).toFixed(2);
+            keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} Bonus (${escapeHTML(bonusToClaim.level_name)}) 💰`, callback_data: `claim_level_bonus:${bonusToClaim.level_id}` }]);
+        } else {
+            keyboardRows.push([{ text: "🔒 No Bonuses to Claim Now 🔒", callback_data: "noop" }]);
+        }
+
+        keyboardRows.push([{ text: "📜 Levels List & Info", callback_data: "menu:levels_info" }]);
+        keyboardRows.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
+        
+        const keyboard = { inline_keyboard: keyboardRows };
+        if (workingMessageId && bot) {
+            await bot.editMessageText(messageTextHTML, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+        } else {
+            await safeSendMessage(chatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+        }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_BONUS_CMD} Error: ${error.message}`, error.stack);
+        const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message)}`;
+        const errorKbd = { inline_keyboard: [[{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]] };
+        if (workingMessageId && bot) {
+            await bot.editMessageText(errorText, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: errorKbd });
+        } else {
+            await safeSendMessage(chatId, errorText, { parse_mode: 'HTML', reply_markup: errorKbd });
+        }
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
+// --- NEW Core Function to Handle Claiming a Level Up Bonus ---
+/**
+ * Core logic to process a level up bonus claim.
+ * Must be called within an active DB transaction (dbClient).
+ * @param {string} userId - Telegram ID of the user claiming.
+ * @param {number} levelIdToClaim - The level_id (from user_levels) being claimed.
+ * @param {import('pg').PoolClient} dbClient - Active database client for the transaction.
+ * @returns {Promise<{success: boolean, messageForUser?: string, error?: string}>}
+ */
+async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
+    const LOG_PREFIX_HCLB_CORE = `[HandleClaimLevelBonusCore UID:${userId} LevelID:${levelIdToClaim}]`;
 
     try {
-        client = await pool.connect(); // <<<< MODIFIED: Assign client here
-        // It's good practice to start a transaction if you're doing multiple reads that need consistency 
-        // or if any helper function called with this client might perform writes.
-        // For now, we assume reads are fine without explicit BEGIN for this specific handler,
-        // but calculateUserRank using this client should be noted.
-        // If calculateUserRank or other internal functions start their own transactions with this client,
-        // it can get complex. Simpler if they use global pool or are purely read-only.
-        // The original did have a COMMIT, implying a transaction might have been expected.
-        // Let's add BEGIN for safety if FOR UPDATE is used by calculateUserRank or for consistency.
-        // However, the primary error is scope, not transaction management itself in this function.
-        // For now, assuming calculateUserRank is read-only on the passed client or manages its own tx.
-
-        let messageTextHTML = `🌟 <b>Level Up Bonus</b> 🌟\n\nPlay games, level up and get even more bonuses!\n\n`;
-        const keyboardRows = [];
-
-        const currentUserDetails = await client.query(
-            `SELECT u.total_wagered_lamports, u.current_level_id, ul.level_name AS current_level_name, ul.wager_threshold_usd AS current_level_threshold_usd, ul.order_index AS current_level_order_index
+        // 1. Fetch user's current level details
+        const userRes = await dbClient.query(
+            `SELECT u.current_level_id, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name
              FROM users u
              LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1`,
+             WHERE u.telegram_id = $1 FOR UPDATE OF u`, // Lock user row for this check
             [userId]
         );
+        if (userRes.rowCount === 0) return { success: false, error: "User not found." };
+        const currentUserLevelOrderIndex = userRes.rows[0].current_level_order_index || 0;
 
-        if (currentUserDetails.rowCount === 0) {
-            throw new Error("User profile not found in database for bonus check.");
+        // 2. Fetch details of the level being claimed
+        const levelToClaimRes = await dbClient.query(
+            `SELECT level_id, level_name, bonus_amount_usd, order_index
+             FROM user_levels WHERE level_id = $1`,
+            [levelIdToClaim]
+        );
+        if (levelToClaimRes.rowCount === 0) return { success: false, error: "Bonus level not found." };
+        const levelToClaimData = levelToClaimRes.rows[0];
+
+        // 3. Validation
+        if (currentUserLevelOrderIndex < levelToClaimData.order_index) {
+            return { success: false, error: `You haven't reached ${escapeHTML(levelToClaimData.level_name)} yet.` };
+        }
+        if (parseFloat(levelToClaimData.bonus_amount_usd) <= 0) {
+             // Mark as claimed even if zero to prevent repeated attempts on button.
+            await dbClient.query(
+                `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, claimed_at, bonus_amount_claimed_lamports, notes)
+                 VALUES ($1, $2, NOW(), $3, $4) ON CONFLICT (user_telegram_id, level_id) DO NOTHING`,
+                [userId, levelIdToClaim, '0', `Attempted to claim zero/negative bonus for ${levelToClaimData.level_name}`]
+            );
+            return { success: false, error: `No bonus amount defined for ${escapeHTML(levelToClaimData.level_name)}.` };
         }
 
-        const userData = currentUserDetails.rows[0];
-        const totalWageredLamports = BigInt(userData.total_wagered_lamports || '0');
-        const solPrice = await getSolUsdPrice();
-        const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+        // 4. Check if already claimed
+        const alreadyClaimedRes = await dbClient.query(
+            `SELECT 1 FROM user_claimed_level_bonuses WHERE user_telegram_id = $1 AND level_id = $2`,
+            [userId, levelIdToClaim]
+        );
+        if (alreadyClaimedRes.rowCount > 0) {
+            return { success: false, error: `You've already claimed the bonus for ${escapeHTML(levelToClaimData.level_name)}.` };
+        }
 
-        const currentLevelName = userData.current_level_name || "Newcomer";
-        // const currentLevelThresholdUSD = parseFloat(userData.current_level_threshold_usd || '0.00'); // Not directly used in this exact display string part
-        const currentLevelOrderIndex = userData.current_level_order_index || 0;
-        
-        messageTextHTML += `Your current level:\n🏆 <b>${escapeHTML(currentLevelName)}</b> - ${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))} wagered\n\n`;
+        // 5. Convert bonus to lamports
+        const bonusAmountUSD = parseFloat(levelToClaimData.bonus_amount_usd);
+        const solPrice = await getSolUsdPrice(); // Assumes getSolUsdPrice is available
+        const bonusAmountLamports = convertUSDToLamports(bonusAmountUSD, solPrice); // Assumes convertUSDToLamports is available
 
-        const nextLevelData = await client.query(
-            `SELECT level_name, wager_threshold_usd, bonus_amount_usd
-             FROM user_levels
-             WHERE order_index > $1
-             ORDER BY order_index ASC
-             LIMIT 1`,
-            [currentLevelOrderIndex]
+        if (bonusAmountLamports <= 0n) {
+            // Should have been caught by bonus_amount_usd check, but good to have another check.
+            await dbClient.query(
+                `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, claimed_at, bonus_amount_claimed_lamports, notes)
+                 VALUES ($1, $2, NOW(), $3, $4) ON CONFLICT (user_telegram_id, level_id) DO NOTHING`,
+                [userId, levelIdToClaim, '0', `Claimed zero lamport bonus for ${levelToClaimData.level_name}`]
+            );
+            return { success: true, messageForUser: `Bonus for ${escapeHTML(levelToClaimData.level_name)} recorded (0 value).` };
+        }
+
+        // 6. Credit user and log
+        const ledgerNotes = `Level Up Bonus: ${levelToClaimData.level_name} ($${bonusAmountUSD.toFixed(2)})`;
+        const creditResult = await updateUserBalanceAndLedger( // Assumes updateUserBalanceAndLedger is available
+            dbClient, userId, bonusAmountLamports,
+            'level_up_bonus_claimed',
+            { custom_level_id: levelIdToClaim, custom_level_name: levelToClaimData.level_name },
+            ledgerNotes
         );
 
-        let nextLevelName = "Max Level Reached!";
-        let nextLevelThresholdUSD = Infinity; 
-        let wagerNeededUSD = 0;
-
-        if (nextLevelData.rowCount > 0) {
-            const nl = nextLevelData.rows[0];
-            nextLevelName = nl.level_name;
-            nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
-            wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
-             messageTextHTML += `Next Level:\n🏅 <b>${escapeHTML(nextLevelName)}</b> - $${nextLevelThresholdUSD.toFixed(2)} wagered\n\n`;
-        } else {
-            messageTextHTML += `Next Level:\n🏅 ${escapeHTML(nextLevelName)}\n\n`;
-        }
-        
-        const rank = await calculateUserRank(userId, client); 
-        messageTextHTML += `You are ranked: <b>#${rank !== null ? rank : 'N/A'}</b>\n`;
-
-        if (nextLevelData.rowCount > 0) {
-            messageTextHTML += `Wager <b>$${wagerNeededUSD.toFixed(2)}</b> more to upgrade your level!\n\n`;
-        } else {
-            messageTextHTML += `You've reached the pinnacle! Well done!\n\n`;
+        if (!creditResult.success) {
+            throw new Error(creditResult.error || "Failed to credit level up bonus to user balance.");
         }
 
-        const claimableBonusesRes = await client.query(
-            `SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd
-             FROM user_levels ul
-             WHERE ul.order_index <= $1
-             AND ul.bonus_amount_usd > 0
-             AND NOT EXISTS (
-                 SELECT 1 FROM user_claimed_level_bonuses uclb
-                 WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-             )
-             ORDER BY ul.order_index DESC 
-             LIMIT 1;`,
-            [currentLevelOrderIndex, userId]
+        // 7. Record the claim
+        await dbClient.query(
+            `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, claimed_at, bonus_amount_claimed_lamports, notes)
+             VALUES ($1, $2, NOW(), $3, $4)`,
+            [userId, levelIdToClaim, bonusAmountLamports.toString(), `Claimed for ${levelToClaimData.level_name}`]
         );
 
-        if (claimableBonusesRes.rowCount > 0) {
-            const bonusToClaim = claimableBonusesRes.rows[0];
-            const bonusAmountToClaimUSD = parseFloat(bonusToClaim.bonus_amount_usd).toFixed(2);
-            keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} Bonus (${escapeHTML(bonusToClaim.level_name)}) 💰`, callback_data: `claim_level_bonus:${bonusToClaim.level_id}` }]);
-        } else {
-            keyboardRows.push([{ text: "🔒 No Bonuses to Claim Now 🔒", callback_data: "noop" }]);
-        }
+        // Ensure formatBalanceForDisplay and escapeHTML are available
+        const bonusAmountUSDDisplay = escapeHTML((await formatBalanceForDisplay(bonusAmountLamports, 'USD')).replace(/[$#]/g, ''));
+        return { success: true, messageForUser: `🎉 Bonus for ${escapeHTML(levelToClaimData.level_name)} (~${bonusAmountUSDDisplay}) claimed! Added to your balance.` };
 
-        keyboardRows.push([{ text: "📜 Levels List & Info", callback_data: "menu:levels_info" }]);
-        keyboardRows.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
-        
-        const keyboard = { inline_keyboard: keyboardRows };
-        if (workingMessageId && bot) {
-            await bot.editMessageText(messageTextHTML, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
-        } else { // Should not happen if loadingMsg was sent successfully
-            await safeSendMessage(chatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
-        }
-        // Removed explicit COMMIT as this function now primarily does reads after client acquisition.
-        // If calculateUserRank or other functions called with `client` perform writes without their own tx management,
-        // this might need reconsideration, or those functions should manage their own tx.
     } catch (error) {
-        console.error(`${LOG_PREFIX_BONUS_CMD} Error: ${error.message}`, error.stack);
-        // Removed explicit ROLLBACK as we are not explicitly starting a transaction with BEGIN in this function's try block.
-        // The release in finally is the main cleanup for the client.
-        const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message)}`;
-        const errorKbd = { inline_keyboard: [[{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]] };
-        if (workingMessageId && bot) {
-            await bot.editMessageText(errorText, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: errorKbd });
-        } else {
-            await safeSendMessage(chatId, errorText, { parse_mode: 'HTML', reply_markup: errorKbd });
-        }
-    } finally {
-        if (client) { // Now client is accessible here
-            client.release();
-        }
+        console.error(`${LOG_PREFIX_HCLB_CORE} Error claiming level bonus: ${error.message}`, error.stack);
+        // Do not re-throw if we want the calling transaction in handleClaimLevelBonusCallback to manage its own rollback.
+        // The calling function will receive this error in claimResult.error.
+        return { success: false, error: error.message || "Could not claim bonus at this time." };
     }
 }
+
+
 // --- End of Part 5a, Section 2 ---
 // --- Start of Part 5a, Section 4 (REVISED for New Dice Escalator UI & Simplified Post-Game Keyboard) ---
 // index.js - Part 5a, Section 4: UI Helpers and Shared Utilities for General Commands & Simple Group Games
@@ -14285,7 +14526,7 @@ async function sendSol(payerKeypair, recipientPublicKeyString, amountLamports, m
 }
 
 // --- End of Part P1 ---
-// --- Start of Part P2 ---
+// --- Start of Part P2 (MODIFIED to include calculateUserRank and call checkAndUpdateUserLevel) ---
 // index.js - Part P2: Payment System Database Operations
 //---------------------------------------------------------------------------
 // Assumed global `pool`, `queryDatabase`,
@@ -14293,755 +14534,776 @@ async function sendSol(payerKeypair, recipientPublicKeyString, amountLamports, m
 // `generateReferralCode`, `getNextAddressIndexForUserDB`,
 // `activeDepositAddresses` cache map, `walletCache` map are available.
 // Constants like SOL_DECIMALS, LAMPORTS_PER_SOL are assumed available.
+// Assumed `checkAndUpdateUserLevel` is defined (e.g., in Part 2).
+// Assumed `processQualifyingBetAndInitialBonus` and `processWagerMilestoneBonus` are defined (e.g., in Part 3).
+// Assumed `getSolUsdPrice` is available (e.g., from Part 1).
 
 // --- Unified User/Wallet Operations ---
 
 /**
- * Fetches payment-system relevant details for a user.
- * @param {string|number} telegramId The user's Telegram ID.
- * @param {import('pg').PoolClient} [client=pool] Optional database client.
- * @returns {Promise<object|null>} User details with BigInt conversions or null if not found/error.
- */
+ * Fetches payment-system relevant details for a user.
+ * @param {string|number} telegramId The user's Telegram ID.
+ * @param {import('pg').PoolClient} [client=pool] Optional database client.
+ * @returns {Promise<object|null>} User details with BigInt conversions or null if not found/error.
+ */
 async function getPaymentSystemUserDetails(telegramId, client = pool) {
-    const stringUserId = String(telegramId);
-    const LOG_PREFIX_GPSUD = `[GetUserPayDetails TG:${stringUserId}]`; // Shortened
-    const query = `
-        SELECT
-            telegram_id, username, first_name, last_name, balance, solana_wallet_address,
-            referral_code, referrer_telegram_id, can_generate_deposit_address,
-            last_deposit_address, last_deposit_address_generated_at,
-            total_deposited_lamports, total_withdrawn_lamports,
-            total_wagered_lamports, total_won_lamports, notes,
-            created_at, updated_at
-        FROM users
-        WHERE telegram_id = $1;
-    `;
-    try {
-        const res = await queryDatabase(query, [stringUserId], client);
-        if (res.rows.length > 0) {
-            const details = res.rows[0];
-            details.telegram_id = String(details.telegram_id); 
-            details.balance = BigInt(details.balance || '0');
-            details.total_deposited_lamports = BigInt(details.total_deposited_lamports || '0');
-            details.total_withdrawn_lamports = BigInt(details.total_withdrawn_lamports || '0');
-            details.total_wagered_lamports = BigInt(details.total_wagered_lamports || '0');
-            details.total_won_lamports = BigInt(details.total_won_lamports || '0');
-            if (details.referrer_telegram_id) {
-                details.referrer_telegram_id = String(details.referrer_telegram_id);
-            }
-            return details;
-        }
-        // console.warn(`${LOG_PREFIX_GPSUD} User not found.`); // Can be noisy, remove if not essential for normal ops
-        return null;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GPSUD} ❌ Error fetching user details: ${err.message}`, err.stack?.substring(0,500));
-        return null;
-    }
+    const stringUserId = String(telegramId);
+    const LOG_PREFIX_GPSUD = `[GetUserPayDetails TG:${stringUserId}]`; // Shortened
+    const query = `
+        SELECT
+            telegram_id, username, first_name, last_name, balance, solana_wallet_address,
+            referral_code, referrer_telegram_id, can_generate_deposit_address,
+            last_deposit_address, last_deposit_address_generated_at,
+            total_deposited_lamports, total_withdrawn_lamports,
+            total_wagered_lamports, total_won_lamports, notes,
+            created_at, updated_at
+        FROM users
+        WHERE telegram_id = $1;
+    `;
+    try {
+        const res = await queryDatabase(query, [stringUserId], client);
+        if (res.rows.length > 0) {
+            const details = res.rows[0];
+            details.telegram_id = String(details.telegram_id); 
+            details.balance = BigInt(details.balance || '0');
+            details.total_deposited_lamports = BigInt(details.total_deposited_lamports || '0');
+            details.total_withdrawn_lamports = BigInt(details.total_withdrawn_lamports || '0');
+            details.total_wagered_lamports = BigInt(details.total_wagered_lamports || '0');
+            details.total_won_lamports = BigInt(details.total_won_lamports || '0');
+            if (details.referrer_telegram_id) {
+                details.referrer_telegram_id = String(details.referrer_telegram_id);
+            }
+            return details;
+        }
+        // console.warn(`${LOG_PREFIX_GPSUD} User not found.`); // Can be noisy, remove if not essential for normal ops
+        return null;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GPSUD} ❌ Error fetching user details: ${err.message}`, err.stack?.substring(0,500));
+        return null;
+    }
 }
 
 /**
- * Finds a user by their referral code.
- * @param {string} refCode The referral code.
- * @param {import('pg').PoolClient} [client=pool] Optional database client.
- * @returns {Promise<{telegram_id: string, username?:string, first_name?:string} | null>} User ID (as string) and basic info or null.
- */
+ * Finds a user by their referral code.
+ * @param {string} refCode The referral code.
+ * @param {import('pg').PoolClient} [client=pool] Optional database client.
+ * @returns {Promise<{telegram_id: string, username?:string, first_name?:string} | null>} User ID (as string) and basic info or null.
+ */
 async function getUserByReferralCode(refCode, client = pool) {
-    const LOG_PREFIX_GUBRC = `[GetUserByRefCode Code:${refCode}]`;
-    if (!refCode || typeof refCode !== 'string' || refCode.trim() === "") {
-        // console.warn(`${LOG_PREFIX_GUBRC} Invalid or empty referral code provided.`); // Reduced log
-        return null;
-    }
-    try {
-        const result = await queryDatabase('SELECT telegram_id, username, first_name FROM users WHERE referral_code = $1', [refCode.trim()], client);
-        if (result.rows.length > 0) {
-            const userFound = result.rows[0];
-            userFound.telegram_id = String(userFound.telegram_id); 
-            return userFound;
-        }
-        return null;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GUBRC} ❌ Error finding user by referral code: ${err.message}`, err.stack?.substring(0,500));
-        return null;
-    }
+    const LOG_PREFIX_GUBRC = `[GetUserByRefCode Code:${refCode}]`;
+    if (!refCode || typeof refCode !== 'string' || refCode.trim() === "") {
+        // console.warn(`${LOG_PREFIX_GUBRC} Invalid or empty referral code provided.`); // Reduced log
+        return null;
+    }
+    try {
+        const result = await queryDatabase('SELECT telegram_id, username, first_name FROM users WHERE referral_code = $1', [refCode.trim()], client);
+        if (result.rows.length > 0) {
+            const userFound = result.rows[0];
+            userFound.telegram_id = String(userFound.telegram_id); 
+            return userFound;
+        }
+        return null;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GUBRC} ❌ Error finding user by referral code: ${err.message}`, err.stack?.substring(0,500));
+        return null;
+    }
 }
 
 // --- Unified Balance & Ledger Operations ---
 
 /**
- * Atomically updates a user's balance and records the change in the ledger table.
- * This is the PRIMARY function for all financial transactions affecting user balance.
- * MUST be called within an active DB transaction if part of a larger multi-step operation.
- * The `dbClient` parameter MUST be an active client from `pool.connect()`.
- *
- * @param {import('pg').PoolClient} dbClient - The active database client.
- * @param {string|number} telegramId - The user's Telegram ID.
- * @param {bigint} changeAmountLamports - Positive for credit, negative for debit.
- * @param {string} transactionType - Type for the ledger.
- * @param {object} [relatedIds={}] Optional related IDs.
- * @param {string|null} [notes=null] Optional notes for the ledger entry.
- * @returns {Promise<{success: boolean, newBalanceLamports?: bigint, oldBalanceLamports?: bigint, ledgerId?: number, error?: string, errorCode?: string}>}
- */
+ * Atomically updates a user's balance and records the change in the ledger table.
+ * This is the PRIMARY function for all financial transactions affecting user balance.
+ * MUST be called within an active DB transaction if part of a larger multi-step operation.
+ * The `dbClient` parameter MUST be an active client from `pool.connect()`.
+ *
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {string|number} telegramId - The user's Telegram ID.
+ * @param {bigint} changeAmountLamports - Positive for credit, negative for debit.
+ * @param {string} transactionType - Type for the ledger.
+ * @param {object} [relatedIds={}] Optional related IDs.
+ * @param {string|null} [notes=null] Optional notes for the ledger entry.
+ * @returns {Promise<{success: boolean, newBalanceLamports?: bigint, oldBalanceLamports?: bigint, ledgerId?: number, error?: string, errorCode?: string}>}
+ */
 async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null) {
-    const stringUserId = String(telegramId);
-    const changeAmount = BigInt(changeAmountLamports);
-    const logPrefix = `[UpdateBalLedger UID:${stringUserId} Type:${transactionType} Amt:${changeAmount}]`;
+    const stringUserId = String(telegramId);
+    const changeAmount = BigInt(changeAmountLamports);
+    const logPrefix = `[UpdateBalLedger UID:${stringUserId} Type:${transactionType} Amt:${changeAmount}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
-        return { success: false, error: 'Invalid database client provided to updateUserBalanceAndLedger.', errorCode: 'INVALID_DB_CLIENT' };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
+        return { success: false, error: 'Invalid database client provided to updateUserBalanceAndLedger.', errorCode: 'INVALID_DB_CLIENT' };
+    }
 
-    const relDepositId = (relatedIds?.deposit_id && Number.isInteger(relatedIds.deposit_id)) ? relatedIds.deposit_id : null;
-    const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(relatedIds.withdrawal_id)) ? relatedIds.withdrawal_id : null;
-    // Use game_id_custom_field if present for game related logs, otherwise fallback to game_log_id
-    const relGameLogId = (relatedIds?.game_id_custom_field && (Number.isInteger(relatedIds.game_id_custom_field) || typeof relatedIds.game_id_custom_field === 'string'))
-        ? relatedIds.game_id_custom_field // Could be string like gameId from activeGames map
-        : ((relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null);
-    const relReferralId = (relatedIds?.referral_id && Number.isInteger(relatedIds.referral_id)) ? relatedIds.referral_id : null;
-    const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(relatedIds.related_sweep_id)) ? relatedIds.related_sweep_id : null;
-    let oldBalanceLamports;
+    const relDepositId = (relatedIds?.deposit_id && Number.isInteger(relatedIds.deposit_id)) ? relatedIds.deposit_id : null;
+    const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(relatedIds.withdrawal_id)) ? relatedIds.withdrawal_id : null;
+    const relGameLogId = (relatedIds?.game_id_custom_field && (Number.isInteger(relatedIds.game_id_custom_field) || typeof relatedIds.game_id_custom_field === 'string'))
+        ? relatedIds.game_id_custom_field
+        : ((relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null);
+    const relReferralId = (relatedIds?.referral_id && Number.isInteger(relatedIds.referral_id)) ? relatedIds.referral_id : null;
+    const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(relatedIds.related_sweep_id)) ? relatedIds.related_sweep_id : null;
+    let oldBalanceLamports;
 
-    try {
-        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
-        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
-        
-        if (balanceRes.rowCount === 0) {
-            console.error(`${logPrefix} ❌ User balance record not found for ID ${stringUserId}.`);
-            return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
-        }
-        const userData = balanceRes.rows[0];
-        oldBalanceLamports = BigInt(userData.balance);
-        const balanceAfter = oldBalanceLamports + changeAmount;
+    try {
+        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
+        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
+        
+        if (balanceRes.rowCount === 0) {
+            console.error(`${logPrefix} ❌ User balance record not found for ID ${stringUserId}.`);
+            return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
+        }
+        const userData = balanceRes.rows[0];
+        oldBalanceLamports = BigInt(userData.balance);
+        const balanceAfter = oldBalanceLamports + changeAmount;
 
-        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_') && transactionType !== 'admin_adjustment_debit') {
-            console.warn(`${logPrefix} ⚠️ Insufficient balance. Current: ${oldBalanceLamports}, Change: ${changeAmount}, Would be: ${balanceAfter}.`);
-            return { success: false, error: 'Insufficient balance for this transaction.', oldBalanceLamports: oldBalanceLamports, newBalanceLamportsWouldBe: balanceAfter, errorCode: 'INSUFFICIENT_FUNDS' };
-        }
+        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_') && transactionType !== 'admin_adjustment_debit') {
+            console.warn(`${logPrefix} ⚠️ Insufficient balance. Current: ${oldBalanceLamports}, Change: ${changeAmount}, Would be: ${balanceAfter}.`);
+            return { success: false, error: 'Insufficient balance for this transaction.', oldBalanceLamports: oldBalanceLamports, newBalanceLamportsWouldBe: balanceAfter, errorCode: 'INSUFFICIENT_FUNDS' };
+        }
 
-        let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
-        let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
-        let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
-        let newTotalWon = BigInt(userData.total_won_lamports || '0');
-        let actualBetAmountForBonusProcessing = 0n; // For referral bonus processing
+        let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
+        let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
+        let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
+        let newTotalWon = BigInt(userData.total_won_lamports || '0');
+        let actualBetAmountForBonusProcessing = 0n;
 
-        if (transactionType === 'deposit' && changeAmount > 0n) {
-            newTotalDeposited += changeAmount;
-        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) {
-            newTotalWithdrawn -= changeAmount; // changeAmount is negative, so subtract it
-        } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
-            actualBetAmountForBonusProcessing = -changeAmount; // Bet amount is positive value
-            newTotalWagered += actualBetAmountForBonusProcessing;
-        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_')) && changeAmount > 0n) {
-            // Winnings/refunds typically cover original stake + profit, or just stake.
-            // If the 'changeAmount' for a win *includes* the original bet return, total_won should reflect net winnings or total payout.
-            // The current description "total_won_lamports" suggests it's the sum of amounts won.
-            // If a "win" transaction type means "net profit", this is fine.
-            // If "win" means "total payout (stake + profit)", then total_won_lamports should track this.
-            // For simplicity, assume changeAmount for 'win_' is the total credited back to user (stake + profit).
+        if (transactionType === 'deposit' && changeAmount > 0n) {
+            newTotalDeposited += changeAmount;
+        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) {
+            newTotalWithdrawn -= changeAmount;
+        } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
+            actualBetAmountForBonusProcessing = -changeAmount;
+            newTotalWagered += actualBetAmountForBonusProcessing;
+        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_')) && changeAmount > 0n) {
+            newTotalWon += changeAmount;
+        } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) {
+            newTotalWon += changeAmount;
+        } else if (transactionType === 'level_up_bonus_claimed' && changeAmount > 0n) { // Matches new function
             newTotalWon += changeAmount;
-        } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) {
-             // This is when a referral commission is credited to the *referrer's* game balance.
-             // (The new system pays out to external wallet, so this might be less used or for other bonus types)
-            newTotalWon += changeAmount; // Could also be a separate "total_bonuses_credited_lamports"
-        } else if (transactionType === 'level_up_bonus_claimed' && changeAmount > 0n) {
-            newTotalWon += changeAmount; // Add level up bonus to total won or a dedicated bonus field
         }
 
 
-        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
-        const updateUserParams = [
-            balanceAfter.toString(),
-            newTotalDeposited.toString(),
-            newTotalWithdrawn.toString(),
-            newTotalWagered.toString(),
-            newTotalWon.toString(),
-            stringUserId
-        ];
-        const updateRes = await dbClient.query(updateUserQuery, updateUserParams);
+        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
+        const updateUserParams = [
+            balanceAfter.toString(),
+            newTotalDeposited.toString(),
+            newTotalWithdrawn.toString(),
+            newTotalWagered.toString(),
+            newTotalWon.toString(),
+            stringUserId
+        ];
+        const updateRes = await dbClient.query(updateUserQuery, updateUserParams);
 
-        if (updateRes.rowCount === 0) {
-            console.error(`${logPrefix} ❌ Failed to update user balance row after lock for user ${stringUserId}. This should not happen.`);
-            throw new Error('Failed to update user balance row after lock.');
-        }
+        if (updateRes.rowCount === 0) {
+            console.error(`${logPrefix} ❌ Failed to update user balance row after lock for user ${stringUserId}. This should not happen.`);
+            throw new Error('Failed to update user balance row after lock.');
+        }
 
-        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING ledger_id;`;
-        const ledgerParams = [
-            stringUserId, transactionType, changeAmount.toString(), oldBalanceLamports.toString(), balanceAfter.toString(),
-            relDepositId, relWithdrawalId, relGameLogId, relReferralId, relSweepId, notes
-        ];
-        const ledgerRes = await dbClient.query(ledgerQuery, ledgerParams);
-        
-        const ledgerId = ledgerRes.rows[0]?.ledger_id;
-        console.log(`${logPrefix} ✅ Balance updated: ${oldBalanceLamports} -> ${balanceAfter}. Ledger: ${ledgerId}.`);
+        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING ledger_id;`;
+        const ledgerParams = [
+            stringUserId, transactionType, changeAmount.toString(), oldBalanceLamports.toString(), balanceAfter.toString(),
+            relDepositId, relWithdrawalId, relGameLogId, relReferralId, relSweepId, notes
+        ];
+        const ledgerRes = await dbClient.query(ledgerQuery, ledgerParams);
+        
+        const ledgerId = ledgerRes.rows[0]?.ledger_id;
+        // console.log(`${logPrefix} ✅ Balance updated: ${oldBalanceLamports} -> ${balanceAfter}. Ledger: ${ledgerId}.`); // Reduced log noise
 
-        // --- NEW: Referral Bonus Processing ---
-        if (transactionType.startsWith('bet_placed_') && actualBetAmountForBonusProcessing > 0n) {
-            console.log(`${logPrefix} Bet placed. Processing referral bonuses for user ${stringUserId}. Bet Amount: ${actualBetAmountForBonusProcessing}`);
-            
-            // 1. Process Initial Bet Bonus (for the user who placed the bet, if they were referred)
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(
-                    dbClient,
-                    stringUserId, // The user who placed the bet (the referred user)
-                    actualBetAmountForBonusProcessing,
-                    String(relGameLogId || relatedIds?.custom_offer_id || 'N/A') // Game context for the bet
-                );
-                if (!initialBonusResult.success) {
-                    console.warn(`${logPrefix} Non-critical: Failed to process initial referral bonus for referred user ${stringUserId}. Error: ${initialBonusResult.error}`);
-                    // Do not rollback main transaction for this, but log it. Admin might need to check.
-                    if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`⚠️ Initial Referral Bonus Processing Issue\nReferred User: ${stringUserId}\nError: ${initialBonusResult.error}\nBet transaction still committed.`, {parse_mode: 'MarkdownV2'});
-                    }
-                } else if (initialBonusResult.bonusProcessed) {
-                    console.log(`${logPrefix} Initial referral bonus processed successfully for referred user ${stringUserId}.`);
-                }
+        // --- Referral Bonus Processing ---
+        if (transactionType.startsWith('bet_placed_') && actualBetAmountForBonusProcessing > 0n) {
+            // console.log(`${logPrefix} Bet placed. Processing referral bonuses for user ${stringUserId}. Bet Amount: ${actualBetAmountForBonusProcessing}`); // Reduced log noise
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(
+                    dbClient, stringUserId, actualBetAmountForBonusProcessing,
+                    String(relGameLogId || relatedIds?.custom_offer_id || 'N/A')
+                );
+                if (!initialBonusResult.success) console.warn(`${logPrefix} Non-critical: Failed to process initial referral bonus for ${stringUserId}. Error: ${initialBonusResult.error}`);
+            } else console.error(`${logPrefix} CRITICAL: processQualifyingBetAndInitialBonus function is undefined!`);
+
+            if (typeof processWagerMilestoneBonus === 'function') {
+                const milestoneBonusResult = await processWagerMilestoneBonus(dbClient, stringUserId, newTotalWagered);
+                if (!milestoneBonusResult.success) console.warn(`${logPrefix} Non-critical: Failed to process wager milestone bonus for ${stringUserId}. Error: ${milestoneBonusResult.error}`);
+            } else console.error(`${logPrefix} CRITICAL: processWagerMilestoneBonus function is undefined!`);
+        }
+        // --- END OF Referral Bonus Processing ---
+
+        // --- NEW: Level Up Check ---
+        // Check if total wagered actually increased and the transaction type suggests a wager.
+        // (e.g., 'bet_placed_', or any other type that should contribute to wager progression)
+        const oldTotalWagered = BigInt(userData.total_wagered_lamports || '0');
+        if (newTotalWagered > oldTotalWagered && (transactionType.startsWith('bet_placed_') || transactionType.startsWith('loss_') || transactionType.startsWith('win_') || transactionType.startsWith('push_'))) {
+            if (typeof checkAndUpdateUserLevel === 'function') {
+                // console.log(`${logPrefix} Wager amount changed. Calling checkAndUpdateUserLevel.`); // Can be noisy
+                await checkAndUpdateUserLevel(dbClient, stringUserId, newTotalWagered);
             } else {
-                console.error(`${logPrefix} CRITICAL: processQualifyingBetAndInitialBonus function is undefined!`);
-            }
-
-            // 2. Process Wager Milestone Bonus (for the user who placed the bet, if they were referred)
-            if (typeof processWagerMilestoneBonus === 'function') {
-                const milestoneBonusResult = await processWagerMilestoneBonus(
-                    dbClient,
-                    stringUserId, // The user whose wager total increased
-                    newTotalWagered  // Their new total wagered amount
-                );
-                if (!milestoneBonusResult.success) {
-                    console.warn(`${logPrefix} Non-critical: Failed to process wager milestone bonus for referred user ${stringUserId}. Error: ${milestoneBonusResult.error}`);
-                     if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`⚠️ Wager Milestone Bonus Processing Issue\nReferred User: ${stringUserId}\nError: ${milestoneBonusResult.error}\nBet transaction still committed.`, {parse_mode: 'MarkdownV2'});
-                    }
-                } else if (milestoneBonusResult.milestonesProcessed > 0) {
-                    console.log(`${logPrefix} ${milestoneBonusResult.milestonesProcessed} wager milestone bonus(es) processed for referred user ${stringUserId}.`);
+                console.error(`${logPrefix} CRITICAL: checkAndUpdateUserLevel function is undefined! Cannot update user level.`);
+                // Optionally notify admin if this is critical for game flow
+                if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
+                    notifyAdmin(`🚨 CRITICAL ALERT 🚨\nFunction \`checkAndUpdateUserLevel\` is MISSING.\nUser levels will not update for UserID: ${escapeMarkdownV2(stringUserId)}.\nPlease deploy the function.`, { parse_mode: 'MarkdownV2' });
                 }
-            } else {
-                console.error(`${logPrefix} CRITICAL: processWagerMilestoneBonus function is undefined!`);
             }
         }
-        // --- END OF NEW: Referral Bonus Processing ---
+        // --- END OF NEW: Level Up Check ---
 
-        return { success: true, newBalanceLamports: balanceAfter, oldBalanceLamports: oldBalanceLamports, ledgerId };
+        return { success: true, newBalanceLamports: balanceAfter, oldBalanceLamports: oldBalanceLamports, ledgerId };
 
-    } catch (err) {
-        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message} (Code: ${err.code || 'N/A'})`, err.stack?.substring(0,500));
-        let errMsg = `Database error during balance/ledger update (Code: ${err.code || 'N/A'})`;
-        if (err.message && err.message.toLowerCase().includes('violates check constraint') && err.message.toLowerCase().includes('balance')) {
-            errMsg = 'Insufficient balance (check constraint violation).';
-        }
-        return { success: false, error: errMsg, errorCode: err.code, oldBalanceLamports };
-    }
+    } catch (err) {
+        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message} (Code: ${err.code || 'N/A'})`, err.stack?.substring(0,500));
+        let errMsg = `Database error during balance/ledger update (Code: ${err.code || 'N/A'})`;
+        if (err.message && err.message.toLowerCase().includes('violates check constraint') && err.message.toLowerCase().includes('balance')) {
+            errMsg = 'Insufficient balance (check constraint violation).';
+        }
+        return { success: false, error: errMsg, errorCode: err.code, oldBalanceLamports };
+    }
 }
 
 // --- Deposit Address & Deposit Operations ---
 
 /**
- * Finds user ID and other details for a given deposit address. Checks cache first.
- * @param {string} depositAddress The deposit address (public key).
- * @returns {Promise<{userId: string, walletId: number, expiresAt: Date, derivationPath: string, isActive:boolean } | null>}
- */
+ * Finds user ID and other details for a given deposit address. Checks cache first.
+ * @param {string} depositAddress The deposit address (public key).
+ * @returns {Promise<{userId: string, walletId: number, expiresAt: Date, derivationPath: string, isActive:boolean } | null>}
+ */
 async function findDepositAddressInfoDB(depositAddress) {
-    const LOG_PREFIX_FDAI = `[FindDepositAddr Addr:${depositAddress ? depositAddress.slice(0,6) : 'N/A'}...]`; // Shortened
-    if (!depositAddress) {
-        // console.warn(`${LOG_PREFIX_FDAI} Called with null or undefined depositAddress.`); // Reduced log
-        return null;
-    }
+    const LOG_PREFIX_FDAI = `[FindDepositAddr Addr:${depositAddress ? depositAddress.slice(0,6) : 'N/A'}...]`; // Shortened
+    if (!depositAddress) {
+        // console.warn(`${LOG_PREFIX_FDAI} Called with null or undefined depositAddress.`); // Reduced log
+        return null;
+    }
 
-    if (typeof activeDepositAddresses !== 'undefined' && activeDepositAddresses instanceof Map) {
-        const cached = activeDepositAddresses.get(depositAddress);
-        if (cached && Date.now() < cached.expiresAt) {
-            // Cache hit is useful, but we often need full details from DB.
-        }
-    }
+    if (typeof activeDepositAddresses !== 'undefined' && activeDepositAddresses instanceof Map) {
+        const cached = activeDepositAddresses.get(depositAddress);
+        if (cached && Date.now() < cached.expiresAt) {
+            // Cache hit is useful, but we often need full details from DB.
+        }
+    }
 
-    try {
-        const res = await queryDatabase(
-            'SELECT user_telegram_id, wallet_id, expires_at, derivation_path, is_active FROM user_deposit_wallets WHERE public_key = $1',
-            [depositAddress]
-        );
-        if (res.rows.length > 0) {
-            const data = res.rows[0];
-            const expiresAtDate = new Date(data.expires_at);
-            const isActiveCurrent = data.is_active && expiresAtDate.getTime() > Date.now();
-            
-            if (typeof activeDepositAddresses !== 'undefined' && activeDepositAddresses instanceof Map) {
-                if (isActiveCurrent) {
-                    activeDepositAddresses.set(depositAddress, { userId: String(data.user_telegram_id), expiresAt: expiresAtDate.getTime() });
-                } else {
-                    activeDepositAddresses.delete(depositAddress);
-                }
-            }
-            return { 
-                userId: String(data.user_telegram_id), 
-                walletId: data.wallet_id, 
-                expiresAt: expiresAtDate, 
-                derivationPath: data.derivation_path, 
-                isActive: isActiveCurrent
-            };
-        }
-        return null;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_FDAI} ❌ Error finding deposit address info: ${err.message}`, err.stack?.substring(0,500));
-        return null;
-    }
+    try {
+        const res = await queryDatabase(
+            'SELECT user_telegram_id, wallet_id, expires_at, derivation_path, is_active FROM user_deposit_wallets WHERE public_key = $1',
+            [depositAddress]
+        );
+        if (res.rows.length > 0) {
+            const data = res.rows[0];
+            const expiresAtDate = new Date(data.expires_at);
+            const isActiveCurrent = data.is_active && expiresAtDate.getTime() > Date.now();
+            
+            if (typeof activeDepositAddresses !== 'undefined' && activeDepositAddresses instanceof Map) {
+                if (isActiveCurrent) {
+                    activeDepositAddresses.set(depositAddress, { userId: String(data.user_telegram_id), expiresAt: expiresAtDate.getTime() });
+                } else {
+                    activeDepositAddresses.delete(depositAddress);
+                }
+            }
+            return { 
+                userId: String(data.user_telegram_id), 
+                walletId: data.wallet_id, 
+                expiresAt: expiresAtDate, 
+                derivationPath: data.derivation_path, 
+                isActive: isActiveCurrent
+            };
+        }
+        return null;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_FDAI} ❌ Error finding deposit address info: ${err.message}`, err.stack?.substring(0,500));
+        return null;
+    }
 }
 
 /**
- * Marks a deposit address as inactive and optionally as swept.
- * @param {import('pg').PoolClient} dbClient - The active database client.
- * @param {number} userDepositWalletId - The ID of the `user_deposit_wallets` record.
- * @param {boolean} [swept=false] - If true, also sets swept_at.
- * @param {bigint|null} [balanceAtSweep=null] - Optional balance at time of sweep.
- * @returns {Promise<boolean>} True if updated successfully.
- */
+ * Marks a deposit address as inactive and optionally as swept.
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {number} userDepositWalletId - The ID of the `user_deposit_wallets` record.
+ * @param {boolean} [swept=false] - If true, also sets swept_at.
+ * @param {bigint|null} [balanceAtSweep=null] - Optional balance at time of sweep.
+ * @returns {Promise<boolean>} True if updated successfully.
+ */
 async function markDepositAddressInactiveDB(dbClient, userDepositWalletId, swept = false, balanceAtSweep = null) {
-    const LOG_PREFIX_MDAI = `[MarkDepositAddrInactive WID:${userDepositWalletId} Swept:${swept}]`; // Shortened
-    try {
-        let query = 'UPDATE user_deposit_wallets SET is_active = FALSE, updated_at = NOW()';
-        const params = [];
-        let paramIndex = 1;
+    const LOG_PREFIX_MDAI = `[MarkDepositAddrInactive WID:${userDepositWalletId} Swept:${swept}]`; // Shortened
+    try {
+        let query = 'UPDATE user_deposit_wallets SET is_active = FALSE, updated_at = NOW()';
+        const params = [];
+        let paramIndex = 1;
 
-        if (swept) {
-            query += `, swept_at = NOW()`;
-            if (balanceAtSweep !== null && typeof balanceAtSweep === 'bigint') {
-                query += `, balance_at_sweep = $${paramIndex++}`;
-                params.push(balanceAtSweep.toString());
-            } else if (balanceAtSweep === null && swept) { 
-                query += `, balance_at_sweep = NULL`;
-            }
-        }
-        query += ` WHERE wallet_id = $${paramIndex++} RETURNING public_key, is_active;`;
-        params.push(userDepositWalletId);
+        if (swept) {
+            query += `, swept_at = NOW()`;
+            if (balanceAtSweep !== null && typeof balanceAtSweep === 'bigint') {
+                query += `, balance_at_sweep = $${paramIndex++}`;
+                params.push(balanceAtSweep.toString());
+            } else if (balanceAtSweep === null && swept) { 
+                query += `, balance_at_sweep = NULL`;
+            }
+        }
+        query += ` WHERE wallet_id = $${paramIndex++} RETURNING public_key, is_active;`;
+        params.push(userDepositWalletId);
 
-        const res = await dbClient.query(query, params);
-        if (res.rowCount > 0) {
-            const updatedWallet = res.rows[0];
-            if (typeof activeDepositAddresses !== 'undefined' && activeDepositAddresses instanceof Map) {
-                activeDepositAddresses.delete(updatedWallet.public_key);
-            }
-            // console.log(`${LOG_PREFIX_MDAI} ✅ Marked wallet ID ${userDepositWalletId} (Addr: ${updatedWallet.public_key.slice(0,6)}) as inactive/swept. Active: ${updatedWallet.is_active}`); // Reduced log
-            return true;
-        }
-        console.warn(`${LOG_PREFIX_MDAI} ⚠️ Wallet ID ${userDepositWalletId} not found or no change made.`);
-        return false;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_MDAI} ❌ Error marking deposit address inactive: ${err.message}`, err.stack?.substring(0,500));
-        return false;
-    }
+        const res = await dbClient.query(query, params);
+        if (res.rowCount > 0) {
+            const updatedWallet = res.rows[0];
+            if (typeof activeDepositAddresses !== 'undefined' && activeDepositAddresses instanceof Map) {
+                activeDepositAddresses.delete(updatedWallet.public_key);
+            }
+            // console.log(`${LOG_PREFIX_MDAI} ✅ Marked wallet ID ${userDepositWalletId} (Addr: ${updatedWallet.public_key.slice(0,6)}) as inactive/swept. Active: ${updatedWallet.is_active}`); // Reduced log
+            return true;
+        }
+        console.warn(`${LOG_PREFIX_MDAI} ⚠️ Wallet ID ${userDepositWalletId} not found or no change made.`);
+        return false;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_MDAI} ❌ Error marking deposit address inactive: ${err.message}`, err.stack?.substring(0,500));
+        return false;
+    }
 }
 
 /**
- * Records a confirmed deposit transaction. Must be called within a transaction using dbClient.
- * @param {import('pg').PoolClient} dbClient
- * @param {string|number} userId
- * @param {number} userDepositWalletId
- * @param {string} depositAddress
- * @param {string} txSignature
- * @param {bigint} amountLamports
- * @param {string|null} [sourceAddress=null]
- * @param {number|null} [blockTime=null]
- * @returns {Promise<{success: boolean, depositId?: number, error?: string, alreadyProcessed?: boolean}>}
- */
+ * Records a confirmed deposit transaction. Must be called within a transaction using dbClient.
+ * @param {import('pg').PoolClient} dbClient
+ * @param {string|number} userId
+ * @param {number} userDepositWalletId
+ * @param {string} depositAddress
+ * @param {string} txSignature
+ * @param {bigint} amountLamports
+ * @param {string|null} [sourceAddress=null]
+ * @param {number|null} [blockTime=null]
+ * @returns {Promise<{success: boolean, depositId?: number, error?: string, alreadyProcessed?: boolean}>}
+ */
 async function recordConfirmedDepositDB(dbClient, userId, userDepositWalletId, depositAddress, txSignature, amountLamports, sourceAddress = null, blockTime = null) {
-    const stringUserId = String(userId);
-    const LOG_PREFIX_RCD = `[RecordDeposit UID:${stringUserId} TX:${txSignature.slice(0,10)}...]`;
-    const query = `
-        INSERT INTO deposits (user_telegram_id, user_deposit_wallet_id, deposit_address, transaction_signature, amount_lamports, source_address, block_time, confirmation_status, processed_at, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'confirmed', NOW(), NOW(), NOW())
-        ON CONFLICT (transaction_signature) DO NOTHING 
-        RETURNING deposit_id;
-    `;
-    try {
-        const res = await dbClient.query(query, [stringUserId, userDepositWalletId, depositAddress, txSignature, amountLamports.toString(), sourceAddress, blockTime]);
-        if (res.rowCount > 0 && res.rows[0].deposit_id) {
-            // console.log(`${LOG_PREFIX_RCD} ✅ Deposit recorded successfully. DB ID: ${res.rows[0].deposit_id}`); // Reduced log
-            return { success: true, depositId: res.rows[0].deposit_id };
-        }
-        const existing = await dbClient.query('SELECT deposit_id FROM deposits WHERE transaction_signature = $1', [txSignature]);
-        if (existing.rowCount > 0) {
-            console.warn(`${LOG_PREFIX_RCD} ⚠️ Deposit TX ${txSignature} already processed (DB ID: ${existing.rows[0].deposit_id}).`);
-            return { success: false, error: 'Deposit already processed.', alreadyProcessed: true, depositId: existing.rows[0].deposit_id };
-        }
-        console.error(`${LOG_PREFIX_RCD} ❌ Failed to record deposit (not duplicate) for TX ${txSignature}.`);
-        return { success: false, error: 'Failed to record deposit (unknown issue after conflict check).' };
-    } catch(err) {
-        console.error(`${LOG_PREFIX_RCD} ❌ Error recording deposit: ${err.message} (Code: ${err.code})`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    const stringUserId = String(userId);
+    const LOG_PREFIX_RCD = `[RecordDeposit UID:${stringUserId} TX:${txSignature.slice(0,10)}...]`;
+    const query = `
+        INSERT INTO deposits (user_telegram_id, user_deposit_wallet_id, deposit_address, transaction_signature, amount_lamports, source_address, block_time, confirmation_status, processed_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'confirmed', NOW(), NOW(), NOW())
+        ON CONFLICT (transaction_signature) DO NOTHING 
+        RETURNING deposit_id;
+    `;
+    try {
+        const res = await dbClient.query(query, [stringUserId, userDepositWalletId, depositAddress, txSignature, amountLamports.toString(), sourceAddress, blockTime]);
+        if (res.rowCount > 0 && res.rows[0].deposit_id) {
+            // console.log(`${LOG_PREFIX_RCD} ✅ Deposit recorded successfully. DB ID: ${res.rows[0].deposit_id}`); // Reduced log
+            return { success: true, depositId: res.rows[0].deposit_id };
+        }
+        const existing = await dbClient.query('SELECT deposit_id FROM deposits WHERE transaction_signature = $1', [txSignature]);
+        if (existing.rowCount > 0) {
+            console.warn(`${LOG_PREFIX_RCD} ⚠️ Deposit TX ${txSignature} already processed (DB ID: ${existing.rows[0].deposit_id}).`);
+            return { success: false, error: 'Deposit already processed.', alreadyProcessed: true, depositId: existing.rows[0].deposit_id };
+        }
+        console.error(`${LOG_PREFIX_RCD} ❌ Failed to record deposit (not duplicate) for TX ${txSignature}.`);
+        return { success: false, error: 'Failed to record deposit (unknown issue after conflict check).' };
+    } catch(err) {
+        console.error(`${LOG_PREFIX_RCD} ❌ Error recording deposit: ${err.message} (Code: ${err.code})`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 // --- Sweep Operations ---
 /**
- * Records a successful sweep transaction. Must be called within a transaction using dbClient.
- * @param {import('pg').PoolClient} dbClient
- * @param {string} sourceDepositAddress
- * @param {string} destinationMainAddress
- * @param {bigint} amountLamports
- * @param {string} transactionSignature
- * @returns {Promise<{success: boolean, sweepId?: number, error?: string}>}
- */
+ * Records a successful sweep transaction. Must be called within a transaction using dbClient.
+ * @param {import('pg').PoolClient} dbClient
+ * @param {string} sourceDepositAddress
+ * @param {string} destinationMainAddress
+ * @param {bigint} amountLamports
+ * @param {string} transactionSignature
+ * @returns {Promise<{success: boolean, sweepId?: number, error?: string}>}
+ */
 async function recordSweepTransactionDB(dbClient, sourceDepositAddress, destinationMainAddress, amountLamports, transactionSignature) {
-    const LOG_PREFIX_RST = `[RecordSweepTX From:${sourceDepositAddress.slice(0,6)} To:${destinationMainAddress.slice(0,6)} TX:${transactionSignature.slice(0,10)}...]`;
-    const query = `
-        INSERT INTO processed_sweeps (source_deposit_address, destination_main_address, amount_lamports, transaction_signature, swept_at)
-        VALUES ($1, $2, $3, $4, NOW())
-        ON CONFLICT (transaction_signature) DO UPDATE SET swept_at = NOW() 
-        RETURNING sweep_id;
-    `; 
-    try {
-        const res = await dbClient.query(query, [sourceDepositAddress, destinationMainAddress, amountLamports.toString(), transactionSignature]);
-        if (res.rowCount > 0 && res.rows[0].sweep_id) {
-            // console.log(`${LOG_PREFIX_RST} ✅ Sweep transaction recorded. DB ID: ${res.rows[0].sweep_id}`); // Reduced log
-            return { success: true, sweepId: res.rows[0].sweep_id };
-        }
-        console.error(`${LOG_PREFIX_RST} ❌ Failed to record sweep transaction or get ID back for TX ${transactionSignature}.`);
-        return { success: false, error: 'Failed to record sweep transaction or retrieve ID.' };
-    } catch (err) {
-        console.error(`${LOG_PREFIX_RST} ❌ Error recording sweep TX: ${err.message} (Code: ${err.code})`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    const LOG_PREFIX_RST = `[RecordSweepTX From:${sourceDepositAddress.slice(0,6)} To:${destinationMainAddress.slice(0,6)} TX:${transactionSignature.slice(0,10)}...]`;
+    const query = `
+        INSERT INTO processed_sweeps (source_deposit_address, destination_main_address, amount_lamports, transaction_signature, swept_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (transaction_signature) DO UPDATE SET swept_at = NOW() 
+        RETURNING sweep_id;
+    `; 
+    try {
+        const res = await dbClient.query(query, [sourceDepositAddress, destinationMainAddress, amountLamports.toString(), transactionSignature]);
+        if (res.rowCount > 0 && res.rows[0].sweep_id) {
+            // console.log(`${LOG_PREFIX_RST} ✅ Sweep transaction recorded. DB ID: ${res.rows[0].sweep_id}`); // Reduced log
+            return { success: true, sweepId: res.rows[0].sweep_id };
+        }
+        console.error(`${LOG_PREFIX_RST} ❌ Failed to record sweep transaction or get ID back for TX ${transactionSignature}.`);
+        return { success: false, error: 'Failed to record sweep transaction or retrieve ID.' };
+    } catch (err) {
+        console.error(`${LOG_PREFIX_RST} ❌ Error recording sweep TX: ${err.message} (Code: ${err.code})`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 // --- Withdrawal Database Operations ---
 async function createWithdrawalRequestDB(dbClient, userId, requestedAmountLamports, feeLamports, recipientAddress, priorityFeeMicroLamports = null, computeUnitLimit = null) {
-    const stringUserId = String(userId);
-    const LOG_PREFIX_CWR = `[CreateWithdrawalReq UID:${stringUserId} Addr:${recipientAddress.slice(0,6)}]`;
-    const query = `
-        INSERT INTO withdrawals (user_telegram_id, destination_address, amount_lamports, fee_lamports, status, priority_fee_microlamports, compute_unit_limit, requested_at, updated_at)
-        VALUES ($1, $2, $3, $4, 'pending_processing', $5, $6, NOW(), NOW())
-        RETURNING withdrawal_id;
-    `;
-    try {
-        const res = await dbClient.query(query, [stringUserId, recipientAddress, requestedAmountLamports.toString(), feeLamports.toString(), priorityFeeMicroLamports, computeUnitLimit]);
-        if (res.rows.length > 0 && res.rows[0].withdrawal_id) {
-            // console.log(`${LOG_PREFIX_CWR} ✅ Withdrawal request created. DB ID: ${res.rows[0].withdrawal_id}`); // Reduced log
-            return { success: true, withdrawalId: res.rows[0].withdrawal_id };
-        }
-        throw new Error("Withdrawal request creation failed to return ID.");
-    } catch (err) {
-        console.error(`${LOG_PREFIX_CWR} ❌ Error creating withdrawal request: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    const stringUserId = String(userId);
+    const LOG_PREFIX_CWR = `[CreateWithdrawalReq UID:${stringUserId} Addr:${recipientAddress.slice(0,6)}]`;
+    const query = `
+        INSERT INTO withdrawals (user_telegram_id, destination_address, amount_lamports, fee_lamports, status, priority_fee_microlamports, compute_unit_limit, requested_at, updated_at)
+        VALUES ($1, $2, $3, $4, 'pending_processing', $5, $6, NOW(), NOW())
+        RETURNING withdrawal_id;
+    `;
+    try {
+        const res = await dbClient.query(query, [stringUserId, recipientAddress, requestedAmountLamports.toString(), feeLamports.toString(), priorityFeeMicroLamports, computeUnitLimit]);
+        if (res.rows.length > 0 && res.rows[0].withdrawal_id) {
+            // console.log(`${LOG_PREFIX_CWR} ✅ Withdrawal request created. DB ID: ${res.rows[0].withdrawal_id}`); // Reduced log
+            return { success: true, withdrawalId: res.rows[0].withdrawal_id };
+        }
+        throw new Error("Withdrawal request creation failed to return ID.");
+    } catch (err) {
+        console.error(`${LOG_PREFIX_CWR} ❌ Error creating withdrawal request: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 async function updateWithdrawalStatusDB(dbClient, withdrawalId, status, signature = null, errorMessage = null, blockTime = null) {
-    const LOG_PREFIX_UWS = `[UpdateWithdrawalStatus ID:${withdrawalId} Status:${status}]`;
-    // MODIFIED SQL Query: Added ::VARCHAR to $1
-    const query = `
-        UPDATE withdrawals 
-        SET status = $1::VARCHAR,  -- Explicit cast for status
-            transaction_signature = $2, 
-            error_message = $3, 
-            block_time = $4,
-            processed_at = CASE WHEN $1::VARCHAR IN ('completed', 'failed', 'confirmed', 'sent') THEN NOW() ELSE processed_at END, -- Explicit cast here too
-            updated_at = NOW()
-        WHERE withdrawal_id = $5
-        RETURNING withdrawal_id;
-    `;
-    try {
-        // Parameters: [status, signature, errorMessage, blockTime, withdrawalId]
-        const res = await dbClient.query(query, [status, signature, errorMessage, blockTime, withdrawalId]);
-        if (res.rowCount > 0) {
-            // console.log(`${LOG_PREFIX_UWS} ✅ Withdrawal status updated successfully.`); // Reduced log
-            return { success: true, withdrawalId: res.rows[0].withdrawal_id };
-        }
-        console.warn(`${LOG_PREFIX_UWS} ⚠️ Withdrawal ID ${withdrawalId} not found or no status update made (rowCount 0).`);
-        return { success: false, error: "Withdrawal record not found or no update made." };
-    } catch (err) {
-        // This console.error is what you're seeing in your logs for this specific error
-        console.error(`${LOG_PREFIX_UWS} ❌ Error updating withdrawal status: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    const LOG_PREFIX_UWS = `[UpdateWithdrawalStatus ID:${withdrawalId} Status:${status}]`;
+    // MODIFIED SQL Query: Added ::VARCHAR to $1
+    const query = `
+        UPDATE withdrawals 
+        SET status = $1::VARCHAR,  -- Explicit cast for status
+            transaction_signature = $2, 
+            error_message = $3, 
+            block_time = $4,
+            processed_at = CASE WHEN $1::VARCHAR IN ('completed', 'failed', 'confirmed', 'sent') THEN NOW() ELSE processed_at END, -- Explicit cast here too
+            updated_at = NOW()
+        WHERE withdrawal_id = $5
+        RETURNING withdrawal_id;
+    `;
+    try {
+        // Parameters: [status, signature, errorMessage, blockTime, withdrawalId]
+        const res = await dbClient.query(query, [status, signature, errorMessage, blockTime, withdrawalId]);
+        if (res.rowCount > 0) {
+            // console.log(`${LOG_PREFIX_UWS} ✅ Withdrawal status updated successfully.`); // Reduced log
+            return { success: true, withdrawalId: res.rows[0].withdrawal_id };
+        }
+        console.warn(`${LOG_PREFIX_UWS} ⚠️ Withdrawal ID ${withdrawalId} not found or no status update made (rowCount 0).`);
+        return { success: false, error: "Withdrawal record not found or no update made." };
+    } catch (err) {
+        // This console.error is what you're seeing in your logs for this specific error
+        console.error(`${LOG_PREFIX_UWS} ❌ Error updating withdrawal status: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 async function getWithdrawalDetailsDB(withdrawalId, dbClient = pool) {
-    const LOG_PREFIX_GWD = `[GetWithdrawalDetails ID:${withdrawalId}]`;
-    try {
-        const res = await dbClient.query('SELECT * FROM withdrawals WHERE withdrawal_id = $1', [withdrawalId]);
-        if (res.rows.length > 0) {
-            const details = res.rows[0];
-            details.amount_lamports = BigInt(details.amount_lamports);
-            details.fee_lamports = BigInt(details.fee_lamports);
-            details.user_telegram_id = String(details.user_telegram_id);
-            return details;
-        }
-        return null;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GWD} ❌ Error fetching withdrawal details: ${err.message}`, err.stack?.substring(0,500));
-        return null;
-    }
+    const LOG_PREFIX_GWD = `[GetWithdrawalDetails ID:${withdrawalId}]`;
+    try {
+        const res = await dbClient.query('SELECT * FROM withdrawals WHERE withdrawal_id = $1', [withdrawalId]);
+        if (res.rows.length > 0) {
+            const details = res.rows[0];
+            details.amount_lamports = BigInt(details.amount_lamports);
+            details.fee_lamports = BigInt(details.fee_lamports);
+            details.user_telegram_id = String(details.user_telegram_id);
+            return details;
+        }
+        return null;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GWD} ❌ Error fetching withdrawal details: ${err.message}`, err.stack?.substring(0,500));
+        return null;
+    }
 }
 
 // --- Referral Payout Database Operations ---
 /**
- * Records that a referral has met criteria and commission is earned (but not yet paid).
- * Assumes a referral link record already exists from getOrCreateUser.
- * @param {import('pg').PoolClient} dbClient
- * @param {string|number} referrerUserId
- * @param {string|number} referredUserId
- * @param {string} commissionType e.g., 'first_deposit_bonus'
- * @param {bigint} commissionAmountLamports Amount earned.
- * @returns {Promise<{success: boolean, referralId?: number, error?: string}>}
- */
+ * Records that a referral has met criteria and commission is earned (but not yet paid).
+ * Assumes a referral link record already exists from getOrCreateUser.
+ * @param {import('pg').PoolClient} dbClient
+ * @param {string|number} referrerUserId
+ * @param {string|number} referredUserId
+ * @param {string} commissionType e.g., 'first_deposit_bonus'
+ * @param {bigint} commissionAmountLamports Amount earned.
+ * @returns {Promise<{success: boolean, referralId?: number, error?: string}>}
+ */
 async function recordReferralCommissionEarnedDB(dbClient, referrerUserId, referredUserId, commissionType, commissionAmountLamports) {
-    const LOG_PREFIX_RRCE = `[RecordRefCommEarn RefBy:${referrerUserId} RefTo:${referredUserId}]`;
-    const query = `
-        UPDATE referrals
-        SET commission_type = $1, commission_amount_lamports = $2, status = 'earned', updated_at = NOW()
-        WHERE referrer_telegram_id = $3 AND referred_telegram_id = $4 AND status = 'pending_criteria'
-        RETURNING referral_id;
-    `;
-    try {
-        const res = await dbClient.query(query, [commissionType, commissionAmountLamports.toString(), referrerUserId, referredUserId]);
-        if (res.rowCount > 0) {
-            console.log(`${LOG_PREFIX_RRCE} ✅ Referral commission of ${commissionAmountLamports} earned. DB ID: ${res.rows[0].referral_id}`);
-            return { success: true, referralId: res.rows[0].referral_id };
-        }
-        // console.warn(`${LOG_PREFIX_RRCE} No eligible 'pending_criteria' referral found or already processed.`); // Can be noisy
-        return { success: false, error: "No eligible pending referral found or already processed." };
-    } catch (err) {
-        console.error(`${LOG_PREFIX_RRCE} ❌ Error recording referral commission earned: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    const LOG_PREFIX_RRCE = `[RecordRefCommEarn RefBy:${referrerUserId} RefTo:${referredUserId}]`;
+    const query = `
+        UPDATE referrals
+        SET commission_type = $1, commission_amount_lamports = $2, status = 'earned', updated_at = NOW()
+        WHERE referrer_telegram_id = $3 AND referred_telegram_id = $4 AND status = 'pending_criteria'
+        RETURNING referral_id;
+    `;
+    try {
+        const res = await dbClient.query(query, [commissionType, commissionAmountLamports.toString(), referrerUserId, referredUserId]);
+        if (res.rowCount > 0) {
+            console.log(`${LOG_PREFIX_RRCE} ✅ Referral commission of ${commissionAmountLamports} earned. DB ID: ${res.rows[0].referral_id}`);
+            return { success: true, referralId: res.rows[0].referral_id };
+        }
+        // console.warn(`${LOG_PREFIX_RRCE} No eligible 'pending_criteria' referral found or already processed.`); // Can be noisy
+        return { success: false, error: "No eligible pending referral found or already processed." };
+    } catch (err) {
+        console.error(`${LOG_PREFIX_RRCE} ❌ Error recording referral commission earned: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 /**
- * Updates a referral record status, typically after a payout attempt.
- * @param {import('pg').PoolClient} dbClient
- * @param {number} referralId
- * @param {'processing' | 'paid_out' | 'failed'} status
- * @param {string|null} [transactionSignature=null]
- * @param {string|null} [errorMessage=null]
- * @returns {Promise<{success: boolean, error?: string}>}
- */
+ * Updates a referral record status, typically after a payout attempt.
+ * @param {import('pg').PoolClient} dbClient
+ * @param {number} referralId
+ * @param {'processing' | 'paid_out' | 'failed'} status
+ * @param {string|null} [transactionSignature=null]
+ * @param {string|null} [errorMessage=null]
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
 async function updateReferralPayoutStatusDB(dbClient, referralId, status, transactionSignature = null, errorMessage = null) {
-    const LOG_PREFIX_URPS = `[UpdateRefPayoutStatus ID:${referralId} Status:${status}]`;
-    const query = `
-        UPDATE referrals
-        SET status = $1, transaction_signature = $2, updated_at = NOW(),
-            notes = CASE WHEN $3 IS NOT NULL THEN COALESCE(notes, '') || 'Payout Error: ' || $3 ELSE notes END
-        WHERE referral_id = $4 AND status != 'paid_out' 
-        RETURNING referral_id;
-    `;
-    try {
-        const res = await dbClient.query(query, [status, transactionSignature, errorMessage, referralId]);
-        if (res.rowCount > 0) {
-            // console.log(`${LOG_PREFIX_URPS} ✅ Referral payout status updated.`); // Reduced log
-            return { success: true };
-        }
-        // console.warn(`${LOG_PREFIX_URPS} Referral ID ${referralId} not found or already paid out/no status change needed.`); // Can be noisy
-        return { success: false, error: "Referral not found or no update made." };
-    } catch (err) {
-        console.error(`${LOG_PREFIX_URPS} ❌ Error updating referral payout status: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    const LOG_PREFIX_URPS = `[UpdateRefPayoutStatus ID:${referralId} Status:${status}]`;
+    const query = `
+        UPDATE referrals
+        SET status = $1, transaction_signature = $2, updated_at = NOW(),
+            notes = CASE WHEN $3 IS NOT NULL THEN COALESCE(notes, '') || 'Payout Error: ' || $3 ELSE notes END
+        WHERE referral_id = $4 AND status != 'paid_out' 
+        RETURNING referral_id;
+    `;
+    try {
+        const res = await dbClient.query(query, [status, transactionSignature, errorMessage, referralId]);
+        if (res.rowCount > 0) {
+            // console.log(`${LOG_PREFIX_URPS} ✅ Referral payout status updated.`); // Reduced log
+            return { success: true };
+        }
+        // console.warn(`${LOG_PREFIX_URPS} Referral ID ${referralId} not found or already paid out/no status change needed.`); // Can be noisy
+        return { success: false, error: "Referral not found or no update made." };
+    } catch (err) {
+        console.error(`${LOG_PREFIX_URPS} ❌ Error updating referral payout status: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 async function getReferralDetailsDB(referralId, dbClient = pool) {
-    const LOG_PREFIX_GRD = `[GetReferralDetails ID:${referralId}]`;
-    try {
-        const res = await dbClient.query('SELECT * FROM referrals WHERE referral_id = $1', [referralId]);
-        if (res.rows.length > 0) {
-            const details = res.rows[0];
-            details.referrer_telegram_id = String(details.referrer_telegram_id);
-            details.referred_telegram_id = String(details.referred_telegram_id);
-            if (details.commission_amount_lamports) {
-                details.commission_amount_lamports = BigInt(details.commission_amount_lamports);
-            }
-            return details;
-        }
-        return null;
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GRD} ❌ Error fetching referral details: ${err.message}`, err.stack?.substring(0,500));
-        return null;
-    }
+    const LOG_PREFIX_GRD = `[GetReferralDetails ID:${referralId}]`;
+    try {
+        const res = await dbClient.query('SELECT * FROM referrals WHERE referral_id = $1', [referralId]);
+        if (res.rows.length > 0) {
+            const details = res.rows[0];
+            details.referrer_telegram_id = String(details.referrer_telegram_id);
+            details.referred_telegram_id = String(details.referred_telegram_id);
+            if (details.commission_amount_lamports) {
+                details.commission_amount_lamports = BigInt(details.commission_amount_lamports);
+            }
+            return details;
+        }
+        return null;
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GRD} ❌ Error fetching referral details: ${err.message}`, err.stack?.substring(0,500));
+        return null;
+    }
 }
 
 async function getTotalReferralEarningsDB(userId, dbClient = pool) {
-    const stringUserId = String(userId);
-    const LOG_PREFIX_GTRE = `[GetTotalRefEarnings UID:${stringUserId}]`;
-    try {
-        const query = `
-            SELECT 
-                COALESCE(SUM(CASE WHEN status = 'paid_out' THEN commission_amount_lamports ELSE 0 END), 0) AS total_earned_paid_lamports,
-                COALESCE(SUM(CASE WHEN status = 'earned' THEN commission_amount_lamports ELSE 0 END), 0) AS total_pending_payout_lamports
-            FROM referrals
-            WHERE referrer_telegram_id = $1;
-        `;
-        const res = await dbClient.query(query, [stringUserId]);
-        if (res.rows.length > 0) {
-            return {
-                total_earned_paid_lamports: BigInt(res.rows[0].total_earned_paid_lamports),
-                total_pending_payout_lamports: BigInt(res.rows[0].total_pending_payout_lamports)
-            };
-        }
-        return { total_earned_paid_lamports: 0n, total_pending_payout_lamports: 0n };
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GTRE} ❌ Error fetching total referral earnings: ${err.message}`, err.stack?.substring(0,500));
-        return { total_earned_paid_lamports: 0n, total_pending_payout_lamports: 0n };
-    }
+    const stringUserId = String(userId);
+    const LOG_PREFIX_GTRE = `[GetTotalRefEarnings UID:${stringUserId}]`;
+    try {
+        const query = `
+            SELECT 
+                COALESCE(SUM(CASE WHEN status = 'paid_out' THEN commission_amount_lamports ELSE 0 END), 0) AS total_earned_paid_lamports,
+                COALESCE(SUM(CASE WHEN status = 'earned' THEN commission_amount_lamports ELSE 0 END), 0) AS total_pending_payout_lamports
+            FROM referrals
+            WHERE referrer_telegram_id = $1;
+        `;
+        const res = await dbClient.query(query, [stringUserId]);
+        if (res.rows.length > 0) {
+            return {
+                total_earned_paid_lamports: BigInt(res.rows[0].total_earned_paid_lamports),
+                total_pending_payout_lamports: BigInt(res.rows[0].total_pending_payout_lamports)
+            };
+        }
+        return { total_earned_paid_lamports: 0n, total_pending_payout_lamports: 0n };
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GTRE} ❌ Error fetching total referral earnings: ${err.message}`, err.stack?.substring(0,500));
+        return { total_earned_paid_lamports: 0n, total_pending_payout_lamports: 0n };
+    }
 }
 
 // --- Bet History & Leaderboard Database Operations ---
 /**
- * Gets transaction history for a user from the ledger.
- * @param {string|number} userId
- * @param {number} [limit=10]
- * @param {number} [offset=0]
- * @param {string|null} [transactionTypeFilter=null] e.g., 'deposit', 'withdrawal%', 'bet%', 'win%' (SQL LIKE pattern)
- * @param {import('pg').PoolClient} [client=pool]
- * @returns {Promise<Array<object>>} Array of ledger entries with BigInt amounts.
- */
+ * Gets transaction history for a user from the ledger.
+ * @param {string|number} userId
+ * @param {number} [limit=10]
+ * @param {number} [offset=0]
+ * @param {string|null} [transactionTypeFilter=null] e.g., 'deposit', 'withdrawal%', 'bet%', 'win%' (SQL LIKE pattern)
+ * @param {import('pg').PoolClient} [client=pool]
+ * @returns {Promise<Array<object>>} Array of ledger entries with BigInt amounts.
+ */
 async function getBetHistoryDB(userId, limit = 10, offset = 0, transactionTypeFilter = null, client = pool) {
-    const stringUserId = String(userId);
-    const LOG_PREFIX_GBH = `[GetBetHistory UID:${stringUserId}]`;
-    try {
-        let queryText = `
-            SELECT l.ledger_id, l.transaction_type, l.amount_lamports, l.balance_after_lamports, l.notes, l.created_at,
-                   d.transaction_signature as deposit_tx, w.transaction_signature as withdrawal_tx,
-                   g.game_type as game_log_type, g.outcome as game_log_outcome
-            FROM ledger l
-            LEFT JOIN deposits d ON l.deposit_id = d.deposit_id
-            LEFT JOIN withdrawals w ON l.withdrawal_id = w.withdrawal_id
-            LEFT JOIN games g ON l.game_log_id = g.game_log_id
-            WHERE l.user_telegram_id = $1 
-        `;
-        const params = [stringUserId];
-        let paramIndex = 2;
-        if (transactionTypeFilter) {
-            queryText += ` AND l.transaction_type ILIKE $${paramIndex++}`;
-            params.push(transactionTypeFilter);
-        }
-        queryText += ` ORDER BY l.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++};`;
-        params.push(limit, offset);
+    const stringUserId = String(userId);
+    const LOG_PREFIX_GBH = `[GetBetHistory UID:${stringUserId}]`;
+    try {
+        let queryText = `
+            SELECT l.ledger_id, l.transaction_type, l.amount_lamports, l.balance_after_lamports, l.notes, l.created_at,
+                   d.transaction_signature as deposit_tx, w.transaction_signature as withdrawal_tx,
+                   g.game_type as game_log_type, g.outcome as game_log_outcome
+            FROM ledger l
+            LEFT JOIN deposits d ON l.deposit_id = d.deposit_id
+            LEFT JOIN withdrawals w ON l.withdrawal_id = w.withdrawal_id
+            LEFT JOIN games g ON l.game_log_id = g.game_log_id
+            WHERE l.user_telegram_id = $1 
+        `;
+        const params = [stringUserId];
+        let paramIndex = 2;
+        if (transactionTypeFilter) {
+            queryText += ` AND l.transaction_type ILIKE $${paramIndex++}`;
+            params.push(transactionTypeFilter);
+        }
+        queryText += ` ORDER BY l.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++};`;
+        params.push(limit, offset);
 
-        const res = await queryDatabase(queryText, params, client);
-        return res.rows.map(row => ({
-            ...row,
-            amount_lamports: BigInt(row.amount_lamports),
-            balance_after_lamports: BigInt(row.balance_after_lamports)
-        }));
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GBH} ❌ Error fetching ledger history: ${err.message}`, err.stack?.substring(0,500));
-        return [];
-    }
+        const res = await queryDatabase(queryText, params, client);
+        return res.rows.map(row => ({
+            ...row,
+            amount_lamports: BigInt(row.amount_lamports),
+            balance_after_lamports: BigInt(row.balance_after_lamports)
+        }));
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GBH} ❌ Error fetching ledger history: ${err.message}`, err.stack?.substring(0,500));
+        return [];
+    }
 }
 
 async function getLeaderboardDataDB(type = 'total_wagered', period = 'all_time', limit = 10) {
-    const LOG_PREFIX_GLD = `[GetLeaderboard Type:${type} Period:${period}]`;
-    // console.log(`${LOG_PREFIX_GLD} Fetching leaderboard data...`); // Reduced log
-    let orderByField = 'total_wagered_lamports'; 
-    if (type === 'total_won') {
-        orderByField = 'total_won_lamports';
-    } else if (type === 'net_profit') {
-        orderByField = '(total_won_lamports - total_wagered_lamports)'; // Actual calculation for net profit
-        // console.warn(`${LOG_PREFIX_GLD} 'net_profit' leaderboard type selected.`); // Informative, can be kept or removed
-    }
+    const LOG_PREFIX_GLD = `[GetLeaderboard Type:${type} Period:${period}]`;
+    // console.log(`${LOG_PREFIX_GLD} Fetching leaderboard data...`); // Reduced log
+    let orderByField = 'total_wagered_lamports'; 
+    if (type === 'total_won') {
+        orderByField = 'total_won_lamports';
+    } else if (type === 'net_profit') {
+        orderByField = '(total_won_lamports - total_wagered_lamports)'; // Actual calculation for net profit
+        // console.warn(`${LOG_PREFIX_GLD} 'net_profit' leaderboard type selected.`); // Informative, can be kept or removed
+    }
 
-    if (period !== 'all_time') {
-        console.warn(`${LOG_PREFIX_GLD} Period '${period}' not yet implemented. Defaulting to 'all_time'.`);
-        // Future: Add date range filtering to the WHERE clause based on `period`.
-    }
+    if (period !== 'all_time') {
+        console.warn(`${LOG_PREFIX_GLD} Period '${period}' not yet implemented. Defaulting to 'all_time'.`);
+        // Future: Add date range filtering to the WHERE clause based on `period`.
+    }
 
-    const query = `
-        SELECT telegram_id, username, first_name, ${orderByField} AS stat_value_ordered
-        FROM users
-        WHERE is_banned = FALSE
-        ORDER BY stat_value_ordered DESC, updated_at DESC
-        LIMIT $1;
-    `;
+    const query = `
+        SELECT telegram_id, username, first_name, ${orderByField} AS stat_value_ordered
+        FROM users
+        WHERE is_banned = FALSE
+        ORDER BY stat_value_ordered DESC, updated_at DESC
+        LIMIT $1;
+    `;
+    try {
+        const res = await queryDatabase(query, [limit]);
+        return res.rows.map(row => ({
+            telegram_id: String(row.telegram_id),
+            username: row.username,
+            first_name: row.first_name,
+            stat_value: BigInt(row.stat_value_ordered) 
+        }));
+    } catch (err) {
+        console.error(`${LOG_PREFIX_GLD} ❌ Error fetching leaderboard data: ${err.message}`, err.stack?.substring(0,500));
+        return [];
+    }
+}
+
+// --- NEW Function to Calculate User Rank ---
+/**
+ * Calculates the user's rank based on total_wagered_lamports.
+ * @param {string} userId - The user's Telegram ID.
+ * @param {import('pg').PoolClient} [dbClient=pool] - Optional database client.
+ * @returns {Promise<number|null>} The user's rank or null if not found/error.
+ */
+async function calculateUserRank(userId, dbClient = pool) {
+    const LOG_PREFIX_CALC_RANK = `[CalculateUserRank UID:${userId}]`;
     try {
-        const res = await queryDatabase(query, [limit]);
-        return res.rows.map(row => ({
-            telegram_id: String(row.telegram_id),
-            username: row.username,
-            first_name: row.first_name,
-            stat_value: BigInt(row.stat_value_ordered) 
-        }));
-    } catch (err) {
-        console.error(`${LOG_PREFIX_GLD} ❌ Error fetching leaderboard data: ${err.message}`, err.stack?.substring(0,500));
-        return [];
+        const query = `
+            WITH ranked_users AS (
+                SELECT
+                    telegram_id,
+                    total_wagered_lamports,
+                    RANK() OVER (ORDER BY total_wagered_lamports DESC, created_at ASC) as user_rank
+                FROM users
+                WHERE is_banned = FALSE -- Consider if you want to exclude banned users from rank calculation basis
+            )
+            SELECT user_rank
+            FROM ranked_users
+            WHERE telegram_id = $1;
+        `;
+        const result = await queryDatabase(query, [userId], dbClient); // queryDatabase is from Part 1
+
+        if (result.rows.length > 0) {
+            return parseInt(result.rows[0].user_rank, 10);
+        }
+        console.warn(`${LOG_PREFIX_CALC_RANK} User not found in ranking query.`);
+        return null;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_CALC_RANK} Error calculating user rank: ${error.message}`, error.stack);
+        return null;
     }
 }
+
 
 // --- Dice Roll Request Database Operations ---
 
 /**
- * Inserts a new dice roll request into the database for the Helper Bot to process.
- * MUST be called within an active DB transaction if atomicity with other operations is required.
- * @param {import('pg').PoolClient} dbClient - The active database client.
- * @param {string} gameId - Identifier for the game requesting the roll.
- * @param {string|number} chatId - The chat ID where the dice should be sent.
- * @param {string|number} [userId=null] - The user ID associated with this roll, if applicable.
- * @param {string} [emojiType='🎲'] - The emoji type for bot.sendDice.
- * @param {string|null} [notes=null] - Optional notes for the request.
- * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
- * @returns {Promise<{success: boolean, requestId?: number, error?: string, errorCode?: string}>}
- */
+ * Inserts a new dice roll request into the database for the Helper Bot to process.
+ * MUST be called within an active DB transaction if atomicity with other operations is required.
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {string} gameId - Identifier for the game requesting the roll.
+ * @param {string|number} chatId - The chat ID where the dice should be sent.
+ * @param {string|number} [userId=null] - The user ID associated with this roll, if applicable.
+ * @param {string} [emojiType='🎲'] - The emoji type for bot.sendDice.
+ * @param {string|null} [notes=null] - Optional notes for the request.
+ * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
+ * @returns {Promise<{success: boolean, requestId?: number, error?: string, errorCode?: string}>}
+ */
 async function insertDiceRollRequest(dbClient, gameId, chatId, userId = null, emojiType = '🎲', notes = null, handlerType = null) {
-    const stringChatId = String(chatId);
-    const stringUserId = userId ? String(userId) : null;
-    const logPrefix = `[InsertDiceReq GID:${gameId} UID:${stringUserId || 'Bot'} HType:${handlerType || 'ANY'}]`;
+    const stringChatId = String(chatId);
+    const stringUserId = userId ? String(userId) : null;
+    const logPrefix = `[InsertDiceReq GID:${gameId} UID:${stringUserId || 'Bot'} HType:${handlerType || 'ANY'}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
-        return { success: false, error: 'Invalid database client for insertDiceRollRequest.' };
-    }
-    const query = `
-        INSERT INTO dice_roll_requests 
-            (game_id, chat_id, user_id, emoji_type, status, notes, requested_at, handler_type)
-        VALUES ($1, $2, $3, $4, 'pending', $5, NOW(), $6) -- Added $6 for handler_type
-        RETURNING request_id;
-    `;
-    try {
-        const params = [gameId, stringChatId, stringUserId, emojiType, notes, handlerType]; // Pass handlerType
-        const res = await dbClient.query(query, params);
-        if (res.rows.length > 0 && res.rows[0].request_id) {
-            // console.log(`${logPrefix} ✅ Dice roll request created. DB ID: ${res.rows[0].request_id}`); // Can be noisy
-            return { success: true, requestId: res.rows[0].request_id };
-        }
-        throw new Error("Dice roll request creation failed to return ID.");
-    } catch (err) {
-        console.error(`${logPrefix} ❌ Error creating dice roll request: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
+        return { success: false, error: 'Invalid database client for insertDiceRollRequest.' };
+    }
+    const query = `
+        INSERT INTO dice_roll_requests 
+            (game_id, chat_id, user_id, emoji_type, status, notes, requested_at, handler_type)
+        VALUES ($1, $2, $3, $4, 'pending', $5, NOW(), $6) -- Added $6 for handler_type
+        RETURNING request_id;
+    `;
+    try {
+        const params = [gameId, stringChatId, stringUserId, emojiType, notes, handlerType]; // Pass handlerType
+        const res = await dbClient.query(query, params);
+        if (res.rows.length > 0 && res.rows[0].request_id) {
+            // console.log(`${logPrefix} ✅ Dice roll request created. DB ID: ${res.rows[0].request_id}`); // Can be noisy
+            return { success: true, requestId: res.rows[0].request_id };
+        }
+        throw new Error("Dice roll request creation failed to return ID.");
+    } catch (err) {
+        console.error(`${LOG_PREFIX_RCD} ❌ Error creating dice roll request: ${err.message}`, err.stack?.substring(0,500)); // Corrected logPrefix here
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 /**
- * Retrieves the status and result of a specific dice roll request.
- * @param {import('pg').PoolClient} dbClient - The active database client.
- * @param {number} requestId - The ID of the dice_roll_requests record.
- * @returns {Promise<{success: boolean, status?: string, roll_value?: number, notes?: string, error?: string}>}
- */
+ * Retrieves the status and result of a specific dice roll request.
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {number} requestId - The ID of the dice_roll_requests record.
+ * @returns {Promise<{success: boolean, status?: string, roll_value?: number, notes?: string, error?: string}>}
+ */
 async function getDiceRollRequestResult(dbClient, requestId) {
-    const logPrefix = `[GetDiceReqResult RID:${requestId}]`;
+    const logPrefix = `[GetDiceReqResult RID:${requestId}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
-        return { success: false, error: 'Invalid database client for getDiceRollRequestResult.' };
-    }
-    const query = `
-        SELECT status, roll_value, notes
-        FROM dice_roll_requests
-        WHERE request_id = $1;
-    `;
-    try {
-        const res = await dbClient.query(query, [requestId]);
-        if (res.rows.length > 0) {
-            const data = res.rows[0];
-            // console.log(`${logPrefix} ✅ Fetched status: ${data.status}, value: ${data.roll_value}`); // Reduced log for polling
-            return {
-                success: true,
-                status: data.status,
-                roll_value: data.roll_value, 
-                notes: data.notes
-            };
-        }
-        // console.warn(`${logPrefix} ⚠️ Dice roll request ID ${requestId} not found.`); // Can be noisy during initial polling
-        return { success: false, error: 'Request ID not found.' };
-    } catch (err) {
-        console.error(`${logPrefix} ❌ Error fetching dice roll request result: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
+        return { success: false, error: 'Invalid database client for getDiceRollRequestResult.' };
+    }
+    const query = `
+        SELECT status, roll_value, notes
+        FROM dice_roll_requests
+        WHERE request_id = $1;
+    `;
+    try {
+        const res = await dbClient.query(query, [requestId]);
+        if (res.rows.length > 0) {
+            const data = res.rows[0];
+            // console.log(`${logPrefix} ✅ Fetched status: ${data.status}, value: ${data.roll_value}`); // Reduced log for polling
+            return {
+                success: true,
+                status: data.status,
+                roll_value: data.roll_value, 
+                notes: data.notes
+            };
+        }
+        // console.warn(`${LOG_PREFIX_RCD} ⚠️ Dice roll request ID ${requestId} not found.`); // Corrected logPrefix here, can be noisy during initial polling
+        return { success: false, error: 'Request ID not found.' };
+    } catch (err) {
+        console.error(`${LOG_PREFIX_RCD} ❌ Error fetching dice roll request result: ${err.message}`, err.stack?.substring(0,500)); // Corrected logPrefix here
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 // --- End of Part P2 ---
