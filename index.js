@@ -965,15 +965,16 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Replace your entire existing initializeDatabaseSchema function with this:
 async function initializeDatabaseSchema() {
-    console.log("⚙️ V9 FINAL CLEAN WHITESPACE: Initializing FULL database schema (All Tables & Triggers)..."); // Changed log slightly for clarity
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        console.log("DEBUG V9 FINAL: BEGIN executed.");
+    console.log("⚙️ Initializing FULL database schema (All Tables & Triggers - Cleaned)...");
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        console.log("DB Schema: BEGIN executed.");
 
-        // Users Table
-console.log("DEBUG V9 FINAL: Creating Users table...");
-await client.query(`CREATE TABLE IF NOT EXISTS users (
+        // Users Table
+        console.log("DB Schema: Creating Users table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS users (
     telegram_id BIGINT PRIMARY KEY,
     username VARCHAR(255),
     first_name VARCHAR(255),
@@ -996,365 +997,350 @@ await client.query(`CREATE TABLE IF NOT EXISTS users (
     total_won_lamports BIGINT DEFAULT 0,
     notes TEXT
 );`);
-console.log("DEBUG V9 FINAL: Users table processed.");
-        
-        
+        console.log("DB Schema: Users table processed.");
+
         // Jackpots Table
-console.log("DEBUG V9 FINAL: Creating Jackpots table...");
-await client.query(`CREATE TABLE IF NOT EXISTS jackpots (
-    jackpot_id VARCHAR(255) PRIMARY KEY,
-    current_amount BIGINT DEFAULT 0,
-    last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-    last_won_timestamp TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        console.log("DB Schema: Creating Jackpots table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS jackpots (
+    jackpot_id VARCHAR(255) PRIMARY KEY,
+    current_amount BIGINT DEFAULT 0,
+    last_won_by_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    last_won_timestamp TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(
-            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
-            [MAIN_JACKPOT_ID]
-        );
-        console.log("DEBUG V9 FINAL: Jackpots table processed.");
+        await client.query(
+            `INSERT INTO jackpots (jackpot_id, current_amount) VALUES ($1, 0) ON CONFLICT (jackpot_id) DO NOTHING;`,
+            [MAIN_JACKPOT_ID]
+        );
+        console.log("DB Schema: Jackpots table processed.");
 
-        // Games Table (Game Log)
-console.log("DEBUG V9 FINAL: Creating Games table...");
-await client.query(`CREATE TABLE IF NOT EXISTS games (
-    game_log_id SERIAL PRIMARY KEY,
-    game_type VARCHAR(50) NOT NULL,
-    chat_id BIGINT,
-    initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
-    participants_ids BIGINT[],
-    bet_amount_lamports BIGINT,
-    outcome TEXT,
-    jackpot_contribution_lamports BIGINT,
-    game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Games Table (Game Log)
+        console.log("DB Schema: Creating Games table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS games (
+    game_log_id SERIAL PRIMARY KEY,
+    game_type VARCHAR(50) NOT NULL,
+    chat_id BIGINT,
+    initiator_telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    participants_ids BIGINT[],
+    bet_amount_lamports BIGINT,
+    outcome TEXT,
+    jackpot_contribution_lamports BIGINT,
+    game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        console.log("DEBUG V9 FINAL: Games table processed.");
+        console.log("DB Schema: Games table processed.");
 
-        // User Deposit Wallets Table
-console.log("DEBUG V9 FINAL: Creating User Deposit Wallets table...");
-await client.query(`CREATE TABLE IF NOT EXISTS user_deposit_wallets (
-    wallet_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    public_key VARCHAR(44) NOT NULL UNIQUE,
-    derivation_path VARCHAR(255) NOT NULL UNIQUE,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMPTZ,
-    swept_at TIMESTAMPTZ,
-    balance_at_sweep BIGINT,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // User Deposit Wallets Table
+        console.log("DB Schema: Creating User Deposit Wallets table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS user_deposit_wallets (
+    wallet_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    public_key VARCHAR(44) NOT NULL UNIQUE,
+    derivation_path VARCHAR(255) NOT NULL UNIQUE,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ,
+    swept_at TIMESTAMPTZ,
+    balance_at_sweep BIGINT,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
-await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
-await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
-console.log("DEBUG V9 FINAL: User Deposit Wallets table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_user_id ON user_deposit_wallets(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_public_key ON user_deposit_wallets(public_key);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_deposit_wallets_is_active_expires_at ON user_deposit_wallets(is_active, expires_at);`);
+        console.log("DB Schema: User Deposit Wallets table processed.");
 
-        // Deposits Table
-console.log("DEBUG V9 FINAL: Creating Deposits table...");
-await client.query(`CREATE TABLE IF NOT EXISTS deposits (
-    deposit_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
-    transaction_signature VARCHAR(88) NOT NULL UNIQUE,
-    source_address VARCHAR(44),
-    deposit_address VARCHAR(44) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    confirmation_status VARCHAR(20) DEFAULT 'pending',
-    block_time BIGINT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMPTZ,
-    notes TEXT,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Deposits Table
+        console.log("DB Schema: Creating Deposits table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS deposits (
+    deposit_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    user_deposit_wallet_id INT REFERENCES user_deposit_wallets(wallet_id) ON DELETE SET NULL,
+    transaction_signature VARCHAR(88) NOT NULL UNIQUE,
+    source_address VARCHAR(44),
+    deposit_address VARCHAR(44) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    confirmation_status VARCHAR(20) DEFAULT 'pending',
+    block_time BIGINT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ,
+    notes TEXT,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
+        console.log("DB Schema: Deposits table processed.");
 
-await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_telegram_id);`);
-await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_transaction_signature ON deposits(transaction_signature);`);
-await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_deposit_address ON deposits(deposit_address);`);
-await client.query(`CREATE INDEX IF NOT EXISTS idx_deposits_status_created_at ON deposits(confirmation_status, created_at);`);
-console.log("DEBUG V9 FINAL: Deposits table processed.");
-
-        // Withdrawals Table
-console.log("DEBUG V9 FINAL: Creating Withdrawals table...");
-await client.query(`CREATE TABLE IF NOT EXISTS withdrawals (
-    withdrawal_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    destination_address VARCHAR(44) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    fee_lamports BIGINT NOT NULL,
-    transaction_signature VARCHAR(88) UNIQUE,
-    status VARCHAR(30) DEFAULT 'pending_verification',
-    error_message TEXT,
-    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMPTZ,
-    block_time BIGINT,
-    priority_fee_microlamports INT,
-    compute_unit_price_microlamports INT,
-    compute_unit_limit INT,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Withdrawals Table
+        console.log("DB Schema: Creating Withdrawals table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS withdrawals (
+    withdrawal_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    destination_address VARCHAR(44) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    fee_lamports BIGINT NOT NULL,
+    transaction_signature VARCHAR(88) UNIQUE,
+    status VARCHAR(30) DEFAULT 'pending_verification',
+    error_message TEXT,
+    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ,
+    block_time BIGINT,
+    priority_fee_microlamports INT,
+    compute_unit_price_microlamports INT,
+    compute_unit_limit INT,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
-        console.log("DEBUG V9 FINAL: Withdrawals table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_withdrawals_status_requested_at ON withdrawals(status, requested_at);`);
+        console.log("DB Schema: Withdrawals table processed.");
 
-        // Referrals Table
-        console.log("DEBUG V9 FINAL: Creating Referrals table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS referrals (
-    referral_id SERIAL PRIMARY KEY,
-    referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
-    commission_type VARCHAR(20),
-    commission_amount_lamports BIGINT,
-    transaction_signature VARCHAR(88),
-    status VARCHAR(20) DEFAULT 'pending_criteria',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
+        // Referrals Table
+        console.log("DB Schema: Creating Referrals table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS referrals (
+    referral_id SERIAL PRIMARY KEY,
+    referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
+    commission_type VARCHAR(20),
+    commission_amount_lamports BIGINT,
+    transaction_signature VARCHAR(88),
+    status VARCHAR(20) DEFAULT 'pending_criteria',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
-        console.log("DEBUG V9 FINAL: Referrals table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
+        console.log("DB Schema: Referrals table processed.");
 
-        // Processed Sweeps Table
-        console.log("DEBUG V9 FINAL: Creating Processed Sweeps table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS processed_sweeps (
-    sweep_id SERIAL PRIMARY KEY,
-    source_deposit_address VARCHAR(44) NOT NULL,
-    destination_main_address VARCHAR(44) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    transaction_signature VARCHAR(88) UNIQUE NOT NULL,
-    swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Processed Sweeps Table
+        console.log("DB Schema: Creating Processed Sweeps table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS processed_sweeps (
+    sweep_id SERIAL PRIMARY KEY,
+    source_deposit_address VARCHAR(44) NOT NULL,
+    destination_main_address VARCHAR(44) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    transaction_signature VARCHAR(88) UNIQUE NOT NULL,
+    swept_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
-        console.log("DEBUG V9 FINAL: Processed Sweeps table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_sweeps_source_address ON processed_sweeps(source_deposit_address);`);
+        console.log("DB Schema: Processed Sweeps table processed.");
 
-        // Ledger Table
-        console.log("DEBUG V9 FINAL: Creating Ledger table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS ledger (
-    ledger_id SERIAL PRIMARY KEY,
-    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-    transaction_type VARCHAR(50) NOT NULL,
-    amount_lamports BIGINT NOT NULL,
-    balance_before_lamports BIGINT NOT NULL,
-    balance_after_lamports BIGINT NOT NULL,
-    deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
-    withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
-    game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
-    referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
-    related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        // Ledger Table
+        console.log("DB Schema: Creating Ledger table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS ledger (
+    ledger_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    transaction_type VARCHAR(50) NOT NULL,
+    amount_lamports BIGINT NOT NULL,
+    balance_before_lamports BIGINT NOT NULL,
+    balance_after_lamports BIGINT NOT NULL,
+    deposit_id INTEGER REFERENCES deposits(deposit_id) ON DELETE SET NULL,
+    withdrawal_id INTEGER REFERENCES withdrawals(withdrawal_id) ON DELETE SET NULL,
+    game_log_id INTEGER REFERENCES games(game_log_id) ON DELETE SET NULL,
+    referral_id INTEGER REFERENCES referrals(referral_id) ON DELETE SET NULL,
+    related_sweep_id INTEGER REFERENCES processed_sweeps(sweep_id) ON DELETE SET NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
-        console.log("DEBUG V9 FINAL: Ledger table processed.");
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_telegram_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON ledger(transaction_type);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);`);
+        console.log("DB Schema: Ledger table processed.");
 
-        // Dice Roll Requests Table
-        console.log("DEBUG V9 FINAL: Creating Dice Roll Requests table...");
-        await client.query(`CREATE TABLE IF NOT EXISTS dice_roll_requests (
-    request_id SERIAL PRIMARY KEY,
-    game_id VARCHAR(255) NULL,
-    chat_id BIGINT NOT NULL,
-    user_id BIGINT NULL,
-    emoji_type VARCHAR(50) DEFAULT '🎲',
-    status VARCHAR(50) DEFAULT 'pending',
-    roll_value INTEGER NULL,
-    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMPTZ NULL,
-    notes TEXT NULL,
-    handler_type VARCHAR(50) NULL, -- <<<< THIS LINE IS CRITICAL AND MUST BE PRESENT
-    helper_id VARCHAR(100) NULL     -- <<<< Optional, but good to have if you added it
-    );`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
-    // Optional but recommended new index if you use handler_type frequently in queries by helpers:
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_handler ON dice_roll_requests(status, handler_type, requested_at);`);
-    console.log("DEBUG V9 FINAL: Dice Roll Requests table processed.");
+        // Dice Roll Requests Table
+        console.log("DB Schema: Creating Dice Roll Requests table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS dice_roll_requests (
+    request_id SERIAL PRIMARY KEY,
+    game_id VARCHAR(255) NULL,
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NULL,
+    emoji_type VARCHAR(50) DEFAULT '🎲',
+    status VARCHAR(50) DEFAULT 'pending',
+    roll_value INTEGER NULL,
+    requested_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ NULL,
+    notes TEXT NULL,
+    handler_type VARCHAR(50) NULL,
+    helper_id VARCHAR(100) NULL
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_requested ON dice_roll_requests(status, requested_at);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_dice_roll_requests_status_handler ON dice_roll_requests(status, handler_type, requested_at);`);
+        console.log("DB Schema: Dice Roll Requests table processed.");
 
-        // NEW: Dice Escalator Jackpot Sessions Table
-    console.log("MainBot_Schema: Creating Dice Escalator Jackpot Sessions table..."); // Adjusted log prefix for clarity
-    await client.query(`CREATE TABLE IF NOT EXISTS de_jackpot_sessions (
-        session_id SERIAL PRIMARY KEY,
-        main_bot_game_id VARCHAR(255) NOT NULL,      -- The original gameId from MainBot's activeGames
-        user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-        chat_id BIGINT NOT NULL,
-        initial_score INTEGER NOT NULL,              -- Score when player entered jackpot mode
-        initial_rolls_json TEXT,                   -- JSON array of rolls made before jackpot mode
-        bet_amount_lamports BIGINT NOT NULL,
-        target_jackpot_score INTEGER NOT NULL,
-        bust_on_value INTEGER NOT NULL,
-        jackpot_pool_at_session_start BIGINT NOT NULL, -- Jackpot amount when this session started
-        status VARCHAR(50) DEFAULT 'pending_pickup', -- e.g., pending_pickup, active_by_helper, completed_bust, completed_target_reached, completed_timeout_forfeit, error_helper
-        final_score INTEGER,                         -- Final score after jackpot run (initial_score + jackpot_run_score from helper)
-        final_rolls_json TEXT,                     -- JSON array of ALL rolls (initial + jackpot run rolls from helper)
-        outcome_notes TEXT,                        -- e.g., "Busted on roll X", "Reached target Y" by helper
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        helper_bot_id VARCHAR(100) NULL            -- Identifier of the helper bot that processed it
-    );`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_status_created ON de_jackpot_sessions(status, created_at);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_main_bot_game_id ON de_jackpot_sessions(main_bot_game_id);`);
+        // Dice Escalator Jackpot Sessions Table
+        console.log("DB Schema: Creating Dice Escalator Jackpot Sessions table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS de_jackpot_sessions (
+    session_id SERIAL PRIMARY KEY,
+    main_bot_game_id VARCHAR(255) NOT NULL,
+    user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    chat_id BIGINT NOT NULL,
+    initial_score INTEGER NOT NULL,
+    initial_rolls_json TEXT,
+    bet_amount_lamports BIGINT NOT NULL,
+    target_jackpot_score INTEGER NOT NULL,
+    bust_on_value INTEGER NOT NULL,
+    jackpot_pool_at_session_start BIGINT NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending_pickup',
+    final_score INTEGER,
+    final_rolls_json TEXT,
+    outcome_notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    helper_bot_id VARCHAR(100) NULL
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_status_created ON de_jackpot_sessions(status, created_at);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_de_jackpot_sessions_main_bot_game_id ON de_jackpot_sessions(main_bot_game_id);`);
+        console.log("DB Schema: Dice Escalator Jackpot Sessions table processed.");
 
+        // Schema modifications for Referral System
+        console.log("DB Schema: Applying schema modifications for Referral System...");
+        await client.query(`
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='referral_count') THEN
+        ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0;
+        RAISE NOTICE 'Column referral_count added to users table.';
+    ELSE
+        RAISE NOTICE 'Column referral_count already exists in users table.';
+    END IF;
 
-        // --- MODIFICATIONS FOR REFERRAL SYSTEM ---
-        console.log("DEBUG V9 FINAL: Applying schema modifications for Referral System...");
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN
+        ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0;
+        RAISE NOTICE 'Column total_referral_earnings_paid_lamports added to users table.';
+    ELSE
+        RAISE NOTICE 'Column total_referral_earnings_paid_lamports already exists in users table.';
+    END IF;
 
-        // ---- MODIFICATIONS FOR USERS TABLE ----
-        await client.query(`
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='referral_count') THEN
-                    ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0;
-                    RAISE NOTICE 'Column referral_count added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column referral_count already exists in users table.';
-                END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='first_bet_placed_at') THEN
+        ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ;
+        RAISE NOTICE 'Column first_bet_placed_at added to users table.';
+    ELSE
+        RAISE NOTICE 'Column first_bet_placed_at already exists in users table.';
+    END IF;
+END $$;`);
+        console.log("DB Schema: Users table checked/modified for Referral System.");
 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN
-                    ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0;
-                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column total_referral_earnings_paid_lamports already exists in users table.';
-                END IF;
+        await client.query(`
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN
+        ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ;
+        RAISE NOTICE 'Column qualifying_bet_processed_at added to referrals table.';
+    ELSE
+        RAISE NOTICE 'Column qualifying_bet_processed_at already exists in referrals table.';
+    END IF;
 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='first_bet_placed_at') THEN
-                    ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ;
-                    RAISE NOTICE 'Column first_bet_placed_at added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column first_bet_placed_at already exists in users table.';
-                END IF;
-            END $$;
-        `);
-        console.log("DEBUG V9 FINAL: Users table checked/modified for Referral System.");
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN
+        ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb;
+        RAISE NOTICE 'Column referred_user_wager_milestones_achieved added to referrals table.';
+    ELSE
+        RAISE NOTICE 'Column referred_user_wager_milestones_achieved already exists in referrals table.';
+    END IF;
 
-        // ---- MODIFICATIONS FOR REFERRALS TABLE ----
-        await client.query(`
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN
-                    ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ;
-                    RAISE NOTICE 'Column qualifying_bet_processed_at added to referrals table.';
-                ELSE
-                    RAISE NOTICE 'Column qualifying_bet_processed_at already exists in referrals table.';
-                END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN
+        ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
+        RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports added to referrals table.';
+    ELSE
+        RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports already exists in referrals table.';
+    END IF;
+END $$;`);
+        console.log("DB Schema: Referrals table checked/modified for Referral System.");
 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN
-                    ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb;
-                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved added to referrals table.';
-                ELSE
-                    RAISE NOTICE 'Column referred_user_wager_milestones_achieved already exists in referrals table.';
-                END IF;
+        // Schema modifications for Level Up Bonus System
+        console.log("DB Schema: Applying schema modifications for Level Up Bonus System...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS user_levels (
+    level_id SERIAL PRIMARY KEY,
+    level_name VARCHAR(50) NOT NULL UNIQUE,
+    wager_threshold_usd DECIMAL(12, 2) NOT NULL,
+    bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    order_index INT UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_levels_order_index ON user_levels(order_index);`);
+        console.log("DB Schema: user_levels table checked/created.");
 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN
-                    ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
-                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports added to referrals table.';
-                ELSE
-                    RAISE NOTICE 'Column last_milestone_bonus_check_wager_lamports already exists in referrals table.';
-                END IF;
-            END $$;
-        `);
-        console.log("DEBUG V9 FINAL: Referrals table checked/modified for Referral System.");
-        // --- END OF MODIFICATIONS FOR REFERRAL SYSTEM ---
+        await client.query(`
+CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
+    claim_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    level_id INT NOT NULL REFERENCES user_levels(level_id) ON DELETE CASCADE,
+    claimed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    bonus_amount_claimed_lamports BIGINT DEFAULT 0,
+    notes TEXT,
+    CONSTRAINT uq_user_level_claim UNIQUE (user_telegram_id, level_id)
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_claimed_level_bonuses_user_level ON user_claimed_level_bonuses(user_telegram_id, level_id);`);
+        console.log("DB Schema: user_claimed_level_bonuses table checked/created.");
 
-        // --- NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
-        console.log("DEBUG V9 FINAL: Applying schema modifications for Level Up Bonus System...");
+        await client.query(`
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='current_level_id') THEN
+        ALTER TABLE users ADD COLUMN current_level_id INT REFERENCES user_levels(level_id) DEFAULT NULL;
+        RAISE NOTICE 'Column current_level_id added to users table.';
+    ELSE
+        RAISE NOTICE 'Column current_level_id already exists in users table.';
+    END IF;
+END $$;`);
+        console.log("DB Schema: Users table checked/modified for Level Up Bonus System.");
 
-        // ---- CREATE user_levels TABLE ----
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_levels (
-                level_id SERIAL PRIMARY KEY,
-                level_name VARCHAR(50) NOT NULL UNIQUE,
-                wager_threshold_usd DECIMAL(12, 2) NOT NULL, -- Wager requirement in USD
-                bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0, -- Bonus amount in USD for reaching this level
-                order_index INT UNIQUE NOT NULL, -- To define the progression of levels
-                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_levels_order_index ON user_levels(order_index);`);
-        console.log("DEBUG V9 FINAL: user_levels table checked/created.");
-
-        // ---- CREATE user_claimed_level_bonuses TABLE ----
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
-                claim_id SERIAL PRIMARY KEY,
-                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
-                level_id INT NOT NULL REFERENCES user_levels(level_id) ON DELETE CASCADE,
-                claimed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                bonus_amount_claimed_lamports BIGINT DEFAULT 0, -- Store the actual lamports claimed at the time
-                notes TEXT,
-                CONSTRAINT uq_user_level_claim UNIQUE (user_telegram_id, level_id) -- Ensure a user can claim bonus for a level only once
-            );
-        `);
-        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_claimed_level_bonuses_user_level ON user_claimed_level_bonuses(user_telegram_id, level_id);`);
-        console.log("DEBUG V9 FINAL: user_claimed_level_bonuses table checked/created.");
-
-        // ---- MODIFICATIONS FOR USERS TABLE (for Level Up System) ----
-        await client.query(`
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='current_level_id') THEN
-                    ALTER TABLE users ADD COLUMN current_level_id INT REFERENCES user_levels(level_id) DEFAULT NULL;
-                    RAISE NOTICE 'Column current_level_id added to users table.';
-                ELSE
-                    RAISE NOTICE 'Column current_level_id already exists in users table.';
-                END IF;
-
-                -- The rank (#751) shown in the screenshot seems like a global rank based on wager.
-                -- We can calculate this dynamically or store it if performance becomes an issue.
-                -- For now, we won't add a dedicated rank column, as it can be derived.
-                -- If you decide to store it later:
-                -- IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='overall_rank') THEN
-                --     ALTER TABLE users ADD COLUMN overall_rank INT DEFAULT NULL;
-                -- END IF;
-            END $$;
-        `);
-        console.log("DEBUG V9 FINAL: Users table checked/modified for Level Up Bonus System.");
-        // --- END OF NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
-
-
-        // Update function for 'updated_at' columns
-        console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
-        await client.query(`
+        // Update function for 'updated_at' columns
+        console.log("DB Schema: Creating/Ensuring trigger function trigger_set_timestamp...");
+        await client.query(`
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
+    NEW.updated_at = NOW();
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;`);
-        console.log("DEBUG V9 FINAL: Trigger function processed. Applying triggers to tables...");
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals'];
-        for (const tableName of tablesWithUpdatedAt) {
-            console.log(`DEBUG V9 FINAL: Checking/Setting trigger for ${tableName}...`);
-            const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
-            const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
+        console.log("DB Schema: Trigger function processed. Applying triggers to tables...");
 
-            if (triggerExistsRes.rowCount === 0) {
-                const createTriggerQuery = `
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals', 'de_jackpot_sessions', 'user_levels', 'user_claimed_level_bonuses']; // Added new tables to this list
+        for (const tableName of tablesWithUpdatedAt) {
+            console.log(`DB Schema: Checking/Setting trigger for ${tableName}...`);
+            const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
+            const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
+
+            if (triggerExistsRes.rowCount === 0) {
+                const createTriggerQuery = `
 CREATE TRIGGER set_timestamp
 BEFORE UPDATE ON ${tableName}
 FOR EACH ROW
 EXECUTE FUNCTION trigger_set_timestamp();`;
-                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
-            }
-        }
-        console.log("DEBUG V9 FINAL: Triggers processed.");
+                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
+            }
+        }
+        console.log("DB Schema: Triggers processed.");
 
-        await client.query('COMMIT');
-        console.log("✅ V9 FINAL CLEAN WHITESPACE: Database schema initialization complete (ALL TABLES & TRIGGERS).");
+        await client.query('COMMIT');
+        console.log("✅ DB Schema: Database schema initialization complete (ALL TABLES & TRIGGERS).");
 
-    } catch (e) {
-        try {
-            console.log("DEBUG V9 FINAL: Error caught, attempting ROLLBACK...");
-            await client.query('ROLLBACK');
-            console.log("DEBUG V9 FINAL: ROLLBACK executed.");
-        } catch (rbError) {
-            console.error("DEBUG V9 FINAL: Error during ROLLBACK attempt:", rbError);
-        }
-        console.error('❌ V9 FINAL CLEAN WHITESPACE: Error during database schema initialization:', e);
-        throw e; // Re-throw the original error to be caught by the main init error handler
-    } finally {
-        client.release();
-    }
+    } catch (e) {
+        try {
+            console.log("DB Schema: Error caught, attempting ROLLBACK...");
+            await client.query('ROLLBACK');
+            console.log("DB Schema: ROLLBACK executed.");
+        } catch (rbError) {
+            console.error("DB Schema: Error during ROLLBACK attempt:", rbError);
+        }
+        console.error('❌ DB Schema: Error during database schema initialization:', e);
+        throw e; // Re-throw the original error to be caught by the main init error handler
+    } finally {
+        client.release();
+    }
 }
 
 //---------------------------------------------------------------------------
