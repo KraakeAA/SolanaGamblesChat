@@ -325,7 +325,57 @@ const REFERRAL_WAGER_MILESTONES_USD_CONFIG = [10, 25, 50, 100, 250, 500, 1000];
 
 const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.005; // 0.5%
 // --- End of NEW Referral System Configurations ---
-
+// --- NEW Level Up Bonus System Configurations ---
+const LEVEL_CONFIG = [
+    // Order index should be sequential and start from 1 for the first level.
+    // Wager thresholds are total USD wagered to reach this level.
+    // Bonus amounts are in USD.
+    { 
+        order_index: 1, 
+        name: "Bronze I", 
+        wager_threshold_usd: 100.00, 
+        bonus_amount_usd: 1.00 
+    },
+    { 
+        order_index: 2, 
+        name: "Bronze II", 
+        wager_threshold_usd: 500.00, 
+        bonus_amount_usd: 2.50 
+    },
+    { 
+        order_index: 3, 
+        name: "Bronze III", 
+        wager_threshold_usd: 1000.00, 
+        bonus_amount_usd: 5.00 
+    },
+    { // Based on your screenshot for "Current Level" example
+        order_index: 4, 
+        name: "Bronze IV", 
+        wager_threshold_usd: 2500.00, // Approximate, adjust as needed
+        bonus_amount_usd: 10.00 // Assuming a bonus for Bronze IV
+    },
+    { // Based on your screenshot for "Next Level" example
+        order_index: 5, 
+        name: "Bronze V", 
+        wager_threshold_usd: 5000.00, 
+        bonus_amount_usd: 12.50 // Bonus mentioned in screenshot
+    },
+    { 
+        order_index: 6, 
+        name: "Silver I", 
+        wager_threshold_usd: 10000.00, 
+        bonus_amount_usd: 25.00 
+    },
+    { 
+        order_index: 7, 
+        name: "Silver II", 
+        wager_threshold_usd: 25000.00, 
+        bonus_amount_usd: 50.00 
+    },
+    // Add more levels as needed (Silver III, Gold I, Platinum, Diamond, etc.)
+    // Ensure order_index is unique and sequential.
+];
+// --- End of NEW Level Up Bonus System Configurations ---
 
 const DEFAULT_GAME_ACTIVITY_CONCURRENCY_LIMITS = {
     UNIFIED_OFFERS: { // These keys are for *pending unified offers*
@@ -1201,6 +1251,63 @@ async function initializeDatabaseSchema() {
         console.log("DEBUG V9 FINAL: Referrals table checked/modified for Referral System.");
         // --- END OF MODIFICATIONS FOR REFERRAL SYSTEM ---
 
+        // --- NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
+        console.log("DEBUG V9 FINAL: Applying schema modifications for Level Up Bonus System...");
+
+        // ---- CREATE user_levels TABLE ----
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_levels (
+                level_id SERIAL PRIMARY KEY,
+                level_name VARCHAR(50) NOT NULL UNIQUE,
+                wager_threshold_usd DECIMAL(12, 2) NOT NULL, -- Wager requirement in USD
+                bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0, -- Bonus amount in USD for reaching this level
+                order_index INT UNIQUE NOT NULL, -- To define the progression of levels
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_levels_order_index ON user_levels(order_index);`);
+        console.log("DEBUG V9 FINAL: user_levels table checked/created.");
+
+        // ---- CREATE user_claimed_level_bonuses TABLE ----
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
+                claim_id SERIAL PRIMARY KEY,
+                user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                level_id INT NOT NULL REFERENCES user_levels(level_id) ON DELETE CASCADE,
+                claimed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                bonus_amount_claimed_lamports BIGINT DEFAULT 0, -- Store the actual lamports claimed at the time
+                notes TEXT,
+                CONSTRAINT uq_user_level_claim UNIQUE (user_telegram_id, level_id) -- Ensure a user can claim bonus for a level only once
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_claimed_level_bonuses_user_level ON user_claimed_level_bonuses(user_telegram_id, level_id);`);
+        console.log("DEBUG V9 FINAL: user_claimed_level_bonuses table checked/created.");
+
+        // ---- MODIFICATIONS FOR USERS TABLE (for Level Up System) ----
+        await client.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='current_level_id') THEN
+                    ALTER TABLE users ADD COLUMN current_level_id INT REFERENCES user_levels(level_id) DEFAULT NULL;
+                    RAISE NOTICE 'Column current_level_id added to users table.';
+                ELSE
+                    RAISE NOTICE 'Column current_level_id already exists in users table.';
+                END IF;
+
+                -- The rank (#751) shown in the screenshot seems like a global rank based on wager.
+                -- We can calculate this dynamically or store it if performance becomes an issue.
+                -- For now, we won't add a dedicated rank column, as it can be derived.
+                -- If you decide to store it later:
+                -- IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='overall_rank') THEN
+                --     ALTER TABLE users ADD COLUMN overall_rank INT DEFAULT NULL;
+                -- END IF;
+            END $$;
+        `);
+        console.log("DEBUG V9 FINAL: Users table checked/modified for Level Up Bonus System.");
+        // --- END OF NEW TABLES & MODIFICATIONS FOR LEVEL UP BONUS SYSTEM ---
+
+
         // Update function for 'updated_at' columns
         console.log("DEBUG V9 FINAL: Creating/Ensuring trigger function trigger_set_timestamp...");
         await client.query(`
@@ -1254,13 +1361,6 @@ EXECUTE FUNCTION trigger_set_timestamp();`;
 // Replace your entire existing getOrCreateUser function (in Part 2) with this:
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
     const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
-    // console.log(`${LOG_PREFIX_GOCU_DEBUG} Received telegramId: ${telegramId} (type: ${typeof telegramId}), username: "${username}", firstName: "${firstName}", lastName: "${lastName}", referrerIdInput: ${referrerIdInput}`);
-    // try {
-    //     const argsArray = Array.from(arguments);
-    //     console.log(`${LOG_PREFIX_GOCU_DEBUG} All arguments received as array: ${JSON.stringify(argsArray)}`);
-    // } catch (e) {
-    //     console.log(`${LOG_PREFIX_GOCU_DEBUG} Could not stringify arguments array: ${e.message}`);
-    // }
 
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
         console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
@@ -1273,7 +1373,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
     }
 
     const stringTelegramId = String(telegramId).trim();
-    const LOG_PREFIX_GOCU = `[GetCreateUser TG:${stringTelegramId}]`;
+    const LOG_PREFIX_GOCU = `[GetCreateUser_Lvl TG:${stringTelegramId}]`; // Added _Lvl
 
     const sanitizeString = (str) => {
         if (typeof str !== 'string') return null;
@@ -1285,19 +1385,13 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
     const sFirstName = firstName ? sanitizeString(firstName) : null;
     const sLastName = lastName ? sanitizeString(lastName) : null;
 
-    // console.log(`${LOG_PREFIX_GOCU} Sanitized inputs - Username: "${sUsername}", FirstName: "${sFirstName}", LastName: "${sLastName}"`);
-
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
         let referrerId = null;
         if (referrerIdInput !== null && referrerIdInput !== undefined) {
-            try {
-                referrerId = BigInt(referrerIdInput);
-            } catch (parseError) {
-                referrerId = null;
-            }
+            try { referrerId = BigInt(referrerIdInput); } catch (parseError) { referrerId = null; }
         }
 
         let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
@@ -1308,9 +1402,9 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
             user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
             user.total_won_lamports = BigInt(user.total_won_lamports || '0');
-            user.referral_count = parseInt(user.referral_count || '0', 10); // Ensure referral_count is number
+            user.referral_count = parseInt(user.referral_count || '0', 10);
             user.total_referral_earnings_paid_lamports = BigInt(user.total_referral_earnings_paid_lamports || '0');
-
+            user.current_level_id = user.current_level_id !== null ? parseInt(user.current_level_id, 10) : null; // Handle current_level_id
 
             if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
@@ -1337,6 +1431,7 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             await client.query('COMMIT');
             const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
             const finalUser = updatedUserRow.rows[0];
+            // Reparse all necessary fields including new ones
             finalUser.balance = BigInt(finalUser.balance);
             finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
             finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
@@ -1344,25 +1439,27 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
             finalUser.referral_count = parseInt(finalUser.referral_count || '0', 10);
             finalUser.total_referral_earnings_paid_lamports = BigInt(finalUser.total_referral_earnings_paid_lamports || '0');
-
+            finalUser.current_level_id = finalUser.current_level_id !== null ? parseInt(finalUser.current_level_id, 10) : null;
             if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
             return finalUser;
         } else {
-            // console.log(`${LOG_PREFIX_GOCU} User not found. Creating new user with sanitized details.`);
             const newReferralCode = generateReferralCode();
+            // *** MODIFIED INSERT to include current_level_id (as NULL) and other referral defaults ***
             const insertQuery = `
                 INSERT INTO users (
                     telegram_id, username, first_name, last_name, balance, referral_code, 
                     referrer_telegram_id, last_active_timestamp, created_at, updated_at,
-                    referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at
+                    referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at,
+                    current_level_id 
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL)
                 RETURNING *;
             `;
             const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
             result = await client.query(insertQuery, values);
             const newUser = result.rows[0];
 
+            // Reparse all necessary fields including new ones
             newUser.balance = BigInt(newUser.balance);
             newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
             newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
@@ -1370,23 +1467,19 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
             newUser.referral_count = parseInt(newUser.referral_count || '0', 10);
             newUser.total_referral_earnings_paid_lamports = BigInt(newUser.total_referral_earnings_paid_lamports || '0');
-
+            newUser.current_level_id = newUser.current_level_id !== null ? parseInt(newUser.current_level_id, 10) : null;
 
             if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
 
-            // console.log(`${LOG_PREFIX_GOCU} New user created: ${newUser.telegram_id}, Bal: ${newUser.balance}, RefCode: ${newUser.referral_code}.`);
-
             if (referrerId) {
                 try {
-                    // *** MODIFIED STATUS HERE ***
                     await client.query(
                         `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
                          VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
                          ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`, // Assuming this unique constraint exists on referred_telegram_id
+                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
                         [referrerId, newUser.telegram_id]
                     );
-                    // console.log(`${LOG_PREFIX_GOCU} Referral link entry created for ${referrerId} -> ${newUser.telegram_id} with status 'pending_qualifying_bet'.`);
                 } catch (referralError) {
                    console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
                 }
@@ -12016,6 +12109,154 @@ async function handleGrantCommand(msg, args, adminUserObj) {
         if (grantClient) grantClient.release();
     }
 }
+
+// --- NEW Command Handler for /bonus (Place in Part 5a, Section 2) ---
+
+async function handleBonusCommand(msg) {
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id); // This will be the user's DM chat if called correctly
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd UID:${userId} CH:${chatId}]`;
+
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(chatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); // HTML safe
+
+    // Ensure this command is primarily handled in DM for a cleaner experience
+    let botUsername = BOT_NAME || "our bot";
+    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* ignore */ }
+    
+    if (msg.chat.type !== 'private') {
+        if (msg.message_id) await bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        await safeSendMessage(msg.chat.id, `${playerRefHTML}, I've sent your Level Up Bonus dashboard to our private chat: @${escapeHTML(botUsername)} 🌟`, { parse_mode: 'HTML' });
+        // Send a new "message" to the DM context to trigger the display there
+        const dmMsgContext = { from: msg.from, chat: { id: userId, type: 'private' }, message_id: null };
+        // Call this function again but with the DM context
+        await handleBonusCommand(dmMsgContext); 
+        return;
+    }
+    
+    // If in DM, delete the original /bonus command message
+    if (msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
+        await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    }
+
+    const loadingMsg = await safeSendMessage(chatId, "⏳ Fetching your Level Up Bonus status...", { parse_mode: 'HTML' });
+    const workingMessageId = loadingMsg?.message_id;
+
+    try {
+        const client = await pool.connect(); // Use a single client for all DB ops in this handler
+        let messageTextHTML = `🌟 <b>Level Up Bonus</b> 🌟\n\nPlay games, level up and get even more bonuses!\n\n`;
+        const keyboardRows = [];
+
+        // Fetch current user details including level and wagered amounts
+        const currentUserDetails = await client.query(
+            `SELECT u.total_wagered_lamports, u.current_level_id, ul.level_name AS current_level_name, ul.wager_threshold_usd AS current_level_threshold_usd, ul.order_index AS current_level_order_index
+             FROM users u
+             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+             WHERE u.telegram_id = $1`,
+            [userId]
+        );
+
+        if (currentUserDetails.rowCount === 0) {
+            throw new Error("User profile not found in database for bonus check.");
+        }
+
+        const userData = currentUserDetails.rows[0];
+        const totalWageredLamports = BigInt(userData.total_wagered_lamports || '0');
+        const solPrice = await getSolUsdPrice();
+        const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+
+        const currentLevelName = userData.current_level_name || "Newcomer";
+        const currentLevelThresholdUSD = parseFloat(userData.current_level_threshold_usd || '0.00');
+        const currentLevelOrderIndex = userData.current_level_order_index || 0;
+        
+        // For "Your current level: Bronze IV - $2,623 wagered", we'll show their total wagered.
+        messageTextHTML += `Your current level:\n🏆 <b>${escapeHTML(currentLevelName)}</b> - ${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))} wagered\n\n`;
+
+        // Find the next level
+        const nextLevelData = await client.query(
+            `SELECT level_name, wager_threshold_usd, bonus_amount_usd
+             FROM user_levels
+             WHERE order_index > $1
+             ORDER BY order_index ASC
+             LIMIT 1`,
+            [currentLevelOrderIndex]
+        );
+
+        let nextLevelName = "Max Level Reached!";
+        let nextLevelThresholdUSD = Infinity; // Effectively
+        let wagerNeededUSD = 0;
+
+        if (nextLevelData.rowCount > 0) {
+            const nl = nextLevelData.rows[0];
+            nextLevelName = nl.level_name;
+            nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
+            wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
+             messageTextHTML += `Next Level:\n🏅 <b>${escapeHTML(nextLevelName)}</b> - $${nextLevelThresholdUSD.toFixed(2)} wagered\n\n`;
+        } else {
+            messageTextHTML += `Next Level:\n🏅 ${escapeHTML(nextLevelName)}\n\n`;
+        }
+        
+        // Calculate Rank
+        const rank = await calculateUserRank(userId, client); // Pass client
+        messageTextHTML += `You are ranked: <b>#${rank !== null ? rank : 'N/A'}</b>\n`;
+
+        if (nextLevelData.rowCount > 0) {
+            messageTextHTML += `Wager <b>$${wagerNeededUSD.toFixed(2)}</b> more to upgrade your level!\n\n`;
+        } else {
+            messageTextHTML += `You've reached the pinnacle! Well done!\n\n`;
+        }
+
+        // Check for claimable bonuses: highest achieved level not yet claimed
+        const claimableBonusesRes = await client.query(
+            `SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd
+             FROM user_levels ul
+             WHERE ul.order_index <= $1  -- Levels user has achieved or surpassed
+             AND ul.bonus_amount_usd > 0
+             AND NOT EXISTS (
+                 SELECT 1 FROM user_claimed_level_bonuses uclb
+                 WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+             )
+             ORDER BY ul.order_index DESC -- Get the highest eligible unclaimed bonus first
+             LIMIT 1;`,
+            [currentLevelOrderIndex, userId]
+        );
+
+        if (claimableBonusesRes.rowCount > 0) {
+            const bonusToClaim = claimableBonusesRes.rows[0];
+            const bonusAmountToClaimUSD = parseFloat(bonusToClaim.bonus_amount_usd).toFixed(2);
+            keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} Bonus (${escapeHTML(bonusToClaim.level_name)}) 💰`, callback_data: `claim_level_bonus:${bonusToClaim.level_id}` }]);
+        } else {
+            keyboardRows.push([{ text: "🔒 No Bonuses to Claim Now 🔒", callback_data: "noop" }]);
+        }
+
+        keyboardRows.push([{ text: "📜 Levels List & Info", callback_data: "menu:levels_info" }]); // Placeholder for a future detailed levels list
+        keyboardRows.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
+        
+        const keyboard = { inline_keyboard: keyboardRows };
+        if (workingMessageId && bot) {
+            await bot.editMessageText(messageTextHTML, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+        } else {
+            await safeSendMessage(chatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
+        }
+        await client.query('COMMIT'); // Commit if any FOR UPDATE locks were implicitly held by selects on user.
+    } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(()=>{}); // Rollback on error
+        console.error(`${LOG_PREFIX_BONUS_CMD} Error: ${error.message}`, error.stack);
+        const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message)}`;
+        const errorKbd = { inline_keyboard: [[{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]] };
+        if (workingMessageId && bot) {
+            await bot.editMessageText(errorText, { chat_id: chatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: errorKbd });
+        } else {
+            await safeSendMessage(chatId, errorText, { parse_mode: 'HTML', reply_markup: errorKbd });
+        }
+    } finally {
+        if (client) client.release();
+    }
+}
 // --- End of Part 5a, Section 2 ---
 // --- Start of Part 5a, Section 4 (REVISED for New Dice Escalator UI & Simplified Post-Game Keyboard) ---
 // index.js - Part 5a, Section 4: UI Helpers and Shared Utilities for General Commands & Simple Group Games
@@ -12716,8 +12957,23 @@ bot.on('message', async (msg) => {
                     if (typeof handleStartSlotCommand === 'function') { const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betSlot) await handleStartSlotCommand(msg, betSlot); }
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSlotCommand`); break;
                 case 'mines':
-                    if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
+                            if (typeof handleStartMinesCommand === 'function') {
+                                await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
+                            } else {
+                                console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`);
+                            }
+                            break;
+                        
+                        case 'bonus': // New command for Level Up Bonus System
+                            if (typeof handleBonusCommand === 'function') {
+                                await handleBonusCommand(msg);
+                            } else {
+                                console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleBonusCommand`);
+                                await safeSendMessage(chatId, "Bonus feature currently unavailable.", {});
+                            }
+                            break;
+
+
                 default:
                     const selfBotInfoDefault = await bot.getMe();
                     if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
@@ -12981,6 +13237,91 @@ async function handleClaimMilestoneBonusCallback(callbackQueryId, userWhoClicked
     }
 }
 
+// --- NEW Callback Handler for Claiming Level Up Bonuses ---
+// (Place this where other callback query handlers are routed)
+
+/**
+ * Handles the callback query when a user clicks the "Claim $X Bonus (Level Name)" button.
+ * @param {string} callbackQueryId - The ID of the callback query.
+ * @param {object} userWhoClicked - The user object of the person who clicked. (Contains .id or .telegram_id)
+ * @param {string} levelIdToClaimStr - The level_id (from user_levels table) for the bonus being claimed, as a string.
+ * @param {string} originalMessageId - The ID of the /bonus message that had the button.
+ * @param {string} originalChatId - The chat ID where the /bonus message is (should be user's DM).
+ */
+async function handleClaimLevelBonusCallback(callbackQueryId, userWhoClicked, levelIdToClaimStr, originalMessageId, originalChatId) {
+    const userId = String(userWhoClicked.id || userWhoClicked.telegram_id);
+    const levelIdToClaim = parseInt(levelIdToClaimStr, 10);
+    const LOG_PREFIX_CLAIM_LVL_CB = `[ClaimLevelBonusCB UID:${userId} LevelID:${levelIdToClaim}]`;
+
+    if (isNaN(levelIdToClaim)) {
+        console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Invalid levelIdToClaim: ${levelIdToClaimStr}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid bonus level ID.", show_alert: true }).catch(() => {});
+        return;
+    }
+
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN'); // Start transaction for the claim process
+
+        // Call the core helper function (defined in Step L3)
+        const claimResult = await handleClaimLevelBonus(userId, levelIdToClaim, client);
+
+        if (claimResult.success) {
+            await client.query('COMMIT');
+            console.log(`${LOG_PREFIX_CLAIM_LVL_CB} Successfully claimed bonus. Message: ${claimResult.messageForUser}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.messageForUser || "Bonus claimed successfully!", show_alert: false }).catch(() => {});
+
+            // Refresh the /bonus dashboard message for the user in their DM
+            // Construct a mock msgOrCbMsg object for handleBonusCommand
+            const mockMsgForDashboardRefresh = {
+                from: userWhoClicked, // Pass the full user object
+                chat: { id: originalChatId, type: 'private' }, // Should be the DM chat
+                message_id: originalMessageId, // The ID of the /bonus message to be edited/replaced
+                // Flags to ensure handleBonusCommand knows this is an internal refresh in DM for an existing message
+                isCallbackEditing: true // A custom flag we can check in handleBonusCommand if needed
+            };
+            if (typeof handleBonusCommand === 'function') {
+                // handleBonusCommand should ideally delete the old message (originalMessageId) and send a new one
+                // or be capable of editing it. Let's assume it will handle replacing/updating the message.
+                await handleBonusCommand(mockMsgForDashboardRefresh);
+            } else {
+                console.error(`${LOG_PREFIX_CLAIM_LVL_CB} CRITICAL: handleBonusCommand is not defined. Cannot refresh /bonus dashboard.`);
+                // Send a simple success message if dashboard can't be refreshed automatically
+                await safeSendMessage(originalChatId, claimResult.messageForUser || "Bonus claimed successfully!", { parse_mode: 'MarkdownV2' });
+            }
+        } else {
+            await client.query('ROLLBACK');
+            console.warn(`${LOG_PREFIX_CLAIM_LVL_CB} Failed to claim bonus: ${claimResult.error}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.error || "Could not claim bonus. It might be already claimed or you might not be eligible.", show_alert: true }).catch(() => {});
+            // Optionally, refresh the /bonus dashboard even on failure to show the current state,
+            // as the button might have been for an already claimed bonus.
+            const mockMsgForDashboardRefreshOnError = {
+                from: userWhoClicked,
+                chat: { id: originalChatId, type: 'private' },
+                message_id: originalMessageId,
+                isCallbackEditing: true
+            };
+            if (typeof handleBonusCommand === 'function') {
+                await handleBonusCommand(mockMsgForDashboardRefreshOnError);
+            }
+        }
+    } catch (error) {
+        if (client) {
+            try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Rollback error: ${rbErr.message}`); }
+        }
+        console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Critical error during level bonus claim processing: ${error.message}`, error.stack);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Server error while claiming bonus. Please try again later or contact support.", show_alert: true }).catch(() => {});
+        if (typeof notifyAdmin === 'function') {
+            notifyAdmin(`🚨 CRITICAL Error Claiming Level Bonus\nUID: ${userId}, LevelID Attempted: ${levelIdToClaim}\nError: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
+        }
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+}
+
 
 // --- Centralized Handler for Direct Challenge Responses (Accept/Decline/Cancel) ---
 // --- START OF FULL REPLACEMENT for handleDirectChallengeResponse function ---
@@ -13225,6 +13566,22 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
                 if (clientAccept) clientAccept.release();
             }
             break;
+            
+        case 'claim_level_bonus': // New case for claiming level up bonus
+            const levelIdToClaimStr = params[0]; // params[0] should be the level_id
+            if (typeof handleClaimLevelBonusCallback === 'function') {
+                await handleClaimLevelBonusCallback(
+                    callbackQueryId,
+                    userObjectForCallback,    // This is the user who clicked the button
+                    levelIdToClaimStr,
+                    originalMessageId,        // ID of the /bonus dashboard message
+                    originalChatId            // Chat ID where the /bonus dashboard message is (should be user's DM)
+                );
+            } else {
+                console.error(`${LOG_PREFIX_CBQ} Missing handler: handleClaimLevelBonusCallback`);
+                await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Bonus claim feature is currently unavailable.", show_alert: true });
+            }
+            break;
 
         // Cases for dir_chal_dec / cf_direct_decline / rps_direct_decline / de_direct_decline / d21_direct_decline / duel_direct_decline
         case 'dir_chal_dec': 
