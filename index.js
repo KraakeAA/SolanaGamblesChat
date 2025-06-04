@@ -841,43 +841,36 @@ async function notifyAdmin(message, options = {}) {
     }
 }
 
-async function fetchSolUsdPriceFromAPI() {
-    // Binance public API endpoint for SOL/USDT price
+async function fetchSolUsdPriceFromBinanceAPI() {
     const apiUrl = 'https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT';
     const logPrefix = '[PriceFeed Binance]';
 
     try {
-        // console.log(`${logPrefix} Attempting to fetch SOL/USDT price from Binance...`); // Optional: less verbose
-        const response = await axios.get(apiUrl, { timeout: 8000 }); // axios is from Part 1 imports
+        // console.log(`${logPrefix} Attempting to fetch SOL/USDT price from Binance...`);
+        const response = await axios.get(apiUrl, { timeout: 8000 });
 
-        // Binance API response for this endpoint is like: {"symbol":"SOLUSDT","price":"170.12000000"}
         if (response.data && typeof response.data.price === 'string') {
             const price = parseFloat(response.data.price);
             if (isNaN(price) || price <= 0) {
                 throw new Error('Invalid or non-positive price data from Binance API.');
             }
-            // console.log(`${logPrefix} Successfully fetched SOL/USDT price: $${price.toFixed(4)}`); // Optional: less verbose
             return price;
         } else {
-            // stringifyWithBigInt is from Part 1
             console.error(`${logPrefix} ⚠️ SOLUSDT price not found or invalid structure in Binance API response:`, stringifyWithBigInt(response.data).substring(0,300));
             throw new Error('SOLUSDT price not found or invalid structure in Binance API response.');
         }
     } catch (error) {
         const errMsg = error.isAxiosError ? error.message : String(error);
         let detailedError = errMsg;
-        if (error.response) { // Axios error with a response from the server
-            // console.error(`${logPrefix} Binance API Response Status: ${error.response.status}, Data:`, stringifyWithBigInt(error.response.data).substring(0,300)); // Optional: less verbose
-            if (error.response.status === 429 || error.response.status === 418) { // 418 can also be used by Binance for IP bans/rate limits
-                detailedError = `Request failed (status ${error.response.status}): Rate Limit Exceeded or IP Ban with Binance. Ensure cache TTL is high.`;
-            } else if (error.response.data && (error.response.data.msg || error.response.data.message)) { // Binance specific error messages
+        if (error.response) {
+            if (error.response.status === 429 || error.response.status === 418) {
+                detailedError = `Request failed (status ${error.response.status}): Rate Limit Exceeded or IP Ban with Binance.`;
+            } else if (error.response.data && (error.response.data.msg || error.response.data.message)) {
                 detailedError = `API Error: ${error.response.data.msg || error.response.data.message}`;
             }
-        } else { // Network error or other issues before a response was received
+        } else {
              console.error(`${logPrefix} ❌ Error fetching SOL/USDT price from Binance: ${detailedError}`);
         }
-        
-        // Add a property to the error if it's a rate limit error, for potential specific handling elsewhere
         if (error.response && (error.response.status === 429 || error.response.status === 418)) {
             const rateLimitError = new Error(`Failed to fetch SOL/USDT price from Binance: ${detailedError}`);
             rateLimitError.isRateLimitError = true;
