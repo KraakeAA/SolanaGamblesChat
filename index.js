@@ -5153,7 +5153,8 @@ const JACKPOT_SESSION_POLL_INTERVAL_MS = 7000; // Poll every 7 seconds, adjust a
 let jackpotSessionPollIntervalId = null;
 
 async function pollCompletedJackpotSessions() {
-    if (isShuttingDown) {
+    console.log("!!! [MainBot_PollJackpotSessions_V2] Poller function EXECUTED - Checking for sessions. !!!"); // VERY FIRST LINE
+    if (isShuttingDown) { 
         console.log("[MainBot_PollJackpotSessions_V2] Shutdown detected, not polling.");
         return;
     }
