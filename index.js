@@ -10760,6 +10760,66 @@ async function handleMinesGameTimeout(gameId) {
 }
 
 // --- End of Part 5d (Mines Game - GRANULAR ACTIVE GAME LIMITS) ---
+// --- Start of Part 5e (Background task Initializers) ---
+
+function startJackpotSessionPolling() {
+    // Using JACKPOT_SESSION_POLL_INTERVAL_MS defined in Part 1
+    let intervalMs = JACKPOT_SESSION_POLL_INTERVAL_MS;
+    // The validation for JACKPOT_SESSION_POLL_INTERVAL_MS being a sensible number
+    // should have already happened in Part 1 when it was defined.
+    // If it was fatal there, the script would have exited.
+    // If it was a warning + fallback, intervalMs will have that fallback.
+
+    if (jackpotSessionPollIntervalId) {
+        clearInterval(jackpotSessionPollIntervalId);
+        console.log("🔄 [JackpotSessionPoll_Start] Cleared existing jackpot session poller interval (if any).");
+    }
+    console.log(`⚙️ [JackpotSessionPoll_Start] Initializing Jackpot Session Poller (Interval: ${intervalMs / 1000}s)...`);
+
+    // Ensure the isRunning property is initialized on the poller function itself
+    if (typeof pollCompletedJackpotSessions.isRunning === 'undefined') {
+        pollCompletedJackpotSessions.isRunning = false;
+    }
+
+    // Initial delay for the first run
+    const initialPollDelay = (parseInt(process.env.INIT_DELAY_MS, 10) || 7000) + 5000; // Stagger start
+
+    setTimeout(() => {
+        if (isShuttingDown) {
+            console.log("[JackpotSessionPoll_Start] Shutdown initiated before first poll. Not starting poller.");
+            return;
+        }
+
+        console.log("[JackpotSessionPoll_Start] Executing initial jackpot session poll...");
+        pollCompletedJackpotSessions().catch(err => {
+            console.error("❌ [Initial Jackpot Session Poll Run] Uncaught Error:", err.message, err.stack?.substring(0, 500));
+            if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
+                notifyAdmin(`🚨 Initial Jackpot Poll Error: ${escapeMarkdownV2(String(err.message || err))}`, {parse_mode:'MarkdownV2'});
+            }
+        });
+
+        jackpotSessionPollIntervalId = setInterval(() => {
+            if (isShuttingDown) {
+                clearInterval(jackpotSessionPollIntervalId);
+                console.log("[JackpotSessionPoll_Start] Shutdown detected. Stopping recurring jackpot poll.");
+                return;
+            }
+            pollCompletedJackpotSessions().catch(err => {
+                console.error("❌ [Recurring Jackpot Session Poll Run] Uncaught Error:", err.message, err.stack?.substring(0, 500));
+                if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
+                    notifyAdmin(`🚨 Recurring Jackpot Poll Error: ${escapeMarkdownV2(String(err.message || err))}`, {parse_mode:'MarkdownV2'});
+                }
+            });
+        }, intervalMs);
+
+        if (jackpotSessionPollIntervalId && typeof jackpotSessionPollIntervalId.unref === 'function') {
+            jackpotSessionPollIntervalId.unref();
+        }
+        console.log(`✅ [JackpotSessionPoll_Start] Jackpot Session Poller is now active and scheduled.`);
+
+    }, initialPollDelay);
+}
+// --- End of 5e Background Task Initializers ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations) ---
 // index.js - Part 5a, Section 2: General Casino Bot Command Implementations
 //----------------------------------------------------------------------------------
