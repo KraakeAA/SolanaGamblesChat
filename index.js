@@ -12638,25 +12638,34 @@ async function handleReferralCommand(msgOrCbMsg) {
     const keyboardRows = [];
     let claimableBonusesMessageHTML = "";
     try {
-        // --- FIXED: This query was causing the syntax error in your log. This version is correct. ---
-        const claimableRes = await queryDatabase(
-            `SELECT r.referral_id, r.commission_type, r.commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name, ru.telegram_id AS referred_telegram_id
-             FROM referrals r
-             LEFT JOIN users ru ON r.referred_telegram_id = ru.telegram_id
-             WHERE r.referrer_telegram_id = $1 AND r.status = 'milestone_bonus_claimable'
-             ORDER BY r.created_at ASC`,
-            [userId]
-        );
+        // --- FIXED: This logic has been rewritten to use multiple simple queries instead of one complex one, avoiding the syntax error. ---
+        const getClaimableBonusesQuery = `
+            SELECT referral_id, commission_type, commission_amount_lamports, referred_telegram_id
+            FROM referrals
+            WHERE referrer_telegram_id = $1 AND status = 'milestone_bonus_claimable'
+            ORDER BY created_at ASC`;
+        const claimableRes = await queryDatabase(getClaimableBonusesQuery, [userId]);
+
         if (claimableRes.rows.length > 0) {
             claimableBonusesMessageHTML = "✨ <b>Claim Your Milestone Bonuses:</b>\n";
             for (const bonus of claimableRes.rows) {
+                // For each bonus, fetch the referred user's details separately
+                const referredUserRes = await queryDatabase(
+                    'SELECT username, first_name FROM users WHERE telegram_id = $1',
+                    [bonus.referred_telegram_id]
+                );
+                
+                const referredUserTempObj = { 
+                    username: referredUserRes.rows[0]?.username, 
+                    first_name: referredUserRes.rows[0]?.first_name, 
+                    telegram_id: bonus.referred_telegram_id 
+                };
+
                 const bonusAmountDisplay = await formatBalanceForDisplay(BigInt(bonus.commission_amount_lamports), 'USD');
-                const referredUserTempObj = { username: bonus.referred_username, first_name: bonus.referred_first_name, telegram_id: bonus.referred_telegram_id };
-                const referredUserDisplay = escapeHTML(getRawPlayerDisplayReference(referredUserTempObj)); // Use raw and escape
+                const referredUserDisplay = escapeHTML(getRawPlayerDisplayReference(referredUserTempObj));
                 const milestoneType = escapeHTML(bonus.commission_type.replace('wager_milestone_', '').replace('_usd', ' USD Wagered'));
 
                 claimableBonusesMessageHTML += ` ▫️ Approx. <b>${escapeHTML(bonusAmountDisplay)}</b> from ${referredUserDisplay} (${milestoneType})\n`;
-                // Make button text concise and HTML-safe
                 keyboardRows.push([{ text: `💰 Claim ~${escapeHTML(bonusAmountDisplay)} (from ${escapeHTML(getRawPlayerDisplayReference(referredUserTempObj, false).substring(0,10))}...)`, callback_data: `claim_milestone_bonus:${bonus.referral_id}` }]);
             }
             claimableBonusesMessageHTML += "\n";
