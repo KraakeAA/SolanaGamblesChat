@@ -2138,6 +2138,48 @@ function escapeHTML(text) {
         .replace(/'/g, '&#039;');
 }
 
+// --- START OF NEW UTILITY FUNCTIONS (to be placed in Part 3) ---
+
+/**
+ * Gets a raw display name from a user object (unescaped).
+ * @param {object} userObject - msg.from or a fetched user object.
+ * @returns {string} Raw display name.
+ */
+function getRawUserDisplayName(userObject) {
+    if (!userObject) return "Valued Player"; // Default raw name
+    const firstName = userObject.first_name || userObject.firstName;
+    const username = userObject.username;
+    const id = userObject.id || userObject.telegram_id;
+    let name = "Player"; // Default raw name
+    if (firstName) {
+        name = firstName;
+    } else if (username) {
+        name = `@${username}`; // Keep @ symbol as it's part of the convention
+    } else if (id) {
+        name = `Player ${String(id).slice(-4)}`;
+    } else {
+        name = "Valued Player"; // Default raw name
+    }
+    return name; // Return raw name
+}
+
+/**
+ * Gets a player's raw display reference (unescaped), preferring @username.
+ * @param {object} userObject - msg.from or a fetched user object.
+ * @param {boolean} [preferUsernameTag=true] - Whether to prefer @username.
+ * @returns {string} Raw player reference.
+ */
+function getRawPlayerDisplayReference(userObject, preferUsernameTag = true) {
+    if (!userObject) return "Mystery Player"; // Default raw name
+    const username = userObject.username;
+    if (preferUsernameTag && username) {
+        return `@${username}`; // Keep @ symbol
+    }
+    return getRawUserDisplayName(userObject); // Returns raw name
+}
+
+// --- END OF NEW UTILITY FUNCTIONS ---
+
 /**
  * Gets a user-friendly clean game name from a technical game ID string.
  * @param {string} technicalGameId - The internal game ID (e.g., GAME_IDS.COINFLIP_PVP).
@@ -12492,116 +12534,134 @@ async function handleDisplayGameRules(originalInvokedChatIdStr, originalMessageI
 }
 
 async function handleReferralCommand(msgOrCbMsg) {
-    const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
-    const commandChatId = String(msgOrCbMsg.chat.id);
-    const originalMessageId = msgOrCbMsg.message_id;
-    const isFromMenuAction = msgOrCbMsg.message && msgOrCbMsg.message.chat && msgOrCbMsg.message.chat.id === userId;
-    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V4_UserText UID:${userId} Chat:${commandChatId}]`; // V4
+    const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
+    const commandChatId = String(msgOrCbMsg.chat.id);
+    const originalMessageId = msgOrCbMsg.message_id;
+    // Determine if this is a menu action in DM (which might involve editing a message)
+    // or a command typed directly (which might involve deleting the command message).
+    const isFromMenuActionEditingInDm = msgOrCbMsg.message && msgOrCbMsg.message.chat && msgOrCbMsg.message.chat.id === userId && originalMessageId && (msgOrCbMsg.isCallbackEditing === true || (msgOrCbMsg.data && msgOrCbMsg.data.startsWith("menu:referral")));
 
-    let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
-    if (!user) {
-        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your profile for referral info. Please try `/start`.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const playerRef = getPlayerDisplayReference(user); // This is MarkdownV2 safe
-    let botUsername = BOT_NAME || "ourbot"; 
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { console.warn(`${LOG_PREFIX_REF_CMD} Could not fetch bot username: ${e.message}`); }
+    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V6_HTML_GroupInfo UID:${userId} Chat:${commandChatId}]`; // V6
 
-    clearUserState(userId);
-    const targetDmChatId = userId;
+    let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
+    if (!user) {
+        await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your player profile for referral info. Please try <code>/start</code>.", { parse_mode: 'HTML' });
+        return;
+    }
+    // For HTML messages, use escapeHTML with the raw display name functions
+    const playerRefHTML = escapeHTML(getRawPlayerDisplayReference(user)); // Assumes getRawPlayerDisplayReference is defined
+    let botUsername = BOT_NAME || "our_bot";
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) { console.warn(`${LOG_PREFIX_REF_CMD} Could not fetch bot username: ${e.message}`); }
 
-    if (commandChatId !== targetDmChatId) {
-        if (originalMessageId) await bot.deleteMessage(commandChatId, originalMessageId).catch(() => {});
-        await safeSendMessage(commandChatId, `${playerRef}, your Referral Dashboard has been sent to our private chat: @${escapeMarkdownV2(botUsername)} 🤝`, { parse_mode: 'MarkdownV2' });
-    }
+    clearUserState(userId); // Assuming clearUserState is defined
+    const targetDmChatId = userId; // All detailed dashboards go to DM
 
-    if (commandChatId === targetDmChatId && originalMessageId && isFromMenuAction) {
-        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
-    } else if (commandChatId === targetDmChatId && originalMessageId && !isFromMenuAction && msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) {
-        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
-    }
+    // --- Group Chat Logic ---
+    if (commandChatId !== targetDmChatId) { // Command was used in a group
+        if (originalMessageId && msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) { // Delete the typed /referral command
+             await bot.deleteMessage(commandChatId, originalMessageId).catch(() => {});
+        }
 
-    let referralCode = user.referral_code;
-    if (!referralCode) {
-        referralCode = generateReferralCode();
-        try {
-            await queryDatabase("UPDATE users SET referral_code = $1, updated_at = NOW() WHERE telegram_id = $2", [referralCode, userId]);
-            user.referral_code = referralCode; 
-        } catch (dbErr) {
-            console.error(`${LOG_PREFIX_REF_CMD} Failed to save new referral code for user ${userId}: ${dbErr.message}`);
-            referralCode = "ErrorGenerating";
-        }
-    }
-    const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
-    // *** Define escapedReferralLinkForCodeBlock here ***
-    const escapedReferralLinkForCodeBlock = escapeMarkdownV2(referralLink);
-    // *** End of definition ***
+        const successfulReferralsGroup = user.referral_count || 0;
+        const totalEarningsPaidLamportsGroup = user.total_referral_earnings_paid_lamports || 0n;
+        const totalEarningsPaidUSDGroup = await formatBalanceForDisplay(totalEarningsPaidLamportsGroup, 'USD'); // Assumes formatBalanceForDisplay is HTML-safe or escaped
 
-    const successfulReferralsCount = user.referral_count || 0; 
-    const totalEarningsPaidLamports = user.total_referral_earnings_paid_lamports || 0n; 
-    const totalEarningsPaidUSDDisplay = await formatBalanceForDisplay(totalEarningsPaidLamports, 'USD');
+        let groupReferralMessageHTML = `✨ <b>${playerRefHTML}'s Referral Quick Stats</b> ✨\n\n` +
+                                     `🤝 Successful Referrals: <b>${successfulReferralsGroup}</b>\n` +
+                                     `💸 Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDGroup)}</b>\n\n` + // escapeHTML for safety
+                                     `📬 Your full Referral Dashboard has been sent to your DMs with @${escapeHTML(botUsername)}.`;
 
-    // *** Using your updated text snippet ***
-    let messageText = `🤝 *Your Referral Dashboard* 🤝\n\n` +
-                            `*Invite Friends & Earn SOL\\!*\n\n` + // Changed "Rewards" to "SOL"
-                            `🔗 *Your Unique Referral Link:*\n` +
-                            `\`${escapedReferralLinkForCodeBlock}\`\n` + // Using your variable
-                            `_\\(Tap the button below to share\\!\\)_\\n\n` + // Changed instructional text
-    // *** End of your updated text snippet ***
-                      `📊 *Your Stats:*\n` +
-                      ` ▫️ Successful Referrals: *${successfulReferralsCount}*\n` +
-                      ` ▫️ Total Earnings Paid Out: *${escapeMarkdownV2(totalEarningsPaidUSDDisplay)}*\n\n` +
-                      `🎁 *How You Earn:*\n\n` +
-                      ` 1️⃣ *Initial Bet Bonus:*\n` +
-                      ` 💰 When your friend places their first qualifying bet (min. *${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)} USD*), you earn a percentage of their bet amount! The more friends you refer, the higher your percentage:\n`;
+        await safeSendMessage(commandChatId, groupReferralMessageHTML, { parse_mode: 'HTML' });
+    }
 
-    REFERRAL_INITIAL_BET_TIERS_CONFIG.forEach(tier => {
-        const upTo = tier.upToReferrals === Infinity ? "100+" : `Up to ${tier.upToReferrals}`;
-        messageText += ` ▫️ ${upTo} Referrals: *${(tier.percentage * 100).toFixed(1)}%*\n`;
-    });
+    // --- DM Logic (Send full dashboard to DM) ---
+    // If the command was typed in DM, delete the original /referral command.
+    // If it's a menu action in DM trying to edit, delete the old menu message.
+    if (commandChatId === targetDmChatId && originalMessageId) {
+        if ((msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) || isFromMenuActionEditingInDm) {
+            await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
+        }
+    }
 
-    messageText += `\n 2️⃣ *Wager Milestone Bonus:*\n` +
-                   ` 💸 As your referred friends play and reach wagering milestones (e.g., they've wagered *${REFERRAL_WAGER_MILESTONES_USD_CONFIG[0]} USD*, *${REFERRAL_WAGER_MILESTONES_USD_CONFIG[1]} USD* total, etc.), you'll receive *${(REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST * 100).toFixed(1)}%* of that milestone amount. These bonuses will appear below for you to claim!\n\n`;
+    let referralCode = user.referral_code;
+    if (!referralCode) {
+        referralCode = generateReferralCode(); // Assuming generateReferralCode is defined
+        try {
+            await queryDatabase("UPDATE users SET referral_code = $1, updated_at = NOW() WHERE telegram_id = $2", [referralCode, userId]);
+            user.referral_code = referralCode;
+        } catch (dbErr) {
+            console.error(`${LOG_PREFIX_REF_CMD} Failed to save new referral code for user ${userId}: ${dbErr.message}`);
+            referralCode = "ErrorGenerating";
+        }
+    }
+    const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
+    // Enticing message for the switch_inline_query. The link itself will be made clickable by Telegram when sent.
+    const enticingShareMessage = `🚀 Join me at ${escapeHTML(BOT_NAME || "this awesome casino")}! Get in on the action and earn rewards with my link: ${referralLink}`;
 
-    const keyboardRows = [];
-    let claimableBonusesMessage = "";
-    try {
-        const claimableRes = await queryDatabase(
-            `SELECT referral_id, commission_type, commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name 
-             FROM referrals r
-             LEFT JOIN users ru ON r.referred_telegram_id = ru.telegram_id
-             WHERE r.referrer_telegram_id = $1 AND r.status = 'milestone_bonus_claimable'`,
-            [userId]
-        );
-        if (claimableRes.rows.length > 0) {
-            claimableBonusesMessage = "✨ *Claim Your Milestone Bonuses:*\n";
-            for (const bonus of claimableRes.rows) {
-                const bonusAmountDisplay = await formatBalanceForDisplay(BigInt(bonus.commission_amount_lamports), 'USD');
-                const referredUserTempObj = { username: bonus.referred_username, first_name: bonus.referred_first_name, telegram_id: null }; 
-                const referredUserDisplay = getPlayerDisplayReference(referredUserTempObj); 
-                const milestoneType = escapeMarkdownV2(bonus.commission_type.replace('wager_milestone_', '').replace('_usd', ' USD Wagered'));
-                
-                claimableBonusesMessage += ` ▫️ Approx. *${escapeMarkdownV2(bonusAmountDisplay)}* from ${escapeMarkdownV2(referredUserDisplay)} (${milestoneType})\n`;
-                keyboardRows.push([{ text: `💰 Claim ~${bonusAmountDisplay} (from ${referredUserDisplay.substring(0,15)}...)`, callback_data: `claim_milestone_bonus:${bonus.referral_id}` }]);
-            }
-            claimableBonusesMessage += "\n";
-        }
-    } catch (e) {
-        console.error(`${LOG_PREFIX_REF_CMD} Error fetching claimable bonuses: ${e.message}`);
-        claimableBonusesMessage = "Error fetching claimable bonuses.\n";
-    }
+    const successfulReferralsCountDM = user.referral_count || 0;
+    const totalEarningsPaidLamportsDM = user.total_referral_earnings_paid_lamports || 0n;
+    const totalEarningsPaidUSDDisplayDM = await formatBalanceForDisplay(totalEarningsPaidLamportsDM, 'USD');
 
-    messageText += claimableBonusesMessage;
-    messageText += `Keep sharing and earning! ✨`;
+    let messageTextHTML = `🤝 <b>Your Referral Dashboard</b> 🤝\n\n` +
+                          `<b>Invite Friends & Earn SOL!</b>\n\n` +
+                          `🔗 <b>Your Unique Referral Link:</b>\n<a href="${escapeHTML(referralLink)}">${escapeHTML(referralLink)}</a>\n` +
+                          `<i>(Or use the "Share Your Link!" button below for a pre-filled message.)</i>\n\n` +
+                          `📊 <b>Your Stats:</b>\n` +
+                          ` ▫️ Successful Referrals: <b>${successfulReferralsCountDM}</b>\n` +
+                          ` ▫️ Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDDisplayDM)}</b>\n\n` + // escapeHTML for safety
+                          `🎁 <b>How You Earn:</b>\n\n` +
+                          ` 1️⃣ <b>Initial Bet Bonus:</b>\n` +
+                          ` 💰 When your friend places their first qualifying bet (min. <b>$${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)} USD</b>), you earn a percentage of their bet amount! The more friends you refer, the higher your percentage:\n`;
 
-    keyboardRows.push([{ text: "🔗 Share Your Link!", switch_inline_query: `${referralLink}` }]); // switch_inline_query uses the raw link
-    keyboardRows.push([{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]);
-    const keyboard = { inline_keyboard: keyboardRows };
+    REFERRAL_INITIAL_BET_TIERS_CONFIG.forEach(tier => {
+        const upTo = tier.upToReferrals === Infinity ? "100+" : `Up to ${tier.upToReferrals}`;
+        messageTextHTML += ` ▫️ ${escapeHTML(upTo)} Referrals: <b>${(tier.percentage * 100).toFixed(1)}%</b>\n`;
+    });
 
-    await safeSendMessage(targetDmChatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
+    messageTextHTML += `\n 2️⃣ <b>Wager Milestone Bonus:</b>\n` +
+                       ` 💸 As your referred friends play and reach wagering milestones (e.g., they've wagered <b>$${REFERRAL_WAGER_MILESTONES_USD_CONFIG[0]} USD</b>, <b>$${REFERRAL_WAGER_MILESTONES_USD_CONFIG[1]} USD</b> total, etc.), you'll receive <b>${(REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST * 100).toFixed(1)}%</b> of that milestone amount. These bonuses will appear below for you to claim!\n\n`;
+
+    const keyboardRows = [];
+    let claimableBonusesMessageHTML = "";
+    try {
+        const claimableRes = await queryDatabase( // Assuming queryDatabase is defined
+            `SELECT r.referral_id, r.commission_type, r.commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name, ru.telegram_id AS referred_telegram_id
+             FROM referrals r
+             LEFT JOIN users ru ON r.referred_telegram_id = ru.telegram_id
+             WHERE r.referrer_telegram_id = $1 AND r.status = 'milestone_bonus_claimable'
+             ORDER BY r.created_at ASC`, // Added ORDER BY for consistency
+            [userId]
+        );
+        if (claimableRes.rows.length > 0) {
+            claimableBonusesMessageHTML = "✨ <b>Claim Your Milestone Bonuses:</b>\n";
+            for (const bonus of claimableRes.rows) {
+                const bonusAmountDisplay = await formatBalanceForDisplay(BigInt(bonus.commission_amount_lamports), 'USD');
+                const referredUserTempObj = { username: bonus.referred_username, first_name: bonus.referred_first_name, telegram_id: bonus.referred_telegram_id };
+                const referredUserDisplay = escapeHTML(getRawPlayerDisplayReference(referredUserTempObj)); // Use raw and escape
+                const milestoneType = escapeHTML(bonus.commission_type.replace('wager_milestone_', '').replace('_usd', ' USD Wagered'));
+
+                claimableBonusesMessageHTML += ` ▫️ Approx. <b>${escapeHTML(bonusAmountDisplay)}</b> from ${referredUserDisplay} (${milestoneType})\n`;
+                // Make button text concise and HTML-safe
+                keyboardRows.push([{ text: `💰 Claim ~${escapeHTML(bonusAmountDisplay)} (from ${escapeHTML(getRawPlayerDisplayReference(referredUserTempObj, false).substring(0,10))}...)`, callback_data: `claim_milestone_bonus:${bonus.referral_id}` }]);
+            }
+            claimableBonusesMessageHTML += "\n";
+        }
+    } catch (e) {
+        console.error(`${LOG_PREFIX_REF_CMD} Error fetching claimable bonuses: ${e.message}`);
+        claimableBonusesMessageHTML = "Error fetching claimable bonuses.\n";
+    }
+
+    messageTextHTML += claimableBonusesMessageHTML;
+    messageTextHTML += `Keep sharing and earning! ✨`;
+
+    keyboardRows.push([{ text: "🔗 Share Your Link!", switch_inline_query: enticingShareMessage }]);
+    keyboardRows.push([{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]);
+    const keyboard = { inline_keyboard: keyboardRows };
+
+    await safeSendMessage(targetDmChatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard, disable_web_page_preview: true });
 }
 
 async function handleBalanceCommand(msg) {
