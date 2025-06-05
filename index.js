@@ -12836,7 +12836,7 @@ async function handleBonusCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V5_TierDisplay UID:${userId} CH:${chatId} Type:${chatType}]`; // V5
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V6_SyntaxReview UID:${userId} CH:${chatId} Type:${chatType}]`; // V6
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) {
@@ -12851,7 +12851,6 @@ async function handleBonusCommand(msg) {
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.warn(`${LOG_PREFIX_BONUS_CMD} Could not fetch bot username: ${e.message}`); }
 
-
     // --- Group Chat Logic ---
     if (chatType === 'group' || chatType === 'supergroup') {
         if (msg.message_id && msg.text && msg.text.startsWith('/bonus') ) { 
@@ -12862,61 +12861,61 @@ async function handleBonusCommand(msg) {
         try {
             client = await pool.connect();
             
-            const currentUserDetailsQuery = `
+            // Fetch necessary data for group message
+            const currentUserDetailsQueryGroup = `
                 SELECT u.total_wagered_lamports, ul.order_index AS current_level_order_index, ul.level_name as current_level_name
                 FROM users u
                 LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
                 WHERE u.telegram_id = $1`;
-            const currentUserDetailsRes = await client.query(currentUserDetailsQuery, [userId]);
-            if (currentUserDetailsRes.rowCount === 0) throw new Error("User not found for bonus info.");
-            const currentUserData = currentUserDetailsRes.rows[0];
-            const totalWageredLamports = BigInt(currentUserData.total_wagered_lamports || '0');
-            const currentLevelOrderIndex = currentUserData.current_level_order_index || 0;
-            const currentLevelName = currentUserData.current_level_name || "Newcomer"; // Get current level name
+            const currentUserDetailsResGroup = await client.query(currentUserDetailsQueryGroup, [userId]);
+            if (currentUserDetailsResGroup.rowCount === 0) throw new Error("User not found for group bonus info.");
+            
+            const currentUserDataGroup = currentUserDetailsResGroup.rows[0];
+            const totalWageredLamportsGroup = BigInt(currentUserDataGroup.total_wagered_lamports || '0');
+            const currentLevelOrderIndexGroup = currentUserDataGroup.current_level_order_index || 0;
+            const currentLevelNameGroup = currentUserDataGroup.current_level_name || "Newcomer";
 
-            const solPrice = await getSolUsdPrice();
-            const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+            const solPriceGroup = await getSolUsdPrice();
+            const totalWageredUSDGroup = Number(totalWageredLamportsGroup) / Number(LAMPORTS_PER_SOL) * solPriceGroup;
 
-            const nextLevelQuery = `
+            const nextLevelQueryGroup = `
                 SELECT level_name, wager_threshold_usd, bonus_amount_usd 
                 FROM user_levels 
                 WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
-            const nextLevelRes = await client.query(nextLevelQuery, [currentLevelOrderIndex]);
-            const nextLevelData = nextLevelRes.rows.length > 0 ? nextLevelRes.rows[0] : null;
+            const nextLevelResGroup = await client.query(nextLevelQueryGroup, [currentLevelOrderIndexGroup]);
+            const nextLevelDataGroup = nextLevelResGroup.rows.length > 0 ? nextLevelResGroup.rows[0] : null;
 
             let wagerNeededUSDText = "🏅 You've reached the highest tier! Congratulations!";
-            if (nextLevelData) {
-                const nextLevelThresholdUSD = parseFloat(nextLevelData.wager_threshold_usd);
-                const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
-                const nextLevelBonusUSD = parseFloat(nextLevelData.bonus_amount_usd).toFixed(2);
-                wagerNeededUSDText = `🎯 Next Tier: <b>${escapeHTML(nextLevelData.level_name)}</b>. Wager ~<b>$${wagerNeededUSD.toFixed(2)} USD</b> more (Bonus: ~$${nextLevelBonusUSD}!)`;
+            if (nextLevelDataGroup) {
+                const nextLevelThresholdUSD = parseFloat(nextLevelDataGroup.wager_threshold_usd);
+                const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSDGroup);
+                const nextLevelBonusUSD = parseFloat(nextLevelDataGroup.bonus_amount_usd).toFixed(2);
+                wagerNeededUSDText = `🎯 Next Tier: <b>${escapeHTML(nextLevelDataGroup.level_name)}</b>. Wager ~<b>$${wagerNeededUSD.toFixed(2)} USD</b> more (Bonus: ~$${nextLevelBonusUSD}!)`;
             }
 
-            const claimableBonusQuery = `
+            const claimableBonusQueryGroup = `
                 SELECT ul.level_id, ul.bonus_amount_usd, ul.level_name
                 FROM user_levels ul
-                JOIN users u ON u.telegram_id = $1
-                LEFT JOIN user_levels current_ul ON u.current_level_id = ul.level_id
-                WHERE ul.order_index <= COALESCE(current_ul.order_index, 0)
+                WHERE ul.order_index <= $1 
                 AND ul.bonus_amount_usd > 0
                 AND NOT EXISTS (
                     SELECT 1 FROM user_claimed_level_bonuses uclb
-                    WHERE uclb.user_telegram_id = $1 AND uclb.level_id = ul.level_id
+                    WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
                 ) ORDER BY ul.order_index ASC LIMIT 1;`;
-            const claimableBonusRes = await client.query(claimableBonusQuery, [userId]);
-            const nextClaimableBonus = claimableBonusRes.rows.length > 0 ? claimableBonusRes.rows[0] : null;
+            const claimableBonusResGroup = await client.query(claimableBonusQueryGroup, [currentLevelOrderIndexGroup, userId]);
+            const nextClaimableBonusGroup = claimableBonusResGroup.rows.length > 0 ? claimableBonusResGroup.rows[0] : null;
 
-            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Quick View</b> ✨\n\n` +
-                                       `🏆 Current Tier: <b>${escapeHTML(currentLevelName)}</b>\n` + // Changed "Rank" to "Current Tier"
+            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Check</b> ✨\n\n` +
+                                       `🏆 Current Tier: <b>${escapeHTML(currentLevelNameGroup)}</b>\n` +
                                        `${wagerNeededUSDText}\n\n`;
             
             let buttonText = "💰 My Bonus Dashboard (DM)";
-            if (nextClaimableBonus) {
-                const bonusAmountToClaimUSD = parseFloat(nextClaimableBonus.bonus_amount_usd).toFixed(2);
+            if (nextClaimableBonusGroup) {
+                const bonusAmountToClaimUSD = parseFloat(nextClaimableBonusGroup.bonus_amount_usd).toFixed(2);
                 groupBonusMessageHTML += `🎉 Bonus available! Check DMs with @${escapeHTML(botUsername)} to claim.`;
                 buttonText = `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus (DM)`;
             } else {
-                groupBonusMessageHTML += `💡 No new bonuses ready to claim. Keep playing!`;
+                groupBonusMessageHTML += `💡 No new bonuses ready to claim right now. Keep playing!`;
             }
 
             const groupKeyboard = {
@@ -12928,7 +12927,7 @@ async function handleBonusCommand(msg) {
 
         } catch (error) {
             console.error(`${LOG_PREFIX_BONUS_CMD} Error generating group bonus message: ${error.message}`, error.stack);
-            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. You can try again or check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
+            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. Please try again or check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
         } finally {
             if (client) client.release();
         }
@@ -12967,76 +12966,76 @@ async function handleBonusCommand(msg) {
         return;
     }
 
-    let clientDm = null;
+    let clientDm = null; 
     try {
         clientDm = await pool.connect();
         let messageTextHTML = `🌟 <b>Level Up Bonus Dashboard</b> 🌟\n\nHi ${playerRefHTML}! Play games, boost your wagers, and climb the ranks to unlock awesome level-up bonuses!\n\n`;
         const keyboardRows = [];
 
-        const currentUserDetailsQuery = `
-            SELECT u.total_wagered_lamports, u.current_level_id, 
-                   ul.level_name AS current_level_name, 
-                   ul.wager_threshold_usd AS current_level_threshold_usd, 
-                   ul.order_index AS current_level_order_index
-            FROM users u
-            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-            WHERE u.telegram_id = $1`;
-        const currentUserDetails = await clientDm.query(currentUserDetailsQuery, [userId]);
+        const currentUserDetailsQueryDm = `
+            SELECT u.total_wagered_lamports, u.current_level_id, 
+                   ul.level_name AS current_level_name, 
+                   ul.wager_threshold_usd AS current_level_threshold_usd, 
+                   ul.order_index AS current_level_order_index
+            FROM users u
+            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+            WHERE u.telegram_id = $1`;
+        const currentUserDetailsDm = await clientDm.query(currentUserDetailsQueryDm, [userId]);
 
-        if (currentUserDetails.rowCount === 0) {
+        if (currentUserDetailsDm.rowCount === 0) {
             throw new Error("User profile not found in database for bonus check.");
         }
 
-        const userData = currentUserDetails.rows[0];
-        const totalWageredLamports = BigInt(userData.total_wagered_lamports || '0');
-        const solPrice = await getSolUsdPrice();
-        const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-        const currentLevelName = userData.current_level_name || "Newcomer";
-        const currentLevelOrderIndex = userData.current_level_order_index || 0;
+        const userDataDm = currentUserDetailsDm.rows[0];
+        const totalWageredLamportsDm = BigInt(userDataDm.total_wagered_lamports || '0');
+        const solPriceDm = await getSolUsdPrice();
+        const totalWageredUSDDm = Number(totalWageredLamportsDm) / Number(LAMPORTS_PER_SOL) * solPriceDm;
+        const currentLevelNameDm = userDataDm.current_level_name || "Newcomer";
+        const currentLevelOrderIndexDm = userDataDm.current_level_order_index || 0;
         
-        messageTextHTML += `🏆 Your Current Tier: <b>${escapeHTML(currentLevelName)}</b>\n` + // Changed "Level" to "Tier" for consistency
-                             `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))}</b>\n\n`;
-                             // Removed Rank display from DM as well for consistency with personal bonus theme
+        messageTextHTML += `🏆 Your Current Tier: <b>${escapeHTML(currentLevelNameDm)}</b>\n` +
+                             `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamportsDm, 'USD'))}</b>\n\n`;
 
-        const nextLevelDataQuery = `
-            SELECT level_name, wager_threshold_usd, bonus_amount_usd FROM user_levels
-            WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
-        const nextLevelData = await clientDm.query(nextLevelDataQuery, [currentLevelOrderIndex]);
+        const nextLevelDataQueryDm = `
+            SELECT level_name, wager_threshold_usd, bonus_amount_usd 
+            FROM user_levels
+            WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
+        const nextLevelDataDm = await clientDm.query(nextLevelDataQueryDm, [currentLevelOrderIndexDm]);
 
-        if (nextLevelData.rowCount > 0) {
-            const nl = nextLevelData.rows[0];
+        if (nextLevelDataDm.rowCount > 0) {
+            const nl = nextLevelDataDm.rows[0];
             const nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
-            const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
+            const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSDDm);
             const nextBonusUSD = parseFloat(nl.bonus_amount_usd).toFixed(2);
-            messageTextHTML += `🏅 Next Tier: <b>${escapeHTML(nl.level_name)}</b>\n` + // Changed "Level" to "Tier"
+            messageTextHTML += `🏅 Next Tier: <b>${escapeHTML(nl.level_name)}</b>\n` +
                                  `🎯 Wager <b>$${wagerNeededUSD.toFixed(2)} USD</b> more to reach it and unlock a bonus of approx. <b>$${nextBonusUSD} USD</b>!\n\n`;
         } else {
             messageTextHTML += `🏅 You've reached the Highest Tier! Truly a casino legend! Congratulations!\n\n`;
         }
         
-        const claimableBonusesQuery = `
-            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd, ul.order_index 
-            FROM user_levels ul
-            WHERE ul.order_index <= $1 AND ul.bonus_amount_usd > 0
-            AND NOT EXISTS (
-                SELECT 1 FROM user_claimed_level_bonuses uclb
-                WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-            ) ORDER BY ul.order_index ASC;`;
-        const claimableBonusesRes = await clientDm.query(claimableBonusesQuery, [currentLevelOrderIndex, userId]);
+        const claimableBonusesQueryDm = `
+            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd, ul.order_index 
+            FROM user_levels ul
+            WHERE ul.order_index <= $1 AND ul.bonus_amount_usd > 0 
+            AND NOT EXISTS (
+                SELECT 1 FROM user_claimed_level_bonuses uclb
+                WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+            ) ORDER BY ul.order_index ASC`;
+        const claimableBonusesResDm = await clientDm.query(claimableBonusesQueryDm, [currentLevelOrderIndexDm, userId]);
 
-        if (claimableBonusesRes.rows.length > 0) {
-            messageTextHTML += "✨ <b>Available Tier Bonuses to Claim:</b>\n"; // Changed "Level" to "Tier"
-            claimableBonusesRes.rows.forEach(bonus => {
+        if (claimableBonusesResDm.rows.length > 0) {
+            messageTextHTML += "✨ <b>Available Tier Bonuses to Claim:</b>\n";
+            claimableBonusesResDm.rows.forEach(bonus => {
                 const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
                 messageTextHTML += `  ▫️ <b>${escapeHTML(bonus.level_name)}</b> - Bonus: approx. <b>$${bonusAmountToClaimUSD} USD</b>\n`;
                 keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} (${escapeHTML(bonus.level_name)})`, callback_data: `claim_level_bonus:${bonus.level_id}` }]);
             });
             messageTextHTML += "\n";
         } else {
-            messageTextHTML += "✅ No new tier bonuses available to claim at this moment.\n\n"; // Changed "level" to "tier"
+            messageTextHTML += "✅ No new tier bonuses available to claim at this moment.\n\n";
         }
 
-        keyboardRows.push([{ text: "📜 View All Tiers & Rewards", callback_data: "menu:levels_info" }]); // Changed "Levels" to "Tiers"
+        keyboardRows.push([{ text: "📜 View All Tiers & Rewards", callback_data: "menu:levels_info" }]);
         keyboardRows.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
         
         const keyboard = { inline_keyboard: keyboardRows };
