@@ -12171,8 +12171,6 @@ async function handleStartCommand(msg, args) {
                             'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
                             [referrerUserRecord.telegram_id, userId]
                         );
-                        // --- FIXED: The SQL query here was syntactically incorrect with two ON CONFLICT clauses. ---
-                        // A user can only be referred once, so we only need to check for a conflict on the unique 'referred_telegram_id' column.
                         await clientRefLink.query(
                             `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at)
                              VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP)
@@ -12207,14 +12205,16 @@ async function handleStartCommand(msg, args) {
                 if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
                 await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
             }
-            // --- MODIFIED: Send welcome and THEN handleHelpCommand ---
             await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
 
+            // --- FIXED: Send a follow-up message to direct the user to the main chat ---
             const mainChatLink = process.env.MAIN_CHAT_INVITE_LINK;
             if (mainChatLink) {
                 const joinGroupText = `🚀 Ready for the full experience? Jump into our main chat to play with others, see live action, and join the community!`;
                 const joinGroupKeyboard = { inline_keyboard: [[{ text: "💬 Join the Main Chat!", url: mainChatLink }]] };
                 await safeSendMessage(userId, joinGroupText, { parse_mode: 'HTML', reply_markup: joinGroupKeyboard });
+            } else {
+                console.warn(`${LOG_PREFIX_START_V2} MAIN_CHAT_INVITE_LINK is not set. Cannot direct new referred user to the main chat.`);
             }
 
             const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
@@ -12222,21 +12222,17 @@ async function handleStartCommand(msg, args) {
             return;
         } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
             const prefixLength = deepLinkParam.startsWith('cb_') ? 3 : 5;
-            // *** MODIFIED PART: Pass the full action string, not split parts ***
             const fullActionString = deepLinkParam.substring(prefixLength); 
-            // Now fullActionString will be e.g., "bonus_dashboard_back" or "wallet"
 
             if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
             const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!\nTaking you to the requested section.`;
             await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
             if (typeof handleMenuAction === 'function') {
-                // Pass fullActionString as menuTypeInput, params as empty array
                 await handleMenuAction(userId, userId, null, fullActionString, [], false, 'private', msg);
             } else {
                 const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
                 await handleHelpCommand(dmMsgContext);
             }
-            // *** END OF MODIFIED PART ***
             return;
         }
     }
@@ -12608,7 +12604,6 @@ async function handleReferralCommand(msgOrCbMsg) {
         }
     }
     const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
-    // --- MODIFIED: More enticing share message based on your template ---
     const enticingShareMessage = `Step into the hottest multiplayer telegram chat 🎲\n\nThey've got fast-paced PvB and PvP multiplayer dice games, huge jackpots, and an awesome community. I'm already playing, you should join too!\n\nClick my link to get started and we can both earn rewards! 👇\n${referralLink}`;
 
     const successfulReferralsCountDM = user.referral_count || 0;
@@ -12637,7 +12632,7 @@ async function handleReferralCommand(msgOrCbMsg) {
     const keyboardRows = [];
     let claimableBonusesMessageHTML = "";
     try {
-        // --- FIXED: The SQL query here was likely malformed in your running code. This version is correct. ---
+        // --- FIXED: This query was causing the syntax error in your log. This version is correct. ---
         const claimableRes = await queryDatabase(
             `SELECT r.referral_id, r.commission_type, r.commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name, ru.telegram_id AS referred_telegram_id
              FROM referrals r
