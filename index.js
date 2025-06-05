@@ -12505,11 +12505,11 @@ async function handleBalanceCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);    
     const commandChatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const LOG_PREFIX_BALANCE_CMD = `[BalanceCmd_V4_Visuals UID:${userId} Chat:${commandChatId}]`; // V4
+    const LOG_PREFIX_BALANCE_CMD = `[BalanceCmd_V5_USDOnly UID:${userId} Chat:${commandChatId}]`; // V5
 
     let user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!user) {
-        await safeSendMessage(commandChatId, "😕 Apologies! We couldn't fetch your player profile to show your balance. Please try `/start` again.", { parse_mode: 'HTML' }); // Changed to HTML for consistency
+        await safeSendMessage(commandChatId, "😕 Apologies! We couldn't fetch your player profile to show your balance. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
         return;
     }
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(user)); 
@@ -12522,43 +12522,42 @@ async function handleBalanceCommand(msg) {
 
     const balanceLamports = await getUserBalance(userId);
     if (balanceLamports === null) {
-        const errorMsgTextHTML = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual.<br>Please try again in a moment, or contact support if this issue persists."; // HTML for consistency
+        const errorMsgTextHTML = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual.<br>Please try again in a moment, or contact support if this issue persists.";
         if (chatType === 'private') {
             await safeSendMessage(userId, errorMsgTextHTML, { parse_mode: 'HTML' });    
         } else {
             if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
-            // Still use Markdown for this specific group redirect to avoid mixing too much if other redirects are MD
-            await safeSendMessage(commandChatId, `${escapeHTML(getPlayerDisplayReference(user))}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeHTML(botUsernameToUse)}.`, { parse_mode: 'HTML' });
+            await safeSendMessage(commandChatId, `${playerRefHTML}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeHTML(botUsernameToUse)}.`, { parse_mode: 'HTML' });
             await safeSendMessage(userId, errorMsgTextHTML, { parse_mode: 'HTML' }); 
         }
         return;
     }
 
+    // Get USD value for display
     const balanceUSD_HTML = escapeHTML(await formatBalanceForDisplay(balanceLamports, 'USD'));
-    const balanceSOL_HTML = escapeHTML(formatCurrency(balanceLamports, 'SOL')); 
-    const balanceLamports_HTML = escapeHTML(String(balanceLamports));
-
 
     if (msg.message_id && commandChatId) {
         await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
     }
 
     if (chatType !== 'private') {
-        // Group chat message - USD only
+        // Group chat message - USD only, no "Approx."
         const groupBalanceMessageHTML = `💰 <b>${playerRefHTML}'s Balance</b> 💰\n\n` +
-                                        `Approx. Value: <b>${balanceUSD_HTML}</b>\n\n` +
+                                        `USD Balance: <b>${balanceUSD_HTML}</b>\n\n` + // Changed "Approx. Value"
                                         `ℹ️ For detailed wallet actions & history, please check your DMs with @${escapeHTML(botUsernameToUse)}. I've sent your full statement there!`;
         await safeSendMessage(commandChatId, groupBalanceMessageHTML, { parse_mode: 'HTML' });
     }
     
-    // Send detailed message to DM regardless, now using HTML
+    // Send detailed message to DM regardless, now using HTML and USD-centric
     const balanceMessageDmHTML = `⚜️ <b>Your Casino Wallet</b> ⚜️\n\n` +
-                                 `Hey ${playerRefHTML}! Here's a snapshot of your funds:\n\n` +
-                                 `💰 <b>Total Estimated Value:</b>\n   ~${balanceUSD_HTML}\n\n` +
-                                 `🪙 <b>SOL Balance:</b>\n   ${balanceSOL_HTML}\n` +
-                                 `   (<code>${balanceLamports_HTML}</code> Lamports)\n\n` +
+                                 `Hey ${playerRefHTML}!\n\n` +
+                                 `Your current casino balance is:\n` +
+                                 `💰 <b>${balanceUSD_HTML}</b>\n` +
+                                 `   (This is the USD value of your SOL balance based on live market rates)\n\n`+
+                                 // Optionally, if you still want to show lamports for user's own reference, but not SOL directly:
+                                 // `   Equivalent to: <code>${escapeHTML(String(balanceLamports))}</code> Lamports\n\n` +
                                  `-------------------------------\n` +
-                                 `Manage your casino funds below. Good luck! ✨`;
+                                 `Manage your funds or dive into the games! Good luck! ✨`;
 
     const keyboardDm = {
         inline_keyboard: [
@@ -12569,117 +12568,6 @@ async function handleBalanceCommand(msg) {
         ]
     };
     await safeSendMessage(userId, balanceMessageDmHTML, { parse_mode: 'HTML', reply_markup: keyboardDm });
-}
-
-async function handleTipCommand(msg, args, tipperUserObj) {
-    const chatId = String(msg.chat.id);
-    const tipperId = String(tipperUserObj.telegram_id);
-    const logPrefix = `[TipCmd UID:${tipperId} CH:${chatId}]`;
-
-    console.log(`${logPrefix} Initiated. Tipper: ${tipperUserObj.username || tipperId}, Args: [${args.join(', ')}]`);
-
-    if (args.length < 2) {
-        await safeSendMessage(chatId, "💡 Usage: `/tip <@username_or_id> <amount_usd> [message]`\nExample: `/tip @LuckyWinner 5 Great game!`", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-
-    const recipientIdentifier = args[0];
-    const amountUSDStr = args[1];
-    const tipMessage = args.slice(2).join(' ').trim() || null;
-
-    const recipientUserObj = await findRecipientUser(recipientIdentifier);
-
-    if (!recipientUserObj) {
-        await safeSendMessage(chatId, `😕 Player "${escapeMarkdownV2(recipientIdentifier)}" not found. Please check the username or Telegram ID and ensure they have interacted with the bot before.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-    const recipientId = String(recipientUserObj.telegram_id);
-
-    if (tipperId === recipientId) {
-        await safeSendMessage(chatId, "😜 You can't tip yourself, generous soul!", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-
-    let tipAmountUSD;
-    try {
-        tipAmountUSD = parseFloat(amountUSDStr);
-        if (isNaN(tipAmountUSD) || tipAmountUSD <= 0) {
-            throw new Error("Tip amount must be a positive number.");
-        }
-    } catch (e) {
-        await safeSendMessage(chatId, `⚠️ Invalid tip amount: "${escapeMarkdownV2(amountUSDStr)}". Please specify a valid USD amount (e.g., \`5\` or \`2.50\`).`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-
-    let tipAmountLamports;
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-        tipAmountLamports = convertUSDToLamports(tipAmountUSD, solPrice);
-    } catch (priceError) {
-        console.error(`${logPrefix} Error getting SOL price or converting tip to lamports: ${priceError.message}`);
-        await safeSendMessage(chatId, "⚙️ Apologies, there was an issue fetching the current SOL price to process your tip. Please try again in a moment.", { parse_mode: 'MarkdownV2' });
-        return;
-    }
-
-    if (tipAmountLamports <= 0n) {
-        await safeSendMessage(chatId, `⚠️ Tip amount is too small after conversion. Please try a slightly larger USD amount.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-
-    const currentTipperDetails = await getOrCreateUser(tipperId); 
-    if (!currentTipperDetails) {
-         await safeSendMessage(chatId, `⚙️ Error fetching your profile for tipping. Please try \`/start\` and then tip again.`, { parse_mode: 'MarkdownV2' });
-         return;
-    }
-    const tipperCurrentBalance = BigInt(currentTipperDetails.balance);
-
-    if (tipperCurrentBalance < tipAmountLamports) {
-        const neededDisplay = escapeMarkdownV2(await formatBalanceForDisplay(tipAmountLamports - tipperCurrentBalance, 'USD', solPrice)); 
-        await safeSendMessage(chatId, `💰 Oops! Your balance is too low to send a *${escapeMarkdownV2(tipAmountUSD.toFixed(2))} USD* tip. You need about *${neededDisplay}* more.`, { parse_mode: 'MarkdownV2' });
-        return;
-    }
-
-    let client = null;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-
-        const tipperName = getPlayerDisplayReference(currentTipperDetails); 
-        const recipientName = getPlayerDisplayReference(recipientUserObj); 
-        const ledgerNoteTipper = `Tip sent to ${recipientName}${tipMessage ? ` (Msg: ${tipMessage.substring(0, 50)})` : ''}`;
-        const ledgerNoteRecipient = `Tip received from ${tipperName}${tipMessage ? ` (Msg: ${tipMessage.substring(0, 50)})` : ''}`;
-
-        const debitResult = await updateUserBalanceAndLedger(client,tipperId,BigInt(-tipAmountLamports),'tip_sent',{},ledgerNoteTipper); 
-        if (!debitResult.success) throw new Error(debitResult.error || "Failed to debit your balance for the tip.");
-        const creditResult = await updateUserBalanceAndLedger(client,recipientId,tipAmountLamports,'tip_received',{},ledgerNoteRecipient);
-        if (!creditResult.success) {
-            console.error(`${logPrefix} CRITICAL: Debited tipper ${tipperId} but failed to credit recipient ${recipientId}. Amount: ${tipAmountLamports}. Error: ${creditResult.error}`);
-            throw new Error(creditResult.error || "Failed to credit recipient's balance after debiting yours. The transaction has been reversed."); 
-        }
-        await client.query('COMMIT');
-
-        const tipAmountDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(tipAmountLamports, 'USD', solPrice));
-        const tipperNewBalanceDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(debitResult.newBalanceLamports, 'USD', solPrice));
-        const recipientNewBalanceDisplayUSD = escapeMarkdownV2(await formatBalanceForDisplay(creditResult.newBalanceLamports, 'USD', solPrice));
-
-        await safeSendMessage(chatId, `✅ Success! You tipped *${tipAmountDisplayUSD}* to ${recipientName}. Your new balance is approx. *${tipperNewBalanceDisplayUSD}*.`, { parse_mode: 'MarkdownV2' });
-        let recipientNotification = `🎁 You've received a tip of *${tipAmountDisplayUSD}* from ${tipperName}!`;
-        if (tipMessage) { recipientNotification += `\nMessage: "_${escapeMarkdownV2(tipMessage)}_"`;}
-        recipientNotification += `\nYour new balance is approx. *${recipientNewBalanceDisplayUSD}*.`;
-        await safeSendMessage(recipientId, recipientNotification, { parse_mode: 'MarkdownV2' });
-    } catch (error) {
-        if (client) { await client.query('ROLLBACK').catch(rbErr => console.error(`${logPrefix} Rollback error: ${rbErr.message}`));}
-        console.error(`${logPrefix} Error processing tip: ${error.message}`, error.stack?.substring(0, 700));
-        await safeSendMessage(chatId, `⚙️ An error occurred while processing your tip: \`${escapeMarkdownV2(error.message)}\`. Please try again.`, { parse_mode: 'MarkdownV2' });
-        if (error.message.includes("Failed to credit recipient")) {
-             if(typeof notifyAdmin === 'function' && ADMIN_USER_ID) {    
-                 notifyAdmin(`🚨 CRITICAL TIP FAILURE 🚨\nTipper: ${tipperId} (${tipperUserObj.username || 'N/A'})\nRecipient: ${recipientId} (${recipientUserObj.username || 'N/A'})\nAmount: ${tipAmountLamports} lamports.\nTipper was likely debited but recipient NOT credited. MANUAL VERIFICATION & CORRECTION REQUIRED.\nError: ${escapeMarkdownV2(error.message)}`,{parse_mode: 'MarkdownV2'}).catch(err => console.error("Failed to notify admin about critical tip failure:", err));
-             }
-        }
-    } finally {
-        if (client) { client.release(); }
-    }
 }
 
 async function handleJackpotCommand(chatId, userObj, chatType) {
