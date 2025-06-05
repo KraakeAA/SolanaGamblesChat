@@ -619,40 +619,31 @@ pool.on('error', (err, client) => {
 });
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query_V5_MANUAL_SUB]';
-    let builtSql = sql;
-    try {
-        if (params.length > 0) {
-            // Manually and safely substitute parameters to bypass the driver bug.
-            for (let i = 0; i < params.length; i++) {
-                const param = params[i];
-                let substValue;
+    const logPrefix = '[DB_Query_V6_NATIVE]'; // V6 using native parameterization
 
-                if (param === null || typeof param === 'undefined') {
-                    substValue = 'NULL';
-                } else if (typeof param === 'bigint' || (typeof param === 'string' && /^\d+$/.test(param)) || typeof param === 'number') {
-                    // It's a bigint, a string of only digits, or a number. Treat as a raw number for the query.
-                    substValue = param.toString();
-                } else {
-                    // It's a regular string. Escape it properly for SQL.
-                    substValue = `'${String(param).replace(/'/g, "''")}'`;
-                }
-                // Replace $1, $2 etc. with the sanitized value.
-                builtSql = builtSql.replace(`$${i + 1}`, substValue);
-            }
-        }
+    try {
+        // The pg driver can handle BigInts if they are passed as strings.
+        // We can create a sanitized parameters array for the driver.
+        const sanitizedParams = params.map(p => {
+            if (typeof p === 'bigint') {
+                return p.toString();
+            }
+            // The driver handles strings, numbers, booleans, nulls, etc., correctly.
+            return p;
+        });
 
-        const cleanedSql = builtSql.replace(/\s+/g, ' ').trim();
-        // We no longer need deep diagnostics, just execute the final built query
-        const result = await dbClient.query(cleanedSql); // Execute without a params array
-        return result;
+        const result = await dbClient.query(sql, sanitizedParams);
+        return result;
 
-    } catch (error) {
-        console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} FINAL BUILT SQL (Preview): ${(builtSql || sql).substring(0, 400)}`);
-        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}`);
-        throw error;
-    }
+    } catch (error) {
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        // Log the original SQL and params for better debugging
+        console.error(`${logPrefix} SQL: ${sql.replace(/\s+/g, ' ').trim().substring(0, 500)}`);
+        console.error(`${logPrefix} Params:`, params);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}`);
+        // Re-throw the original error to be handled by the calling function
+        throw error;
+    }
 }
 
 const connectionOptions = {
