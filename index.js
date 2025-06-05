@@ -327,53 +327,46 @@ const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.005; // 0.5%
 // --- End of NEW Referral System Configurations ---
 // --- NEW Level Up Bonus System Configurations ---
 const LEVEL_CONFIG = [
-    // Order index should be sequential and start from 1 for the first level.
-    // Wager thresholds are total USD wagered to reach this level.
-    // Bonus amounts are in USD.
-    { 
-        order_index: 1, 
-        name: "Bronze I", 
-        wager_threshold_usd: 100.00, 
-        bonus_amount_usd: 1.00 
-    },
-    { 
-        order_index: 2, 
-        name: "Bronze II", 
-        wager_threshold_usd: 500.00, 
-        bonus_amount_usd: 2.50 
-    },
-    { 
-        order_index: 3, 
-        name: "Bronze III", 
-        wager_threshold_usd: 1000.00, 
-        bonus_amount_usd: 5.00 
-    },
-    { // Based on your screenshot for "Current Level" example
-        order_index: 4, 
-        name: "Bronze IV", 
-        wager_threshold_usd: 2500.00, // Approximate, adjust as needed
-        bonus_amount_usd: 10.00 // Assuming a bonus for Bronze IV
-    },
-    { // Based on your screenshot for "Next Level" example
-        order_index: 5, 
-        name: "Bronze V", 
-        wager_threshold_usd: 5000.00, 
-        bonus_amount_usd: 12.50 // Bonus mentioned in screenshot
-    },
-    { 
-        order_index: 6, 
-        name: "Silver I", 
-        wager_threshold_usd: 10000.00, 
-        bonus_amount_usd: 25.00 
-    },
-    { 
-        order_index: 7, 
-        name: "Silver II", 
-        wager_threshold_usd: 25000.00, 
-        bonus_amount_usd: 50.00 
-    },
-    // Add more levels as needed (Silver III, Gold I, Platinum, Diamond, etc.)
-    // Ensure order_index is unique and sequential.
+    // --- Bronze Tier ---
+    { order_index: 1,  name: "Bronze I",     wager_threshold_usd: 50.00,    bonus_amount_usd: 0.25 },
+    { order_index: 2,  name: "Bronze II",    wager_threshold_usd: 100.00,   bonus_amount_usd: 0.50 },
+    { order_index: 3,  name: "Bronze III",   wager_threshold_usd: 250.00,   bonus_amount_usd: 1.00 },
+    { order_index: 4,  name: "Bronze IV",    wager_threshold_usd: 500.00,   bonus_amount_usd: 2.00 },
+    { order_index: 5,  name: "Bronze V",     wager_threshold_usd: 1000.00,  bonus_amount_usd: 5.00 },
+
+    // --- Silver Tier ---
+    { order_index: 6,  name: "Silver I",     wager_threshold_usd: 2000.00,  bonus_amount_usd: 10.00 },
+    { order_index: 7,  name: "Silver II",    wager_threshold_usd: 4000.00,  bonus_amount_usd: 15.00 },
+    { order_index: 8,  name: "Silver III",   wager_threshold_usd: 7500.00,  bonus_amount_usd: 25.00 },
+    { order_index: 9,  name: "Silver IV",    wager_threshold_usd: 12500.00, bonus_amount_usd: 40.00 },
+    { order_index: 10, name: "Silver V",     wager_threshold_usd: 20000.00, bonus_amount_usd: 60.00 },
+
+    // --- Gold Tier ---
+    { order_index: 11, name: "Gold I",       wager_threshold_usd: 30000.00, bonus_amount_usd: 90.00 },
+    { order_index: 12, name: "Gold II",      wager_threshold_usd: 50000.00, bonus_amount_usd: 125.00 },
+    { order_index: 13, name: "Gold III",     wager_threshold_usd: 75000.00, bonus_amount_usd: 175.00 },
+    { order_index: 14, name: "Gold IV",      wager_threshold_usd: 100000.00,bonus_amount_usd: 250.00 },
+    { order_index: 15, name: "Gold V",       wager_threshold_usd: 150000.00,bonus_amount_usd: 350.00 },
+
+    // --- Platinum Tier ---
+    { order_index: 16, name: "Platinum I",   wager_threshold_usd: 250000.00,bonus_amount_usd: 500.00 },
+    { order_index: 17, name: "Platinum II",  wager_threshold_usd: 400000.00,bonus_amount_usd: 750.00 },
+    { order_index: 18, name: "Platinum III", wager_threshold_usd: 600000.00,bonus_amount_usd: 1000.00 },
+    { order_index: 19, name: "Platinum IV",  wager_threshold_usd: 800000.00,bonus_amount_usd: 1250.00 },
+    { order_index: 20, name: "Platinum V",   wager_threshold_usd: 1000000.00,bonus_amount_usd: 1500.00 },
+
+    // --- Diamond Tier ---
+    { order_index: 21, name: "Diamond I",    wager_threshold_usd: 1500000.00,bonus_amount_usd: 2000.00 },
+    { order_index: 22, name: "Diamond II",   wager_threshold_usd: 2000000.00,bonus_amount_usd: 2500.00 },
+    { order_index: 23, name: "Diamond III",  wager_threshold_usd: 3000000.00,bonus_amount_usd: 3500.00 },
+    { order_index: 24, name: "Diamond IV",   wager_threshold_usd: 4000000.00,bonus_amount_usd: 4500.00 },
+    { order_index: 25, name: "Diamond V",    wager_threshold_usd: 5000000.00,bonus_amount_usd: 5000.00 },
+    
+    // --- Elite Tiers (Example) ---
+    { order_index: 26, name: "Master",       wager_threshold_usd: 7500000.00, bonus_amount_usd: 7500.00 },
+    { order_index: 27, name: "Grandmaster",  wager_threshold_usd: 10000000.00,bonus_amount_usd: 10000.00 },
+    { order_index: 28, name: "Legend",       wager_threshold_usd: 15000000.00,bonus_amount_usd: 15000.00 },
+    // Add more as needed, ensuring 'order_index' is always unique and sequential.
 ];
 // --- End of NEW Level Up Bonus System Configurations ---
 
@@ -1964,17 +1957,17 @@ async function initializeLevelsDB(extClient = null) {
  */
 async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports) {
     const LOG_PREFIX_CHECK_LVL = `[CheckUserLevel UID:${userId}]`;
-    // console.log(`${LOG_PREFIX_CHECK_LVL} Checking level eligibility. Total wagered lamports: ${newTotalWageredLamports}`); // Can be noisy
+    // console.log(`${LOG_PREFIX_CHECK_LVL} Checking level eligibility. Total wagered lamports: ${newTotalWageredLamports}`);
 
     try {
-        const solPrice = await getSolUsdPrice(); // Assumes getSolUsdPrice is available
-        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice; // Assumes LAMPORTS_PER_SOL is available
+        const solPrice = await getSolUsdPrice(); // Assumes getSolUsdPrice is available (Part 1)
+        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice; // Assumes LAMPORTS_PER_SOL is available (Part 1)
 
         const currentUserData = await dbClient.query(
-            `SELECT u.current_level_id, ul.order_index AS current_order_index, ul.level_name AS current_level_name
+            `SELECT u.current_level_id, u.username, u.first_name, ul.order_index AS current_order_index, ul.level_name AS current_level_name
              FROM users u
              LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1 FOR UPDATE OF u`,
+             WHERE u.telegram_id = $1 FOR UPDATE OF u`, 
             [userId]
         );
 
@@ -1983,9 +1976,10 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
             return;
         }
 
-        const currentLevelId = currentUserData.rows[0].current_level_id;
-        const currentOrderIndex = currentUserData.rows[0].current_order_index || 0;
-        const currentLevelName = currentUserData.rows[0].current_level_name || "Newcomer";
+        const userFromDb = currentUserData.rows[0];
+        const currentLevelId = userFromDb.current_level_id;
+        const currentOrderIndex = userFromDb.current_order_index || 0;
+        const currentLevelName = userFromDb.current_level_name || "Newcomer";
 
         const allLevelsRes = await dbClient.query(
             `SELECT level_id, level_name, wager_threshold_usd, bonus_amount_usd, order_index
@@ -1996,17 +1990,15 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         let newPotentialLevelId = currentLevelId;
         let newPotentialLevelName = currentLevelName;
         let newPotentialOrderIndex = currentOrderIndex;
-        let newLevelReachedNotification = null;
-        let newLevelDataForNotification = null;
-
+        let newLevelDataForNotification = null; // To store the full data of the new level reached
 
         for (const level of allLevelsRes.rows) {
             if (totalWageredUSD >= parseFloat(level.wager_threshold_usd)) {
-                if (level.order_index > newPotentialOrderIndex) {
+                if (level.order_index > newPotentialOrderIndex) { 
                     newPotentialLevelId = level.level_id;
                     newPotentialLevelName = level.level_name;
                     newPotentialOrderIndex = level.order_index;
-                    newLevelDataForNotification = level; // Store the whole level data for bonus info
+                    newLevelDataForNotification = level; // Store this level's data
                 }
             } else {
                 break;
@@ -2014,31 +2006,54 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         }
 
         if (newPotentialLevelId !== currentLevelId && newPotentialOrderIndex > currentOrderIndex) {
+            // User has leveled up! Update the database.
             await dbClient.query(
                 `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
                 [newPotentialLevelId, userId]
             );
-            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From ${currentLevelName} (Order: ${currentOrderIndex}) to ${newPotentialLevelName} (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
+            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
 
-            const bonusAmountForNewLevelUSD = parseFloat(newLevelDataForNotification?.bonus_amount_usd || '0.00');
+            // Construct and send DM notification
             // Ensure getPlayerDisplayReference and escapeMarkdownV2 are available
-            const playerRef = typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({telegram_id: userId, username: currentUserData.rows[0].username, first_name: currentUserData.rows[0].first_name}) : `User ${userId}`;
+            const playerRefForNotif = typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name}) : `User ${userId}`;
             
-            newLevelReachedNotification = `🎉 **LEVEL UP, ${playerRef}!** 🎉\n\nCongratulations, you've reached **${escapeMarkdownV2(newPotentialLevelName)}**!`;
-            if (bonusAmountForNewLevelUSD > 0) {
-                newLevelReachedNotification += `\nA new bonus of approx. *\$${bonusAmountForNewLevelUSD.toFixed(2)}* is now available for you to claim from the \`/bonus\` menu! 💰`;
-            }
-            newLevelReachedNotification += `\n\nKeep playing to reach new heights! 🚀`;
-        }
+            let dmNotificationText = `🎉 **LEVEL UP, ${playerRefForNotif}!** 🎉\n\nCongratulations, you've reached **${escapeMarkdownV2(newPotentialLevelName)}**!`;
+            const keyboardRowsDM = [];
 
-        if (newLevelReachedNotification && typeof safeSendMessage === 'function') {
-            safeSendMessage(userId, newLevelReachedNotification, { parse_mode: 'MarkdownV2' }).catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send level up DM: ${e.message}`));
+            if (newLevelDataForNotification && parseFloat(newLevelDataForNotification.bonus_amount_usd) > 0) {
+                const bonusAmountUSD = parseFloat(newLevelDataForNotification.bonus_amount_usd).toFixed(2);
+                dmNotificationText += `\n\nA new bonus of approx. *\$${bonusAmountUSD}* is now available for you!`;
+                // Add a claim button
+                keyboardRowsDM.push([{ text: `💰 Claim \$${bonusAmountUSD} Bonus!`, callback_data: `claim_level_bonus:${newLevelDataForNotification.level_id}` }]);
+            }
+            
+            dmNotificationText += `\n\nKeep playing to reach new heights! 🚀\nYou can check all your available bonuses via the \`/bonus\` command.`;
+            keyboardRowsDM.push([{ text: "📊 View My Bonus Dashboard", callback_data: "menu:bonus_dashboard_back" }]); // Assuming this callback takes user to /bonus
+
+            if (typeof safeSendMessage === 'function') {
+                safeSendMessage(userId, dmNotificationText, { 
+                    parse_mode: 'MarkdownV2',
+                    reply_markup: { inline_keyboard: keyboardRowsDM } 
+                }).catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send level up DM to ${userId}: ${e.message}`));
+            } else {
+                console.warn(`${LOG_PREFIX_CHECK_LVL} safeSendMessage not available to notify user ${userId} of level up.`);
+            }
+            
+            // TODO for future enhancement: Group chat notification
+            // To notify the group, you'd need the original game's chatId.
+            // This would require passing more context through updateUserBalanceAndLedger.
+            // Example: if (originalGameChatId) {
+            //     safeSendMessage(originalGameChatId, `🎉 Congrats to ${playerRefForNotif} for reaching level ${newPotentialLevelName}! 🎉`, {parse_mode: 'MarkdownV2'});
+            // }
+
+        } else {
+            // console.log(`${LOG_PREFIX_CHECK_LVL} User ${userId} remains at level '${currentLevelName}'. Wagered: $${totalWageredUSD.toFixed(2)}`); // Can be noisy
         }
 
     } catch (error) {
         console.error(`${LOG_PREFIX_CHECK_LVL} ❌ Error checking/updating user level: ${error.message}`, error.stack);
         if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
-            notifyAdmin(`⚠️ Error in Level Up Check for User ${userId}: ${escapeMarkdownV2(error.message)}. Balance update likely succeeded, but level up may have failed.`, { parse_mode: 'MarkdownV2' });
+            notifyAdmin(`⚠️ Error in Level Up Check for User ${userId}: ${escapeMarkdownV2(error.message)}. Balance update likely succeeded, but level up process may have failed.`, { parse_mode: 'MarkdownV2' });
         }
     }
 }
@@ -12363,10 +12378,10 @@ async function handleGrantCommand(msg, args, adminUserObj) {
 
 // REVISED handleBonusCommand function (to be placed in Part 5a, Section 2)
 
-async function handleBonusCommand(msg) { // msg can be original command or a mock object from a callback
+async function handleBonusCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id); // This should be the user's DM chat ID
-    const LOG_PREFIX_BONUS_CMD = `[BonusCmd UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V2 UID:${userId} CH:${chatId}]`; // V2 for multi-claim
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) {
@@ -12375,37 +12390,33 @@ async function handleBonusCommand(msg) { // msg can be original command or a moc
     }
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
 
-    // Determine if we are editing an existing message (passed via msg.message_id from a callback context)
-    // or sending a new one (e.g., from a typed /bonus command).
-    let workingMessageId = null;
+    let workingMessageId = msg.message_id; // Passed if called from a menu callback for editing
     const isEditingExistingDashboard = msg.message_id && msg.isCallbackEditing === true;
 
-    if (isEditingExistingDashboard) {
-        workingMessageId = msg.message_id;
+    if (!isEditingExistingDashboard && msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
+        await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+        workingMessageId = null; 
+    }
+
+    if (isEditingExistingDashboard && workingMessageId) {
         try {
-            // Edit the existing dashboard to "Loading..."
             await bot.editMessageText("⏳ Fetching your Level Up Bonus status...", {
-                chat_id: chatId,
-                message_id: Number(workingMessageId),
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [] } // Clear buttons while loading
+                chat_id: chatId, message_id: Number(workingMessageId),
+                parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
             });
         } catch (editError) {
             console.warn(`${LOG_PREFIX_BONUS_CMD} Failed to edit message ${workingMessageId} to 'Loading...'. Error: ${editError.message}. Will send new message.`);
-            workingMessageId = null; // Fallback to sending a new message if edit fails
+            workingMessageId = null; 
         }
-    } else {
-        // If it's a typed /bonus command, delete the user's command message
-        if (msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
-            await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-        }
-        // Send a new "Loading..." message
+    }
+    
+    if (!workingMessageId) { // Send new "Loading..." message if not editing or edit failed
         const loadingMsg = await safeSendMessage(chatId, "⏳ Fetching your Level Up Bonus status...", { parse_mode: 'HTML' });
         workingMessageId = loadingMsg?.message_id;
     }
 
     if (!workingMessageId) {
-        console.error(`${LOG_PREFIX_BONUS_CMD} Failed to establish a message context (workingMessageId is null) for bonus display.`);
+        console.error(`${LOG_PREFIX_BONUS_CMD} Failed to establish a message context for bonus display.`);
         await safeSendMessage(chatId, "Sorry, there was an issue loading your bonus dashboard. Please try again.", {parse_mode: 'HTML'});
         return;
     }
@@ -12413,12 +12424,14 @@ async function handleBonusCommand(msg) { // msg can be original command or a moc
     let client = null;
     try {
         client = await pool.connect();
-        let messageTextHTML = `🌟 <b>Level Up Bonus</b> 🌟\n\nPlay games, level up and get even more bonuses!\n\n`;
+        let messageTextHTML = `🌟 <b>Level Up Bonus Dashboard</b> 🌟\n\nPlay games, level up, and claim your rewards!\n\n`;
         const keyboardRows = [];
 
         const currentUserDetailsQuery = `
-            SELECT u.total_wagered_lamports, u.current_level_id, ul.level_name AS current_level_name,
-                   ul.wager_threshold_usd AS current_level_threshold_usd, ul.order_index AS current_level_order_index
+            SELECT u.total_wagered_lamports, u.current_level_id, 
+                   ul.level_name AS current_level_name, 
+                   ul.wager_threshold_usd AS current_level_threshold_usd, 
+                   ul.order_index AS current_level_order_index
             FROM users u
             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
             WHERE u.telegram_id = $1`;
@@ -12435,43 +12448,47 @@ async function handleBonusCommand(msg) { // msg can be original command or a moc
         const currentLevelName = userData.current_level_name || "Newcomer";
         const currentLevelOrderIndex = userData.current_level_order_index || 0;
         
-        messageTextHTML += `Your current level:\n🏆 <b>${escapeHTML(currentLevelName)}</b> - ${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))} wagered\n\n`;
+        messageTextHTML += `Your current level:\n🏆 <b>${escapeHTML(currentLevelName)}</b> - ${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))} total wagered.\n`;
+
+        const rank = await calculateUserRank(userId, client); 
+        messageTextHTML += `Your current rank: <b>#${rank !== null ? rank : 'N/A'}</b>\n\n`;
 
         const nextLevelDataQuery = `
-            SELECT level_name, wager_threshold_usd, bonus_amount_usd FROM user_levels
+            SELECT level_name, wager_threshold_usd FROM user_levels
             WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
         const nextLevelData = await client.query(nextLevelDataQuery, [currentLevelOrderIndex]);
 
-        let nextLevelNameText = "Max Level Reached!";
         if (nextLevelData.rowCount > 0) {
             const nl = nextLevelData.rows[0];
-            nextLevelNameText = nl.level_name;
             const nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
             const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
-            messageTextHTML += `Next Level:\n🏅 <b>${escapeHTML(nextLevelNameText)}</b> - $${nextLevelThresholdUSD.toFixed(2)} total wagered\n`;
-            messageTextHTML += `Wager <b>$${wagerNeededUSD.toFixed(2)}</b> more to upgrade your level!\n\n`;
+            messageTextHTML += `Next Level: 🏅 <b>${escapeHTML(nl.level_name)}</b> (Requires $${nextLevelThresholdUSD.toFixed(2)} total wagered).\n`;
+            messageTextHTML += `Wager <b>$${wagerNeededUSD.toFixed(2)}</b> more to reach it!\n\n`;
         } else {
-            messageTextHTML += `Next Level:\n🏅 ${escapeHTML(nextLevelNameText)}\n\n`;
+            messageTextHTML += `Next Level: 🏅 You've reached the Max Level! Congratulations!\n\n`;
         }
         
-        const rank = await calculateUserRank(userId, client);
-        messageTextHTML += `You are ranked: <b>#${rank !== null ? rank : 'N/A'}</b>\n\n`;
-
+        // Fetch ALL claimable bonuses up to the user's current level order index
         const claimableBonusesQuery = `
-            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd FROM user_levels ul
+            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd, ul.order_index 
+            FROM user_levels ul
             WHERE ul.order_index <= $1 AND ul.bonus_amount_usd > 0
             AND NOT EXISTS (
                 SELECT 1 FROM user_claimed_level_bonuses uclb
                 WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-            ) ORDER BY ul.order_index DESC LIMIT 1;`;
+            ) ORDER BY ul.order_index ASC;`; // Order ASC to show oldest claimable first, or DESC for highest
         const claimableBonusesRes = await client.query(claimableBonusesQuery, [currentLevelOrderIndex, userId]);
 
-        if (claimableBonusesRes.rowCount > 0) {
-            const bonusToClaim = claimableBonusesRes.rows[0];
-            const bonusAmountToClaimUSD = parseFloat(bonusToClaim.bonus_amount_usd).toFixed(2);
-            keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} Bonus (${escapeHTML(bonusToClaim.level_name)}) 💰`, callback_data: `claim_level_bonus:${bonusToClaim.level_id}` }]);
+        if (claimableBonusesRes.rows.length > 0) {
+            messageTextHTML += "✨ **Available Bonuses to Claim:**\n";
+            claimableBonusesRes.rows.forEach(bonus => {
+                const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
+                messageTextHTML += `  ▫️ Level ${escapeHTML(String(bonus.order_index))}: <b>${escapeHTML(bonus.level_name)}</b> - Bonus: <b>$${bonusAmountToClaimUSD} USD</b>\n`;
+                keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} (${escapeHTML(bonus.level_name)})`, callback_data: `claim_level_bonus:${bonus.level_id}` }]);
+            });
+            messageTextHTML += "\n";
         } else {
-            keyboardRows.push([{ text: "🔒 No New Level Bonuses to Claim 🔒", callback_data: "noop" }]);
+            messageTextHTML += "✅ No new level bonuses available to claim at this moment.\n\n";
         }
 
         keyboardRows.push([{ text: "📜 Levels List & Info", callback_data: "menu:levels_info" }]);
@@ -12487,11 +12504,10 @@ async function handleBonusCommand(msg) { // msg can be original command or a moc
         });
     } catch (error) {
         console.error(`${LOG_PREFIX_BONUS_CMD} Error displaying bonus dashboard: ${error.message}`, error.stack);
-        const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message)}`;
+        const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message.replace(/<br\s*\/?>/gi, '\n'))}`;
         const errorKbd = { inline_keyboard: [[{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]] };
-        // Try to edit the workingMessageId, if it failed to send the loading message, it will fallback to sending a new one
         await bot.editMessageText(errorText, { chat_id: chatId, message_id: Number(workingMessageId), parse_mode: 'HTML', reply_markup: errorKbd })
-            .catch(async () => { // Fallback if editing fails
+            .catch(async () => { 
                 await safeSendMessage(chatId, errorText, { parse_mode: 'HTML', reply_markup: errorKbd });
             });
     } finally {
