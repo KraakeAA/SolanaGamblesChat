@@ -15002,13 +15002,13 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         return { success: false, error: 'Invalid database client provided to updateUserBalanceAndLedger.', errorCode: 'INVALID_DB_CLIENT' };
     }
 
-    const relDepositId = (relatedIds?.deposit_id && Number.isInteger(relatedIds.deposit_id)) ? relatedIds.deposit_id : null;
-    const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(relatedIds.withdrawal_id)) ? relatedIds.withdrawal_id : null;
-    const relGameLogId = (relatedIds?.game_id_custom_field && (Number.isInteger(relatedIds.game_id_custom_field) || typeof relatedIds.game_id_custom_field === 'string'))
-        ? relatedIds.game_id_custom_field
-        : ((relatedIds?.game_log_id && Number.isInteger(relatedIds.game_log_id)) ? relatedIds.game_log_id : null);
-    const relReferralId = (relatedIds?.referral_id && Number.isInteger(relatedIds.referral_id)) ? relatedIds.referral_id : null;
-    const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(relatedIds.related_sweep_id)) ? relatedIds.related_sweep_id : null;
+    const relDepositId = (relatedIds?.deposit_id && Number.isInteger(Number(relatedIds.deposit_id))) ? Number(relatedIds.deposit_id) : null;
+    const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(Number(relatedIds.withdrawal_id))) ? Number(relatedIds.withdrawal_id) : null;
+    // *** MODIFIED PART: relGameLogId to strictly expect an integer from relatedIds.game_log_id ***
+    const relGameLogId = (relatedIds?.game_log_id && Number.isInteger(Number(relatedIds.game_log_id))) ? Number(relatedIds.game_log_id) : null;
+    // *** END OF MODIFIED PART ***
+    const relReferralId = (relatedIds?.referral_id && Number.isInteger(Number(relatedIds.referral_id))) ? Number(relatedIds.referral_id) : null;
+    const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(Number(relatedIds.related_sweep_id))) ? Number(relatedIds.related_sweep_id) : null;
     let oldBalanceLamports;
 
     try {
@@ -15037,23 +15037,19 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         if (transactionType === 'deposit' && changeAmount > 0n) {
             newTotalDeposited += changeAmount;
         } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) {
-            newTotalWithdrawn -= changeAmount; // changeAmount is negative, so -= becomes addition
+            newTotalWithdrawn -= changeAmount;
         } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
-            actualBetAmountForBonusProcessing = -changeAmount; // Make it positive for wager tracking
+            actualBetAmountForBonusProcessing = -changeAmount; 
             newTotalWagered += actualBetAmountForBonusProcessing;
         } else if ((transactionType.startsWith('loss_') || transactionType.endsWith('_timeout_forfeit') || transactionType.endsWith('_self_forfeit') || transactionType.endsWith('_bust') || transactionType.includes('_forfeit')) && changeAmount === 0n) {
-        // Bet already counted in `bet_placed_`. This ledger entry is for the loss outcome.
-        // `newTotalWagered` is not changed here.
+            // No change to totals here, wager already counted.
         } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_')) && changeAmount > 0n) {
-        // `newTotalWagered` was updated at `bet_placed_`.
-        // `newTotalWon` tracks gross winnings credited.
             newTotalWon += changeAmount;
         } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) {
             newTotalWon += changeAmount;
         } else if (transactionType === 'level_up_bonus_claimed' && changeAmount > 0n) {
             newTotalWon += changeAmount;
         }
-
 
         const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
         const updateUserParams = [
@@ -15080,28 +15076,23 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         
         const ledgerId = ledgerRes.rows[0]?.ledger_id;
 
-        // --- Referral Bonus Processing (for initial qualifying bet) ---
         if (transactionType.startsWith('bet_placed_') && actualBetAmountForBonusProcessing > 0n) {
             if (typeof processQualifyingBetAndInitialBonus === 'function') {
                 const initialBonusResult = await processQualifyingBetAndInitialBonus(
                     dbClient, stringUserId, actualBetAmountForBonusProcessing,
-                    String(relGameLogId || relatedIds?.custom_offer_id || 'N/A')
+                    String(relGameLogId || relatedIds?.custom_offer_id || 'N/A') // Pass game_log_id if available
                 );
                 if (!initialBonusResult.success) console.warn(`${logPrefix} Non-critical: Failed to process initial referral bonus for ${stringUserId}. Error: ${initialBonusResult.error}`);
             } else console.error(`${logPrefix} CRITICAL: processQualifyingBetAndInitialBonus function is undefined!`);
         }
-        // --- Wager Milestone (counts all wagers, not just first) ---
-        const oldTotalWageredFromDB = BigInt(userData.total_wagered_lamports || '0'); // Get the value before this transaction's update
-      // Call processWagerMilestoneBonus if newTotalWagered (after current bet) is greater than what was in DB before this transaction
+        const oldTotalWageredFromDB = BigInt(userData.total_wagered_lamports || '0');
         if (newTotalWagered > oldTotalWageredFromDB && typeof processWagerMilestoneBonus === 'function') {
              const milestoneBonusResult = await processWagerMilestoneBonus(dbClient, stringUserId, newTotalWagered);
              if (!milestoneBonusResult.success) console.warn(`${logPrefix} Non-critical: Failed to process wager milestone bonus for ${stringUserId}. Error: ${milestoneBonusResult.error}`);
         } else if (newTotalWagered > oldTotalWageredFromDB && typeof processWagerMilestoneBonus !== 'function') {
             console.error(`${logPrefix} CRITICAL: processWagerMilestoneBonus function is undefined!`);
         }
-        // --- END OF Referral Bonus Processing ---
 
-        // Level-up check is now deferred to game finalization logic, not called here.
         return { success: true, newBalanceLamports: balanceAfter, oldBalanceLamports: oldBalanceLamports, ledgerId, newTotalWageredLamports: newTotalWagered };
 
     } catch (err) {
@@ -15690,6 +15681,41 @@ async function unlinkUserWalletDB(userId, dbClient) {
     } catch (error) {
         console.error(`${LOG_PREFIX_UNLINK} Error unlinking wallet: ${error.message}`, error.stack);
         return { success: false, error: error.message };
+    }
+}
+
+async function logGameResultToGamesTable(dbClient, gameType, chatId, initiatorId, participantsIds, betAmountLamports, outcomeText, jackpotContributionLamports = null) {
+    const LOG_PREFIX_LOG_GAME = `[LogGameToGamesTable Type:${gameType}]`;
+    try {
+        const query = `
+            INSERT INTO games (game_type, chat_id, initiator_telegram_id, participants_ids, bet_amount_lamports, outcome, jackpot_contribution_lamports, game_timestamp)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            RETURNING game_log_id;
+        `;
+        // Ensure participantsIds is an array of strings or null for the DB
+        const participantsDbArray = participantsIds ? participantsIds.map(id => String(id)) : null;
+
+        const params = [
+            String(gameType),
+            String(chatId),
+            String(initiatorId),
+            participantsDbArray,
+            betAmountLamports.toString(),
+            String(outcomeText).substring(0, 255), // Ensure outcomeText is not too long
+            jackpotContributionLamports ? jackpotContributionLamports.toString() : null
+        ];
+        const res = await dbClient.query(query, params);
+        if (res.rows.length > 0 && res.rows[0].game_log_id) {
+            console.log(`${LOG_PREFIX_LOG_GAME} Game logged with game_log_id: ${res.rows[0].game_log_id}`);
+            return Number(res.rows[0].game_log_id);
+        }
+        console.error(`${LOG_PREFIX_LOG_GAME} Failed to insert game log or retrieve game_log_id.`);
+        return null;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_LOG_GAME} Error logging game to games table: ${error.message}`, error.stack);
+        // Do not throw here if called within a larger transaction that might want to proceed with partial success or specific error handling.
+        // The caller should check for null and decide how to proceed.
+        return null;
     }
 }
 
