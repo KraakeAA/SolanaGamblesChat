@@ -16689,10 +16689,10 @@ async function handleReferralCommand(msgOrCbMsg) {
     const totalEarningsPaidUSDDisplay = await formatBalanceForDisplay(totalEarningsPaidLamports, 'USD');
 
     let messageText = `🤝 *Your Referral Dashboard* 🤝\n\n` +
-                      `Invite Friends & Earn USD!\n\n` +
-                      `🔗 *Your Unique Referral Link:*\n` +
-                      `\`${escapeMarkdownV2(referralLink)}\`\n` +
-                      `_(Tap link or button below to share! Keep it handy!)_\n\n` +
+                            `*Invite Friends & Earn SOL\\!*\n\n` +
+                            `🔗 *Your Unique Referral Link:*\n` +
+                            `\`${escapedReferralLinkForCodeBlock}\`\n` +
+                            `_\\(Tap the button below to share\\!\\)_\\n\n` +
                       `📊 *Your Stats:*\n` +
                       `  ▫️ Referrals (who made 1st qualifying bet): *${successfulReferralsCount}*\n` +
                       `  ▫️ Total Earnings Paid Out: *${escapeMarkdownV2(totalEarningsPaidUSDDisplay)}*\n\n` +
