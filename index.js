@@ -1955,107 +1955,109 @@ async function initializeLevelsDB(extClient = null) {
  * @param {string} userId - The user's Telegram ID.
  * @param {bigint} newTotalWageredLamports - The user's new total wagered amount in lamports.
  */
-async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports) {
-    const LOG_PREFIX_CHECK_LVL = `[CheckUserLevel UID:${userId}]`;
-    // console.log(`${LOG_PREFIX_CHECK_LVL} Checking level eligibility. Total wagered lamports: ${newTotalWageredLamports}`);
+async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports, originalGameChatId = null) {
+    const LOG_PREFIX_CHECK_LVL = `[CheckUserLevel UID:${userId} GameChat:${originalGameChatId || 'N/A'}]`;
 
-    try {
-        const solPrice = await getSolUsdPrice(); // Assumes getSolUsdPrice is available (Part 1)
-        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice; // Assumes LAMPORTS_PER_SOL is available (Part 1)
+    try {
+        const solPrice = await getSolUsdPrice();
+        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        const currentUserData = await dbClient.query(
-            `SELECT u.current_level_id, u.username, u.first_name, ul.order_index AS current_order_index, ul.level_name AS current_level_name
-             FROM users u
-             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1 FOR UPDATE OF u`, 
-            [userId]
-        );
+        const currentUserData = await dbClient.query(
+            `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_order_index, ul.level_name AS current_level_name
+             FROM users u
+             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+             WHERE u.telegram_id = $1 FOR UPDATE OF u`, 
+            [userId]
+        );
 
-        if (currentUserData.rowCount === 0) {
-            console.warn(`${LOG_PREFIX_CHECK_LVL} User not found. Cannot update level.`);
-            return;
-        }
+        if (currentUserData.rowCount === 0) {
+            console.warn(`${LOG_PREFIX_CHECK_LVL} User not found. Cannot update level.`);
+            return;
+        }
 
-        const userFromDb = currentUserData.rows[0];
-        const currentLevelId = userFromDb.current_level_id;
-        const currentOrderIndex = userFromDb.current_order_index || 0;
-        const currentLevelName = userFromDb.current_level_name || "Newcomer";
+        const userFromDb = currentUserData.rows[0];
+        const currentLevelId = userFromDb.current_level_id;
+        const currentOrderIndex = userFromDb.current_level_order_index || 0; // Default to 0 if no current level (new user)
+        const currentLevelName = userFromDb.current_level_name || "Newcomer";
 
-        const allLevelsRes = await dbClient.query(
-            `SELECT level_id, level_name, wager_threshold_usd, bonus_amount_usd, order_index
-             FROM user_levels
-             ORDER BY order_index ASC`
-        );
+        const allLevelsRes = await dbClient.query(
+            `SELECT level_id, level_name, wager_threshold_usd, bonus_amount_usd, order_index
+             FROM user_levels
+             ORDER BY order_index ASC`
+        );
 
-        let newPotentialLevelId = currentLevelId;
-        let newPotentialLevelName = currentLevelName;
-        let newPotentialOrderIndex = currentOrderIndex;
-        let newLevelDataForNotification = null; // To store the full data of the new level reached
+        let newPotentialLevelId = currentLevelId;
+        let newPotentialLevelName = currentLevelName;
+        let newPotentialOrderIndex = currentOrderIndex;
+        let newLevelDataForNotification = null;
 
-        for (const level of allLevelsRes.rows) {
-            if (totalWageredUSD >= parseFloat(level.wager_threshold_usd)) {
-                if (level.order_index > newPotentialOrderIndex) { 
-                    newPotentialLevelId = level.level_id;
-                    newPotentialLevelName = level.level_name;
-                    newPotentialOrderIndex = level.order_index;
-                    newLevelDataForNotification = level; // Store this level's data
-                }
-            } else {
-                break;
+        for (const level of allLevelsRes.rows) {
+            if (totalWageredUSD >= parseFloat(level.wager_threshold_usd)) {
+                if (level.order_index > newPotentialOrderIndex) { 
+                    newPotentialLevelId = level.level_id;
+                    newPotentialLevelName = level.level_name;
+                    newPotentialOrderIndex = level.order_index;
+                    newLevelDataForNotification = level;
+                }
+            } else {
+                break; 
+            }
+        }
+
+        if (newPotentialLevelId !== currentLevelId && newPotentialOrderIndex > currentOrderIndex) {
+            await dbClient.query(
+                `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
+                [newPotentialLevelId, userId]
+            );
+            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
+
+            // Construct user display name (HTML safe)
+            const userObjectForDisplay = { telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name, last_name: userFromDb.last_name };
+            const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObjectForDisplay)); // Ensure getPlayerDisplayReference exists and is HTML safe
+
+            // --- Enhanced DM Notification ---
+            let dmNotificationTextHTML = `🎉✨ **LEVEL UP!** ✨🎉\n\n` +
+                                       `Huge congrats, ${playerRefHTML}! You've climbed the ranks and reached:\n\n` +
+                                       `🏅 **${escapeHTML(newPotentialLevelName)}** (Level ${newPotentialOrderIndex}) 🏅\n\n`;
+            const keyboardRowsDM = [];
+
+            if (newLevelDataForNotification && parseFloat(newLevelDataForNotification.bonus_amount_usd) > 0) {
+                const bonusAmountUSD = parseFloat(newLevelDataForNotification.bonus_amount_usd).toFixed(2);
+                dmNotificationTextHTML += `As a reward, a sparkling bonus of approx. <b>$${bonusAmountUSD} USD</b> is now available for you to claim!\n\n`;
+                keyboardRowsDM.push([{ text: `💰 Claim $${bonusAmountUSD} Bonus! (${escapeHTML(newPotentialLevelName)})`, callback_data: `claim_level_bonus:${newLevelDataForNotification.level_id}` }]);
+            } else {
+                dmNotificationTextHTML += `Keep up the great work and climb higher for more rewards!\n\n`;
             }
-        }
+            
+            dmNotificationTextHTML += `🚀 Check your \`/bonus\` dashboard for all available rewards and your next level!`;
+            keyboardRowsDM.push([{ text: "📊 View My Bonus Dashboard", callback_data: "menu:bonus_dashboard_back" }]);
+            keyboardRowsDM.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
 
-        if (newPotentialLevelId !== currentLevelId && newPotentialOrderIndex > currentOrderIndex) {
-            // User has leveled up! Update the database.
-            await dbClient.query(
-                `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
-                [newPotentialLevelId, userId]
-            );
-            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
 
-            // Construct and send DM notification
-            // Ensure getPlayerDisplayReference and escapeMarkdownV2 are available
-            const playerRefForNotif = typeof getPlayerDisplayReference === 'function' ? getPlayerDisplayReference({telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name}) : `User ${userId}`;
-            
-            let dmNotificationText = `🎉 **LEVEL UP, ${playerRefForNotif}!** 🎉\n\nCongratulations, you've reached **${escapeMarkdownV2(newPotentialLevelName)}**!`;
-            const keyboardRowsDM = [];
+            if (typeof safeSendMessage === 'function') {
+                safeSendMessage(userId, dmNotificationTextHTML, { 
+                    parse_mode: 'HTML', // Changed to HTML for better formatting
+                    reply_markup: { inline_keyboard: keyboardRowsDM } 
+                }).catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send level up DM to ${userId}: ${e.message}`));
+            } else {
+                console.warn(`${LOG_PREFIX_CHECK_LVL} safeSendMessage not available to notify user ${userId} of level up.`);
+            }
 
-            if (newLevelDataForNotification && parseFloat(newLevelDataForNotification.bonus_amount_usd) > 0) {
-                const bonusAmountUSD = parseFloat(newLevelDataForNotification.bonus_amount_usd).toFixed(2);
-                dmNotificationText += `\n\nA new bonus of approx. *\$${bonusAmountUSD}* is now available for you!`;
-                // Add a claim button
-                keyboardRowsDM.push([{ text: `💰 Claim \$${bonusAmountUSD} Bonus!`, callback_data: `claim_level_bonus:${newLevelDataForNotification.level_id}` }]);
+            // --- Group Chat Notification ---
+            if (originalGameChatId && String(originalGameChatId) !== String(userId)) { // Ensure it's a group chat, not the DM itself
+                const groupNotificationHTML = `🎉🥳 Level Up Alert! 🥳🎉\n\n` +
+                                             `Congratulations to ${playerRefHTML} for achieving a new rank: 🏅 **${escapeHTML(newPotentialLevelName)}**!\n\n` +
+                                             `Keep an eye on your DMs for any new bonus rewards!`;
+                safeSendMessage(originalGameChatId, groupNotificationHTML, { parse_mode: 'HTML' })
+                    .catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send group level up notification to chat ${originalGameChatId}: ${e.message}`));
             }
-            
-            dmNotificationText += `\n\nKeep playing to reach new heights! 🚀\nYou can check all your available bonuses via the \`/bonus\` command.`;
-            keyboardRowsDM.push([{ text: "📊 View My Bonus Dashboard", callback_data: "menu:bonus_dashboard_back" }]); // Assuming this callback takes user to /bonus
-
-            if (typeof safeSendMessage === 'function') {
-                safeSendMessage(userId, dmNotificationText, { 
-                    parse_mode: 'MarkdownV2',
-                    reply_markup: { inline_keyboard: keyboardRowsDM } 
-                }).catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send level up DM to ${userId}: ${e.message}`));
-            } else {
-                console.warn(`${LOG_PREFIX_CHECK_LVL} safeSendMessage not available to notify user ${userId} of level up.`);
-            }
-            
-            // TODO for future enhancement: Group chat notification
-            // To notify the group, you'd need the original game's chatId.
-            // This would require passing more context through updateUserBalanceAndLedger.
-            // Example: if (originalGameChatId) {
-            //     safeSendMessage(originalGameChatId, `🎉 Congrats to ${playerRefForNotif} for reaching level ${newPotentialLevelName}! 🎉`, {parse_mode: 'MarkdownV2'});
-            // }
-
-        } else {
-            // console.log(`${LOG_PREFIX_CHECK_LVL} User ${userId} remains at level '${currentLevelName}'. Wagered: $${totalWageredUSD.toFixed(2)}`); // Can be noisy
-        }
-
-    } catch (error) {
-        console.error(`${LOG_PREFIX_CHECK_LVL} ❌ Error checking/updating user level: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
-            notifyAdmin(`⚠️ Error in Level Up Check for User ${userId}: ${escapeMarkdownV2(error.message)}. Balance update likely succeeded, but level up process may have failed.`, { parse_mode: 'MarkdownV2' });
-        }
-    }
+        }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_CHECK_LVL} ❌ Error checking/updating user level: ${error.message}`, error.stack);
+        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') { // Check for escapeMarkdownV2 as well
+            notifyAdmin(`⚠️ Error in Level Up Check for User ${userId}: ${escapeMarkdownV2(error.message)}. Balance update likely succeeded, but level up process may have failed.`, { parse_mode: 'MarkdownV2' });
+        }
+    }
 }
 
 
