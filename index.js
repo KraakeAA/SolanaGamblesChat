@@ -12495,10 +12495,8 @@ async function handleReferralCommand(msgOrCbMsg) {
     const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
     const commandChatId = String(msgOrCbMsg.chat.id);
     const originalMessageId = msgOrCbMsg.message_id;
-    // Determine if the command was triggered from a menu callback already in DM, used for deciding to edit vs send new.
-    const isFromMenuActionInDm = (originalMessageId && commandChatId === userId && msgOrCbMsg.message && msgOrCbMsg.message.chat && msgOrCbMsg.message.chat.id === userId);
-
-    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V6_Complete UID:${userId} Chat:${commandChatId}]`; // V6
+    const isFromMenuAction = msgOrCbMsg.message && msgOrCbMsg.message.chat && msgOrCbMsg.message.chat.id === userId;
+    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V4_UserText UID:${userId} Chat:${commandChatId}]`; // V4
 
     let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!user) {
@@ -12512,29 +12510,19 @@ async function handleReferralCommand(msgOrCbMsg) {
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.warn(`${LOG_PREFIX_REF_CMD} Could not fetch bot username: ${e.message}`); }
 
-    clearUserState(userId); // Clear any pending input states
-    const targetDmChatId = userId; // Referral dashboard is always in DM
+    clearUserState(userId);
+    const targetDmChatId = userId;
 
-    // If command was issued in a group, delete original and notify user to check DM
     if (commandChatId !== targetDmChatId) {
         if (originalMessageId) await bot.deleteMessage(commandChatId, originalMessageId).catch(() => {});
         await safeSendMessage(commandChatId, `${playerRef}, your Referral Dashboard has been sent to our private chat: @${escapeMarkdownV2(botUsername)} 🤝`, { parse_mode: 'MarkdownV2' });
     }
 
-    // In DM: if it's an edit of an existing menu message, that message will be used by safeSendMessage logic.
-    // If it's a new typed /referral command in DM, delete the command.
-    let messageToSendToDmId = null;
-    if (commandChatId === targetDmChatId && originalMessageId) {
-        if (isFromMenuActionInDm) { // Editing the menu message
-            messageToSendToDmId = originalMessageId;
-        } else if (msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) { // Typed command in DM
-            await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
-            // A new message will be sent
-        } else {
-            // Potentially an unexpected callback or message type in DM, send new.
-            messageToSendToDmId = null;
-        }
-    }
+    if (commandChatId === targetDmChatId && originalMessageId && isFromMenuAction) {
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
+    } else if (commandChatId === targetDmChatId && originalMessageId && !isFromMenuAction && msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) {
+        await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
+    }
 
     let referralCode = user.referral_code;
     if (!referralCode) {
@@ -12548,17 +12536,21 @@ async function handleReferralCommand(msgOrCbMsg) {
         }
     }
     const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
+    // *** Define escapedReferralLinkForCodeBlock here ***
     const escapedReferralLinkForCodeBlock = escapeMarkdownV2(referralLink);
+    // *** End of definition ***
 
     const successfulReferralsCount = user.referral_count || 0; 
     const totalEarningsPaidLamports = user.total_referral_earnings_paid_lamports || 0n; 
     const totalEarningsPaidUSDDisplay = await formatBalanceForDisplay(totalEarningsPaidLamports, 'USD');
 
+    // *** Using your updated text snippet ***
     let messageText = `🤝 *Your Referral Dashboard* 🤝\n\n` +
-                      `*Invite Friends & Earn SOL\\!*\n\n` +
-                      `🔗 *Your Unique Referral Link:*\n` +
-                      `\`${escapedReferralLinkForCodeBlock}\`\n` + // Link in backticks for tap-to-copy
-                      `_\\(Tap the button below to share\\!\\)_\\n\n` +
+                            `*Invite Friends & Earn SOL\\!*\n\n` + // Changed "Rewards" to "SOL"
+                            `🔗 *Your Unique Referral Link:*\n` +
+                            `\`${escapedReferralLinkForCodeBlock}\`\n` + // Using your variable
+                            `_\\(Tap the button below to share\\!\\)_\\n\n` + // Changed instructional text
+    // *** End of your updated text snippet ***
                       `📊 *Your Stats:*\n` +
                       ` ▫️ Successful Referrals: *${successfulReferralsCount}*\n` +
                       ` ▫️ Total Earnings Paid Out: *${escapeMarkdownV2(totalEarningsPaidUSDDisplay)}*\n\n` +
@@ -12577,8 +12569,6 @@ async function handleReferralCommand(msgOrCbMsg) {
     const keyboardRows = [];
     let claimableBonusesMessage = "";
     try {
-        // This query assumes 'referrals' table holds individual claimable milestone bonuses with 'milestone_bonus_claimable' status.
-        // This relies on processWagerMilestoneBonus being fixed to correctly update or manage these records.
         const claimableRes = await queryDatabase(
             `SELECT referral_id, commission_type, commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name 
              FROM referrals r
@@ -12598,9 +12588,7 @@ async function handleReferralCommand(msgOrCbMsg) {
                 keyboardRows.push([{ text: `💰 Claim ~${bonusAmountDisplay} (from ${referredUserDisplay.substring(0,15)}...)`, callback_data: `claim_milestone_bonus:${bonus.referral_id}` }]);
             }
             claimableBonusesMessage += "\n";
-        } else {
-            claimableBonusesMessage = "✅ No milestone bonuses currently available to claim.\n\n";
-        }
+        }
     } catch (e) {
         console.error(`${LOG_PREFIX_REF_CMD} Error fetching claimable bonuses: ${e.message}`);
         claimableBonusesMessage = "Error fetching claimable bonuses.\n";
@@ -12609,30 +12597,11 @@ async function handleReferralCommand(msgOrCbMsg) {
     messageText += claimableBonusesMessage;
     messageText += `Keep sharing and earning! ✨`;
 
-    keyboardRows.push([{ text: "🔗 Share Your Link!", switch_inline_query: `${referralLink}` }]);
+    keyboardRows.push([{ text: "🔗 Share Your Link!", switch_inline_query: `${referralLink}` }]); // switch_inline_query uses the raw link
     keyboardRows.push([{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]);
     const keyboard = { inline_keyboard: keyboardRows };
 
-    // Send the message, editing if messageToSendToDmId is available (from a menu callback in DM)
-    // or sending new if not (e.g., group redirect, or typed /referral in DM)
-    if (messageToSendToDmId) {
-        try {
-            await bot.editMessageText(messageText, {
-                chat_id: targetDmChatId,
-                message_id: Number(messageToSendToDmId),
-                parse_mode: 'MarkdownV2',
-                reply_markup: keyboard,
-                disable_web_page_preview: true
-            });
-        } catch (editError) {
-            if (!editError.message?.toLowerCase().includes("message is not modified")) {
-                console.warn(`${LOG_PREFIX_REF_CMD} Failed to edit referral dashboard ${messageToSendToDmId}, sending new. Error: ${editError.message}`);
-                await safeSendMessage(targetDmChatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
-            }
-        }
-    } else {
-        await safeSendMessage(targetDmChatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
-    }
+    await safeSendMessage(targetDmChatId, messageText, { parse_mode: 'MarkdownV2', reply_markup: keyboard, disable_web_page_preview: true });
 }
 
 async function handleBalanceCommand(msg) {
