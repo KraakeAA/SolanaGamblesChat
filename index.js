@@ -1442,141 +1442,128 @@ EXECUTE FUNCTION trigger_set_timestamp();`;
 //---------------------------------------------------------------------------
 
 // Replace your entire existing getOrCreateUser function (in Part 2) with this:
+// CORRECTED getOrCreateUser
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
+    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
 
-    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
-        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
-        console.trace("Trace for undefined telegramId call");
-        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
-            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
-                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
-        }
-        return null;
-    }
+    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
+        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
+        console.trace("Trace for undefined telegramId call");
+        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
+            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
+                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
+        }
+        return null;
+    }
 
-    const stringTelegramId = String(telegramId).trim();
-    const LOG_PREFIX_GOCU = `[GetCreateUser_Lvl TG:${stringTelegramId}]`; // Added _Lvl
+    const stringTelegramId = String(telegramId).trim();
+    const LOG_PREFIX_GOCU = `[GetCreateUser_Lvl TG:${stringTelegramId}]`;
 
-    const sanitizeString = (str) => {
-        if (typeof str !== 'string') return null;
-        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim();
-        return cleaned.substring(0, 255);
-    };
+    const sanitizeString = (str) => {
+        if (typeof str !== 'string') return null;
+        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim();
+        return cleaned.substring(0, 255);
+    };
 
-    const sUsername = username ? sanitizeString(username) : null;
-    const sFirstName = firstName ? sanitizeString(firstName) : null;
-    const sLastName = lastName ? sanitizeString(lastName) : null;
+    const sUsername = username ? sanitizeString(username) : null;
+    const sFirstName = firstName ? sanitizeString(firstName) : null;
+    const sLastName = lastName ? sanitizeString(lastName) : null;
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-        let referrerId = null;
-        if (referrerIdInput !== null && referrerIdInput !== undefined) {
-            try { referrerId = BigInt(referrerIdInput); } catch (parseError) { referrerId = null; }
-        }
+        let referrerId = null;
+        if (referrerIdInput !== null && referrerIdInput !== undefined) {
+            try { referrerId = BigInt(referrerIdInput); } catch (parseError) { referrerId = null; }
+        }
 
-        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0) {
-            const user = result.rows[0];
-            user.balance = BigInt(user.balance);
-            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
-            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
-            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
-            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
-            user.referral_count = parseInt(user.referral_count || '0', 10);
-            user.total_referral_earnings_paid_lamports = BigInt(user.total_referral_earnings_paid_lamports || '0');
-            user.current_level_id = user.current_level_id !== null ? parseInt(user.current_level_id, 10) : null; // Handle current_level_id
+        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
+            user.balance = BigInt(user.balance);
+            user.total_deposited_lamports = BigInt(user.total_deposited_lamports || '0');
+            user.total_withdrawn_lamports = BigInt(user.total_withdrawn_lamports || '0');
+            user.total_wagered_lamports = BigInt(user.total_wagered_lamports || '0');
+            user.total_won_lamports = BigInt(user.total_won_lamports || '0');
+            user.referral_count = parseInt(user.referral_count || '0', 10);
+            user.total_referral_earnings_paid_lamports = BigInt(user.total_referral_earnings_paid_lamports || '0');
+            user.current_level_id = user.current_level_id !== null ? parseInt(user.current_level_id, 10) : null;
 
-            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
+            if (user.referrer_telegram_id) user.referrer_telegram_id = String(user.referrer_telegram_id);
 
-            let detailsChanged = false;
-            const currentUsername = user.username || '';
-            const currentFirstName = user.first_name || '';
-            const currentLastName = user.last_name || '';
+            let detailsChanged = false;
+            const currentUsername = user.username || '';
+            const currentFirstName = user.first_name || '';
+            const currentLastName = user.last_name || '';
 
-            if (sUsername && currentUsername !== sUsername) detailsChanged = true;
-            if (sFirstName && currentFirstName !== sFirstName) detailsChanged = true;
-            if (sLastName && currentLastName !== sLastName) detailsChanged = true;
-            if (!currentUsername && sUsername) detailsChanged = true;
-            if (!currentFirstName && sFirstName) detailsChanged = true;
-            if (!currentLastName && sLastName && sLastName !== '') detailsChanged = true;
+            if (sUsername && currentUsername !== sUsername) detailsChanged = true;
+            if (sFirstName && currentFirstName !== sFirstName) detailsChanged = true;
+            if (sLastName && currentLastName !== sLastName) detailsChanged = true;
+            if (!currentUsername && sUsername) detailsChanged = true;
+            if (!currentFirstName && sFirstName) detailsChanged = true;
+            if (!currentLastName && sLastName && sLastName !== '') detailsChanged = true;
 
-            if (detailsChanged) {
-                await client.query(
-                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
-                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
-                );
-            } else {
-                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
-            }
-            await client.query('COMMIT');
-            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-            const finalUser = updatedUserRow.rows[0];
-            // Reparse all necessary fields including new ones
-            finalUser.balance = BigInt(finalUser.balance);
-            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
-            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
-            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
-            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
-            finalUser.referral_count = parseInt(finalUser.referral_count || '0', 10);
-            finalUser.total_referral_earnings_paid_lamports = BigInt(finalUser.total_referral_earnings_paid_lamports || '0');
-            finalUser.current_level_id = finalUser.current_level_id !== null ? parseInt(finalUser.current_level_id, 10) : null;
-            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
-            return finalUser;
-        } else {
-            const newReferralCode = generateReferralCode();
-            // *** MODIFIED INSERT to include current_level_id (as NULL) and other referral defaults ***
-            const insertQuery = `
-                INSERT INTO users (
-                    telegram_id, username, first_name, last_name, balance, referral_code, 
-                    referrer_telegram_id, last_active_timestamp, created_at, updated_at,
-                    referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at,
-                    current_level_id 
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL)
-                RETURNING *;
-            `;
-            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
-            result = await client.query(insertQuery, values);
-            const newUser = result.rows[0];
+            if (detailsChanged) {
+                await client.query(
+                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
+                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
+                );
+            } else {
+                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+            }
+            await client.query('COMMIT');
+            const updatedUserRow = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+            const finalUser = updatedUserRow.rows[0];
+            
+            finalUser.balance = BigInt(finalUser.balance);
+            finalUser.total_deposited_lamports = BigInt(finalUser.total_deposited_lamports || '0');
+            finalUser.total_withdrawn_lamports = BigInt(finalUser.total_withdrawn_lamports || '0');
+            finalUser.total_wagered_lamports = BigInt(finalUser.total_wagered_lamports || '0');
+            finalUser.total_won_lamports = BigInt(finalUser.total_won_lamports || '0');
+            finalUser.referral_count = parseInt(finalUser.referral_count || '0', 10);
+            finalUser.total_referral_earnings_paid_lamports = BigInt(finalUser.total_referral_earnings_paid_lamports || '0');
+            finalUser.current_level_id = finalUser.current_level_id !== null ? parseInt(finalUser.current_level_id, 10) : null;
+            if (finalUser.referrer_telegram_id) finalUser.referrer_telegram_id = String(finalUser.referrer_telegram_id);
+            return finalUser;
+        } else {
+            const newReferralCode = generateReferralCode();
+            const insertQuery = `INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at, referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at, current_level_id) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL) RETURNING *;`;
+            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
+            result = await client.query(insertQuery, values);
+            const newUser = result.rows[0];
 
-            // Reparse all necessary fields including new ones
-            newUser.balance = BigInt(newUser.balance);
-            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
-            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
-            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
-            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
-            newUser.referral_count = parseInt(newUser.referral_count || '0', 10);
-            newUser.total_referral_earnings_paid_lamports = BigInt(newUser.total_referral_earnings_paid_lamports || '0');
-            newUser.current_level_id = newUser.current_level_id !== null ? parseInt(newUser.current_level_id, 10) : null;
+            newUser.balance = BigInt(newUser.balance);
+            newUser.total_deposited_lamports = BigInt(newUser.total_deposited_lamports || '0');
+            newUser.total_withdrawn_lamports = BigInt(newUser.total_withdrawn_lamports || '0');
+            newUser.total_wagered_lamports = BigInt(newUser.total_wagered_lamports || '0');
+            newUser.total_won_lamports = BigInt(newUser.total_won_lamports || '0');
+            newUser.referral_count = parseInt(newUser.referral_count || '0', 10);
+            newUser.total_referral_earnings_paid_lamports = BigInt(newUser.total_referral_earnings_paid_lamports || '0');
+            newUser.current_level_id = newUser.current_level_id !== null ? parseInt(newUser.current_level_id, 10) : null;
 
-            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
+            if (newUser.referrer_telegram_id) newUser.referrer_telegram_id = String(newUser.referrer_telegram_id);
 
-            if (referrerId) {
-                try {
-                    await client.query(
-                        // --- FIXED: Shortened status from 'pending_qualifying_bet' to 'pending_qual_bet' ---
-                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qual_bet', CURRENT_TIMESTAMP) 
-                         ON CONFLICT (referred_telegram_id) DO NOTHING;`,
-                        [referrerId, newUser.telegram_id]
-                    );
-                } catch (referralError) {
-                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
-                }
-            }
-            await client.query('COMMIT');
-            return newUser;
-        }
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message} (SQL State: ${error.code})`, error.stack?.substring(0,700));
-        return null;
-    } finally {
-        client.release();
-    }
+            if (referrerId) {
+                try {
+                    await client.query(
+                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qual_bet', CURRENT_TIMESTAMP) ON CONFLICT (referred_telegram_id) DO NOTHING;`,
+                        [referrerId, newUser.telegram_id]
+                    );
+                } catch (referralError) {
+                   console.error(`${LOG_PREFIX_GOCU} Failed to record referral for ${referrerId} -> ${newUser.telegram_id}:`, referralError);
+                }
+            }
+            await client.query('COMMIT');
+            return newUser;
+        }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message} (SQL State: ${error.code})`, error.stack?.substring(0,700));
+        return null;
+    } finally {
+        client.release();
+    }
 }
 
 async function updateUserActivity(telegramId) {
