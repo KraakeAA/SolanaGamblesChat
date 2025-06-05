@@ -1565,10 +1565,10 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
             if (referrerId) {
                 try {
                     await client.query(
+                        // --- FIXED: Shortened status from 'pending_qualifying_bet' to 'pending_qual_bet' ---
                         `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
-                         ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                         ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                         VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qual_bet', CURRENT_TIMESTAMP) 
+                         ON CONFLICT (referred_telegram_id) DO NOTHING;`,
                         [referrerId, newUser.telegram_id]
                     );
                 } catch (referralError) {
@@ -12164,8 +12164,6 @@ async function handleStartCommand(msg, args) {
                     try {
                         clientRefLink = await pool.connect();
                         await clientRefLink.query('BEGIN');
-                        
-                        // --- FIXED: Using parameterized queries passed through the central queryDatabase function. ---
                         await queryDatabase(
                             'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
                             [referrerUserRecord.telegram_id, userId],
@@ -12179,18 +12177,18 @@ async function handleStartCommand(msg, args) {
                         );
 
                         if (checkExistingReferral.rowCount === 0) {
+                            // --- FIXED: Shortened status from 'pending_qualifying_bet' to 'pending_qual_bet' ---
                             await queryDatabase(
                                 `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at)
-                                 VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP)`,
+                                 VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qual_bet', CURRENT_TIMESTAMP)`,
                                 [referrerUserRecord.telegram_id, userId],
                                 clientRefLink
                             );
                         }
-                        // --- END OF FIX ---
 
                         await clientRefLink.query('COMMIT');
                         userObject = await getOrCreateUser(userId); 
-                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
+                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qual_bet'.`);
                     } catch (refError) {
                         if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
                         console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
