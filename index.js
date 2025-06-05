@@ -12834,7 +12834,7 @@ async function handleBonusCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V4 UID:${userId} CH:${chatId} Type:${chatType}]`; // V4
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V5_TierDisplay UID:${userId} CH:${chatId} Type:${chatType}]`; // V5
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) {
@@ -12849,9 +12849,10 @@ async function handleBonusCommand(msg) {
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.warn(`${LOG_PREFIX_BONUS_CMD} Could not fetch bot username: ${e.message}`); }
 
+
     // --- Group Chat Logic ---
     if (chatType === 'group' || chatType === 'supergroup') {
-        if (msg.message_id && msg.text && msg.text.startsWith('/bonus') ) { // Delete the triggering /bonus command from group
+        if (msg.message_id && msg.text && msg.text.startsWith('/bonus') ) { 
             await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
         }
 
@@ -12859,9 +12860,6 @@ async function handleBonusCommand(msg) {
         try {
             client = await pool.connect();
             
-            // Fetch necessary data: rank, current wager, current level, next level, claimable bonus
-            const rank = await calculateUserRank(userId, client);
-
             const currentUserDetailsQuery = `
                 SELECT u.total_wagered_lamports, ul.order_index AS current_level_order_index, ul.level_name as current_level_name
                 FROM users u
@@ -12872,6 +12870,7 @@ async function handleBonusCommand(msg) {
             const currentUserData = currentUserDetailsRes.rows[0];
             const totalWageredLamports = BigInt(currentUserData.total_wagered_lamports || '0');
             const currentLevelOrderIndex = currentUserData.current_level_order_index || 0;
+            const currentLevelName = currentUserData.current_level_name || "Newcomer"; // Get current level name
 
             const solPrice = await getSolUsdPrice();
             const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
@@ -12883,15 +12882,14 @@ async function handleBonusCommand(msg) {
             const nextLevelRes = await client.query(nextLevelQuery, [currentLevelOrderIndex]);
             const nextLevelData = nextLevelRes.rows.length > 0 ? nextLevelRes.rows[0] : null;
 
-            let wagerNeededUSDText = "🏅 Max Level Reached! Congratulations!";
+            let wagerNeededUSDText = "🏅 You've reached the highest tier! Congratulations!";
             if (nextLevelData) {
                 const nextLevelThresholdUSD = parseFloat(nextLevelData.wager_threshold_usd);
                 const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
                 const nextLevelBonusUSD = parseFloat(nextLevelData.bonus_amount_usd).toFixed(2);
-                wagerNeededUSDText = `🎯 Next Level: Wager ~<b>$${wagerNeededUSD.toFixed(2)} USD</b> more for <b>${escapeHTML(nextLevelData.level_name)}</b> (approx. $${nextLevelBonusUSD} bonus)!`;
+                wagerNeededUSDText = `🎯 Next Tier: <b>${escapeHTML(nextLevelData.level_name)}</b>. Wager ~<b>$${wagerNeededUSD.toFixed(2)} USD</b> more (Bonus: ~$${nextLevelBonusUSD}!)`;
             }
 
-            // Check for *any* claimable bonus to adjust button text
             const claimableBonusQuery = `
                 SELECT ul.level_id, ul.bonus_amount_usd, ul.level_name
                 FROM user_levels ul
@@ -12902,21 +12900,21 @@ async function handleBonusCommand(msg) {
                 AND NOT EXISTS (
                     SELECT 1 FROM user_claimed_level_bonuses uclb
                     WHERE uclb.user_telegram_id = $1 AND uclb.level_id = ul.level_id
-                ) ORDER BY ul.order_index ASC LIMIT 1;`; // Get the soonest claimable for button text
+                ) ORDER BY ul.order_index ASC LIMIT 1;`;
             const claimableBonusRes = await client.query(claimableBonusQuery, [userId]);
             const nextClaimableBonus = claimableBonusRes.rows.length > 0 ? claimableBonusRes.rows[0] : null;
 
-            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Check</b> ✨\n\n` +
-                                       `🏆 Rank: <b>#${rank !== null ? rank : 'N/A'}</b>\n` +
+            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Quick View</b> ✨\n\n` +
+                                       `🏆 Current Tier: <b>${escapeHTML(currentLevelName)}</b>\n` + // Changed "Rank" to "Current Tier"
                                        `${wagerNeededUSDText}\n\n`;
             
             let buttonText = "💰 My Bonus Dashboard (DM)";
             if (nextClaimableBonus) {
                 const bonusAmountToClaimUSD = parseFloat(nextClaimableBonus.bonus_amount_usd).toFixed(2);
-                groupBonusMessageHTML += `🎉 Bonus available! Check your DM with @${escapeHTML(botUsername)} to claim.`;
+                groupBonusMessageHTML += `🎉 Bonus available! Check DMs with @${escapeHTML(botUsername)} to claim.`;
                 buttonText = `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus (DM)`;
             } else {
-                groupBonusMessageHTML += `💡 No new bonuses ready to claim right now. Keep playing!`;
+                groupBonusMessageHTML += `💡 No new bonuses ready to claim. Keep playing!`;
             }
 
             const groupKeyboard = {
@@ -12928,14 +12926,14 @@ async function handleBonusCommand(msg) {
 
         } catch (error) {
             console.error(`${LOG_PREFIX_BONUS_CMD} Error generating group bonus message: ${error.message}`, error.stack);
-            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. Please check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
+            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. You can try again or check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
         } finally {
             if (client) client.release();
         }
         return; 
     }
 
-    // --- Private Chat (DM) Logic (Remains mostly the same, enhanced for clarity) ---
+    // --- Private Chat (DM) Logic ---
     let workingMessageId = msg.message_id; 
     const isEditingExistingDashboard = msg.message_id && msg.isCallbackEditing === true;
 
@@ -12967,7 +12965,7 @@ async function handleBonusCommand(msg) {
         return;
     }
 
-    let clientDm = null; // Renamed to avoid conflict with group client variable
+    let clientDm = null;
     try {
         clientDm = await pool.connect();
         let messageTextHTML = `🌟 <b>Level Up Bonus Dashboard</b> 🌟\n\nHi ${playerRefHTML}! Play games, boost your wagers, and climb the ranks to unlock awesome level-up bonuses!\n\n`;
@@ -12994,11 +12992,9 @@ async function handleBonusCommand(msg) {
         const currentLevelName = userData.current_level_name || "Newcomer";
         const currentLevelOrderIndex = userData.current_level_order_index || 0;
         
-        messageTextHTML += `🏆 Your Current Level: <b>${escapeHTML(currentLevelName)}</b>\n` +
-                             `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))}</b>\n`;
-
-        const rank = await calculateUserRank(userId, clientDm); 
-        messageTextHTML += `🎖️ Your Casino Rank: <b>#${rank !== null ? rank : 'N/A'}</b>\n\n`;
+        messageTextHTML += `🏆 Your Current Tier: <b>${escapeHTML(currentLevelName)}</b>\n` + // Changed "Level" to "Tier" for consistency
+                             `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))}</b>\n\n`;
+                             // Removed Rank display from DM as well for consistency with personal bonus theme
 
         const nextLevelDataQuery = `
             SELECT level_name, wager_threshold_usd, bonus_amount_usd FROM user_levels
@@ -13010,10 +13006,10 @@ async function handleBonusCommand(msg) {
             const nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
             const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
             const nextBonusUSD = parseFloat(nl.bonus_amount_usd).toFixed(2);
-            messageTextHTML += `🏅 Next Level: <b>${escapeHTML(nl.level_name)}</b>\n` +
+            messageTextHTML += `🏅 Next Tier: <b>${escapeHTML(nl.level_name)}</b>\n` + // Changed "Level" to "Tier"
                                  `🎯 Wager <b>$${wagerNeededUSD.toFixed(2)} USD</b> more to reach it and unlock a bonus of approx. <b>$${nextBonusUSD} USD</b>!\n\n`;
         } else {
-            messageTextHTML += `🏅 You've reached the Max Level! Truly a casino legend! Congratulations!\n\n`;
+            messageTextHTML += `🏅 You've reached the Highest Tier! Truly a casino legend! Congratulations!\n\n`;
         }
         
         const claimableBonusesQuery = `
@@ -13027,7 +13023,7 @@ async function handleBonusCommand(msg) {
         const claimableBonusesRes = await clientDm.query(claimableBonusesQuery, [currentLevelOrderIndex, userId]);
 
         if (claimableBonusesRes.rows.length > 0) {
-            messageTextHTML += "✨ <b>Available Bonuses to Claim:</b>\n";
+            messageTextHTML += "✨ <b>Available Tier Bonuses to Claim:</b>\n"; // Changed "Level" to "Tier"
             claimableBonusesRes.rows.forEach(bonus => {
                 const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
                 messageTextHTML += `  ▫️ <b>${escapeHTML(bonus.level_name)}</b> - Bonus: approx. <b>$${bonusAmountToClaimUSD} USD</b>\n`;
@@ -13035,15 +13031,15 @@ async function handleBonusCommand(msg) {
             });
             messageTextHTML += "\n";
         } else {
-            messageTextHTML += "✅ No new level bonuses available to claim at this moment.\n\n";
+            messageTextHTML += "✅ No new tier bonuses available to claim at this moment.\n\n"; // Changed "level" to "tier"
         }
 
-        keyboardRows.push([{ text: "📜 View All Levels & Rewards", callback_data: "menu:levels_info" }]);
+        keyboardRows.push([{ text: "📜 View All Tiers & Rewards", callback_data: "menu:levels_info" }]); // Changed "Levels" to "Tiers"
         keyboardRows.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
         
         const keyboard = { inline_keyboard: keyboardRows };
         await bot.editMessageText(messageTextHTML, { 
-            chat_id: chatId, // Should be the DM chat ID for this section
+            chat_id: chatId, 
             message_id: Number(workingMessageId), 
             parse_mode: 'HTML', 
             reply_markup: keyboard, 
