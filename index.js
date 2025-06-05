@@ -1979,9 +1979,14 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         const solPrice = await getSolUsdPrice();
         const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        // --- FIXED: Rewritten to build the query directly to bypass parameter handling errors. ---
-        const currentUserDataRes = await dbClient.query(
-            `SELECT telegram_id, username, first_name, last_name, current_level_id FROM users WHERE telegram_id = ${userId} FOR UPDATE OF users`
+        // --- FIXED: Reverted to a standard parameterized query that uses our central, safe queryDatabase function. ---
+        const currentUserDataRes = await queryDatabase(
+            `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name
+             FROM users u
+             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+             WHERE u.telegram_id = $1 FOR UPDATE OF u`,
+            [userId],
+            dbClient
         );
 
         if (currentUserDataRes.rowCount === 0) {
@@ -1989,18 +1994,8 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
             return;
         }
         const userFromDb = currentUserDataRes.rows[0];
-        let currentLevelOrderIndex = 0;
-        let currentLevelName = "Newcomer";
-
-        if (userFromDb.current_level_id) {
-            const currentLevelDetailsRes = await dbClient.query(
-                `SELECT order_index, level_name FROM user_levels WHERE level_id = ${userFromDb.current_level_id}`
-            );
-            if (currentLevelDetailsRes.rowCount > 0) {
-                currentLevelOrderIndex = currentLevelDetailsRes.rows[0].order_index || 0;
-                currentLevelName = currentLevelDetailsRes.rows[0].level_name || "Newcomer";
-            }
-        }
+        const currentLevelOrderIndex = userFromDb.current_level_order_index || 0;
+        const currentLevelName = userFromDb.current_level_name || "Newcomer";
         // --- END OF FIX ---
 
         const allLevelsRes = await dbClient.query(
@@ -2029,7 +2024,8 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
 
         if (newPotentialLevelId !== userFromDb.current_level_id && newPotentialOrderIndex > currentLevelOrderIndex) {
             await dbClient.query(
-                `UPDATE users SET current_level_id = ${newPotentialLevelId}, updated_at = NOW() WHERE telegram_id = ${userId}`
+                `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
+                [newPotentialLevelId, userId]
             );
             console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentLevelOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
 
@@ -2712,12 +2708,14 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
     let milestonesProcessedThisCall = 0;
 
     try {
-        // --- FIXED: Rewritten to build the query directly to bypass parameter handling errors. ---
-        const referralLinkDetailsQuery = await dbClient.query(
-            `SELECT referral_id, referrer_telegram_id, referred_user_wager_milestones_achieved, last_milestone_bonus_check_wager_lamports
-             FROM referrals
-             WHERE referred_telegram_id = ${stringReferredUserId} 
-             LIMIT 1`
+        // --- FIXED: Reverted to a standard parameterized query to be handled by the central queryDatabase function. ---
+        const referralLinkDetailsQuery = await queryDatabase(
+            `SELECT r.referral_id, r.referrer_telegram_id, r.referred_user_wager_milestones_achieved, r.last_milestone_bonus_check_wager_lamports
+             FROM referrals r
+             WHERE r.referred_telegram_id = $1
+             LIMIT 1`,
+            [stringReferredUserId],
+            dbClient
         );
         // --- END OF FIX ---
 
@@ -2789,13 +2787,6 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
     }
 }
 
-/**
- * Handles the callback when a referrer clicks to claim a milestone bonus.
- * @param {string} userIdClicking - Telegram ID of the user clicking the button (should be the referrer).
- * @param {number} commissionReferralId - The specific ID from the 'referrals' table for this milestone bonus entry.
- * @param {import('pg').PoolClient} dbClient - An active DB client for transaction.
- * @returns {Promise<{success: boolean, messageForUser?: string, error?: string}>}
- */
 async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, dbClient) {
     const LOG_PREFIX_HCMB = `[ClaimMilestoneBonus UID:${userIdClicking} CommID:${commissionReferralId}]`;
 
@@ -12172,22 +12163,26 @@ async function handleStartCommand(msg, args) {
                     try {
                         clientRefLink = await pool.connect();
                         await clientRefLink.query('BEGIN');
-                        await clientRefLink.query(
+                        
+                        // --- FIXED: Using parameterized queries passed through the central queryDatabase function. ---
+                        await queryDatabase(
                             'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
-                            [referrerUserRecord.telegram_id, userId]
+                            [referrerUserRecord.telegram_id, userId],
+                            clientRefLink
                         );
                         
-                        // --- FIXED: Replaced ON CONFLICT with a separate SELECT check to be more robust against syntax errors. ---
-                        const checkExistingReferral = await clientRefLink.query(
+                        const checkExistingReferral = await queryDatabase(
                             `SELECT 1 FROM referrals WHERE referred_telegram_id = $1`,
-                            [userId]
+                            [userId],
+                            clientRefLink
                         );
 
                         if (checkExistingReferral.rowCount === 0) {
-                            await clientRefLink.query(
+                            await queryDatabase(
                                 `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at)
                                  VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP)`,
-                                [referrerUserRecord.telegram_id, userId]
+                                [referrerUserRecord.telegram_id, userId],
+                                clientRefLink
                             );
                         }
                         // --- END OF FIX ---
