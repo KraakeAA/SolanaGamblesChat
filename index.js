@@ -619,11 +619,16 @@ pool.on('error', (err, client) => {
 });
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query]';
-    // --- FIXED: This line cleans the SQL query to remove any non-standard whitespace or line breaks that cause syntax errors ---
-    const cleanedSql = sql.replace(/\s+/g, ' ').trim();
+    const logPrefix = '[DB_Query_V3_Diagnostic]'; // New version for logs
+    let cleanedSql = sql; // Default to original sql
 
     try {
+        // --- DIAGNOSTIC AND FIX: This will clean any hidden characters and log the result ---
+        console.log(`${logPrefix} RAW SQL (before cleaning):\n---\n${sql}\n---`);
+        cleanedSql = sql.replace(/\s+/g, ' ').trim();
+        console.log(`${logPrefix} CLEANED SQL (after cleaning): ${cleanedSql}`);
+        // --- END OF DIAGNOSTIC AND FIX ---
+
         const result = await dbClient.query(cleanedSql, params); // Use the cleaned SQL
         return result;
     } catch (error) {
