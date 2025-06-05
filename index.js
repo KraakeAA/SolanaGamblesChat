@@ -2551,138 +2551,86 @@ function calculateInitialBetBonusPercentage(referralCount, referralTiersConfig) 
  * @param {string} gameIdForBet - The game ID for which the bet was placed (for ledger notes).
  * @returns {Promise<{success: boolean, bonusProcessed?: boolean, error?: string}>}
  */
+// REVISED AND CORRECTED - processQualifyingBetAndInitialBonus
 async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegramId, referredUserBetAmountLamports, gameIdForBet) {
-    const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PQB = `[ProcessQualifyingBet UID:${stringReferredUserId}]`;
+    const stringReferredUserId = String(referredUserTelegramId);
+    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V2_InternalCredit UID:${stringReferredUserId}]`;
 
-    try {
-        // 1. Check if this user was referred and if their first bet bonus has already been processed.
-        const referredUserDetails = await dbClient.query(
-            `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
-            [stringReferredUserId]
-        );
+    try {
+        const referredUserDetails = await dbClient.query(
+            `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
+            [stringReferredUserId]
+        );
+        if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
+            return { success: true, bonusProcessed: false, message: "Not a referred user." };
+        }
+        if (referredUserDetails.rows[0].first_bet_placed_at) {
+            return { success: true, bonusProcessed: false, message: "Initial bonus already handled." };
+        }
+        
+        const solPrice = await getSolUsdPrice();
+        const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+        
+        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+        if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
+            return { success: true, bonusProcessed: false, message: "Bet too small to qualify." };
+        }
 
-        if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
-            // console.log(`${LOG_PREFIX_PQB} User was not referred or no referrer_id. No initial bonus to process.`);
-            return { success: true, bonusProcessed: false, message: "Not a referred user or no referrer." };
-        }
+        const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
+        const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
+        const currentReferrerCount = referrerData.rows.length > 0 ? (referrerData.rows[0].referral_count || 0) : 0;
+        
+        const bonusPercentage = calculateInitialBetBonusPercentage(currentReferrerCount, REFERRAL_INITIAL_BET_TIERS_CONFIG);
+        const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
 
-        const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
-        const firstBetPlacedAt = referredUserDetails.rows[0].first_bet_placed_at;
+        if (initialBonusAmountLamports <= 0n) {
+             console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero. No commission created.`);
+             return { success: true, bonusProcessed: false, message: "Bonus amount was zero." };
+        }
+        
+        // --- THIS IS THE KEY CHANGE ---
+        // Instead of queueing a job, we credit the balance directly.
+        const commissionRecordResult = await dbClient.query(
+            `UPDATE referrals SET commission_type = 'initial_bet_bonus', commission_amount_lamports = $1, status = 'paid_out', qualifying_bet_processed_at = NOW()
+             WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL
+             RETURNING referral_id;`,
+            [referrerId, stringReferredUserId]
+        );
 
-        // If first_bet_placed_at is already set, it means the initial bonus (or attempt) has been handled.
-        if (firstBetPlacedAt) {
-            // console.log(`${LOG_PREFIX_PQB} User has already placed their first bet at ${firstBetPlacedAt}. Initial bonus already handled.`);
-            return { success: true, bonusProcessed: false, message: "Initial bonus already processed previously." };
-        }
+        if (commissionRecordResult.rowCount > 0) {
+             const referralDbId = commissionRecordResult.rows[0].referral_id;
+             await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
 
-        // 2. Check if the bet amount qualifies (convert to USD).
-        const solPrice = await getSolUsdPrice(); // Assumes this function is available
-        const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-
-        if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
-            // console.log(`${LOG_PREFIX_PQB} Bet amount $${betAmountUSD.toFixed(2)} is less than qualifying $${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)}. No initial bonus.`);
-            // Still mark first_bet_placed_at so we don't re-check for non-qualifying small bets.
-            // Or, defer marking if you only want to mark it upon a *qualifying* first bet. For now, mark it.
-            await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
-            return { success: true, bonusProcessed: false, message: "Bet amount too small to qualify for initial referral bonus." };
-        }
-
-        // 3. This is the first QUALIFYING bet. Process the bonus for the referrer.
-        // Mark first_bet_placed_at for the referred user.
-        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
-
-        // Get referrer's current referral count (BEFORE this one is fully processed for count increment).
-        // The count used for tiering should ideally be based on *already processed* referrals.
-        const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
-        let currentReferrerCount = 0;
-        if (referrerData.rowCount > 0) {
-            currentReferrerCount = referrerData.rows[0].referral_count || 0;
-        }
-
-        const bonusPercentage = calculateInitialBetBonusPercentage(currentReferrerCount, REFERRAL_INITIAL_BET_TIERS_CONFIG);
-        const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
-
-        if (initialBonusAmountLamports <= 0n) {
-            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero or less. No commission created. Percentage: ${bonusPercentage}`);
-            // Mark the referral link as processed for the initial bet bonus to avoid re-checks
-            await dbClient.query(
-                `UPDATE referrals SET qualifying_bet_processed_at = NOW(), status = 'archived_zero_initial_bonus'
-                 WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL`,
-                [referrerId, stringReferredUserId]
-            );
-            // Increment referral_count as the referred user did place a qualifying bet, even if bonus was 0.
-            await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
-            return { success: true, bonusProcessed: true, message: "Qualifying bet made, but bonus amount was zero." };
-        }
-
-        // 4. Record the commission for the referrer.
-        // Upsert logic: If a 'pending_qualifying_bet' record exists, update it. Otherwise, insert.
-        // This assumes a record was created in 'referrals' when the user signed up via link.
-        const commissionRecordResult = await dbClient.query(
-            `UPDATE referrals
-             SET commission_type = 'initial_bet_bonus',
-                 commission_amount_lamports = $1,
-                 status = 'earned', -- Ready for payout queue
-                 qualifying_bet_processed_at = NOW(),
-                 updated_at = NOW()
-             WHERE referrer_telegram_id = $2 AND referred_telegram_id = $3 AND qualifying_bet_processed_at IS NULL
-             RETURNING referral_id;`,
-            [initialBonusAmountLamports.toString(), referrerId, stringReferredUserId]
-        );
-
-        if (commissionRecordResult.rowCount === 0) {
-            // This case might happen if the referral link wasn't properly recorded, or was already processed.
-            // The first_bet_placed_at check should prevent most re-processing.
-            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus, or already processed. Referrer: ${referrerId}, Referred: ${stringReferredUserId}`);
-            // Don't increment referrer's count here if no record was updated, as it implies an issue or prior processing.
-            return { success: false, bonusProcessed: false, error: "No eligible pending referral record found for initial bonus." };
-        }
-        const referralDbId = commissionRecordResult.rows[0].referral_id;
-
-        // 5. Increment the referrer's successful referral count.
-        await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
-
-        console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports (RefDBID: ${referralDbId}) earned for referrer ${referrerId}. Referrer count updated.`);
-
-        // 6. Queue the payout job for this commission.
-        // The actual crediting to referrer's balance will happen via handleReferralPayoutJob -> updateUserBalanceAndLedger
-        if (typeof addPayoutJob === 'function') {
-            addPayoutJob({
-                type: 'payout_referral_commission', // A more generic type for the job queue
-                referralDbId: referralDbId, // Pass the specific DB ID of the commission row
-                commissionType: 'initial_bet_bonus',
-                commissionAmountLamports: initialBonusAmountLamports,
-                referrerUserId: referrerId,
-                referredUserId: stringReferredUserId
-            });
-        } else {
-            console.error(`${LOG_PREFIX_PQB} CRITICAL: addPayoutJob function not defined! Initial bonus for ${referrerId} NOT QUEUED.`);
-            // Potentially notify admin
-        }
-
-        // Notify referrer
-        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient); // Fetch for notification
-        if (referrerUserObj) {
-            const bonusAmountUSDDisplay = await formatBalanceForDisplay(initialBonusAmountLamports, 'USD');
-            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
-            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
+             // Credit the referrer's internal balance
+             await updateUserBalanceAndLedger(
+                 dbClient,
+                 referrerId,
+                 initialBonusAmountLamports,
+                 'referral_commission_credit',
+                 { referral_id: referralDbId },
+                 `Initial Bet Bonus from user ${stringReferredUserId}`
+             );
             
-            // --- FIXED: Escaped the period in "soon." for MarkdownV2 ---
-            safeSendMessage(referrerId,
-                `🎉 Cha-ching! Your referred friend ${escapeMarkdownV2(referredName)} just placed their first qualifying bet!\n` +
-                `You've earned an Initial Bet Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}*!\n` +
-                `It will be processed to your linked wallet soon\\. Keep referring to earn more! 🤝`,
-                { parse_mode: 'MarkdownV2' }
-            ).catch(e => console.warn(`${LOG_PREFIX_PQB} Failed to send Initial Bet Bonus notification to referrer ${referrerId}: ${e.message}`));
-        }
+             console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports credited to referrer ${referrerId}.`);
+            
+             // Notify referrer
+             const bonusAmountUSDDisplay = await formatBalanceForDisplay(initialBonusAmountLamports, 'USD');
+             const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
+             safeSendMessage(referrerId,
+                 `🎉 Cha-ching! Your referred friend ${escapeMarkdownV2(referredName)} placed their first qualifying bet!\n` +
+                 `You've earned an Initial Bet Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}*! It has been added to your casino balance. 🤝`,
+                 { parse_mode: 'MarkdownV2' }
+             ).catch(e => console.warn(`${LOG_PREFIX_PQB} Failed to send Initial Bet Bonus notification to referrer ${referrerId}: ${e.message}`));
+        } else {
+             console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus.`);
+        }
+        
+        return { success: true, bonusProcessed: true };
 
-        return { success: true, bonusProcessed: true };
-
-    } catch (error) {
-        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack?.substring(0, 700));
-        return { success: false, bonusProcessed: false, error: error.message };
-    }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack?.substring(0, 700));
+        return { success: false, bonusProcessed: false, error: error.message };
+    }
 }
 
 
@@ -2780,11 +2728,12 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
     }
 }
 
+// REVISED AND CORRECTED - handleClaimMilestoneBonus
 async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, dbClient) {
-    const LOG_PREFIX_HCMB = `[ClaimMilestoneBonus UID:${userIdClicking} CommID:${commissionReferralId}]`;
+    const LOG_PREFIX_HCMB = `[ClaimMilestoneBonus_V2_InternalCredit UID:${userIdClicking} CommID:${commissionReferralId}]`;
 
     try {
-        // 1. Fetch the specific milestone bonus record.
+        // 1. Fetch and lock the specific milestone bonus record to prevent race conditions.
         const commissionRes = await dbClient.query(
             `SELECT * FROM referrals WHERE referral_id = $1 AND referrer_telegram_id = $2 AND status = 'milestone_bonus_claimable' FOR UPDATE`,
             [commissionReferralId, userIdClicking]
@@ -2795,32 +2744,34 @@ async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, d
         }
         const commissionData = commissionRes.rows[0];
         const commissionAmountLamports = BigInt(commissionData.commission_amount_lamports);
+        
+        // --- THIS IS THE KEY CHANGE ---
+        // Instead of queueing a job, we credit the balance and finalize the record.
 
-        // 2. Update its status to 'earned' (ready for payout queue).
+        // 2. Credit the referrer's internal balance
+        const creditResult = await updateUserBalanceAndLedger(
+            dbClient,
+            userIdClicking,
+            commissionAmountLamports,
+            'referral_commission_credit',
+            { referral_id: commissionReferralId },
+            `Milestone Bonus: ${commissionData.commission_type}`
+        );
+
+        if (!creditResult.success) {
+            throw new Error(creditResult.error || "Failed to credit milestone bonus to user balance.");
+        }
+
+        // 3. Update its status to 'paid_out'.
         await dbClient.query(
-            `UPDATE referrals SET status = 'earned', updated_at = NOW() WHERE referral_id = $1`,
+            `UPDATE referrals SET status = 'paid_out', updated_at = NOW() WHERE referral_id = $1`,
             [commissionReferralId]
         );
 
-        console.log(`${LOG_PREFIX_HCMB} Milestone bonus ${commissionReferralId} status changed to 'earned'. Amount: ${commissionAmountLamports}`);
+        console.log(`${LOG_PREFIX_HCMB} Milestone bonus ${commissionReferralId} credited to internal balance. Amount: ${commissionAmountLamports}`);
 
-        // 3. Queue the payout job for this 'earned' commission.
-        if (typeof addPayoutJob === 'function') {
-            addPayoutJob({
-                type: 'payout_referral_commission',
-                referralDbId: commissionReferralId,
-                commissionType: commissionData.commission_type,
-                commissionAmountLamports: commissionAmountLamports,
-                referrerUserId: userIdClicking,
-                referredUserId: commissionData.referred_telegram_id // For logging if needed
-            });
-        } else {
-            console.error(`${LOG_PREFIX_HCMB} CRITICAL: addPayoutJob function not defined! Milestone bonus for CommID ${commissionReferralId} NOT QUEUED.`);
-            // This is a critical failure; the bonus is marked 'earned' but not queued. Admin needs to be alerted.
-            throw new Error("Payout system unavailable. Bonus claim processed but not queued. Contact support.");
-        }
         const bonusAmountUSDDisplay = await formatBalanceForDisplay(commissionAmountLamports, 'USD');
-        return { success: true, messageForUser: `Milestone bonus of approx. ${bonusAmountUSDDisplay} claimed! It's now queued for payout to your linked wallet.` };
+        return { success: true, messageForUser: `Milestone bonus of approx. ${escapeHTML(bonusAmountUSDDisplay)} claimed! It has been added to your casino balance.` };
 
     } catch (error) {
         console.error(`${LOG_PREFIX_HCMB} Error claiming milestone bonus: ${error.message}`);
@@ -13148,105 +13099,80 @@ async function handleBonusCommand(msg) {
 }
 
 // --- NEW Core Function to Handle Claiming a Level Up Bonus ---
-/**
- * Core logic to process a level up bonus claim.
- * Must be called within an active DB transaction (dbClient).
- * @param {string} userId - Telegram ID of the user claiming.
- * @param {number} levelIdToClaim - The level_id (from user_levels) being claimed.
- * @param {import('pg').PoolClient} dbClient - Active database client for the transaction.
- * @returns {Promise<{success: boolean, messageForUser?: string, error?: string}>}
- */
+// REVISED AND CORRECTED - handleClaimLevelBonus
 async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
-    const LOG_PREFIX_HCLB_CORE = `[HandleClaimLevelBonusCore UID:${userId} LevelID:${levelIdToClaim}]`;
+    const LOG_PREFIX_HCLB_CORE = `[HandleClaimLevelBonusCore_V3_InternalCredit UID:${userId} LevelID:${levelIdToClaim}]`;
 
     try {
-        // 1. Fetch user's current level details
-        const userRes = await dbClient.query(
-            `SELECT u.current_level_id, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name
-             FROM users u
-             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1 FOR UPDATE OF u`, // Lock user row for this check
-            [userId]
-        );
-        if (userRes.rowCount === 0) return { success: false, error: "User not found." };
-        const currentUserLevelOrderIndex = userRes.rows[0].current_level_order_index || 0;
-
-        // 2. Fetch details of the level being claimed
+        // 1. Fetch details of the level being claimed
         const levelToClaimRes = await dbClient.query(
-            `SELECT level_id, level_name, bonus_amount_usd, order_index
-             FROM user_levels WHERE level_id = $1`,
+            `SELECT level_id, level_name, bonus_amount_usd, order_index FROM user_levels WHERE level_id = $1`,
             [levelIdToClaim]
         );
         if (levelToClaimRes.rowCount === 0) return { success: false, error: "Bonus level not found." };
         const levelToClaimData = levelToClaimRes.rows[0];
 
-        // 3. Validation
-        if (currentUserLevelOrderIndex < levelToClaimData.order_index) {
+        // 2. Check if user is eligible
+        const userRes = await dbClient.query(
+            `SELECT ul.order_index AS current_level_order_index FROM users u
+             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+             WHERE u.telegram_id = $1 FOR UPDATE`,
+            [userId]
+        );
+        if (userRes.rowCount === 0) return { success: false, error: "User not found." };
+        if ((userRes.rows[0].current_level_order_index || 0) < levelToClaimData.order_index) {
             return { success: false, error: `You haven't reached ${escapeHTML(levelToClaimData.level_name)} yet.` };
         }
-        if (parseFloat(levelToClaimData.bonus_amount_usd) <= 0) {
-             // Mark as claimed even if zero to prevent repeated attempts on button.
-            await dbClient.query(
-                `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, claimed_at, bonus_amount_claimed_lamports, notes)
-                 VALUES ($1, $2, NOW(), $3, $4) ON CONFLICT (user_telegram_id, level_id) DO NOTHING`,
-                [userId, levelIdToClaim, '0', `Attempted to claim zero/negative bonus for ${levelToClaimData.level_name}`]
-            );
-            return { success: false, error: `No bonus amount defined for ${escapeHTML(levelToClaimData.level_name)}.` };
-        }
 
-        // 4. Check if already claimed
-        const alreadyClaimedRes = await dbClient.query(
-            `SELECT 1 FROM user_claimed_level_bonuses WHERE user_telegram_id = $1 AND level_id = $2`,
+        // 3. Atomically INSERT to prevent race conditions.
+        // This is the core fix for the race condition.
+        const insertRes = await dbClient.query(
+            `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, notes)
+             VALUES ($1, $2, 'Claimed by user') ON CONFLICT (user_telegram_id, level_id) DO NOTHING
+             RETURNING claim_id;`,
             [userId, levelIdToClaim]
         );
-        if (alreadyClaimedRes.rowCount > 0) {
+
+        if (insertRes.rowCount === 0) {
+            // INSERT failed due to conflict, meaning it was already claimed.
             return { success: false, error: `You've already claimed the bonus for ${escapeHTML(levelToClaimData.level_name)}.` };
         }
+        const claimId = insertRes.rows[0].claim_id;
 
-        // 5. Convert bonus to lamports
+        // 4. If insert was successful, proceed with crediting the user's balance
         const bonusAmountUSD = parseFloat(levelToClaimData.bonus_amount_usd);
-        const solPrice = await getSolUsdPrice(); // Assumes getSolUsdPrice is available
-        const bonusAmountLamports = convertUSDToLamports(bonusAmountUSD, solPrice); // Assumes convertUSDToLamports is available
+        const solPrice = await getSolUsdPrice();
+        const bonusAmountLamports = convertUSDToLamports(bonusAmountUSD, solPrice);
 
         if (bonusAmountLamports <= 0n) {
-            // Should have been caught by bonus_amount_usd check, but good to have another check.
-            await dbClient.query(
-                `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, claimed_at, bonus_amount_claimed_lamports, notes)
-                 VALUES ($1, $2, NOW(), $3, $4) ON CONFLICT (user_telegram_id, level_id) DO NOTHING`,
-                [userId, levelIdToClaim, '0', `Claimed zero lamport bonus for ${levelToClaimData.level_name}`]
-            );
-            return { success: true, messageForUser: `Bonus for ${escapeHTML(levelToClaimData.level_name)} recorded (0 value).` };
+             return { success: true, messageForUser: `Bonus for ${escapeHTML(levelToClaimData.level_name)} recorded (0 value).` };
         }
-
-        // 6. Credit user and log
+        
         const ledgerNotes = `Level Up Bonus: ${levelToClaimData.level_name} ($${bonusAmountUSD.toFixed(2)})`;
-        const creditResult = await updateUserBalanceAndLedger( // Assumes updateUserBalanceAndLedger is available
+        const creditResult = await updateUserBalanceAndLedger(
             dbClient, userId, bonusAmountLamports,
             'level_up_bonus_claimed',
-            { custom_level_id: levelIdToClaim, custom_level_name: levelToClaimData.level_name },
+            { custom_level_id: levelIdToClaim, custom_level_name: levelToClaimData.level_name, custom_claim_id: claimId },
             ledgerNotes
         );
 
         if (!creditResult.success) {
+            // This is critical. The claim was recorded but credit failed. This will cause the transaction to rollback.
             throw new Error(creditResult.error || "Failed to credit level up bonus to user balance.");
         }
-
-        // 7. Record the claim
+        
+        // 5. Update the claim record with the amount credited
         await dbClient.query(
-            `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, claimed_at, bonus_amount_claimed_lamports, notes)
-             VALUES ($1, $2, NOW(), $3, $4)`,
-            [userId, levelIdToClaim, bonusAmountLamports.toString(), `Claimed for ${levelToClaimData.level_name}`]
+            'UPDATE user_claimed_level_bonuses SET bonus_amount_claimed_lamports = $1 WHERE claim_id = $2',
+            [bonusAmountLamports.toString(), claimId]
         );
 
-        // Ensure formatBalanceForDisplay and escapeHTML are available
         const bonusAmountUSDDisplay = escapeHTML((await formatBalanceForDisplay(bonusAmountLamports, 'USD')).replace(/[$#]/g, ''));
-        return { success: true, messageForUser: `🎉 Bonus for ${escapeHTML(levelToClaimData.level_name)} (~${bonusAmountUSDDisplay}) claimed! Added to your balance.` };
+        return { success: true, messageForUser: `🎉 Bonus for ${escapeHTML(levelToClaimData.level_name)} (~${bonusAmountUSDDisplay}) claimed and added to your balance!` };
 
     } catch (error) {
         console.error(`${LOG_PREFIX_HCLB_CORE} Error claiming level bonus: ${error.message}`, error.stack);
-        // Do not re-throw if we want the calling transaction in handleClaimLevelBonusCallback to manage its own rollback.
-        // The calling function will receive this error in claimResult.error.
-        return { success: false, error: error.message || "Could not claim bonus at this time." };
+        return { success: false, error: error.message || "Could not claim bonus due to a server error." };
     }
 }
 
