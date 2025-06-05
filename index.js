@@ -619,25 +619,33 @@ pool.on('error', (err, client) => {
 });
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query_V3_Diagnostic]'; // New version for logs
-    let cleanedSql = sql; // Default to original sql
+    const logPrefix = '[DB_Query_V4_DEEPEST_LOGS]'; // New version for deep logging
+    let cleanedSql = sql.replace(/\s+/g, ' ').trim();
+
+    // --- DEEPEST DIAGNOSTIC LOGGING ---
+    // This will log every query and the exact type of its parameters right before execution.
+    try {
+        const paramTypes = params.map(p => ({ value: String(p).substring(0, 50), type: typeof p }));
+        console.log(`${logPrefix} --- PRE-QUERY DIAGNOSTICS ---`);
+        console.log(`${logPrefix} SQL: ${cleanedSql}`);
+        console.log(`${logPrefix} PARAM TYPES: ${JSON.stringify(paramTypes)}`);
+        console.log(`${logPrefix} DB_CLIENT_VALID: ${!!(dbClient && typeof dbClient.query === 'function')}`);
+        console.log(`${logPrefix} --- END DIAGNOSTICS ---`);
+    } catch (logError) {
+        console.error(`${logPrefix} FATAL LOGGING ERROR: ${logError.message}`);
+    }
+    // --- END LOGGING ---
 
     try {
-        // --- DIAGNOSTIC AND FIX: This will clean any hidden characters and log the result ---
-        console.log(`${logPrefix} RAW SQL (before cleaning):\n---\n${sql}\n---`);
-        cleanedSql = sql.replace(/\s+/g, ' ').trim();
-        console.log(`${logPrefix} CLEANED SQL (after cleaning): ${cleanedSql}`);
-        // --- END OF DIAGNOSTIC AND FIX ---
-
-        const result = await dbClient.query(cleanedSql, params); // Use the cleaned SQL
+        const result = await dbClient.query(cleanedSql, params);
         return result;
     } catch (error) {
         const sqlPreviewOnError = cleanedSql.length > 200 ? `${cleanedSql.substring(0, 197)}...` : cleanedSql;
-        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : p) );
+        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : String(p)) );
 
         console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
-        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
+        console.error(`${logPrefix} SQL THAT FAILED (Preview): [${sqlPreviewOnError}]`);
+        console.error(`${logPrefix} PARAMS at time of catch: [${paramsPreviewOnError.join(', ')}]`);
         console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
         if (error.stack) {
             console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
