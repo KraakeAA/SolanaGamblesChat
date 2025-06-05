@@ -12252,63 +12252,69 @@ async function handleStartCommand(msg, args) {
 }
 
 async function handleHelpCommand(msg) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const dmChatId = String(msg.chat.id); 
-    // messageIdToEdit is for when this function is called to *edit* an existing message in DM,
-    // e.g., when coming back to the main menu from another menu.
-    // If msg.isCallbackEditing is a flag we set, we use msg.message_id.
-    // Otherwise, if it's a direct /help command, msg.message_id is the command itself and should be deleted if a new message is sent.
-    let messageIdToEditOrDelete = msg.message_id;
-    let shouldEdit = (msg.chat.type === 'private' && msg.isCallbackEditing === true && msg.message_id);
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const dmChatId = String(msg.chat.id); 
+    // messageIdToEdit is for when this function is called to *edit* an existing message in DM,
+    // e.g., when coming back to the main menu from another menu.
+    // If msg.isCallbackEditing is a flag we set, we use msg.message_id.
+    // Otherwise, if it's a direct /help command, msg.message_id is the command itself and should be deleted if a new message is sent.
+    let messageIdToEditOrDelete = msg.message_id;
+    let shouldEdit = (msg.chat.type === 'private' && msg.isCallbackEditing === true && msg.message_id);
 
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    const botNameToUse = BOT_NAME || "our bot"; 
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    const botNameToUse = BOT_NAME || "our bot"; 
 
-    // If it's a typed /help command in DM, delete the command message before sending the menu
-    if (msg.chat.type === 'private' && !msg.isCallbackEditing && msg.text && msg.text.startsWith('/help') && messageIdToEditOrDelete) {
-        await bot.deleteMessage(dmChatId, messageIdToEditOrDelete).catch(() => {});
-        shouldEdit = false; // Force sending a new message
-        messageIdToEditOrDelete = null;
-    }
+    // If it's a typed /help command in DM, delete the command message before sending the menu
+    if (msg.chat.type === 'private' && !msg.isCallbackEditing && msg.text && msg.text.startsWith('/help') && messageIdToEditOrDelete) {
+        await bot.deleteMessage(dmChatId, messageIdToEditOrDelete).catch(() => {});
+        shouldEdit = false; // Force sending a new message
+        messageIdToEditOrDelete = null;
+    }
 
 
-    const helpMessageHTML = `🎉 Welcome to <b>${escapeHTML(botNameToUse)}</b>, ${playerRefHTML}!\n\n` +
-                            `Your casino adventure starts here. What would you like to do?`;
+    const helpMessageHTML = `🎉 Welcome to <b>${escapeHTML(botNameToUse)}</b>, ${playerRefHTML}!\n\n` +
+                            `Your casino adventure starts here. What would you like to do?`;
+    
+    // --- MODIFIED KEYBOARD: Added "Join Community Chat" button ---
+    const helpKeyboardRows = [
+        [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
+        [{ text: "🌟 Level Up Bonus", callback_data: "menu:bonus_dashboard_back" }], 
+        [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],
+        [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
+    ];
     
-    // MODIFIED KEYBOARD: Replaced "Play Games" with "Level Up Bonus"
-    const helpKeyboard = {
-        inline_keyboard: [
-            [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
-            // The "menu:bonus_dashboard_back" callback should trigger handleBonusCommand via handleMenuAction
-            [{ text: "🌟 Level Up Bonus", callback_data: "menu:bonus_dashboard_back" }], 
-            [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],
-            [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
-        ]
-    };
-
-    if (shouldEdit && messageIdToEditOrDelete) {
-        try {
-            await bot.editMessageText(helpMessageHTML, {
-                chat_id: dmChatId, message_id: Number(messageIdToEditOrDelete),
-                parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true
-            });
-        } catch (e) {
-            // If editing fails (e.g., message not found or not modified error if content is same), send a new one.
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                console.warn(`[handleHelpCommand] Failed to edit message ${messageIdToEditOrDelete}, sending new. Error: ${e.message}`);
-                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
-            }
-        }
-    } else {
-        // If not editing (e.g., group redirect, or typed /help in DM where command was deleted), send a new message.
-        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+    const mainChatLink = process.env.MAIN_CHAT_INVITE_LINK;
+    if (mainChatLink) {
+        helpKeyboardRows.unshift([{ text: "💬 Join Community Chat", url: mainChatLink }]); // Add button to the top
     }
+
+    const helpKeyboard = {
+        inline_keyboard: helpKeyboardRows
+    };
+
+    if (shouldEdit && messageIdToEditOrDelete) {
+        try {
+            await bot.editMessageText(helpMessageHTML, {
+                chat_id: dmChatId, message_id: Number(messageIdToEditOrDelete),
+                parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true
+            });
+        } catch (e) {
+            // If editing fails (e.g., message not found or not modified error if content is same), send a new one.
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`[handleHelpCommand] Failed to edit message ${messageIdToEditOrDelete}, sending new. Error: ${e.message}`);
+                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+            }
+        }
+    } else {
+        // If not editing (e.g., group redirect, or typed /help in DM where command was deleted), send a new message.
+        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+    }
 }
 
 async function handleRulesCommand(invokedInChatIdStr, userObj, msgIdInInvokedChatStr = null, isEditAttempt = false, invokedChatType = 'private') {
