@@ -619,23 +619,26 @@ pool.on('error', (err, client) => {
 });
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query]';
-    try {
-        const result = await dbClient.query(sql, params);
-        return result;
-    } catch (error) {
-        const sqlPreviewOnError = sql.length > 200 ? `${sql.substring(0, 197)}...` : sql;
-        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : p) );
+    const logPrefix = '[DB_Query]';
+    // --- FIXED: This line cleans the SQL query to remove any non-standard whitespace or line breaks that cause syntax errors ---
+    const cleanedSql = sql.replace(/\s+/g, ' ').trim();
 
-        console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
-        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
-        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
-        if (error.stack) {
-            console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
-        }
-        throw error;
-    }
+    try {
+        const result = await dbClient.query(cleanedSql, params); // Use the cleaned SQL
+        return result;
+    } catch (error) {
+        const sqlPreviewOnError = cleanedSql.length > 200 ? `${cleanedSql.substring(0, 197)}...` : cleanedSql;
+        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : p) );
+
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        console.error(`${logPrefix} SQL that failed (Preview): [${sqlPreviewOnError}]`);
+        console.error(`${logPrefix} PARAMS for failed SQL: [${paramsPreviewOnError.join(', ')}]`);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
+        if (error.stack) {
+            console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
+        }
+        throw error;
+    }
 }
 
 const connectionOptions = {
