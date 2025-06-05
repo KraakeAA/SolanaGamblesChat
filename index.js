@@ -619,37 +619,38 @@ pool.on('error', (err, client) => {
 });
 
 async function queryDatabase(sql, params = [], dbClient = pool) {
-    const logPrefix = '[DB_Query_V4_DEEPEST_LOGS]'; // New version for deep logging
-    let cleanedSql = sql.replace(/\s+/g, ' ').trim();
-
-    // --- DEEPEST DIAGNOSTIC LOGGING ---
-    // This will log every query and the exact type of its parameters right before execution.
-    try {
-        const paramTypes = params.map(p => ({ value: String(p).substring(0, 50), type: typeof p }));
-        console.log(`${logPrefix} --- PRE-QUERY DIAGNOSTICS ---`);
-        console.log(`${logPrefix} SQL: ${cleanedSql}`);
-        console.log(`${logPrefix} PARAM TYPES: ${JSON.stringify(paramTypes)}`);
-        console.log(`${logPrefix} DB_CLIENT_VALID: ${!!(dbClient && typeof dbClient.query === 'function')}`);
-        console.log(`${logPrefix} --- END DIAGNOSTICS ---`);
-    } catch (logError) {
-        console.error(`${logPrefix} FATAL LOGGING ERROR: ${logError.message}`);
-    }
-    // --- END LOGGING ---
-
+    const logPrefix = '[DB_Query_V5_MANUAL_SUB]';
+    let builtSql = sql;
     try {
-        const result = await dbClient.query(cleanedSql, params);
-        return result;
-    } catch (error) {
-        const sqlPreviewOnError = cleanedSql.length > 200 ? `${cleanedSql.substring(0, 197)}...` : cleanedSql;
-        const paramsPreviewOnError = params.map(p => (typeof p === 'string' && p.length > 50) ? `${p.substring(0, 47)}...` : ((typeof p === 'bigint') ? p.toString() + 'n' : String(p)) );
+        if (params.length > 0) {
+            // Manually and safely substitute parameters to bypass the driver bug.
+            for (let i = 0; i < params.length; i++) {
+                const param = params[i];
+                let substValue;
 
-        console.error(`${logPrefix} ❌ Error executing query.`);
-        console.error(`${logPrefix} SQL THAT FAILED (Preview): [${sqlPreviewOnError}]`);
-        console.error(`${logPrefix} PARAMS at time of catch: [${paramsPreviewOnError.join(', ')}]`);
-        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}, Position: ${error.position || 'N/A'}`);
-        if (error.stack) {
-            console.error(`${logPrefix} Stack (Partial): ${error.stack.substring(0,500)}...`);
+                if (param === null || typeof param === 'undefined') {
+                    substValue = 'NULL';
+                } else if (typeof param === 'bigint' || (typeof param === 'string' && /^\d+$/.test(param)) || typeof param === 'number') {
+                    // It's a bigint, a string of only digits, or a number. Treat as a raw number for the query.
+                    substValue = param.toString();
+                } else {
+                    // It's a regular string. Escape it properly for SQL.
+                    substValue = `'${String(param).replace(/'/g, "''")}'`;
+                }
+                // Replace $1, $2 etc. with the sanitized value.
+                builtSql = builtSql.replace(`$${i + 1}`, substValue);
+            }
         }
+
+        const cleanedSql = builtSql.replace(/\s+/g, ' ').trim();
+        // We no longer need deep diagnostics, just execute the final built query
+        const result = await dbClient.query(cleanedSql); // Execute without a params array
+        return result;
+
+    } catch (error) {
+        console.error(`${logPrefix} ❌ Error executing query.`);
+        console.error(`${logPrefix} FINAL BUILT SQL (Preview): ${(builtSql || sql).substring(0, 400)}`);
+        console.error(`${logPrefix} Error Details: Message: ${error.message}, Code: ${error.code || 'N/A'}`);
         throw error;
     }
 }
