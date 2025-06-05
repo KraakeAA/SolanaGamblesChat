@@ -1203,10 +1203,11 @@ CREATE TABLE IF NOT EXISTS referrals (
     commission_amount_lamports BIGINT,
     transaction_signature VARCHAR(88),
     status VARCHAR(20) DEFAULT 'pending_criteria',
+    notes TEXT, -- <<< PLEASE CONFIRM THIS LINE IS HERE AND SAVED
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
-);`);
+);;
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
         console.log("DB Schema: Referrals table processed.");
@@ -13073,32 +13074,46 @@ async function handleBonusCommand(msg) {
 
 // --- NEW Core Function to Handle Claiming a Level Up Bonus ---
 // REVISED AND CORRECTED - handleClaimLevelBonus
+// FINAL CORRECTED handleClaimLevelBonus
 async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
-    const LOG_PREFIX_HCLB_CORE = `[HandleClaimLevelBonusCore_V3_InternalCredit UID:${userId} LevelID:${levelIdToClaim}]`;
+    const LOG_PREFIX_HCLB_CORE = `[HandleClaimLevelBonusCore_V4_LockFix UID:${userId} LevelID:${levelIdToClaim}]`;
 
     try {
-        // 1. Fetch details of the level being claimed
+        // 1. Fetch details of the level being claimed first
         const levelToClaimRes = await dbClient.query(
             `SELECT level_id, level_name, bonus_amount_usd, order_index FROM user_levels WHERE level_id = $1`,
             [levelIdToClaim]
         );
-        if (levelToClaimRes.rowCount === 0) return { success: false, error: "Bonus level not found." };
+        if (levelToClaimRes.rowCount === 0) {
+            return { success: false, error: "Bonus level not found." };
+        }
         const levelToClaimData = levelToClaimRes.rows[0];
 
-        // 2. Check if user is eligible
+        // 2. NOW, fetch and LOCK the user's record. This is the critical change to avoid the JOIN issue.
         const userRes = await dbClient.query(
-            `SELECT ul.order_index AS current_level_order_index FROM users u
-             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1 FOR UPDATE`,
+            `SELECT current_level_id FROM users WHERE telegram_id = $1 FOR UPDATE`,
             [userId]
         );
-        if (userRes.rowCount === 0) return { success: false, error: "User not found." };
-        if ((userRes.rows[0].current_level_order_index || 0) < levelToClaimData.order_index) {
+        if (userRes.rowCount === 0) {
+            return { success: false, error: "User not found." };
+        }
+        const userCurrentLevelId = userRes.rows[0].current_level_id;
+
+        // 3. Get the order_index for the user's current level
+        let currentUserLevelOrderIndex = 0;
+        if (userCurrentLevelId) {
+            const userLevelDetailsRes = await dbClient.query(`SELECT order_index FROM user_levels WHERE level_id = $1`, [userCurrentLevelId]);
+            if (userLevelDetailsRes.rows.length > 0) {
+                currentUserLevelOrderIndex = userLevelDetailsRes.rows[0].order_index;
+            }
+        }
+
+        // 4. Perform validations
+        if (currentUserLevelOrderIndex < levelToClaimData.order_index) {
             return { success: false, error: `You haven't reached ${escapeHTML(levelToClaimData.level_name)} yet.` };
         }
 
-        // 3. Atomically INSERT to prevent race conditions.
-        // This is the core fix for the race condition.
+        // 5. Atomically INSERT to prevent race conditions.
         const insertRes = await dbClient.query(
             `INSERT INTO user_claimed_level_bonuses (user_telegram_id, level_id, notes)
              VALUES ($1, $2, 'Claimed by user') ON CONFLICT (user_telegram_id, level_id) DO NOTHING
@@ -13107,19 +13122,18 @@ async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
         );
 
         if (insertRes.rowCount === 0) {
-            // INSERT failed due to conflict, meaning it was already claimed.
             return { success: false, error: `You've already claimed the bonus for ${escapeHTML(levelToClaimData.level_name)}.` };
         }
         const claimId = insertRes.rows[0].claim_id;
 
-        // 4. If insert was successful, proceed with crediting the user's balance
+        // 6. If insert was successful, proceed with crediting the user's balance
         const bonusAmountUSD = parseFloat(levelToClaimData.bonus_amount_usd);
-        const solPrice = await getSolUsdPrice();
-        const bonusAmountLamports = convertUSDToLamports(bonusAmountUSD, solPrice);
-
-        if (bonusAmountLamports <= 0n) {
+        if (bonusAmountUSD <= 0) {
              return { success: true, messageForUser: `Bonus for ${escapeHTML(levelToClaimData.level_name)} recorded (0 value).` };
         }
+        
+        const solPrice = await getSolUsdPrice();
+        const bonusAmountLamports = convertUSDToLamports(bonusAmountUSD, solPrice);
         
         const ledgerNotes = `Level Up Bonus: ${levelToClaimData.level_name} ($${bonusAmountUSD.toFixed(2)})`;
         const creditResult = await updateUserBalanceAndLedger(
@@ -13130,11 +13144,10 @@ async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
         );
 
         if (!creditResult.success) {
-            // This is critical. The claim was recorded but credit failed. This will cause the transaction to rollback.
             throw new Error(creditResult.error || "Failed to credit level up bonus to user balance.");
         }
         
-        // 5. Update the claim record with the amount credited
+        // 7. Update the claim record with the amount credited
         await dbClient.query(
             'UPDATE user_claimed_level_bonuses SET bonus_amount_claimed_lamports = $1 WHERE claim_id = $2',
             [bonusAmountLamports.toString(), claimId]
