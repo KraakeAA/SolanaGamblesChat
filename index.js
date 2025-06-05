@@ -12833,77 +12833,109 @@ async function handleGrantCommand(msg, args, adminUserObj) {
 async function handleBonusCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type; // Determine chat type
-    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V3 UID:${userId} CH:${chatId} Type:${chatType}]`; // V3
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V4 UID:${userId} CH:${chatId} Type:${chatType}]`; // V4
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) {
         await safeSendMessage(chatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
         return;
     }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); // For HTML messages
-    const playerRefMD = getPlayerDisplayReference(userObject); // For MarkdownV2 messages
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); 
 
-    let botUsername = BOT_NAME || "our_bot"; // Fallback
+    let botUsername = BOT_NAME || "our_bot"; 
     try {
         const selfInfo = await bot.getMe();
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.warn(`${LOG_PREFIX_BONUS_CMD} Could not fetch bot username: ${e.message}`); }
 
-
     // --- Group Chat Logic ---
     if (chatType === 'group' || chatType === 'supergroup') {
-        if (msg.message_id) { // Delete the triggering /bonus command
+        if (msg.message_id && msg.text && msg.text.startsWith('/bonus') ) { // Delete the triggering /bonus command from group
             await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
         }
 
         let client = null;
         try {
             client = await pool.connect();
+            
+            // Fetch necessary data: rank, current wager, current level, next level, claimable bonus
             const rank = await calculateUserRank(userId, client);
 
-            // Check for claimable bonuses
-            const claimableBonusesQuery = `
-                SELECT ul.level_id
+            const currentUserDetailsQuery = `
+                SELECT u.total_wagered_lamports, ul.order_index AS current_level_order_index, ul.level_name as current_level_name
+                FROM users u
+                LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+                WHERE u.telegram_id = $1`;
+            const currentUserDetailsRes = await client.query(currentUserDetailsQuery, [userId]);
+            if (currentUserDetailsRes.rowCount === 0) throw new Error("User not found for bonus info.");
+            const currentUserData = currentUserDetailsRes.rows[0];
+            const totalWageredLamports = BigInt(currentUserData.total_wagered_lamports || '0');
+            const currentLevelOrderIndex = currentUserData.current_level_order_index || 0;
+
+            const solPrice = await getSolUsdPrice();
+            const totalWageredUSD = Number(totalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+
+            const nextLevelQuery = `
+                SELECT level_name, wager_threshold_usd, bonus_amount_usd 
+                FROM user_levels 
+                WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
+            const nextLevelRes = await client.query(nextLevelQuery, [currentLevelOrderIndex]);
+            const nextLevelData = nextLevelRes.rows.length > 0 ? nextLevelRes.rows[0] : null;
+
+            let wagerNeededUSDText = "🏅 Max Level Reached! Congratulations!";
+            if (nextLevelData) {
+                const nextLevelThresholdUSD = parseFloat(nextLevelData.wager_threshold_usd);
+                const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSD);
+                const nextLevelBonusUSD = parseFloat(nextLevelData.bonus_amount_usd).toFixed(2);
+                wagerNeededUSDText = `🎯 Next Level: Wager ~<b>$${wagerNeededUSD.toFixed(2)} USD</b> more for <b>${escapeHTML(nextLevelData.level_name)}</b> (approx. $${nextLevelBonusUSD} bonus)!`;
+            }
+
+            // Check for *any* claimable bonus to adjust button text
+            const claimableBonusQuery = `
+                SELECT ul.level_id, ul.bonus_amount_usd, ul.level_name
                 FROM user_levels ul
                 JOIN users u ON u.telegram_id = $1
-                LEFT JOIN user_levels current_ul ON u.current_level_id = current_ul.level_id
+                LEFT JOIN user_levels current_ul ON u.current_level_id = ul.level_id
                 WHERE ul.order_index <= COALESCE(current_ul.order_index, 0)
                 AND ul.bonus_amount_usd > 0
                 AND NOT EXISTS (
                     SELECT 1 FROM user_claimed_level_bonuses uclb
                     WHERE uclb.user_telegram_id = $1 AND uclb.level_id = ul.level_id
-                ) LIMIT 1;`; // Only need to know if at least one exists
-            const claimableBonusesRes = await client.query(claimableBonusesQuery, [userId]);
-            const hasClaimableBonuses = claimableBonusesRes.rows.length > 0;
+                ) ORDER BY ul.order_index ASC LIMIT 1;`; // Get the soonest claimable for button text
+            const claimableBonusRes = await client.query(claimableBonusQuery, [userId]);
+            const nextClaimableBonus = claimableBonusRes.rows.length > 0 ? claimableBonusRes.rows[0] : null;
 
-            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Quick View</b> ✨\n\n` +
-                                       `🏆 Current Rank: <b>#${rank !== null ? rank : 'N/A'}</b>\n\n`;
-
-            if (hasClaimableBonuses) {
-                groupBonusMessageHTML += `🎉 Great news! You have level-up bonuses waiting to be claimed!\n`;
+            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Check</b> ✨\n\n` +
+                                       `🏆 Rank: <b>#${rank !== null ? rank : 'N/A'}</b>\n` +
+                                       `${wagerNeededUSDText}\n\n`;
+            
+            let buttonText = "💰 My Bonus Dashboard (DM)";
+            if (nextClaimableBonus) {
+                const bonusAmountToClaimUSD = parseFloat(nextClaimableBonus.bonus_amount_usd).toFixed(2);
+                groupBonusMessageHTML += `🎉 Bonus available! Check your DM with @${escapeHTML(botUsername)} to claim.`;
+                buttonText = `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus (DM)`;
             } else {
-                groupBonusMessageHTML += `💡 Keep playing and leveling up to unlock exciting bonuses!\n`;
+                groupBonusMessageHTML += `💡 No new bonuses ready to claim right now. Keep playing!`;
             }
-            groupBonusMessageHTML += `\nTap below to view your full Bonus Dashboard & claim any rewards in your private chat with me. 👇`;
 
             const groupKeyboard = {
                 inline_keyboard: [
-                    [{ text: "💰 My Full Bonus Dashboard (DM)", url: `https://t.me/${botUsername}?start=menu_bonus_dashboard_back` }]
+                    [{ text: buttonText, url: `https://t.me/${botUsername}?start=menu_bonus_dashboard_back` }]
                 ]
             };
             await safeSendMessage(chatId, groupBonusMessageHTML, { parse_mode: 'HTML', reply_markup: groupKeyboard });
 
         } catch (error) {
             console.error(`${LOG_PREFIX_BONUS_CMD} Error generating group bonus message: ${error.message}`, error.stack);
-            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view right now. You can try again or check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
+            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. Please check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
         } finally {
             if (client) client.release();
         }
-        return; // End execution for group chat
+        return; 
     }
 
-    // --- Private Chat (DM) Logic (Existing logic, enhanced) ---
+    // --- Private Chat (DM) Logic (Remains mostly the same, enhanced for clarity) ---
     let workingMessageId = msg.message_id; 
     const isEditingExistingDashboard = msg.message_id && msg.isCallbackEditing === true;
 
@@ -12912,11 +12944,7 @@ async function handleBonusCommand(msg) {
         workingMessageId = null; 
     }
     
-    // If original messageId was from a menu action (isCallbackEditing), keep it for editing.
-    // Otherwise, if it was a typed command (now deleted), workingMessageId is null.
-    // If workingMessageId is not null, try to edit to "Loading...". If it is null, send new "Loading..."
-
-    if (workingMessageId) { // True if isEditingExistingDashboard or if msg.message_id existed and wasn't a typed /bonus command
+    if (workingMessageId) { 
         try {
             await bot.editMessageText("⏳ Fetching your Level Up Bonus status...", {
                 chat_id: chatId, message_id: Number(workingMessageId),
@@ -12939,9 +12967,9 @@ async function handleBonusCommand(msg) {
         return;
     }
 
-    let client = null;
+    let clientDm = null; // Renamed to avoid conflict with group client variable
     try {
-        client = await pool.connect();
+        clientDm = await pool.connect();
         let messageTextHTML = `🌟 <b>Level Up Bonus Dashboard</b> 🌟\n\nHi ${playerRefHTML}! Play games, boost your wagers, and climb the ranks to unlock awesome level-up bonuses!\n\n`;
         const keyboardRows = [];
 
@@ -12953,7 +12981,7 @@ async function handleBonusCommand(msg) {
             FROM users u
             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
             WHERE u.telegram_id = $1`;
-        const currentUserDetails = await client.query(currentUserDetailsQuery, [userId]);
+        const currentUserDetails = await clientDm.query(currentUserDetailsQuery, [userId]);
 
         if (currentUserDetails.rowCount === 0) {
             throw new Error("User profile not found in database for bonus check.");
@@ -12969,13 +12997,13 @@ async function handleBonusCommand(msg) {
         messageTextHTML += `🏆 Your Current Level: <b>${escapeHTML(currentLevelName)}</b>\n` +
                              `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamports, 'USD'))}</b>\n`;
 
-        const rank = await calculateUserRank(userId, client); 
+        const rank = await calculateUserRank(userId, clientDm); 
         messageTextHTML += `🎖️ Your Casino Rank: <b>#${rank !== null ? rank : 'N/A'}</b>\n\n`;
 
         const nextLevelDataQuery = `
             SELECT level_name, wager_threshold_usd, bonus_amount_usd FROM user_levels
             WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
-        const nextLevelData = await client.query(nextLevelDataQuery, [currentLevelOrderIndex]);
+        const nextLevelData = await clientDm.query(nextLevelDataQuery, [currentLevelOrderIndex]);
 
         if (nextLevelData.rowCount > 0) {
             const nl = nextLevelData.rows[0];
@@ -12996,13 +13024,12 @@ async function handleBonusCommand(msg) {
                 SELECT 1 FROM user_claimed_level_bonuses uclb
                 WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
             ) ORDER BY ul.order_index ASC;`;
-        const claimableBonusesRes = await client.query(claimableBonusesQuery, [currentLevelOrderIndex, userId]);
+        const claimableBonusesRes = await clientDm.query(claimableBonusesQuery, [currentLevelOrderIndex, userId]);
 
         if (claimableBonusesRes.rows.length > 0) {
             messageTextHTML += "✨ <b>Available Bonuses to Claim:</b>\n";
             claimableBonusesRes.rows.forEach(bonus => {
                 const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
-                // Removed level order index from message for brevity, level name is enough
                 messageTextHTML += `  ▫️ <b>${escapeHTML(bonus.level_name)}</b> - Bonus: approx. <b>$${bonusAmountToClaimUSD} USD</b>\n`;
                 keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} (${escapeHTML(bonus.level_name)})`, callback_data: `claim_level_bonus:${bonus.level_id}` }]);
             });
@@ -13023,7 +13050,7 @@ async function handleBonusCommand(msg) {
             disable_web_page_preview: true 
         });
     } catch (error) {
-        console.error(`${LOG_PREFIX_BONUS_CMD} Error displaying bonus dashboard: ${error.message}`, error.stack);
+        console.error(`${LOG_PREFIX_BONUS_CMD} Error displaying bonus dashboard (DM): ${error.message}`, error.stack);
         const errorText = `⚙️ Apologies, ${playerRefHTML}. We couldn't fetch your bonus information: ${escapeHTML(error.message.replace(/<br\s*\/?>/gi, '\n'))}`;
         const errorKbd = { inline_keyboard: [[{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]] };
         await bot.editMessageText(errorText, { chat_id: chatId, message_id: Number(workingMessageId), parse_mode: 'HTML', reply_markup: errorKbd })
@@ -13031,8 +13058,8 @@ async function handleBonusCommand(msg) {
                 await safeSendMessage(chatId, errorText, { parse_mode: 'HTML', reply_markup: errorKbd });
             });
     } finally {
-        if (client) {
-            client.release();
+        if (clientDm) {
+            clientDm.release();
         }
     }
 }
