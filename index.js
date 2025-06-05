@@ -1971,10 +1971,9 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         const solPrice = await getSolUsdPrice();
         const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        // --- FIXED: Replaced one complex query with multiple simpler ones to avoid syntax errors. ---
+        // --- FIXED: Rewritten to build the query directly to bypass parameter handling errors. ---
         const currentUserDataRes = await dbClient.query(
-            `SELECT telegram_id, username, first_name, last_name, current_level_id FROM users WHERE telegram_id = $1 FOR UPDATE OF users`,
-            [userId]
+            `SELECT telegram_id, username, first_name, last_name, current_level_id FROM users WHERE telegram_id = ${userId} FOR UPDATE OF users`
         );
 
         if (currentUserDataRes.rowCount === 0) {
@@ -1987,8 +1986,7 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
 
         if (userFromDb.current_level_id) {
             const currentLevelDetailsRes = await dbClient.query(
-                `SELECT order_index, level_name FROM user_levels WHERE level_id = $1`,
-                [userFromDb.current_level_id]
+                `SELECT order_index, level_name FROM user_levels WHERE level_id = ${userFromDb.current_level_id}`
             );
             if (currentLevelDetailsRes.rowCount > 0) {
                 currentLevelOrderIndex = currentLevelDetailsRes.rows[0].order_index || 0;
@@ -2023,16 +2021,13 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
 
         if (newPotentialLevelId !== userFromDb.current_level_id && newPotentialOrderIndex > currentLevelOrderIndex) {
             await dbClient.query(
-                `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
-                [newPotentialLevelId, userId]
+                `UPDATE users SET current_level_id = ${newPotentialLevelId}, updated_at = NOW() WHERE telegram_id = ${userId}`
             );
             console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentLevelOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
 
-            // Construct user display name (HTML safe)
             const userObjectForDisplay = { telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name, last_name: userFromDb.last_name };
-            const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObjectForDisplay)); // Ensure getPlayerDisplayReference exists and is HTML safe
+            const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObjectForDisplay));
 
-            // --- Enhanced DM Notification ---
             let dmNotificationTextHTML = `🎉✨ **LEVEL UP!** ✨🎉\n\n` +
                                        `Huge congrats, ${playerRefHTML}! You've climbed the ranks and reached:\n\n` +
                                        `🏅 **${escapeHTML(newPotentialLevelName)}** (Level ${newPotentialOrderIndex}) 🏅\n\n`;
@@ -2050,18 +2045,16 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
             keyboardRowsDM.push([{ text: "📊 View My Bonus Dashboard", callback_data: "menu:bonus_dashboard_back" }]);
             keyboardRowsDM.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
 
-
             if (typeof safeSendMessage === 'function') {
                 safeSendMessage(userId, dmNotificationTextHTML, { 
-                    parse_mode: 'HTML', // Changed to HTML for better formatting
+                    parse_mode: 'HTML',
                     reply_markup: { inline_keyboard: keyboardRowsDM } 
                 }).catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send level up DM to ${userId}: ${e.message}`));
             } else {
                 console.warn(`${LOG_PREFIX_CHECK_LVL} safeSendMessage not available to notify user ${userId} of level up.`);
             }
 
-            // --- Group Chat Notification ---
-            if (originalGameChatId && String(originalGameChatId) !== String(userId)) { // Ensure it's a group chat, not the DM itself
+            if (originalGameChatId && String(originalGameChatId) !== String(userId)) {
                 const groupNotificationHTML = `🎉🥳 Level Up Alert! 🥳🎉\n\n` +
                                              `Congratulations to ${playerRefHTML} for achieving a new rank: 🏅 **${escapeHTML(newPotentialLevelName)}**!\n\n` +
                                              `Keep an eye on your DMs for any new bonus rewards!`;
@@ -2071,7 +2064,7 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         }
     } catch (error) {
         console.error(`${LOG_PREFIX_CHECK_LVL} ❌ Error checking/updating user level: ${error.message}`, error.stack);
-        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') { // Check for escapeMarkdownV2 as well
+        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
             notifyAdmin(`⚠️ Error in Level Up Check for User ${userId}: ${escapeMarkdownV2(error.message)}. Balance update likely succeeded, but level up process may have failed.`, { parse_mode: 'MarkdownV2' });
         }
     }
@@ -2711,30 +2704,25 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
     let milestonesProcessedThisCall = 0;
 
     try {
-        // --- FIXED: Replaced a complex JOIN query with a simpler one to avoid syntax errors. ---
-        // 1. Find who referred this user and the existing referral link details.
+        // --- FIXED: Rewritten to build the query directly to bypass parameter handling errors. ---
         const referralLinkDetailsQuery = await dbClient.query(
             `SELECT referral_id, referrer_telegram_id, referred_user_wager_milestones_achieved, last_milestone_bonus_check_wager_lamports
              FROM referrals
-             WHERE referred_telegram_id = $1
-             LIMIT 1;`,
-            [stringReferredUserId]
+             WHERE referred_telegram_id = ${stringReferredUserId} 
+             LIMIT 1`
         );
         // --- END OF FIX ---
 
         if (referralLinkDetailsQuery.rowCount === 0) {
-            // console.log(`${LOG_PREFIX_PWM} No active referral link found for user ${stringReferredUserId} to process milestones.`);
             return { success: true, milestonesProcessed: 0 };
         }
 
         const referralLink = referralLinkDetailsQuery.rows[0];
         const referrerId = String(referralLink.referrer_telegram_id);
-        let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {}; // JSONB field
+        let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {};
         const lastCheckedWager = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
 
-        // If wager hasn't increased since last check, no need to re-evaluate milestones.
         if (newTotalWageredLamportsByReferred <= lastCheckedWager) {
-            // console.log(`${LOG_PREFIX_PWM} Total wagered has not increased significantly since last check. Current: ${newTotalWageredLamportsByReferred}, LastChecked: ${lastCheckedWager}`);
             return { success: true, milestonesProcessed: 0 };
         }
 
@@ -2744,34 +2732,26 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
         for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
             const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
             if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
-                // Milestone reached and not yet processed!
                 const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
 
                 if (milestoneBonusAmountLamports > 0n) {
-                    // Create a new commission record for this milestone, making it claimable
                     const milestoneCommissionInsert = await dbClient.query(
                         `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, commission_type, commission_amount_lamports, status, notes, created_at, updated_at)
                          VALUES ($1, $2, $3, $4, 'milestone_bonus_claimable', $5, NOW(), NOW())
                          RETURNING referral_id;`,
                         [
-                            referrerId,
-                            stringReferredUserId,
-                            `wager_milestone_${milestoneUSD}_usd`,
-                            milestoneBonusAmountLamports.toString(),
-                            `Referred user ${stringReferredUserId} reached $${milestoneUSD} wager milestone.`
+                            referrerId, stringReferredUserId, `wager_milestone_${milestoneUSD}_usd`,
+                            milestoneBonusAmountLamports.toString(), `Referred user ${stringReferredUserId} reached $${milestoneUSD} wager milestone.`
                         ]
                     );
                     const newMilestoneReferralId = milestoneCommissionInsert.rows[0]?.referral_id;
 
                     if (newMilestoneReferralId) {
-                        console.log(`${LOG_PREFIX_PWM} Milestone $${milestoneUSD} bonus of ${milestoneBonusAmountLamports} lamports (RefDBID: ${newMilestoneReferralId}) now claimable for referrer ${referrerId}.`);
                         milestonesProcessedThisCall++;
-
-                        // Notify referrer about the claimable bonus
                         const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient);
                         if (referrerUserObj) {
                             const bonusAmountUSDDisplay = await formatBalanceForDisplay(milestoneBonusAmountLamports, 'USD');
-                             const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
+                            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
                             const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
 
                             safeSendMessage(referrerId,
@@ -2782,11 +2762,10 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
                         }
                     }
                 }
-                achievedMilestonesData[milestoneKey] = new Date().toISOString(); // Mark as processed
+                achievedMilestonesData[milestoneKey] = new Date().toISOString();
             }
         }
 
-        // Update the referral link record with new achieved milestones and the last checked wager amount
         if (milestonesProcessedThisCall > 0 || newTotalWageredLamportsByReferred > lastCheckedWager) {
             await dbClient.query(
                 `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW()
