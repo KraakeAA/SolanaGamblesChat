@@ -16355,7 +16355,7 @@ async function handleHistoryCommand(msgOrCbMsg) {
 
 async function handleMenuAction(userId, originalChatId, originalMessageId, menuTypeInput, params = [], isFromCallback = true, originalChatType = 'private', originalMsgObject = null) {
     const stringUserId = String(userId);
-    const menuType = String(menuTypeInput).trim();
+    const menuType = String(menuTypeInput).trim(); // Trim to remove potential leading/trailing whitespace
     const logPrefix = `[MenuAction UID:${stringUserId} Type:${menuType} OrigChat:${originalChatId}]`;
     console.log(`${logPrefix} Processing menu action. Cleaned menuType: '${menuType}', Params: [${params.join(',')}]`);
 
@@ -16363,7 +16363,7 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
         console.error(`${logPrefix} CRITICAL: stringUserId is problematic: '${stringUserId}'`);
         return;
     }
-    let userObject = await getOrCreateUser(stringUserId);
+    let userObject = await getOrCreateUser(stringUserId); // Assuming getOrCreateUser is robust for stringUserId
 
     if(!userObject) {
         console.error(`${logPrefix} Could not fetch user profile for menu action. User ID: ${stringUserId}`);
@@ -16373,7 +16373,7 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
         return;
     }
 
-    let botUsername = BOT_NAME || "our bot";
+    let botUsername = BOT_NAME || "our bot"; // BOT_NAME should be globally available
     try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* ignore */ }
 
     let targetChatIdForAction = stringUserId; 
@@ -16384,14 +16384,13 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
     const dmPreferredMenuTypes = [...sensitiveMenuTypes, 'rules_list', 'games_overview', 'levels_info', 'main', 'bonus_dashboard_back'];
 
     if ((originalChatType === 'group' || originalChatType === 'supergroup') && dmPreferredMenuTypes.includes(menuType)) {
-        // ... (redirection logic remains the same as previous version) ...
         console.log(`${logPrefix} DM-preferred menu action '${menuType}' in group. Redirecting user ${stringUserId} to DM.`);
         isGroupActionRedirect = true;
-        const playerRefForRedirect = escapeHTML(getPlayerDisplayReference(userObject));
+        const playerRefForRedirect = escapeHTML(getPlayerDisplayReference(userObject)); // Ensure getPlayerDisplayReference is available
         const redirectText = `${playerRefForRedirect}, for privacy, please continue this in our direct message: @${escapeHTML(botUsername)}`;
         const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
         
-        if (originalMessageId && bot) {
+        if (originalMessageId && bot) { // Ensure bot instance is available
             try {
                 await bot.editMessageText(redirectText, {
                     chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'HTML',
@@ -16410,55 +16409,81 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
         targetChatIdForAction = originalChatId;
     }
     
+    // Clear user state unless it's a specific state we want to preserve during its flow
     const statefulActionsToPreserveState = ['awaiting_withdrawal_address', 'awaiting_withdrawal_amount', 'awaiting_withdrawal_confirmation'];
-    if (!statefulActionsToPreserveState.includes(userStateCache.get(stringUserId)?.state) && menuType !== 'link_wallet_prompt_confirm_address' && menuType !== 'withdraw_amount_confirm') { // Avoid clearing if in a stateful flow unless it's a menu nav
+    if (userStateCache && !statefulActionsToPreserveState.includes(userStateCache.get(stringUserId)?.state)) {
         if (typeof clearUserState === 'function') clearUserState(stringUserId); else userStateCache.delete(stringUserId);
     }
 
 
     const actionMsgContext = {
         from: userObject,
-        chat: { id: targetChatIdForAction, type: 'private' },
+        chat: { id: targetChatIdForAction, type: 'private' }, // All actions ultimately handled in DM context
         message_id: messageIdToEdit,
         isCallbackRedirect: isGroupActionRedirect,
         originalChatInfo: isGroupActionRedirect ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
-        message: originalMsgObject 
+        message: originalMsgObject // The original callbackQuery.message or msg object
     };
     
-    const alwaysNewMessageInDM = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main', 'rules_list', 'games_overview', 'levels_info', 'bonus_dashboard_back', 'unlink_wallet_confirm'];
+    const alwaysNewMessageInDM = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main', 'rules_list', 'games_overview', 'levels_info', 'bonus_dashboard_back', 'unlink_wallet_confirm', 'unlink_wallet_execute'];
     if (targetChatIdForAction === stringUserId && actionMsgContext.message_id && alwaysNewMessageInDM.includes(menuType)) {
         await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
-        actionMsgContext.message_id = null; // Force sending a new message for these actions in DM
+        actionMsgContext.message_id = null; // Ensures these actions send a fresh message
     }
 
     let client = null; 
 
     try {
+        // Connect client only for cases that need it and haven't had it passed or opened yet.
         if (menuType === 'levels_info' || menuType === 'unlink_wallet_confirm' || menuType === 'unlink_wallet_execute') {
-            client = await pool.connect();
+            client = await pool.connect(); // Ensure pool is available
         }
 
         switch(menuType) {
-            // ... (other cases like 'wallet', 'deposit', etc. remain the same) ...
-
+            case 'wallet':
+                console.log(`${logPrefix} Matched case 'wallet'`); // Diagnostic log
+                if (typeof handleWalletCommand === 'function') await handleWalletCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleWalletCommand`);
+                break;
+            case 'deposit': case 'quick_deposit':
+                console.log(`${logPrefix} Matched case '${menuType}'`);
+                if (typeof handleDepositCommand === 'function') await handleDepositCommand(actionMsgContext, [], stringUserId);
+                else console.error(`${logPrefix} Missing handler: handleDepositCommand`);
+                break;
+            case 'withdraw':
+                console.log(`${logPrefix} Matched case 'withdraw'`);
+                if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(actionMsgContext, [], stringUserId);
+                else console.error(`${logPrefix} Missing handler: handleWithdrawCommand`);
+                break;
+            case 'referral':
+                console.log(`${logPrefix} Matched case 'referral'`);
+                if (typeof handleReferralCommand === 'function') await handleReferralCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleReferralCommand`);
+                break;
+            case 'history':
+                console.log(`${logPrefix} Matched case 'history'`);
+                if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleHistoryCommand`);
+                break;
+            case 'leaderboards':
+                console.log(`${logPrefix} Matched case 'leaderboards'`);
+                const leaderboardsContext = isGroupActionRedirect ?
+                    {...actionMsgContext, chat: {id: stringUserId, type: 'private'}, message_id: null } :
+                    {...actionMsgContext, chat: {id: originalChatId, type: originalChatType}, message_id: originalMessageId};
+                if (typeof handleLeaderboardsCommand === 'function') await handleLeaderboardsCommand(leaderboardsContext, params);
+                else console.error(`${logPrefix} Missing handler: handleLeaderboardsCommand`);
+                break;
             case 'link_wallet_prompt':
                 console.log(`${logPrefix} Matched case 'link_wallet_prompt'`);
-                clearUserState(stringUserId); // Clear any previous input state
-                if (actionMsgContext.message_id && targetChatIdForAction === stringUserId) {
+                if (actionMsgContext.message_id && targetChatIdForAction === stringUserId) { // actionMsgContext.message_id is messageIdToEdit
                     await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
                 }
-
-                const currentlyLinkedWallet = await getUserLinkedWallet(stringUserId); // Check if a wallet is already linked
-                let promptText = `🔗 <b>Link/Update Your Withdrawal Wallet</b>\n\n`;
-                if (currentlyLinkedWallet) {
-                    promptText += `Your current linked wallet is: <code>${escapeHTML(currentlyLinkedWallet)}</code>\n\nTo update, please reply with your new Solana wallet address. You can also choose to unlink your current wallet.\n\n`;
-                } else {
-                    promptText += `Please reply to this message with your personal Solana wallet address where you'd like to receive withdrawals.\n\n`;
-                }
-                promptText += `Ensure it's correct as transactions are irreversible.\nExample: <code>SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD</code>`;
+                const promptText = `🔗 <b>Link/Update Your Withdrawal Wallet</b>\n\n` +
+                                 (await getUserLinkedWallet(stringUserId) ? `Your current linked wallet is: <code>${escapeHTML(await getUserLinkedWallet(stringUserId))}</code>\n\nTo update, please reply with your new Solana wallet address. You can also choose to unlink your current wallet.\n\n` : `Please reply to this message with your personal Solana wallet address where you'd like to receive withdrawals.\n\n`) +
+                                 `Ensure it's correct as transactions are irreversible.\nExample: <code>SoLmaNqerT3ZpPT1qS9j2kKx2o5x94s2f8u5aA3bCgD</code>`;
                 
                 const keyboardButtons = [];
-                if (currentlyLinkedWallet) {
+                if (await getUserLinkedWallet(stringUserId)) {
                     keyboardButtons.push([{ text: '🗑️ Unlink Current Wallet', callback_data: 'menu:unlink_wallet_confirm' }]);
                 }
                 keyboardButtons.push([{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }]);
@@ -16470,7 +16495,7 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
                     userStateCache.set(stringUserId, {
                         state: 'awaiting_withdrawal_address', chatId: stringUserId, messageId: sentDmPrompt.message_id,
                         data: {
-                            originalPromptMessageId: sentDmPrompt.message_id,
+                            originalPromptMessageId: sentDmPrompt.message_id, // Store ID of this new prompt
                             originalGroupChatId: isGroupActionRedirect ? originalChatId : null,
                             originalGroupMessageId: isGroupActionRedirect ? originalMessageId : null
                         },
@@ -16485,17 +16510,20 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
                 console.log(`${logPrefix} Matched case 'unlink_wallet_confirm'`);
                 const walletToUnlink = await getUserLinkedWallet(stringUserId);
                 if (!walletToUnlink) {
-                    await safeSendMessage(targetChatIdForAction, "It seems you don't have a wallet linked to remove.", {parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:wallet')});
-                    if (actionMsgContext.message_id) await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
+                    const noWalletMsg = "It seems you don't have a wallet linked to remove.";
+                    if (actionMsgContext.message_id) await bot.editMessageText(noWalletMsg, {chat_id: targetChatIdForAction, message_id: Number(actionMsgContext.message_id), parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:wallet')}).catch(async () => await safeSendMessage(targetChatIdForAction, noWalletMsg, {parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:wallet')}));
+                    else await safeSendMessage(targetChatIdForAction, noWalletMsg, {parse_mode:'HTML', reply_markup: createBackToMenuKeyboard('menu:wallet')});
                     break;
                 }
-                const confirmUnlinkText = `⚠️ **Confirm Unlink Wallet** ⚠️\n\nAre you sure you want to unlink your currently linked wallet: <code>${escapeHTML(walletToUnlink)}</code>?\n\nThis action will remove it from your profile. You can link a new wallet later.`;
+                const confirmUnlinkText = `⚠️ **Confirm Unlink Wallet** ⚠️\n\nAre you sure you want to unlink your currently linked wallet:\n<code>${escapeHTML(walletToUnlink)}</code>?\n\nThis action will remove it from your profile. You can link a new wallet later.`;
                 const confirmUnlinkKbd = { inline_keyboard: [
                     [{ text: '🗑️ Yes, Unlink This Wallet', callback_data: 'menu:unlink_wallet_execute' }],
                     [{ text: '❌ No, Keep It', callback_data: 'menu:wallet' }]
                 ]};
-                if (actionMsgContext.message_id) {
-                     await bot.editMessageText(confirmUnlinkText, { chat_id: targetChatIdForAction, message_id: Number(actionMsgContext.message_id), parse_mode: 'HTML', reply_markup: confirmUnlinkKbd}).catch(async (e) => {
+                // Ensure actionMsgContext.message_id is the one to edit or send new
+                const unlinkConfirmMessageId = actionMsgContext.message_id; // ID of the link_wallet_prompt message
+                if (unlinkConfirmMessageId) {
+                     await bot.editMessageText(confirmUnlinkText, { chat_id: targetChatIdForAction, message_id: Number(unlinkConfirmMessageId), parse_mode: 'HTML', reply_markup: confirmUnlinkKbd}).catch(async (e) => {
                         if (!e.message?.toLowerCase().includes("message is not modified")) await safeSendMessage(targetChatIdForAction, confirmUnlinkText, { parse_mode: 'HTML', reply_markup: confirmUnlinkKbd });
                     });
                 } else {
@@ -16508,9 +16536,9 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
                 let unlinkSuccessMessage = "Your wallet has been successfully unlinked.";
                 let unlinkErrorMessage = null;
                 try {
-                    if (!client) client = await pool.connect(); // Ensure client if not acquired earlier
+                    if (!client) client = await pool.connect();
                     await client.query('BEGIN');
-                    const unlinkResult = await unlinkUserWalletDB(stringUserId, client); // Assumes unlinkUserWalletDB is defined in Part P2
+                    const unlinkResult = await unlinkUserWalletDB(stringUserId, client); 
                     if (unlinkResult.success) {
                         await client.query('COMMIT');
                     } else {
@@ -16524,18 +16552,20 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
                     unlinkErrorMessage = dbErr.message; 
                 }
 
+                // Delete the "Are you sure?" confirmation message
                 if (actionMsgContext.message_id) {
                     await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
                 }
-                await safeSendMessage(targetChatIdForAction, unlinkSuccessMessage, {parse_mode: 'HTML', reply_markup: createBackToMenuKeyboard('menu:wallet')});
-                // Optionally, call handleWalletCommand to refresh the wallet view immediately
+                // Send a new message with the result
+                const unlinkFinalMsg = await safeSendMessage(targetChatIdForAction, unlinkSuccessMessage, {parse_mode: 'HTML', reply_markup: createBackToMenuKeyboard('menu:wallet')});
+                
+                // Optionally, call handleWalletCommand to refresh the wallet view immediately IF successful
                 if (typeof handleWalletCommand === 'function' && !unlinkErrorMessage) {
-                    const refreshWalletContext = {...actionMsgContext, message_id: null}; // Send new wallet message
+                    const refreshWalletContext = {...actionMsgContext, message_id: unlinkFinalMsg?.message_id, isCallbackEditing: !!unlinkFinalMsg?.message_id }; 
                     await handleWalletCommand(refreshWalletContext);
                 }
                 break;
 
-            // ... (other cases like 'main', 'rules_list', 'games_overview', 'levels_info', 'bonus_dashboard_back' remain the same) ...
             case 'main': 
                 console.log(`${logPrefix} Matched case 'main'`);
                 if (typeof handleHelpCommand === 'function') await handleHelpCommand(actionMsgContext);
@@ -16601,7 +16631,7 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
             case 'bonus_dashboard_back':
                 console.log(`${logPrefix} Matched case 'bonus_dashboard_back'`);
                 if (typeof handleBonusCommand === 'function') {
-                    const bonusMsgContext = {...actionMsgContext, message_id: null};
+                    const bonusMsgContext = {...actionMsgContext, message_id: null}; // Ensure new message for bonus dashboard
                     await handleBonusCommand(bonusMsgContext);
                 } else {
                     console.error(`${logPrefix} Missing handler: handleBonusCommand for bonus_dashboard_back`);
