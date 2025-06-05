@@ -1203,11 +1203,11 @@ CREATE TABLE IF NOT EXISTS referrals (
     commission_amount_lamports BIGINT,
     transaction_signature VARCHAR(88),
     status VARCHAR(20) DEFAULT 'pending_criteria',
-    notes TEXT, -- <<< PLEASE CONFIRM THIS LINE IS HERE AND SAVED
+    notes TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_referral_pair UNIQUE (referrer_telegram_id, referred_telegram_id)
-);;
+);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_telegram_id);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_telegram_id);`);
         console.log("DB Schema: Referrals table processed.");
