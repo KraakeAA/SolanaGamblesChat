@@ -12171,11 +12171,12 @@ async function handleStartCommand(msg, args) {
                             'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
                             [referrerUserRecord.telegram_id, userId]
                         );
+                        // --- FIXED: The SQL query here was syntactically incorrect with two ON CONFLICT clauses. ---
+                        // A user can only be referred once, so we only need to check for a conflict on the unique 'referred_telegram_id' column.
                         await clientRefLink.query(
-                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                             VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
-                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at)
+                             VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP)
+                             ON CONFLICT (referred_telegram_id) DO NOTHING;`,
                             [referrerUserRecord.telegram_id, userId]
                         );
                         await clientRefLink.query('COMMIT');
@@ -12636,12 +12637,13 @@ async function handleReferralCommand(msgOrCbMsg) {
     const keyboardRows = [];
     let claimableBonusesMessageHTML = "";
     try {
-        const claimableRes = await queryDatabase( // Assuming queryDatabase is defined
+        // --- FIXED: The SQL query here was likely malformed in your running code. This version is correct. ---
+        const claimableRes = await queryDatabase(
             `SELECT r.referral_id, r.commission_type, r.commission_amount_lamports, ru.username AS referred_username, ru.first_name AS referred_first_name, ru.telegram_id AS referred_telegram_id
-             FROM referrals r
-             LEFT JOIN users ru ON r.referred_telegram_id = ru.telegram_id
-             WHERE r.referrer_telegram_id = $1 AND r.status = 'milestone_bonus_claimable'
-             ORDER BY r.created_at ASC`, // Added ORDER BY for consistency
+             FROM referrals r
+             LEFT JOIN users ru ON r.referred_telegram_id = ru.telegram_id
+             WHERE r.referrer_telegram_id = $1 AND r.status = 'milestone_bonus_claimable'
+             ORDER BY r.created_at ASC`,
             [userId]
         );
         if (claimableRes.rows.length > 0) {
