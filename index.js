@@ -829,12 +829,13 @@ async function safeSendMessage(chatId, text, options = {}) {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function notifyAdmin(message, options = {}) {
-    if (ADMIN_USER_ID) {
-        const adminAlertMessage = `🔔 *ADMIN ALERT* (${escapeMarkdownV2(BOT_NAME)}) 🔔\n\n${message}`;
-        return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
-    } else {
-        return null;
-    }
+    if (ADMIN_USER_ID) {
+        // FIXED: Escaped the parentheses around the bot name for MarkdownV2
+        const adminAlertMessage = `🔔 *ADMIN ALERT* \\(${escapeMarkdownV2(BOT_NAME)}\\) 🔔\n\n${message}`;
+        return safeSendMessage(ADMIN_USER_ID, adminAlertMessage, { parse_mode: 'MarkdownV2', ...options });
+    } else {
+        return null;
+    }
 }
 
 async function fetchSolUsdPriceFromBinanceAPI() {
