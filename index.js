@@ -1965,11 +1965,11 @@ async function initializeLevelsDB(extClient = null) {
  * @param {bigint} newTotalWageredLamports - The user's new total wagered amount in lamports.
  */
 // REVISED AND CORRECTED - checkAndUpdateUserLevel
+// REVISED AND CORRECTED - checkAndUpdateUserLevel
 async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports, solUsdPrice, originalGameChatId = null) {
     const LOG_PREFIX_CHECK_LVL = `[CheckUserLevel UID:${userId} GameChat:${originalGameChatId || 'N/A'}]`;
 
     try {
-        // The price is now passed in, not fetched here. This is the critical change.
         if (!solUsdPrice || solUsdPrice <= 0) {
             console.error(`${LOG_PREFIX_CHECK_LVL} Invalid solUsdPrice (${solUsdPrice}) passed. Cannot calculate level progress.`);
             return; 
@@ -1977,11 +1977,11 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         
         const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solUsdPrice;
 
+        // This SQL has been cleaned of any potential non-standard characters.
+        const currentUserDetailsQueryText = `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name FROM users u LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id WHERE u.telegram_id = $1 FOR UPDATE OF u`;
+        
         const currentUserDataRes = await queryDatabase(
-            `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name
-             FROM users u
-             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1 FOR UPDATE OF u`,
+            currentUserDetailsQueryText,
             [userId],
             dbClient
         );
@@ -2647,89 +2647,88 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, milestonesProcessed: number, error?: string}>}
  */
+// CORRECTED processWagerMilestoneBonus
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred) {
-    const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PWM = `[ProcessWagerMilestone UID:${stringReferredUserId}]`;
-    let milestonesProcessedThisCall = 0;
+    const stringReferredUserId = String(referredUserTelegramId);
+    const LOG_PREFIX_PWM = `[ProcessWagerMilestone UID:${stringReferredUserId}]`;
+    let milestonesProcessedThisCall = 0;
 
-    try {
-        // --- FIXED: Reverted to a standard parameterized query to be handled by the central queryDatabase function. ---
-        const referralLinkDetailsQuery = await queryDatabase(
-            `SELECT r.referral_id, r.referrer_telegram_id, r.referred_user_wager_milestones_achieved, r.last_milestone_bonus_check_wager_lamports
-             FROM referrals r
-             WHERE r.referred_telegram_id = $1
-             LIMIT 1`,
-            [stringReferredUserId],
+    try {
+        // This SQL has been cleaned of any potential non-standard characters.
+        const referralLinkDetailsQueryText = `SELECT r.referral_id, r.referrer_telegram_id, r.referred_user_wager_milestones_achieved, r.last_milestone_bonus_check_wager_lamports FROM referrals r WHERE r.referred_telegram_id = $1 LIMIT 1`;
+        
+        const referralLinkDetailsQuery = await queryDatabase(
+            referralLinkDetailsQueryText,
+            [stringReferredUserId],
             dbClient
-        );
-        // --- END OF FIX ---
+        );
 
-        if (referralLinkDetailsQuery.rowCount === 0) {
-            return { success: true, milestonesProcessed: 0 };
-        }
+        if (referralLinkDetailsQuery.rowCount === 0) {
+            return { success: true, milestonesProcessed: 0 };
+        }
 
-        const referralLink = referralLinkDetailsQuery.rows[0];
-        const referrerId = String(referralLink.referrer_telegram_id);
-        let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {};
-        const lastCheckedWager = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
+        const referralLink = referralLinkDetailsQuery.rows[0];
+        const referrerId = String(referralLink.referrer_telegram_id);
+        let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {};
+        const lastCheckedWager = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
 
-        if (newTotalWageredLamportsByReferred <= lastCheckedWager) {
-            return { success: true, milestonesProcessed: 0 };
-        }
+        if (newTotalWageredLamportsByReferred <= lastCheckedWager) {
+            return { success: true, milestonesProcessed: 0 };
+        }
 
-        const solPrice = await getSolUsdPrice();
-        const totalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
+        const solPrice = await getSolUsdPrice();
+        const totalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
-            const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
-            if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
-                const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
+        for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
+            const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
+            if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
+                const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
 
-                if (milestoneBonusAmountLamports > 0n) {
-                    const milestoneCommissionInsert = await dbClient.query(
-                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, commission_type, commission_amount_lamports, status, notes, created_at, updated_at)
-                         VALUES ($1, $2, $3, $4, 'milestone_bonus_claimable', $5, NOW(), NOW())
-                         RETURNING referral_id;`,
-                        [
-                            referrerId, stringReferredUserId, `wager_milestone_${milestoneUSD}_usd`,
-                            milestoneBonusAmountLamports.toString(), `Referred user ${stringReferredUserId} reached $${milestoneUSD} wager milestone.`
-                        ]
-                    );
-                    const newMilestoneReferralId = milestoneCommissionInsert.rows[0]?.referral_id;
+                if (milestoneBonusAmountLamports > 0n) {
+                    const milestoneCommissionInsert = await dbClient.query(
+                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, commission_type, commission_amount_lamports, status, notes, created_at, updated_at)
+                         VALUES ($1, $2, $3, $4, 'milestone_bonus_claimable', $5, NOW(), NOW())
+                         RETURNING referral_id;`,
+                        [
+                            referrerId, stringReferredUserId, `wager_milestone_${milestoneUSD}_usd`,
+                            milestoneBonusAmountLamports.toString(), `Referred user ${stringReferredUserId} reached $${milestoneUSD} wager milestone.`
+                        ]
+                    );
+                    const newMilestoneReferralId = milestoneCommissionInsert.rows[0]?.referral_id;
 
-                    if (newMilestoneReferralId) {
-                        milestonesProcessedThisCall++;
-                        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient);
-                        if (referrerUserObj) {
-                            const bonusAmountUSDDisplay = await formatBalanceForDisplay(milestoneBonusAmountLamports, 'USD');
-                            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
-                            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
+                    if (newMilestoneReferralId) {
+                        milestonesProcessedThisCall++;
+                        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient);
+                        if (referrerUserObj) {
+                            const bonusAmountUSDDisplay = await formatBalanceForDisplay(milestoneBonusAmountLamports, 'USD');
+                            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
+                            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
 
-                            safeSendMessage(referrerId,
-                                `🌟 Milestone Alert! Your referral ${escapeMarkdownV2(referredName)} has wagered over *${milestoneUSD} USD*!\n` +
-                                `You have a Wager Milestone Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* ready to be claimed from your \`/referral\` dashboard\\.`,
-                                { parse_mode: 'MarkdownV2' }
-                            ).catch(e => console.warn(`${LOG_PREFIX_PWM} Failed to send Milestone Bonus claimable notification to referrer ${referrerId}: ${e.message}`));
-                        }
-                    }
-                }
-                achievedMilestonesData[milestoneKey] = new Date().toISOString();
-            }
-        }
+                            safeSendMessage(referrerId,
+                                `🌟 Milestone Alert! Your referral ${escapeMarkdownV2(referredName)} has wagered over *${milestoneUSD} USD*!\n` +
+                                `You have a Wager Milestone Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* ready to be claimed from your \`/referral\` dashboard\\.`,
+                                { parse_mode: 'MarkdownV2' }
+                            ).catch(e => console.warn(`${LOG_PREFIX_PWM} Failed to send Milestone Bonus claimable notification to referrer ${referrerId}: ${e.message}`));
+                        }
+                    }
+                }
+                achievedMilestonesData[milestoneKey] = new Date().toISOString();
+            }
+        }
 
-        if (milestonesProcessedThisCall > 0 || newTotalWageredLamportsByReferred > lastCheckedWager) {
-            await dbClient.query(
-                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW()
-                 WHERE referral_id = $3;`,
-                [achievedMilestonesData, newTotalWageredLamportsByReferred.toString(), referralLink.referral_id]
-            );
-        }
-        return { success: true, milestonesProcessed: milestonesProcessedThisCall };
+        if (milestonesProcessedThisCall > 0 || newTotalWageredLamportsByReferred > lastCheckedWager) {
+            await dbClient.query(
+                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW()
+                 WHERE referral_id = $3;`,
+                [achievedMilestonesData, newTotalWageredLamportsByReferred.toString(), referralLink.referral_id]
+            );
+        }
+        return { success: true, milestonesProcessed: milestonesProcessedThisCall };
 
-    } catch (error) {
-        console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack?.substring(0,700));
-        return { success: false, milestonesProcessed: 0, error: error.message };
-    }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack?.substring(0,700));
+        return { success: false, milestonesProcessed: 0, error: error.message };
+    }
 }
 
 // REVISED AND CORRECTED - handleClaimMilestoneBonus
