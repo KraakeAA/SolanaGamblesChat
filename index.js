@@ -1966,23 +1966,31 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
         const solPrice = await getSolUsdPrice();
         const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        const currentUserData = await dbClient.query(
-            `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_order_index, ul.level_name AS current_level_name
-             FROM users u
-             LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-             WHERE u.telegram_id = $1 FOR UPDATE OF u`, 
+        // --- FIXED: Replaced one complex query with multiple simpler ones to avoid syntax errors. ---
+        const currentUserDataRes = await dbClient.query(
+            `SELECT telegram_id, username, first_name, last_name, current_level_id FROM users WHERE telegram_id = $1 FOR UPDATE OF users`,
             [userId]
         );
 
-        if (currentUserData.rowCount === 0) {
+        if (currentUserDataRes.rowCount === 0) {
             console.warn(`${LOG_PREFIX_CHECK_LVL} User not found. Cannot update level.`);
             return;
         }
+        const userFromDb = currentUserDataRes.rows[0];
+        let currentLevelOrderIndex = 0;
+        let currentLevelName = "Newcomer";
 
-        const userFromDb = currentUserData.rows[0];
-        const currentLevelId = userFromDb.current_level_id;
-        const currentOrderIndex = userFromDb.current_level_order_index || 0; // Default to 0 if no current level (new user)
-        const currentLevelName = userFromDb.current_level_name || "Newcomer";
+        if (userFromDb.current_level_id) {
+            const currentLevelDetailsRes = await dbClient.query(
+                `SELECT order_index, level_name FROM user_levels WHERE level_id = $1`,
+                [userFromDb.current_level_id]
+            );
+            if (currentLevelDetailsRes.rowCount > 0) {
+                currentLevelOrderIndex = currentLevelDetailsRes.rows[0].order_index || 0;
+                currentLevelName = currentLevelDetailsRes.rows[0].level_name || "Newcomer";
+            }
+        }
+        // --- END OF FIX ---
 
         const allLevelsRes = await dbClient.query(
             `SELECT level_id, level_name, wager_threshold_usd, bonus_amount_usd, order_index
@@ -1990,9 +1998,9 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
              ORDER BY order_index ASC`
         );
 
-        let newPotentialLevelId = currentLevelId;
+        let newPotentialLevelId = userFromDb.current_level_id;
         let newPotentialLevelName = currentLevelName;
-        let newPotentialOrderIndex = currentOrderIndex;
+        let newPotentialOrderIndex = currentLevelOrderIndex;
         let newLevelDataForNotification = null;
 
         for (const level of allLevelsRes.rows) {
@@ -2004,25 +2012,25 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
                     newLevelDataForNotification = level;
                 }
             } else {
-                break; 
+                break; 
             }
         }
 
-        if (newPotentialLevelId !== currentLevelId && newPotentialOrderIndex > currentOrderIndex) {
+        if (newPotentialLevelId !== userFromDb.current_level_id && newPotentialOrderIndex > currentLevelOrderIndex) {
             await dbClient.query(
                 `UPDATE users SET current_level_id = $1, updated_at = NOW() WHERE telegram_id = $2`,
                 [newPotentialLevelId, userId]
             );
-            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
+            console.log(`${LOG_PREFIX_CHECK_LVL} 🎉 User ${userId} LEVELED UP! From '${currentLevelName}' (Order: ${currentLevelOrderIndex}) to '${newPotentialLevelName}' (Order: ${newPotentialOrderIndex})! Wagered: $${totalWageredUSD.toFixed(2)}`);
 
-            // Construct user display name (HTML safe)
-            const userObjectForDisplay = { telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name, last_name: userFromDb.last_name };
+            // Construct user display name (HTML safe)
+            const userObjectForDisplay = { telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name, last_name: userFromDb.last_name };
             const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObjectForDisplay)); // Ensure getPlayerDisplayReference exists and is HTML safe
 
-            // --- Enhanced DM Notification ---
-            let dmNotificationTextHTML = `🎉✨ **LEVEL UP!** ✨🎉\n\n` +
-                                       `Huge congrats, ${playerRefHTML}! You've climbed the ranks and reached:\n\n` +
-                                       `🏅 **${escapeHTML(newPotentialLevelName)}** (Level ${newPotentialOrderIndex}) 🏅\n\n`;
+            // --- Enhanced DM Notification ---
+            let dmNotificationTextHTML = `🎉✨ **LEVEL UP!** ✨🎉\n\n` +
+                                       `Huge congrats, ${playerRefHTML}! You've climbed the ranks and reached:\n\n` +
+                                       `🏅 **${escapeHTML(newPotentialLevelName)}** (Level ${newPotentialOrderIndex}) 🏅\n\n`;
             const keyboardRowsDM = [];
 
             if (newLevelDataForNotification && parseFloat(newLevelDataForNotification.bonus_amount_usd) > 0) {
@@ -2030,12 +2038,12 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
                 dmNotificationTextHTML += `As a reward, a sparkling bonus of approx. <b>$${bonusAmountUSD} USD</b> is now available for you to claim!\n\n`;
                 keyboardRowsDM.push([{ text: `💰 Claim $${bonusAmountUSD} Bonus! (${escapeHTML(newPotentialLevelName)})`, callback_data: `claim_level_bonus:${newLevelDataForNotification.level_id}` }]);
             } else {
-                dmNotificationTextHTML += `Keep up the great work and climb higher for more rewards!\n\n`;
-            }
+                dmNotificationTextHTML += `Keep up the great work and climb higher for more rewards!\n\n`;
+            }
             
             dmNotificationTextHTML += `🚀 Check your \`/bonus\` dashboard for all available rewards and your next level!`;
             keyboardRowsDM.push([{ text: "📊 View My Bonus Dashboard", callback_data: "menu:bonus_dashboard_back" }]);
-            keyboardRowsDM.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
+            keyboardRowsDM.push([{ text: "⬅️ Back to Main Menu", callback_data: "menu:main" }]);
 
 
             if (typeof safeSendMessage === 'function') {
@@ -2047,14 +2055,14 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
                 console.warn(`${LOG_PREFIX_CHECK_LVL} safeSendMessage not available to notify user ${userId} of level up.`);
             }
 
-            // --- Group Chat Notification ---
-            if (originalGameChatId && String(originalGameChatId) !== String(userId)) { // Ensure it's a group chat, not the DM itself
-                const groupNotificationHTML = `🎉🥳 Level Up Alert! 🥳🎉\n\n` +
-                                             `Congratulations to ${playerRefHTML} for achieving a new rank: 🏅 **${escapeHTML(newPotentialLevelName)}**!\n\n` +
-                                             `Keep an eye on your DMs for any new bonus rewards!`;
-                safeSendMessage(originalGameChatId, groupNotificationHTML, { parse_mode: 'HTML' })
-                    .catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send group level up notification to chat ${originalGameChatId}: ${e.message}`));
-            }
+            // --- Group Chat Notification ---
+            if (originalGameChatId && String(originalGameChatId) !== String(userId)) { // Ensure it's a group chat, not the DM itself
+                const groupNotificationHTML = `🎉🥳 Level Up Alert! 🥳🎉\n\n` +
+                                             `Congratulations to ${playerRefHTML} for achieving a new rank: 🏅 **${escapeHTML(newPotentialLevelName)}**!\n\n` +
+                                             `Keep an eye on your DMs for any new bonus rewards!`;
+                safeSendMessage(originalGameChatId, groupNotificationHTML, { parse_mode: 'HTML' })
+                    .catch(e => console.warn(`${LOG_PREFIX_CHECK_LVL} Failed to send group level up notification to chat ${originalGameChatId}: ${e.message}`));
+            }
         }
     } catch (error) {
         console.error(`${LOG_PREFIX_CHECK_LVL} ❌ Error checking/updating user level: ${error.message}`, error.stack);
@@ -2698,15 +2706,16 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
     let milestonesProcessedThisCall = 0;
 
     try {
+        // --- FIXED: Replaced a complex JOIN query with a simpler one to avoid syntax errors. ---
         // 1. Find who referred this user and the existing referral link details.
         const referralLinkDetailsQuery = await dbClient.query(
-            `SELECT r.referral_id, r.referrer_telegram_id, r.referred_user_wager_milestones_achieved, r.last_milestone_bonus_check_wager_lamports
-             FROM referrals r
-             JOIN users u ON r.referred_telegram_id = u.telegram_id
-             WHERE r.referred_telegram_id = $1 AND u.referrer_telegram_id = r.referrer_telegram_id
-             LIMIT 1;`, // Should only be one primary link.
+            `SELECT referral_id, referrer_telegram_id, referred_user_wager_milestones_achieved, last_milestone_bonus_check_wager_lamports
+             FROM referrals
+             WHERE referred_telegram_id = $1
+             LIMIT 1;`,
             [stringReferredUserId]
         );
+        // --- END OF FIX ---
 
         if (referralLinkDetailsQuery.rowCount === 0) {
             // console.log(`${LOG_PREFIX_PWM} No active referral link found for user ${stringReferredUserId} to process milestones.`);
@@ -12175,12 +12184,22 @@ async function handleStartCommand(msg, args) {
                             'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
                             [referrerUserRecord.telegram_id, userId]
                         );
-                        await clientRefLink.query(
-                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at)
-                             VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP)
-                             ON CONFLICT (referred_telegram_id) DO NOTHING;`,
-                            [referrerUserRecord.telegram_id, userId]
-                        );
+                        
+                        // --- FIXED: Replaced ON CONFLICT with a separate SELECT check to be more robust against syntax errors. ---
+                        const checkExistingReferral = await clientRefLink.query(
+                            `SELECT 1 FROM referrals WHERE referred_telegram_id = $1`,
+                            [userId]
+                        );
+
+                        if (checkExistingReferral.rowCount === 0) {
+                            await clientRefLink.query(
+                                `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at)
+                                 VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP)`,
+                                [referrerUserRecord.telegram_id, userId]
+                            );
+                        }
+                        // --- END OF FIX ---
+
                         await clientRefLink.query('COMMIT');
                         userObject = await getOrCreateUser(userId); 
                         console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
@@ -12211,7 +12230,6 @@ async function handleStartCommand(msg, args) {
             }
             await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
 
-            // --- FIXED: Send a follow-up message to direct the user to the main chat ---
             const mainChatLink = process.env.MAIN_CHAT_INVITE_LINK;
             if (mainChatLink) {
                 const joinGroupText = `🚀 Ready for the full experience? Jump into our main chat to play with others, see live action, and join the community!`;
