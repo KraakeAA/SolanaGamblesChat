@@ -12607,9 +12607,8 @@ async function handleReferralCommand(msgOrCbMsg) {
         }
     }
     const referralLink = `https://t.me/${botUsername}?start=ref_${referralCode}`;
-    // --- MODIFIED: More enticing share message ---
-    const botDisplayName = escapeHTML(BOT_NAME || "the Casino");
-    const enticingShareMessage = `🎲 Step into ${botDisplayName}, the hottest casino on Solana! 🚀\n\nThey've got fast-paced games, huge jackpots, and an awesome community. I'm already playing, you should join too!\n\nClick my link to get started and we can both earn rewards! 👇\n${referralLink}`;
+    // --- MODIFIED: More enticing share message based on your template ---
+    const enticingShareMessage = `Step into the hottest multiplayer telegram chat 🎲\n\nThey've got fast-paced PvB and PvP multiplayer dice games, huge jackpots, and an awesome community. I'm already playing, you should join too!\n\nClick my link to get started and we can both earn rewards! 👇\n${referralLink}`;
 
     const successfulReferralsCountDM = user.referral_count || 0;
     const totalEarningsPaidLamportsDM = user.total_referral_earnings_paid_lamports || 0n;
@@ -12618,7 +12617,7 @@ async function handleReferralCommand(msgOrCbMsg) {
     let messageTextHTML = `🤝 <b>Your Referral Dashboard</b> 🤝\n\n` +
                           `<b>Invite Friends & Earn SOL!</b>\n\n` +
                           `🔗 <b>Your Unique Referral Link:</b>\n<a href="${escapeHTML(referralLink)}">${escapeHTML(referralLink)}</a>\n` +
-                          `<i>(Use the "Share Your Link!" button below for an enticing, pre-filled message.)</i>\n\n` + // MODIFIED TEXT
+                          `<i>(Use the "Share Your Link!" button below for an enticing, pre-filled message.)</i>\n\n` +
                           `📊 <b>Your Stats:</b>\n` +
                           ` ▫️ Successful Referrals: <b>${successfulReferralsCountDM}</b>\n` +
                           ` ▫️ Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDDisplayDM)}</b>\n\n` + // escapeHTML for safety
