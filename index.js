@@ -12087,118 +12087,120 @@ function startJackpotSessionPolling() {
 // --- Command Handler Functions (General Casino Bot Commands) ---
 
 async function handleStartCommand(msg, args) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_START_V2 = `[StartCmd_V2 UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_START_V2 = `[StartCmd_V3_DeepLinkFix UID:${userId} CH:${chatId}]`; // V3
 
-    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
+    console.log(`${LOG_PREFIX_START_V2} /start command received. ChatType: ${chatType}, Args: ${args.join(', ')}`);
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    let botUsernameToUse = BOT_NAME || "our bot";
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsernameToUse = selfInfo.username;
-    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
-    const botUsernameHTML = escapeHTML(botUsernameToUse);
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(chatId, "😕 Error fetching your player profile. Please try typing <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    let botUsernameToUse = BOT_NAME || "our bot";
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsernameToUse = selfInfo.username;
+    } catch (e) { console.error(`${LOG_PREFIX_START_V2} Could not fetch bot username: ${e.message}`); }
+    const botUsernameHTML = escapeHTML(botUsernameToUse);
 
-    if (args && args[0]) {
-        const deepLinkParam = args[0];
-        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
+    if (args && args[0]) {
+        const deepLinkParam = args[0];
+        console.log(`${LOG_PREFIX_START_V2} Processing deep link parameter: ${deepLinkParam}`);
 
-        if (deepLinkParam.startsWith('ref_')) {
-            const refCode = deepLinkParam.substring(4);
-            const referrerUserRecord = await getUserByReferralCode(refCode);
-            let refByDisplayHTML = "a fellow player";
+        if (deepLinkParam.startsWith('ref_')) {
+            const refCode = deepLinkParam.substring(4);
+            const referrerUserRecord = await getUserByReferralCode(refCode);
+            let refByDisplayHTML = "a fellow player";
 
-            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
-                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
-                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
-                
-                if (!userObject.referrer_telegram_id) {
-                    let clientRefLink = null;
-                    try {
-                        clientRefLink = await pool.connect();
-                        await clientRefLink.query('BEGIN');
-                        await clientRefLink.query(
-                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        await clientRefLink.query(
-                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
-                             VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
-                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
-                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
-                            [referrerUserRecord.telegram_id, userId]
-                        );
-                        await clientRefLink.query('COMMIT');
-                        userObject = await getOrCreateUser(userId); 
-                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
-                    } catch (refError) {
-                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
-                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
-                    } finally {
-                        if(clientRefLink) clientRefLink.release();
-                    }
-                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
-                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord));
-                } else {
-                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
-                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
-                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
-                }
-            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
-                refByDisplayHTML = "yourself (clever try! 😉)";
-            } else if (!referrerUserRecord) {
-                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
-                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
-            }
-            
-            // Corrected: \n instead of <br>
-            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.\nExplore the casino using the menu I've just displayed!`;
-            if (chatType !== 'private') {
-                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
-            }
-            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
-            const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-            await handleHelpCommand(dmMsgContext); 
-            return;
-        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
-            const actionDetails = deepLinkParam.startsWith('cb_') ? deepLinkParam.substring(3) : deepLinkParam.substring(5);
-            const [actionName, ...actionParams] = actionDetails.split('_');
-            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
-            // Corrected: \n instead of <br>
-            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!\nTaking you to the requested section.`;
-            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
-            if (typeof handleMenuAction === 'function') {
-                // Pass the original msg object from handleStartCommand as the last argument to handleMenuAction
-                await handleMenuAction(userId, userId, null, actionName, actionParams, false, 'private', msg);
-            } else {
-                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-                await handleHelpCommand(dmMsgContext);
-            }
-            return;
-        }
-    }
+            if (referrerUserRecord && String(referrerUserRecord.telegram_id) !== userId) {
+                const referrerFullObj = await getOrCreateUser(referrerUserRecord.telegram_id, referrerUserRecord.username, referrerUserRecord.first_name);
+                if (referrerFullObj) refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerFullObj));
+                
+                if (!userObject.referrer_telegram_id) {
+                    let clientRefLink = null;
+                    try {
+                        clientRefLink = await pool.connect();
+                        await clientRefLink.query('BEGIN');
+                        await clientRefLink.query(
+                            'UPDATE users SET referrer_telegram_id = $1, updated_at = NOW() WHERE telegram_id = $2 AND referrer_telegram_id IS NULL',
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        await clientRefLink.query(
+                            `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) 
+                             VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qualifying_bet', CURRENT_TIMESTAMP) 
+                             ON CONFLICT (referrer_telegram_id, referred_telegram_id) DO NOTHING
+                             ON CONFLICT ON CONSTRAINT referrals_referred_telegram_id_key DO NOTHING;`,
+                            [referrerUserRecord.telegram_id, userId]
+                        );
+                        await clientRefLink.query('COMMIT');
+                        userObject = await getOrCreateUser(userId); 
+                        console.log(`${LOG_PREFIX_START_V2} User ${userId} successfully linked to referrer ${referrerUserRecord.telegram_id} with status 'pending_qualifying_bet'.`);
+                    } catch (refError) {
+                        if(clientRefLink) await clientRefLink.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_START_V2} Rollback error: ${rbErr.message}`));
+                        console.error(`${LOG_PREFIX_START_V2} Error linking referral for user ${userId} via code ${refCode}:`, refError);
+                    } finally {
+                        if(clientRefLink) clientRefLink.release();
+                    }
+                } else if (String(userObject.referrer_telegram_id) === String(referrerUserRecord.telegram_id)) {
+                    refByDisplayHTML = escapeHTML(getPlayerDisplayReference(referrerUserRecord));
+                } else {
+                    const existingReferrerDetails = await getOrCreateUser(userObject.referrer_telegram_id);
+                    refByDisplayHTML = existingReferrerDetails ? escapeHTML(getPlayerDisplayReference(existingReferrerDetails)) : "their original referrer";
+                    console.log(`${LOG_PREFIX_START_V2} User ${userId} already has a referrer (${userObject.referrer_telegram_id}). Cannot re-assign via new link from ${referrerUserRecord.telegram_id}.`);
+                }
+            } else if (referrerUserRecord && String(referrerUserRecord.telegram_id) === userId) {
+                refByDisplayHTML = "yourself (clever try! 😉)";
+            } else if (!referrerUserRecord) {
+                refByDisplayHTML = `an unknown player (code: ${escapeHTML(refCode)})`;
+                console.warn(`${LOG_PREFIX_START_V2} Referral code ${refCode} not found.`);
+            }
+            
+            const referralMsgHTML = `👋 Welcome, ${playerRefHTML}! You started via a link from ${refByDisplayHTML}.\nExplore the casino using the menu I've just displayed!`;
+            if (chatType !== 'private') {
+                if(msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+                await safeSendMessage(chatId, `${playerRefHTML}, welcome! I've sent the main menu to our private chat: @${botUsernameHTML} 📬`, { parse_mode: 'HTML' });
+            }
+            await safeSendMessage(userId, referralMsgHTML, { parse_mode: 'HTML' });
+            const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+            await handleHelpCommand(dmMsgContext); 
+            return;
+        } else if (deepLinkParam.startsWith('cb_') || deepLinkParam.startsWith('menu_')) {
+            const prefixLength = deepLinkParam.startsWith('cb_') ? 3 : 5;
+            // *** MODIFIED PART: Pass the full action string, not split parts ***
+            const fullActionString = deepLinkParam.substring(prefixLength); 
+            // Now fullActionString will be e.g., "bonus_dashboard_back" or "wallet"
 
-    if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+            if (chatType !== 'private' && msg.message_id) await bot.deleteMessage(chatId, msg.message_id).catch(()=>{});
+            const userGuidanceTextHTML = `👋 Welcome back, ${playerRefHTML}!\nTaking you to the requested section.`;
+            await safeSendMessage(userId, userGuidanceTextHTML, {parse_mode: 'HTML'});
+            if (typeof handleMenuAction === 'function') {
+                // Pass fullActionString as menuTypeInput, params as empty array
+                await handleMenuAction(userId, userId, null, fullActionString, [], false, 'private', msg);
+            } else {
+                const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+                await handleHelpCommand(dmMsgContext);
+            }
+            // *** END OF MODIFIED PART ***
+            return;
+        }
+    }
 
-    if (chatType === 'group' || chatType === 'supergroup') {
-        if (msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
-        const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
-        await handleHelpCommand(dmMsgContext);
-    } else { 
-        if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
-        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} };
-        await handleHelpCommand(privateStartMsgContext);
-    }
+    if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+
+    if (chatType === 'group' || chatType === 'supergroup') {
+        if (msg.message_id && chatId !== userId) await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+        await safeSendMessage(chatId, `Hi ${playerRefHTML}! 👋 For commands & our main menu, please check our private chat: @${botUsernameHTML} 📬 I've sent it to you there!`, { parse_mode: 'HTML' });
+        const dmMsgContext = { from: userObject, chat: { id: userId, type: 'private' }, message_id: null };
+        await handleHelpCommand(dmMsgContext);
+    } else { 
+        if (msg.message_id) await bot.deleteMessage(userId, msg.message_id).catch(() => {});
+        const privateStartMsgContext = { ...msg, message_id: null, from: userObject, chat: {id: userId, type: 'private'} };
+        await handleHelpCommand(privateStartMsgContext);
+    }
 }
 
 async function handleHelpCommand(msg) {
