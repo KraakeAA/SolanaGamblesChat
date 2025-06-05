@@ -12505,14 +12505,18 @@ async function handleBalanceCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);    
     const commandChatId = String(msg.chat.id);
     const chatType = msg.chat.type;
+    const LOG_PREFIX_BALANCE_CMD = `[BalanceCmd_V3 UID:${userId} Chat:${commandChatId}]`; // V3
     
     const user = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!user) {
+        // Send error to the chat where command was issued
         await safeSendMessage(commandChatId, "😕 Apologies! We couldn't fetch your player profile to show your balance. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
         return;
     }
-    const playerRef = getPlayerDisplayReference(user); 
-    let botUsernameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(user)); // For HTML messages
+    const playerRefMD = getPlayerDisplayReference(user); // For MarkdownV2 messages
+    
+    let botUsernameToUse = BOT_NAME || "our bot";
     try {
         const selfInfo = await bot.getMe();
         if (selfInfo.username) botUsernameToUse = selfInfo.username;
@@ -12520,26 +12524,37 @@ async function handleBalanceCommand(msg) {
 
     const balanceLamports = await getUserBalance(userId);
     if (balanceLamports === null) {
-        const errorMsgDm = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual. Please try again in a moment, or contact support if this issue persists.";
-        await safeSendMessage(userId, errorMsgDm, { parse_mode: 'MarkdownV2' });    
-        if (chatType !== 'private') {
-            if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
-            await safeSendMessage(commandChatId, `${playerRef}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeMarkdownV2(botUsernameToUse)}.`, { parse_mode: 'MarkdownV2' });
-        }
+        const errorMsgText = "🏦 Oops! We couldn't retrieve your balance right now. This is unusual. Please try again in a moment, or contact support if this issue persists.";
+        if (chatType === 'private') {
+            await safeSendMessage(userId, errorMsgText, { parse_mode: 'MarkdownV2' });    
+        } else {
+            if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
+            await safeSendMessage(commandChatId, `${playerRefMD}, there was a hiccup fetching your balance. I've sent details to your DMs with @${escapeMarkdownV2(botUsernameToUse)}.`, { parse_mode: 'MarkdownV2' });
+            await safeSendMessage(userId, errorMsgText, { parse_mode: 'MarkdownV2' }); // Send error to DM as well
+        }
         return;
     }
 
     const balanceUSDShort = await formatBalanceForDisplay(balanceLamports, 'USD');
     const balanceSOLShort = formatCurrency(balanceLamports, 'SOL');
 
+    // Delete the triggering command message
+    if (msg.message_id && commandChatId) {
+        await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
+    }
+
     if (chatType !== 'private') {
-        if (msg.message_id && commandChatId !== userId) await bot.deleteMessage(commandChatId, msg.message_id).catch(() => {});
-        const groupBalanceMessage = `${playerRef}, your current war chest holds approx. *${escapeMarkdownV2(balanceUSDShort)}* / *${escapeMarkdownV2(balanceSOLShort)}*. 💰\nFor a detailed breakdown and wallet actions, please check your DMs with me: @${escapeMarkdownV2(botUsernameToUse)} 📬`;
-        await safeSendMessage(commandChatId, groupBalanceMessage, { parse_mode: 'MarkdownV2' });
+        // Enhanced HTML message for group chat
+        const groupBalanceMessageHTML = `💰 <b>${playerRefHTML}'s Balance Check</b> 💰\n\n` +
+                                        `Approx. Value: <b>${escapeHTML(balanceUSDShort)}</b>\n` +
+                                        `SOL Balance: <b>${escapeHTML(balanceSOLShort)}</b>\n\n` +
+                                        `ℹ️ For detailed wallet actions & history, please check your DMs with @${escapeHTML(botUsernameToUse)}. I've sent your full statement there!`;
+        await safeSendMessage(commandChatId, groupBalanceMessageHTML, { parse_mode: 'HTML' });
     }
     
+    // Send detailed message to DM regardless of where command was issued
     const balanceMessageDm = `🏦 **Your Casino Royale Account Statement** 🏦\n\n` +
-        `Player: ${playerRef}\n` + 
+        `Player: ${playerRefMD}\n` + 
         `-------------------------------\n` +    
         `💰 Approx. Total Value: *${escapeMarkdownV2(balanceUSDShort)}*\n` +
         `🪙 SOL Balance: *${escapeMarkdownV2(balanceSOLShort)}*\n` +
@@ -12551,7 +12566,8 @@ async function handleBalanceCommand(msg) {
         inline_keyboard: [
             [{ text: "💰 Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }, { text: "💸 Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION_CONST }],
             [{ text: "📜 Transaction History", callback_data: "menu:history" }, { text: "🔗 Link/Update Wallet", callback_data: "menu:link_wallet_prompt" }],
-            [{ text: "🎲 View Games & Rules", callback_data: "menu:rules_list" }, { text: "🤝 Referrals", callback_data: "menu:referral" }] 
+            [{ text: "🎲 View Games & Rules", callback_data: "menu:rules_list" }, { text: "🤝 Referrals", callback_data: "menu:referral" }],
+            [{ text: "🌟 Level Up Bonus", callback_data: "menu:bonus_dashboard_back" }] // Added Level Up Bonus to DM wallet view
         ]
     };
     await safeSendMessage(userId, balanceMessageDm, { parse_mode: 'MarkdownV2', reply_markup: keyboardDm });
