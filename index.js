@@ -46,7 +46,7 @@ function stringifyWithBigInt(obj) {
     return value;
   }, 2);
 }
-console.log("!!!!!!!!!! MY LATEST CODE IS RUNNING - JUNE 5 !!!!!!!!!!");
+
 // --- Environment Variable Defaults ---
 const CASINO_ENV_DEFAULTS = {
   'DB_POOL_MAX': '25',
@@ -2561,136 +2561,137 @@ function calculateInitialBetBonusPercentage(referralCount, referralTiersConfig) 
  * @returns {Promise<{success: boolean, bonusProcessed?: boolean, error?: string}>}
  */
 async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegramId, referredUserBetAmountLamports, gameIdForBet) {
-    const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PQB = `[ProcessQualifyingBet UID:${stringReferredUserId}]`;
+    const stringReferredUserId = String(referredUserTelegramId);
+    const LOG_PREFIX_PQB = `[ProcessQualifyingBet UID:${stringReferredUserId}]`;
 
-    try {
-        // 1. Check if this user was referred and if their first bet bonus has already been processed.
-        const referredUserDetails = await dbClient.query(
-            `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
-            [stringReferredUserId]
-        );
+    try {
+        // 1. Check if this user was referred and if their first bet bonus has already been processed.
+        const referredUserDetails = await dbClient.query(
+            `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
+            [stringReferredUserId]
+        );
 
-        if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
-            // console.log(`${LOG_PREFIX_PQB} User was not referred or no referrer_id. No initial bonus to process.`);
-            return { success: true, bonusProcessed: false, message: "Not a referred user or no referrer." };
-        }
+        if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
+            // console.log(`${LOG_PREFIX_PQB} User was not referred or no referrer_id. No initial bonus to process.`);
+            return { success: true, bonusProcessed: false, message: "Not a referred user or no referrer." };
+        }
 
-        const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
-        const firstBetPlacedAt = referredUserDetails.rows[0].first_bet_placed_at;
+        const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
+        const firstBetPlacedAt = referredUserDetails.rows[0].first_bet_placed_at;
 
-        // If first_bet_placed_at is already set, it means the initial bonus (or attempt) has been handled.
-        if (firstBetPlacedAt) {
-            // console.log(`${LOG_PREFIX_PQB} User has already placed their first bet at ${firstBetPlacedAt}. Initial bonus already handled.`);
-            return { success: true, bonusProcessed: false, message: "Initial bonus already processed previously." };
-        }
+        // If first_bet_placed_at is already set, it means the initial bonus (or attempt) has been handled.
+        if (firstBetPlacedAt) {
+            // console.log(`${LOG_PREFIX_PQB} User has already placed their first bet at ${firstBetPlacedAt}. Initial bonus already handled.`);
+            return { success: true, bonusProcessed: false, message: "Initial bonus already processed previously." };
+        }
 
-        // 2. Check if the bet amount qualifies (convert to USD).
-        const solPrice = await getSolUsdPrice(); // Assumes this function is available
-        const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+        // 2. Check if the bet amount qualifies (convert to USD).
+        const solPrice = await getSolUsdPrice(); // Assumes this function is available
+        const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
-            // console.log(`${LOG_PREFIX_PQB} Bet amount $${betAmountUSD.toFixed(2)} is less than qualifying $${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)}. No initial bonus.`);
-            // Still mark first_bet_placed_at so we don't re-check for non-qualifying small bets.
-            // Or, defer marking if you only want to mark it upon a *qualifying* first bet. For now, mark it.
-            await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
-            return { success: true, bonusProcessed: false, message: "Bet amount too small to qualify for initial referral bonus." };
-        }
+        if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
+            // console.log(`${LOG_PREFIX_PQB} Bet amount $${betAmountUSD.toFixed(2)} is less than qualifying $${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)}. No initial bonus.`);
+            // Still mark first_bet_placed_at so we don't re-check for non-qualifying small bets.
+            // Or, defer marking if you only want to mark it upon a *qualifying* first bet. For now, mark it.
+            await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+            return { success: true, bonusProcessed: false, message: "Bet amount too small to qualify for initial referral bonus." };
+        }
 
-        // 3. This is the first QUALIFYING bet. Process the bonus for the referrer.
-        // Mark first_bet_placed_at for the referred user.
-        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+        // 3. This is the first QUALIFYING bet. Process the bonus for the referrer.
+        // Mark first_bet_placed_at for the referred user.
+        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
 
-        // Get referrer's current referral count (BEFORE this one is fully processed for count increment).
-        // The count used for tiering should ideally be based on *already processed* referrals.
-        const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
-        let currentReferrerCount = 0;
-        if (referrerData.rowCount > 0) {
-            currentReferrerCount = referrerData.rows[0].referral_count || 0;
-        }
+        // Get referrer's current referral count (BEFORE this one is fully processed for count increment).
+        // The count used for tiering should ideally be based on *already processed* referrals.
+        const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
+        let currentReferrerCount = 0;
+        if (referrerData.rowCount > 0) {
+            currentReferrerCount = referrerData.rows[0].referral_count || 0;
+        }
 
-        const bonusPercentage = calculateInitialBetBonusPercentage(currentReferrerCount, REFERRAL_INITIAL_BET_TIERS_CONFIG);
-        const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
+        const bonusPercentage = calculateInitialBetBonusPercentage(currentReferrerCount, REFERRAL_INITIAL_BET_TIERS_CONFIG);
+        const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
 
-        if (initialBonusAmountLamports <= 0n) {
-            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero or less. No commission created. Percentage: ${bonusPercentage}`);
-            // Mark the referral link as processed for the initial bet bonus to avoid re-checks
-            await dbClient.query(
-                `UPDATE referrals SET qualifying_bet_processed_at = NOW(), status = 'archived_zero_initial_bonus'
-                 WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL`,
-                [referrerId, stringReferredUserId]
-            );
-            // Increment referral_count as the referred user did place a qualifying bet, even if bonus was 0.
-            await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
-            return { success: true, bonusProcessed: true, message: "Qualifying bet made, but bonus amount was zero." };
-        }
+        if (initialBonusAmountLamports <= 0n) {
+            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero or less. No commission created. Percentage: ${bonusPercentage}`);
+            // Mark the referral link as processed for the initial bet bonus to avoid re-checks
+            await dbClient.query(
+                `UPDATE referrals SET qualifying_bet_processed_at = NOW(), status = 'archived_zero_initial_bonus'
+                 WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL`,
+                [referrerId, stringReferredUserId]
+            );
+            // Increment referral_count as the referred user did place a qualifying bet, even if bonus was 0.
+            await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
+            return { success: true, bonusProcessed: true, message: "Qualifying bet made, but bonus amount was zero." };
+        }
 
-        // 4. Record the commission for the referrer.
-        // Upsert logic: If a 'pending_qualifying_bet' record exists, update it. Otherwise, insert.
-        // This assumes a record was created in 'referrals' when the user signed up via link.
-        const commissionRecordResult = await dbClient.query(
-            `UPDATE referrals
-             SET commission_type = 'initial_bet_bonus',
-                 commission_amount_lamports = $1,
-                 status = 'earned', -- Ready for payout queue
-                 qualifying_bet_processed_at = NOW(),
-                 updated_at = NOW()
-             WHERE referrer_telegram_id = $2 AND referred_telegram_id = $3 AND qualifying_bet_processed_at IS NULL
-             RETURNING referral_id;`,
-            [initialBonusAmountLamports.toString(), referrerId, stringReferredUserId]
-        );
+        // 4. Record the commission for the referrer.
+        // Upsert logic: If a 'pending_qualifying_bet' record exists, update it. Otherwise, insert.
+        // This assumes a record was created in 'referrals' when the user signed up via link.
+        const commissionRecordResult = await dbClient.query(
+            `UPDATE referrals
+             SET commission_type = 'initial_bet_bonus',
+                 commission_amount_lamports = $1,
+                 status = 'earned', -- Ready for payout queue
+                 qualifying_bet_processed_at = NOW(),
+                 updated_at = NOW()
+             WHERE referrer_telegram_id = $2 AND referred_telegram_id = $3 AND qualifying_bet_processed_at IS NULL
+             RETURNING referral_id;`,
+            [initialBonusAmountLamports.toString(), referrerId, stringReferredUserId]
+        );
 
-        if (commissionRecordResult.rowCount === 0) {
-            // This case might happen if the referral link wasn't properly recorded, or was already processed.
-            // The first_bet_placed_at check should prevent most re-processing.
-            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus, or already processed. Referrer: ${referrerId}, Referred: ${stringReferredUserId}`);
-            // Don't increment referrer's count here if no record was updated, as it implies an issue or prior processing.
-            return { success: false, bonusProcessed: false, error: "No eligible pending referral record found for initial bonus." };
-        }
-        const referralDbId = commissionRecordResult.rows[0].referral_id;
+        if (commissionRecordResult.rowCount === 0) {
+            // This case might happen if the referral link wasn't properly recorded, or was already processed.
+            // The first_bet_placed_at check should prevent most re-processing.
+            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus, or already processed. Referrer: ${referrerId}, Referred: ${stringReferredUserId}`);
+            // Don't increment referrer's count here if no record was updated, as it implies an issue or prior processing.
+            return { success: false, bonusProcessed: false, error: "No eligible pending referral record found for initial bonus." };
+        }
+        const referralDbId = commissionRecordResult.rows[0].referral_id;
 
-        // 5. Increment the referrer's successful referral count.
-        await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
+        // 5. Increment the referrer's successful referral count.
+        await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
 
-        console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports (RefDBID: ${referralDbId}) earned for referrer ${referrerId}. Referrer count updated.`);
+        console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports (RefDBID: ${referralDbId}) earned for referrer ${referrerId}. Referrer count updated.`);
 
-        // 6. Queue the payout job for this commission.
-        // The actual crediting to referrer's balance will happen via handleReferralPayoutJob -> updateUserBalanceAndLedger
-        if (typeof addPayoutJob === 'function') {
-            addPayoutJob({
-                type: 'payout_referral_commission', // A more generic type for the job queue
-                referralDbId: referralDbId, // Pass the specific DB ID of the commission row
-                commissionType: 'initial_bet_bonus',
-                commissionAmountLamports: initialBonusAmountLamports,
-                referrerUserId: referrerId,
-                referredUserId: stringReferredUserId
-            });
-        } else {
-            console.error(`${LOG_PREFIX_PQB} CRITICAL: addPayoutJob function not defined! Initial bonus for ${referrerId} NOT QUEUED.`);
-            // Potentially notify admin
-        }
+        // 6. Queue the payout job for this commission.
+        // The actual crediting to referrer's balance will happen via handleReferralPayoutJob -> updateUserBalanceAndLedger
+        if (typeof addPayoutJob === 'function') {
+            addPayoutJob({
+                type: 'payout_referral_commission', // A more generic type for the job queue
+                referralDbId: referralDbId, // Pass the specific DB ID of the commission row
+                commissionType: 'initial_bet_bonus',
+                commissionAmountLamports: initialBonusAmountLamports,
+                referrerUserId: referrerId,
+                referredUserId: stringReferredUserId
+            });
+        } else {
+            console.error(`${LOG_PREFIX_PQB} CRITICAL: addPayoutJob function not defined! Initial bonus for ${referrerId} NOT QUEUED.`);
+            // Potentially notify admin
+        }
 
-        // Notify referrer
-        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient); // Fetch for notification
-        if (referrerUserObj) {
-            const bonusAmountUSDDisplay = await formatBalanceForDisplay(initialBonusAmountLamports, 'USD');
-            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
-            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
+        // Notify referrer
+        const referrerUserObj = await getOrCreateUser(referrerId, null, null, null, dbClient); // Fetch for notification
+        if (referrerUserObj) {
+            const bonusAmountUSDDisplay = await formatBalanceForDisplay(initialBonusAmountLamports, 'USD');
+            const referredUserForNotif = await getOrCreateUser(stringReferredUserId, null, null, null, dbClient);
+            const referredName = getPlayerDisplayReference(referredUserForNotif || {telegram_id: stringReferredUserId});
+            
+            // --- FIXED: Escaped the period in "soon." for MarkdownV2 ---
+            safeSendMessage(referrerId,
+                `🎉 Cha-ching! Your referred friend ${escapeMarkdownV2(referredName)} just placed their first qualifying bet!\n` +
+                `You've earned an Initial Bet Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}*!\n` +
+                `It will be processed to your linked wallet soon\\. Keep referring to earn more! 🤝`,
+                { parse_mode: 'MarkdownV2' }
+            ).catch(e => console.warn(`${LOG_PREFIX_PQB} Failed to send Initial Bet Bonus notification to referrer ${referrerId}: ${e.message}`));
+        }
 
-            safeSendMessage(referrerId,
-                `🎉 Cha-ching! Your referred friend ${escapeMarkdownV2(referredName)} just placed their first qualifying bet!\n` +
-                `You've earned an Initial Bet Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}*!\n` +
-                `It will be processed to your linked wallet soon. Keep referring to earn more! 🤝`,
-                { parse_mode: 'MarkdownV2' }
-            ).catch(e => console.warn(`${LOG_PREFIX_PQB} Failed to send Initial Bet Bonus notification to referrer ${referrerId}: ${e.message}`));
-        }
+        return { success: true, bonusProcessed: true };
 
-        return { success: true, bonusProcessed: true };
-
-    } catch (error) {
-        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack?.substring(0, 700));
-        return { success: false, bonusProcessed: false, error: error.message };
-    }
+    } catch (error) {
+        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack?.substring(0, 700));
+        return { success: false, bonusProcessed: false, error: error.message };
+    }
 }
 
 
