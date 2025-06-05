@@ -1,3 +1,5 @@
+console.log("--- SCRIPT PARSE START ---");
+
 // --- Start of Part 1 (FINAL CORRECTION - Original Constant Names Restored, All Declarations Fixed, All Original Code Included, Retains Granular Active Game Limits - WITH JACKPOT POLLER VARS INTEGRATED) ---
 // index.js -  Part 1: Core Imports, Basic Setup, Global State & Utilities
 //---------------------------------------------------------------------------
