@@ -11735,43 +11735,63 @@ async function handleStartCommand(msg, args) {
 }
 
 async function handleHelpCommand(msg) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const dmChatId = String(msg.chat.id); 
-    const originalMessageIdToEdit = (msg.chat.type === 'private' && msg.message_id && msg.message?.from?.is_bot) ? msg.message_id : null;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const dmChatId = String(msg.chat.id); 
+    // messageIdToEdit is for when this function is called to *edit* an existing message in DM,
+    // e.g., when coming back to the main menu from another menu.
+    // If msg.isCallbackEditing is a flag we set, we use msg.message_id.
+    // Otherwise, if it's a direct /help command, msg.message_id is the command itself and should be deleted if a new message is sent.
+    let messageIdToEditOrDelete = msg.message_id;
+    let shouldEdit = (msg.chat.type === 'private' && msg.isCallbackEditing === true && msg.message_id);
 
-    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObject) {
-        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
-        return;
-    }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    const botNameToUse = BOT_NAME || "our bot"; // Use global BOT_NAME
 
-    const helpMessageHTML = `🎉 Welcome to <b>${escapeHTML(botNameToUse)}</b>, ${playerRefHTML}!\n\n` +
-                            `Your casino adventure starts here. What would you like to do?`;
-    const helpKeyboard = {
-        inline_keyboard: [
-            [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
-            [{ text: "🎲 Play Games", callback_data: "menu:games_overview" }],
-            [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],
-            [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
-        ]
-    };
+    let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObject) {
+        await safeSendMessage(dmChatId, "😕 Error fetching your player profile. Please try <code>/start</code> again.", { parse_mode: 'HTML' });
+        return;
+    }
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+    const botNameToUse = BOT_NAME || "our bot"; 
 
-    if (originalMessageIdToEdit) {
-        try {
-            await bot.editMessageText(helpMessageHTML, {
-                chat_id: dmChatId, message_id: Number(originalMessageIdToEdit),
-                parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true
-            });
-        } catch (e) {
-            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
-                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
-            }
-        }
-    } else {
-        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
-    }
+    // If it's a typed /help command in DM, delete the command message before sending the menu
+    if (msg.chat.type === 'private' && !msg.isCallbackEditing && msg.text && msg.text.startsWith('/help') && messageIdToEditOrDelete) {
+        await bot.deleteMessage(dmChatId, messageIdToEditOrDelete).catch(() => {});
+        shouldEdit = false; // Force sending a new message
+        messageIdToEditOrDelete = null;
+    }
+
+
+    const helpMessageHTML = `🎉 Welcome to <b>${escapeHTML(botNameToUse)}</b>, ${playerRefHTML}!\n\n` +
+                            `Your casino adventure starts here. What would you like to do?`;
+    
+    // MODIFIED KEYBOARD: Replaced "Play Games" with "Level Up Bonus"
+    const helpKeyboard = {
+        inline_keyboard: [
+            [{ text: "💰 My Wallet & Funds", callback_data: "menu:wallet" }],
+            // The "menu:bonus_dashboard_back" callback should trigger handleBonusCommand via handleMenuAction
+            [{ text: "🌟 Level Up Bonus", callback_data: "menu:bonus_dashboard_back" }], 
+            [{ text: "📖 Game Rules", callback_data: "menu:rules_list" }],
+            [{ text: "🤝 Referral Program", callback_data: "menu:referral" }],
+        ]
+    };
+
+    if (shouldEdit && messageIdToEditOrDelete) {
+        try {
+            await bot.editMessageText(helpMessageHTML, {
+                chat_id: dmChatId, message_id: Number(messageIdToEditOrDelete),
+                parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true
+            });
+        } catch (e) {
+            // If editing fails (e.g., message not found or not modified error if content is same), send a new one.
+            if (!e.message || !e.message.toLowerCase().includes("message is not modified")) {
+                console.warn(`[handleHelpCommand] Failed to edit message ${messageIdToEditOrDelete}, sending new. Error: ${e.message}`);
+                await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+            }
+        }
+    } else {
+        // If not editing (e.g., group redirect, or typed /help in DM where command was deleted), send a new message.
+        await safeSendMessage(dmChatId, helpMessageHTML, { parse_mode: 'HTML', reply_markup: helpKeyboard, disable_web_page_preview: true });
+    }
 }
 
 async function handleRulesCommand(invokedInChatIdStr, userObj, msgIdInInvokedChatStr = null, isEditAttempt = false, invokedChatType = 'private') {
@@ -15929,7 +15949,7 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
         const message = `💰 *Your ${newAddressGenerated ? 'New' : 'Active'} Deposit Address*\n\n` +
                         `Hi ${playerRef}, please send SOL to your unique deposit address below:\n\n` +
                         `\`${escapedAddress}\`\n` +
-                        `_\\(Tap the address above to copy\\)_\\n\n` +
+                        `_\\(Tap the address above to copy\\)_\\n\\n` +
                         `This address is valid for approximately *${timeRemainingMinutesEscaped} minutes* \\(expires around ${expiryDateTimeStringEscaped}\\)\\. __Do not use after expiry\\.__\n\n` +
                         `Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\.\n\n` +
                         `⚠️ *Important Information:*\n` +
@@ -15981,31 +16001,31 @@ async function handleDepositCommand(msgOrCbMsg, args = [], correctUserIdFromCb =
 
 // Newly ADDED and REVISED handleWithdrawCommand
 async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb = null) {
-    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id);
+    const userId = String(correctUserIdFromCb || msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
     const targetDmChatId = userId; 
     const originalCommandChatId = String(msgOrCbMsg.chat.id);
     const originalMessageId = msgOrCbMsg.message_id;
-    const isFromMenuActionOrRedirect = msgOrCbMsg.isCallbackRedirect !== undefined || !!(correctUserIdFromCb && correctUserIdFromCb === userId);
+    const isFromMenuActionOrRedirect = (msgOrCbMsg.isCallbackRedirect !== undefined && msgOrCbMsg.isCallbackRedirect) || (correctUserIdFromCb && correctUserIdFromCb === userId);
 
-    const logPrefix = `[WithdrawCmd_HTML_V3_Newline UID:${userId} OrigChat:${originalCommandChatId}]`; 
+    const logPrefix = `[WithdrawCmd_HTML_V5_NoBR UID:${userId} OrigChat:${originalCommandChatId}]`; // V5_NoBR
 
     let userObject = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!userObject) {
-        await safeSendMessage(targetDmChatId, "Error fetching your player profile for withdrawal.<br>Please try <code>/start</code> again.", { parse_mode: 'HTML' });
+        await safeSendMessage(targetDmChatId, "Error fetching your player profile for withdrawal.\nPlease try <code>/start</code> again.", { parse_mode: 'HTML' });
         return;
     }
     const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-    clearUserState(userId); // Clears previous states before setting a new one for withdrawal
+    clearUserState(userId);
 
-    let botUsername = "our bot";
-    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* Reduced log */ }
+    let botUsername = BOT_NAME || "our bot";
+    try { const selfInfo = await bot.getMe(); if (selfInfo.username) botUsername = selfInfo.username; } catch (e) { /* ignore */ }
 
     if (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) {
         if (originalMessageId) await bot.deleteMessage(originalCommandChatId, originalMessageId).catch(() => {});
         await safeSendMessage(originalCommandChatId, `${playerRefHTML}, for your security, withdrawal requests are handled in our private chat: @${escapeHTML(botUsername)} 📬 Please check your DMs.`, { parse_mode: 'HTML' });
     }
     
-    if (originalCommandChatId === targetDmChatId && originalMessageId && (isFromMenuActionOrRedirect || !msgOrCbMsg.isCallbackRedirect) ) {
+    if (originalCommandChatId === targetDmChatId && originalMessageId) {
         await bot.deleteMessage(targetDmChatId, originalMessageId).catch(()=>{});
     }
 
@@ -16023,19 +16043,19 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
         const currentBalanceLamports = await getUserBalance(userId);
 
         if (currentBalanceLamports === null) {
-            throw new Error("Could not retrieve your current balance.<br>Please try again shortly.");
+            throw new Error("Could not retrieve your current balance.\nPlease try again shortly.");
         }
 
         if (!linkedWallet) {
-            // ... (noWalletText and keyboard as before) ...
-            const noWalletText = `⚠️ ${playerRefHTML}, you don't have a Solana withdrawal wallet linked to your account yet!<br><br>` +
+            // Corrected: Uses \n\n
+            const noWalletText = `⚠️ ${playerRefHTML}, you don't have a Solana withdrawal wallet linked to your account yet!\n\n` +
                                  `Please link a wallet first using the button below, or by typing <code>/setwallet YOUR_SOL_ADDRESS</code> in this chat.`;
             const noWalletKeyboard = { inline_keyboard: [
                 [{ text: "🔗 Link Withdrawal Wallet Now", callback_data: "menu:link_wallet_prompt" }],
                 [{ text: "💳 Back to Wallet Menu", callback_data: "menu:wallet" }]
             ]};
             await bot.editMessageText(noWalletText, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: noWalletKeyboard });
-            return;
+            return; 
         }
 
         const solPrice = await getSolUsdPrice();
@@ -16044,13 +16064,14 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
         const feeDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(WITHDRAWAL_FEE_LAMPORTS, 'USD')); 
         const currentBalanceDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(currentBalanceLamports, 'USD')); 
 
+        // Corrected: Uses \n and \n\n
         const promptTextHTML = `💸 <b>Initiate Withdrawal</b>\n\n` +
-                             `Player: ${playerRefHTML}\n` +
-                             `Linked Wallet: <code>${escapeHTML(linkedWallet)}</code>\n` +
-                             `Available Balance: <b>${currentBalanceDisplayUSD_HTML}</b>\n\n` +
-                             `Minimum Withdrawal: <b>${minWithdrawalDisplayUSD_HTML}</b> (approx. $${escapeHTML(MIN_WITHDRAWAL_USD_val.toFixed(2))})\n` +
-                             `Withdrawal Fee: <b>${feeDisplayUSD_HTML}</b> (this will be deducted from the amount you withdraw)\n\n` +
-                             `Please reply with the amount you wish to withdraw in USD (e.g., <code>50</code> or <code>75.50</code>) or type <code>max</code> to withdraw your maximum available balance (after fees).`;
+                               `Player: ${playerRefHTML}\n` +
+                               `Linked Wallet: <code>${escapeHTML(linkedWallet)}</code>\n` +
+                               `Available Balance: <b>${currentBalanceDisplayUSD_HTML}</b>\n\n` +
+                               `Minimum Withdrawal: <b>${minWithdrawalDisplayUSD_HTML}</b> (approx. $${escapeHTML(MIN_WITHDRAWAL_USD_val.toFixed(2))})\n` +
+                               `Withdrawal Fee: <b>${feeDisplayUSD_HTML}</b> (this will be deducted from the amount you withdraw)\n\n` +
+                               `Please reply with the amount you wish to withdraw in USD (e.g., <code>50</code> or <code>75.50</code>) or type <code>max</code> to withdraw your maximum available balance (after fees).`;
 
         const promptKeyboard = { inline_keyboard: [[{ text: "❌ Cancel & Back to Wallet", callback_data: "menu:wallet" }]] };
         await bot.editMessageText(promptTextHTML, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: promptKeyboard, disable_web_page_preview: true });
@@ -16059,8 +16080,8 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
             state: 'awaiting_withdrawal_amount',
             chatId: targetDmChatId,
             messageId: workingMessageId,
-            data: {
-                linkedWallet: linkedWallet,
+            data: { 
+                linkedWallet: linkedWallet, 
                 currentBalanceLamportsStr: currentBalanceLamports.toString(),
                 originalPromptMessageId: workingMessageId, 
                 originalGroupChatId: (originalCommandChatId !== targetDmChatId && !isFromMenuActionOrRedirect && !msgOrCbMsg.isCallbackRedirect) ? originalCommandChatId : (msgOrCbMsg.isCallbackRedirect ? msgOrCbMsg.originalChatInfo?.id : null),
@@ -16069,20 +16090,21 @@ async function handleWithdrawCommand(msgOrCbMsg, args = [], correctUserIdFromCb 
             timestamp: Date.now()
         };
         userStateCache.set(userId, stateToSet);
-        // --- ADDED DIAGNOSTIC LOG ---
-        console.log(`${logPrefix} State SET for awaiting_withdrawal_amount. Content: ${stringifyWithBigInt(userStateCache.get(userId))}`);
-        // --- END OF ADDED DIAGNOSTIC LOG ---
-
+        console.log(`${logPrefix} State SET for awaiting_withdrawal_amount. MsgID: ${workingMessageId}`);
+        
     } catch (error) {
         console.error(`${logPrefix} Error preparing withdrawal: ${error.message}`, error.stack?.substring(0,500));
-        const errorText = `⚙️ Apologies, ${playerRefHTML}, an error occurred while preparing your withdrawal request: <code>${escapeHTML(error.message)}</code>.<br>Please try again from the wallet menu.`;
+        // Corrected: Ensure error.message (which might contain problematic HTML from a deeper error) is cleaned for this HTML context
+        const errorMessageContent = String(error.message || "An unexpected error occurred.").replace(/<br\s*\/?>/gi, '\n');
+        const errorText = `⚙️ Apologies, ${playerRefHTML}, an error occurred while preparing your withdrawal request: <code>${escapeHTML(errorMessageContent)}</code>.\nPlease try again from the wallet menu.`;
         const errorKeyboard = { inline_keyboard: [[{ text: "💳 Back to Wallet Menu", callback_data: "menu:wallet" }]] };
+        
         if (workingMessageId) {
             await bot.editMessageText(errorText, { chat_id: targetDmChatId, message_id: workingMessageId, parse_mode: 'HTML', reply_markup: errorKeyboard })
-                .catch(async () => {
+                .catch(async () => { 
                     await safeSendMessage(targetDmChatId, errorText, { parse_mode: 'HTML', reply_markup: errorKeyboard });
                 });
-        } else {
+        } else { 
             await safeSendMessage(targetDmChatId, errorText, { parse_mode: 'HTML', reply_markup: errorKeyboard });
         }
     }
