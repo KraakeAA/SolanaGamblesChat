@@ -1056,7 +1056,7 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Database Schema Initialization
 //---------------------------------------------------------------------------
-// FULLY CORRECTED initializeDatabaseSchema
+// FINAL CORRECTED initializeDatabaseSchema (with all fixes)
 async function initializeDatabaseSchema() {
     console.log("⚙️ Initializing FULL database schema (All Tables & Triggers - Cleaned)...");
     const client = await pool.connect();
@@ -1169,16 +1169,16 @@ CREATE TABLE IF NOT EXISTS withdrawals (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
         
-        // Referrals Table (with notes column)
+        // Referrals Table (with corrected column sizes)
         await client.query(`
 CREATE TABLE IF NOT EXISTS referrals (
     referral_id SERIAL PRIMARY KEY,
     referrer_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     referred_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE UNIQUE,
-    commission_type VARCHAR(20),
+    commission_type VARCHAR(50),
     commission_amount_lamports BIGINT,
     transaction_signature VARCHAR(88),
-    status VARCHAR(20) DEFAULT 'pending_criteria',
+    status VARCHAR(50) DEFAULT 'pending_criteria',
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1294,7 +1294,6 @@ CREATE TABLE IF NOT EXISTS user_levels (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
         
-        // This is the fully corrected table definition with all columns
         await client.query(`
 CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
     claim_id SERIAL PRIMARY KEY,
@@ -1318,7 +1317,6 @@ BEGIN
     END IF;
 END $$;`);
         
-        // Update function for 'updated_at' columns
         await client.query(`
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
@@ -1342,11 +1340,7 @@ $$ LANGUAGE plpgsql;`);
         console.log("✅ DB Schema: Database schema initialization complete (ALL TABLES & TRIGGERS).");
 
     } catch (e) {
-        try {
-            await client.query('ROLLBACK');
-        } catch (rbError) {
-            console.error("DB Schema: Error during ROLLBACK attempt:", rbError);
-        }
+        try { await client.query('ROLLBACK'); } catch (rbError) { console.error("DB Schema: Error during ROLLBACK attempt:", rbError); }
         console.error('❌ DB Schema: Error during database schema initialization:', e);
         throw e;
     } finally {
