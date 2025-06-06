@@ -12128,129 +12128,138 @@ async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, d
 }
 
 // CORRECTED handleMinesTileClickCallback (Full Version)
+// CORRECTED handleMinesTileClickCallback (Full Version)
 async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str, callbackQueryId, originalMessageId, originalChatId) {
-    const userId = String(userWhoClicked.telegram_id || userWhoClicked.id);
-    const r = parseInt(r_str, 10);
-    const c = parseInt(c_str, 10);
-    const logPrefix = `[MinesTileClick_V4_DeadlockFix GID:${gameId} UID:${userId} Tile:${r},${c}]`;
-    let allNotificationsToSend = [];
+    const userId = String(userWhoClicked.telegram_id || userWhoClicked.id);
+    const r = parseInt(r_str, 10);
+    const c = parseInt(c_str, 10);
+    const logPrefix = `[MinesTileClick_V5_Fix GID:${gameId} UID:${userId} Tile:${r},${c}]`;
+    let allNotificationsToSend = [];
 
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-    } catch (priceError) {
-        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up/milestone checks will be skipped. Error: ${priceError.message}`);
-        solPrice = 0;
-    }
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+    } catch (priceError) {
+        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up/milestone checks will be skipped. Error: ${priceError.message}`);
+        solPrice = 0;
+    }
 
-    let gameData = activeGames.get(gameId);
+    let gameData = activeGames.get(gameId);
 
-    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.userId !== userId || gameData.status !== 'player_turn' ||
-        isNaN(r) || isNaN(c) || r < 0 || r >= gameData.rows || c < 0 || c >= gameData.cols || gameData.grid[r][c].isRevealed) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid action or tile.", show_alert: true }).catch(()=>{});
-        return;
-    }
+    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.userId !== userId || gameData.status !== 'player_turn' ||
+        isNaN(r) || isNaN(c) || r < 0 || r >= gameData.rows || c < 0 || c >= gameData.cols || gameData.grid[r][c].isRevealed) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid action or tile.", show_alert: true }).catch(()=>{});
+        return;
+    }
 
-    if (gameData.activityTimeoutId) { 
-        clearTimeout(gameData.activityTimeoutId);
-        gameData.activityTimeoutId = null;
-    }
+    if (gameData.activityTimeoutId) { 
+        clearTimeout(gameData.activityTimeoutId);
+        gameData.activityTimeoutId = null;
+    }
 
-    const cell = gameData.grid[r][c];
-    cell.isRevealed = true;
-    gameData.lastInteractionTime = Date.now();
-    let statusMessageForAnswerCallback = '';
-    let gameOver = false;
-    let client = null; 
-    let balanceUpdateSucceeded = false;
+    const cell = gameData.grid[r][c];
+    cell.isRevealed = true;
+    gameData.lastInteractionTime = Date.now();
+    let statusMessageForAnswerCallback = '';
+    let gameOver = false;
+    let client = null; 
+    let balanceUpdateSucceeded = false;
 
-    if (cell.isMine) {
-        gameData.status = 'game_over_mine_hit';
-        statusMessageForAnswerCallback = `${TILE_EMOJI_EXPLOSION} BOOM! Mine!`;
-        gameOver = true; gameData.finalPayout = 0n; gameData.finalMultiplier = 0;
-        gameData.mineLocations.forEach(([mr_loc, mc_loc]) => { if (gameData.grid[mr_loc]?.[mc_loc]) gameData.grid[mr_loc][mc_loc].isRevealed = true; });
-        try {
-            client = await pool.connect(); await client.query('BEGIN');
-            const lossUpdateResult = await updateUserBalanceAndLedger(client, userId, 0n, 'loss_mines_hit', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, gems_found: gameData.gemsFound, original_bet_amount: gameData.betAmount.toString() }, `Mines: Hit mine. Bet lost.`, solPrice);
-            if (lossUpdateResult.success) {
-                balanceUpdateSucceeded = true;
-                if(lossUpdateResult.notifications) allNotificationsToSend.push(...lossUpdateResult.notifications);
-                
-                if (gameData.totalWageredForLevelCheck !== undefined) {
-                    const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
-                    allNotificationsToSend.push(...levelNotifications);
-                    const milestoneNotifications = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
-                    allNotificationsToSend.push(...milestoneNotifications);
-                }
-                await client.query('COMMIT');
-            } else {
-                await client.query('ROLLBACK');
-                throw new Error(lossUpdateResult.error || "DB Error logging mine hit loss.");
-            }
-        } catch (e) { 
-            if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(()=>{});
-            statusMessageForAnswerCallback += " (DB Log Error)"; 
-            console.error(`${logPrefix} DB Error logging mine hit: ${e.message}`);
-        }
-        finally { if (client) client.release(); }
-    } else {
-        gameData.gemsFound++;
-        gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.gemsFound);
-        gameData.potentialPayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
-        statusMessageForAnswerCallback = `${TILE_EMOJI_GEM} Gem! x${gameData.currentMultiplier.toFixed(2)}`;
-        const totalNonMineCells = (gameData.rows * gameData.cols) - gameData.numMines;
-        if (gameData.gemsFound >= totalNonMineCells) {
-            gameData.status = 'game_over_all_gems_found';
-            gameData.finalPayout = gameData.potentialPayout; gameData.finalMultiplier = gameData.currentMultiplier;
-            gameOver = true;
-            try {
-                client = await pool.connect(); await client.query('BEGIN');
-                const winUpdateResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_all_gems', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines max win.`, solPrice);
-                if (winUpdateResult.success) {
-                    balanceUpdateSucceeded = true;
-                    if(winUpdateResult.notifications) allNotificationsToSend.push(...winUpdateResult.notifications);
-
-                    if (gameData.totalWageredForLevelCheck !== undefined) {
-                        const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
-                        allNotificationsToSend.push(...levelNotifications);
-                        const milestoneNotifications = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
-                        allNotificationsToSend.push(...milestoneNotifications);
+    if (cell.isMine) {
+        gameData.status = 'game_over_mine_hit';
+        statusMessageForAnswerCallback = `${TILE_EMOJI_EXPLOSION} BOOM! Mine!`;
+        gameOver = true; gameData.finalPayout = 0n; gameData.finalMultiplier = 0;
+        gameData.mineLocations.forEach(([mr_loc, mc_loc]) => { if (gameData.grid[mr_loc]?.[mc_loc]) gameData.grid[mr_loc][mc_loc].isRevealed = true; });
+        try {
+            client = await pool.connect(); await client.query('BEGIN');
+            const lossUpdateResult = await updateUserBalanceAndLedger(client, userId, 0n, 'loss_mines_hit', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, gems_found: gameData.gemsFound, original_bet_amount: gameData.betAmount.toString() }, `Mines: Hit mine. Bet lost.`, solPrice);
+            if (lossUpdateResult.success) {
+                balanceUpdateSucceeded = true;
+                if(lossUpdateResult.notifications) allNotificationsToSend.push(...lossUpdateResult.notifications);
+                
+                if (gameData.totalWageredForLevelCheck !== undefined) {
+                    const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
+                    allNotificationsToSend.push(...levelNotifications);
+                    
+                    // **FIX APPLIED HERE**: Check the result from processWagerMilestoneBonus, but do not spread it.
+                    const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
+                    if (!milestoneResult.success) {
+                        console.warn(`${logPrefix} Failed to process milestone bonus on mine hit: ${milestoneResult.error}`);
                     }
-                    await client.query('COMMIT');
-                } else {
-                    await client.query('ROLLBACK');
-                    throw new Error(winUpdateResult.error || "DB Error logging all gems found win.");
-                }
-            } catch (dbError) { 
-                if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(()=>{}); 
-                statusMessageForAnswerCallback = "Error processing max win payout."; 
-                console.error(`${logPrefix} DB Error logging all gems found: ${dbError.message}`);
-            }
-            finally { if (client) client.release(); }
-        }
-    }
+                }
+                await client.query('COMMIT');
+            } else {
+                await client.query('ROLLBACK');
+                throw new Error(lossUpdateResult.error || "DB Error logging mine hit loss.");
+            }
+        } catch (e) { 
+            if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(()=>{});
+            statusMessageForAnswerCallback += " (DB Log Error)"; 
+            console.error(`${logPrefix} DB Error logging mine hit: ${e.message}`);
+        }
+        finally { if (client) client.release(); }
+    } else {
+        gameData.gemsFound++;
+        gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.gemsFound);
+        gameData.potentialPayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
+        statusMessageForAnswerCallback = `${TILE_EMOJI_GEM} Gem! x${gameData.currentMultiplier.toFixed(2)}`;
+        const totalNonMineCells = (gameData.rows * gameData.cols) - gameData.numMines;
+        if (gameData.gemsFound >= totalNonMineCells) {
+            gameData.status = 'game_over_all_gems_found';
+            gameData.finalPayout = gameData.potentialPayout; gameData.finalMultiplier = gameData.currentMultiplier;
+            gameOver = true;
+            try {
+                client = await pool.connect(); await client.query('BEGIN');
+                const winUpdateResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_all_gems', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines max win.`, solPrice);
+                if (winUpdateResult.success) {
+                    balanceUpdateSucceeded = true;
+                    if(winUpdateResult.notifications) allNotificationsToSend.push(...winUpdateResult.notifications);
 
-    if(activeGames.has(gameId)) activeGames.set(gameId, gameData); 
-    const cbAnswerText = statusMessageForAnswerCallback.substring(0,190);
-    await bot.answerCallbackQuery(callbackQueryId, {text: cbAnswerText }).catch(() => {});
-    
-    if (gameOver) {
-        for (const notification of allNotificationsToSend) {
-            if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
-                await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
-            } else {
-                await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
-            }
-        }
-    }
+                    if (gameData.totalWageredForLevelCheck !== undefined) {
+                        const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
+                        allNotificationsToSend.push(...levelNotifications);
+                        
+                        // **FIX APPLIED HERE**: Check the result from processWagerMilestoneBonus, but do not spread it.
+                        const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
+                        if (!milestoneResult.success) {
+                            console.warn(`${logPrefix} Failed to process milestone bonus on all-gems-found win: ${milestoneResult.error}`);
+                        }
+                    }
+                    await client.query('COMMIT');
+                } else {
+                    await client.query('ROLLBACK');
+                    throw new Error(winUpdateResult.error || "DB Error logging all gems found win.");
+                }
+            } catch (dbError) { 
+                if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(()=>{}); 
+                statusMessageForAnswerCallback = "Error processing max win payout."; 
+                console.error(`${logPrefix} DB Error logging all gems found: ${dbError.message}`);
+            }
+            finally { if (client) client.release(); }
+        }
+    }
 
-    await updateMinesGameMessage(gameData, true, gameOver); 
+    if(activeGames.has(gameId)) activeGames.set(gameId, gameData); 
+    const cbAnswerText = statusMessageForAnswerCallback.substring(0,190);
+    await bot.answerCallbackQuery(callbackQueryId, {text: cbAnswerText }).catch(() => {});
+    
+    if (gameOver) {
+        for (const notification of allNotificationsToSend) {
+            if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
+                await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
+            } else {
+                await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
+            }
+        }
+    }
 
-    if (gameOver) {
-        activeGames.delete(gameId);
-        await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null); 
-        console.log(`${logPrefix} Game ${gameId} ended (mine hit or all gems). Lock for ${GAME_IDS.MINES} cleared.`);
-    }
+    await updateMinesGameMessage(gameData, true, gameOver); 
+
+    if (gameOver) {
+        activeGames.delete(gameId);
+        await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null); 
+        console.log(`${logPrefix} Game ${gameId} ended (mine hit or all gems). Lock for ${GAME_IDS.MINES} cleared.`);
+    }
 }
 
 // CORRECTED handleMinesCashOutCallback (Full Version)
