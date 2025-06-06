@@ -2568,9 +2568,10 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
 
                     if (!creditResult.success) {
                         console.error(`${LOG_PREFIX_PWM} Failed to credit milestone bonus to referrer ${referrerId}. Error: ${creditResult.error}`);
-                        continue; // Skip to next milestone
+                        continue;
                     }
                     
+                    // Use the pre-fetched price to format the message, avoiding a network call
                     const bonusAmountUSDDisplay = convertLamportsToUSDString(milestoneBonusAmountLamports, solPrice);
                     const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
                     
@@ -11001,30 +11002,28 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 // - Global State: activeGames (Map)
 // - Timeout Constants: ACTIVE_GAME_TURN_TIMEOUT_MS, UNIFIED_OFFER_TIMEOUT_MS, GAME_ACTIVITY_LIMITS
 
-// FINAL-FIX handleStartMinesCommand (Full Version)
-async function handleStartMinesCommand(msg, args, userObj) { 
-    const userId = String(userObj.telegram_id); 
+// FINAL-FIX handleStartMinesCommand
+async function handleStartMinesCommand(msg, args, userObj) {
+    const userId = String(userObj.telegram_id);
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const LOG_PREFIX_MINES_START = `[Mines_StartOffer_V6_FinalFix UID:${userId} CH:${chatId}]`; 
+    const LOG_PREFIX_MINES_START = `[Mines_StartOffer_V6_FinalFix UID:${userId} CH:${chatId}]`;
     
-    // --- NEW PATTERN: Get price BEFORE the transaction ---
     let solPrice;
     try {
         solPrice = await getSolUsdPrice();
     } catch (priceError) {
         console.error(`${LOG_PREFIX_MINES_START} CRITICAL: Could not get SOL price. Bonus checks may be skipped. Error: ${priceError.message}`);
-        solPrice = 0; // Set to 0 to prevent downstream errors
+        solPrice = 0;
     }
-    // --- END OF NEW PATTERN ---
     
-    let notificationsToSend = []; // Array to hold notifications
+    let notificationsToSend = [];
 
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
     if (activeUserGameCheck.limitReached) {
         const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
         const blockingGameType = activeUserGameCheck.details.type;
-        const cleanGameName = getCleanGameName(blockingGameType); 
+        const cleanGameName = getCleanGameName(blockingGameType);
         const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
         await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
         return;
@@ -11061,9 +11060,9 @@ async function handleStartMinesCommand(msg, args, userObj) {
     }
 
     const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    const offerActivityKey = GAME_IDS.MINES_OFFER; 
+    const offerActivityKey = GAME_IDS.MINES_OFFER;
     const currentMinesOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKey) || [];
-    const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKey] || 1; 
+    const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKey] || 1;
 
     if (currentMinesOffers.length >= limitUnified) {
         await safeSendMessage(chatId, `⏳ ${playerRefHTML}, max ${limitUnified} Mines offer(s) active here. Please wait.`, { parse_mode: 'HTML' });
@@ -11079,16 +11078,16 @@ async function handleStartMinesCommand(msg, args, userObj) {
         await clientBetPlacement.query('BEGIN');
         
         const betResult = await updateUserBalanceAndLedger(
-            clientBetPlacement, userId, BigInt(-betAmountLamports), 
-            'bet_placed_mines_offer', 
-            { custom_offer_id: offerId }, 
+            clientBetPlacement, userId, BigInt(-betAmountLamports),
+            'bet_placed_mines_offer',
+            { custom_offer_id: offerId },
             `Mines Offer creation`,
             solPrice
         );
         
         if (!betResult.success) throw new Error(betResult.error || "Failed to place bet for Mines offer.");
         
-        userObj.balance = betResult.newBalanceLamports; 
+        userObj.balance = betResult.newBalanceLamports;
         totalWageredAfterBetPlacement = betResult.newTotalWageredLamports;
         if (betResult.notifications && betResult.notifications.length > 0) {
             notificationsToSend.push(...betResult.notifications);
@@ -11096,8 +11095,8 @@ async function handleStartMinesCommand(msg, args, userObj) {
 
         const offerData = {
             type: GAME_IDS.MINES_OFFER, gameId: offerId, chatId: chatId,
-            initiatorId: userId, initiatorMentionHTML: playerRefHTML, 
-            initiatorUserObj: userObj, 
+            initiatorId: userId, initiatorMentionHTML: playerRefHTML,
+            initiatorUserObj: userObj,
             betAmount: betAmountLamports, status: 'awaiting_difficulty',
             creationTime: Date.now(), offerMessageId: null, timeoutId: null,
             totalWageredForLevelCheck: totalWageredAfterBetPlacement
@@ -11113,9 +11112,7 @@ async function handleStartMinesCommand(msg, args, userObj) {
         await safeSendMessage(chatId, "⚙️ Oops! Couldn't start Mines offer. Please try again.", { parse_mode: 'HTML' });
         if (offerId && activeGames.has(offerId)) {
             activeGames.delete(offerId);
-        }
-        if (offerActivityKey) { 
-             await updateGroupGameDetails(chatId, {removeThisId: offerId}, offerActivityKey, null);
+            await updateGroupGameDetails(chatId, {removeThisId: offerId}, offerActivityKey, null);
         }
         return;
     } finally {
@@ -11144,13 +11141,12 @@ async function handleStartMinesCommand(msg, args, userObj) {
     const sentMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: { inline_keyboard: difficultyKeyboardRows }});
     
     if (sentMessage?.message_id) {
-        const currentOffer = activeGames.get(offerId); 
+        const currentOffer = activeGames.get(offerId);
         if (currentOffer) {
             currentOffer.offerMessageId = String(sentMessage.message_id);
             currentOffer.timeoutId = setTimeout(async () => {
                 const timedOutMinesOffer = activeGames.get(offerId);
                 if (timedOutMinesOffer && timedOutMinesOffer.status === 'awaiting_difficulty') {
-                    console.log(`${LOG_PREFIX_MINES_START} Mines offer ${offerId} (difficulty selection) timed out.`);
                     activeGames.delete(offerId);
                     await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKey, null);
                     let refundClientTimeout = null;
@@ -11158,13 +11154,12 @@ async function handleStartMinesCommand(msg, args, userObj) {
                         refundClientTimeout = await pool.connect(); await refundClientTimeout.query('BEGIN');
                         await updateUserBalanceAndLedger(refundClientTimeout, timedOutMinesOffer.initiatorId, timedOutMinesOffer.betAmount, 'refund_mines_offer_timeout', { custom_offer_id: offerId }, `Refund for timed out Mines offer ${offerId}`);
                         await refundClientTimeout.query('COMMIT');
-                    } catch (e) { 
-                        if(refundClientTimeout) await refundClientTimeout.query('ROLLBACK'); 
-                        console.error(`${LOG_PREFIX_MINES_START} CRITICAL REFUND FAIL for Mines offer ${offerId}: ${e.message}`); 
-                        if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL MINES OFFER REFUND TIMEOUT FAIL: Offer ${offerId}, User ${timedOutMinesOffer.initiatorId}. Err: ${e.message}`);
+                    } catch (e) {
+                        if(refundClientTimeout) await refundClientTimeout.query('ROLLBACK');
+                        console.error(`${LOG_PREFIX_MINES_START} CRITICAL REFUND FAIL for Mines offer ${offerId}: ${e.message}`);
+                    } finally {
+                         if(refundClientTimeout) refundClientTimeout.release();
                     }
-                    finally { if(refundClientTimeout) refundClientTimeout.release(); }
-
                     if (timedOutMinesOffer.offerMessageId && bot) {
                         await bot.editMessageText(`⏳ Mines offer by ${timedOutMinesOffer.initiatorMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutMinesOffer.betAmount, 'USD'))}</b> expired. Bet refunded.`,
                             { chat_id: String(chatId), message_id: Number(timedOutMinesOffer.offerMessageId), parse_mode: 'HTML', reply_markup: {} }
@@ -15148,7 +15143,7 @@ async function getUserByReferralCode(refCode, client = pool) {
 async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null, solPrice = 0) {
     const stringUserId = String(telegramId);
     const changeAmount = BigInt(changeAmountLamports);
-    const logPrefix = `[UpdateBalLedger_V3_FinalFix UID:${stringUserId}]`;
+    const logPrefix = `[UpdateBalLedger_V4_FinalFix UID:${stringUserId}]`;
 
     if (!dbClient || typeof dbClient.query !== 'function') {
         return { success: false, error: 'Invalid database client provided.', errorCode: 'INVALID_DB_CLIENT' };
