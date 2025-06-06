@@ -12253,138 +12253,105 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
     }
 }
 
-// --- TEMPORARY DEBUG VERSION of handleMinesCashOutCallback ---
+// CORRECTED handleMinesCashOutCallback (Full Version)
 async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, originalMessageId, originalChatId) {
-    const userId = String(userObject.telegram_id || userObject.id);
-    const logPrefix = `[MinesCashOut_DEBUG GID:${gameId} UID:${userId}]`;
+    const userId = String(userObject.telegram_id || userObject.id);
+    const logPrefix = `[MinesCashOut_V2_Fix GID:${gameId} UID:${userId}]`;
 
-    console.log(`\n--- ${logPrefix} ---`);
-    console.log(`${logPrefix} Function SUCCESSFULLY CALLED.`);
+    const gameData = activeGames.get(gameId);
 
-    const gameData = activeGames.get(gameId);
+    if (!gameData || gameData.type !== GAME_IDS.MINES || gameData.userId !== userId || gameData.status !== 'player_turn') {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Invalid action or game state.", show_alert: true }).catch(() => {});
+        return;
+    }
+    if (gameData.gemsFound === 0) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Find at least one gem before cashing out!", show_alert: true }).catch(() => {});
+        return;
+    }
 
-    // 1. Check if gameData exists
-    if (!gameData) {
-        console.error(`${logPrefix} ❌ FAILURE: gameData not found in activeGames map! Game may have been deleted.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Game session not found.", show_alert: true }).catch(() => {});
-        return;
-    }
-    console.log(`${logPrefix} ✅ SUCCESS: GameData found.`);
+    if (gameData.activityTimeoutId) {
+        clearTimeout(gameData.activityTimeoutId);
+        gameData.activityTimeoutId = null;
+    }
 
-    // 2. Check game type
-    if (gameData.type !== GAME_IDS.MINES) {
-        console.error(`${logPrefix} ❌ FAILURE: Game type mismatch. Expected '${GAME_IDS.MINES}', but got '${gameData.type}'.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid game type.", show_alert: true }).catch(() => {});
-        return;
-    }
-    console.log(`${logPrefix} ✅ SUCCESS: Game type is correct.`);
+    await bot.answerCallbackQuery(callbackQueryId, { text: "Cashing out..." }).catch(() => {});
 
-    // 3. Check if the user clicking is the player in the game
-    if (gameData.userId !== userId) {
-        console.error(`${logPrefix} ❌ FAILURE: User ID mismatch. Game belongs to '${gameData.userId}', but clicker is '${userId}'.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This is not your game.", show_alert: true }).catch(() => {});
-        return;
-    }
-    console.log(`${logPrefix} ✅ SUCCESS: User ID matches.`);
+    gameData.status = 'game_over_cashed_out';
+    gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.gemsFound);
+    gameData.finalPayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
+    gameData.finalMultiplier = gameData.currentMultiplier;
+    gameData.lastInteractionTime = Date.now();
+    for (let r = 0; r < gameData.rows; r++) {
+        for (let c = 0; c < gameData.cols; c++) {
+            gameData.grid[r][c].isRevealed = true;
+        }
+    }
 
-    // 4. Check the game status
-    if (gameData.status !== 'player_turn') {
-        console.error(`${logPrefix} ❌ FAILURE: Status check failed. Expected 'player_turn', but got '${gameData.status}'.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Cannot cash out. Game status is: ${gameData.status}`, show_alert: true }).catch(() => {});
-        return;
-    }
-    console.log(`${logPrefix} ✅ SUCCESS: Game status is 'player_turn'.`);
+    let client = null;
+    let balanceUpdateSucceeded = false;
+    let allNotificationsToSend = [];
+    
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+    } catch (priceError) {
+        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Bonus checks will be skipped. Error: ${priceError.message}`);
+        solPrice = 0;
+    }
 
-    // 5. Check if any gems have been found
-    if (gameData.gemsFound === 0) {
-        console.error(`${logPrefix} ❌ FAILURE: Gems found is 0. Cannot cash out with no gems.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Find at least one gem before cashing out!", show_alert: true }).catch(() => {});
-        return;
-    }
-    console.log(`${logPrefix} ✅ SUCCESS: Gems found > 0.`);
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const cashoutResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_cashout', { game_id_custom_field: gameId, difficulty_custom: gameData.difficultyKey, gems_custom: gameData.gemsFound, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines cash out.`, solPrice);
+        if (!cashoutResult.success) {
+            throw new Error(cashoutResult.error || "Failed to update balance on cash out.");
+        }
+        balanceUpdateSucceeded = true;
+        if (cashoutResult.notifications) allNotificationsToSend.push(...cashoutResult.notifications);
 
-    console.log(`${logPrefix} All initial checks PASSED. Proceeding with cash out logic...`);
+        if (gameData.totalWageredForLevelCheck !== undefined) {
+            const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
+            allNotificationsToSend.push(...levelNotifications);
+            
+            // **FIX APPLIED HERE**: Check the result from processWagerMilestoneBonus, but do not spread it.
+            const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
+            if (!milestoneResult.success) {
+                console.warn(`${logPrefix} Failed to process milestone bonus during cashout: ${milestoneResult.error}`);
+            }
+        }
 
-    // --- The original function logic continues from here ---
-    if (gameData.activityTimeoutId) {
-        clearTimeout(gameData.activityTimeoutId);
-        gameData.activityTimeoutId = null;
-    }
+        await client.query('COMMIT');
+    } catch (dbError) {
+        // **FIX APPLIED HERE**: The client.release() call has been removed from the catch block.
+        if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(() => {});
+        console.error(`${logPrefix} DB Error processing Mines cash out: ${dbError.message}`);
+        await safeSendMessage(userId, "⚙️ Error processing cash out (DB). Contact support.", { parse_mode: 'HTML' });
+        if (typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL MINES CASHOUT DB Error GID: ${gameId}. Manual check needed.`);
 
-    await bot.answerCallbackQuery(callbackQueryId, { text: "Cashing out..." }).catch(() => {});
+        gameData.status = 'game_over_error_payout';
+        if (activeGames.has(gameId)) activeGames.set(gameId, gameData);
+        await updateMinesGameMessage(gameData, true, true);
+        activeGames.delete(gameId);
+        await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null);
+        return;
+    } finally {
+        // **FIX APPLIED HERE**: This is now the ONLY place client.release() is called.
+        if (client) client.release();
+    }
 
-    gameData.status = 'game_over_cashed_out';
-    gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.gemsFound);
-    gameData.finalPayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
-    gameData.finalMultiplier = gameData.currentMultiplier;
-    gameData.lastInteractionTime = Date.now();
-    for (let r = 0; r < gameData.rows; r++) {
-        for (let c = 0; c < gameData.cols; c++) {
-            gameData.grid[r][c].isRevealed = true;
-        }
-    }
+    for (const notification of allNotificationsToSend) {
+        if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
+            await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
+        } else {
+            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
+        }
+    }
 
-    let client = null;
-    let balanceUpdateSucceeded = false;
-    let allNotificationsToSend = [];
-    
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-    } catch (priceError) {
-        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Bonus checks will be skipped. Error: ${priceError.message}`);
-        solPrice = 0;
-    }
-
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const cashoutResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_cashout', { game_id_custom_field: gameId, difficulty_custom: gameData.difficultyKey, gems_custom: gameData.gemsFound, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines cash out.`, solPrice);
-        if (!cashoutResult.success) {
-            await client.query('ROLLBACK');
-            throw new Error(cashoutResult.error || "Failed to update balance on cash out.");
-        }
-        balanceUpdateSucceeded = true;
-        if (cashoutResult.notifications) allNotificationsToSend.push(...cashoutResult.notifications);
-
-        if (gameData.totalWageredForLevelCheck !== undefined) {
-            const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
-            allNotificationsToSend.push(...levelNotifications);
-            const milestoneNotifications = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
-            allNotificationsToSend.push(...milestoneNotifications);
-        }
-
-        await client.query('COMMIT');
-    } catch (dbError) {
-        if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} DB Error processing Mines cash out: ${dbError.message}`);
-        await safeSendMessage(userId, "⚙️ Error processing cash out (DB). Contact support.", { parse_mode: 'HTML' });
-        if (typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL MINES CASHOUT DB Error GID: ${gameId}. Manual check needed.`);
-        if (client) client.release();
-
-        gameData.status = 'game_over_error_payout';
-        if (activeGames.has(gameId)) activeGames.set(gameId, gameData);
-        await updateMinesGameMessage(gameData, true, true);
-        activeGames.delete(gameId);
-        await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null);
-        return;
-    } finally {
-        if (client) client.release();
-    }
-
-    for (const notification of allNotificationsToSend) {
-        if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
-            await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
-        } else {
-            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
-        }
-    }
-
-    if (activeGames.has(gameId)) activeGames.set(gameId, gameData);
-    await updateMinesGameMessage(gameData, true, true);
-    activeGames.delete(gameId);
-    await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null);
-    console.log(`${logPrefix} Game ${gameId} cashed out. Lock for ${GAME_IDS.MINES} cleared.`);
+    if (activeGames.has(gameId)) activeGames.set(gameId, gameData);
+    await updateMinesGameMessage(gameData, true, true);
+    activeGames.delete(gameId);
+    await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null);
+    console.log(`${logPrefix} Game ${gameId} cashed out. Lock for ${GAME_IDS.MINES} cleared.`);
 }
 
 async function handleMinesCancelOfferCallback(offerId, userWhoClicked, originalMessageId, originalChatId, callbackQueryId) {
