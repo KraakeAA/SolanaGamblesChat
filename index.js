@@ -11538,7 +11538,7 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
     const c = parseInt(c_str, 10);
     const logPrefix = `[MinesTileClick_V4_DeadlockFix GID:${gameId} UID:${userId} Tile:${r},${c}]`;
 
-    // --- NEW PATTERN: Get price BEFORE the transaction ---
+    // --- NEW PATTERN: Get price BEFORE any transaction ---
     let solPrice;
     try {
         solPrice = await getSolUsdPrice();
