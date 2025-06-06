@@ -2522,10 +2522,11 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, milestonesProcessed: number, error?: string}>}
  */
-// FINAL CORRECTED processWagerMilestoneBonus (Automatic Internal Payout)
+// FINAL CORRECTED processWagerMilestoneBonus (Returns Notifications)
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V4_AutoCredit UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V5_FinalFix UID:${stringReferredUserId}]`;
+    const notificationsToSend = [];
 
     try {
         const referralLinkDetailsRes = await queryDatabase(
@@ -2535,7 +2536,7 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
         );
 
         if (referralLinkDetailsRes.rowCount === 0) {
-            return { success: true }; // No referral link, nothing to do.
+            return { success: true, notifications: [] };
         }
 
         const referralLink = referralLinkDetailsRes.rows[0];
@@ -2549,58 +2550,36 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
         for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
             const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
             
-            // Check if milestone is reached AND not already paid out
             if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
-                console.log(`${LOG_PREFIX_PWM} Milestone of $${milestoneUSD} USD has been reached by user ${stringReferredUserId}!`);
-                
+                console.log(`${LOG_PREFIX_PWM} Milestone of $${milestoneUSD} USD reached by user ${stringReferredUserId}!`);
                 const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
 
                 if (milestoneBonusAmountLamports > 0n) {
-                    // Instantly credit the referrer's internal wallet balance
-                    await updateUserBalanceAndLedger(
-                        dbClient,
-                        referrerId,
-                        milestoneBonusAmountLamports,
-                        'referral_milestone_bonus',
-                        { referral_id: referralLink.referral_id },
-                        `Milestone Bonus: Referred user ${stringReferredUserId} wagered $${milestoneUSD}`
-                    );
+                    await updateUserBalanceAndLedger(dbClient, referrerId, milestoneBonusAmountLamports, 'referral_milestone_bonus', { referral_id: referralLink.referral_id }, `Milestone Bonus: Referred user ${stringReferredUserId} wagered $${milestoneUSD}`);
                     
-                    console.log(`${LOG_PREFIX_PWM} Credited ${milestoneBonusAmountLamports} lamports to referrer ${referrerId} for $${milestoneUSD} milestone.`);
-                    
-                    // Notify the referrer
                     const bonusAmountUSDDisplay = await formatBalanceForDisplay(milestoneBonusAmountLamports, 'USD');
                     const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
-                    safeSendMessage(referrerId,
-                        `🌟 Cha-ching! Your referral ${escapeMarkdownV2(referredName)} crossed the *${escapeMarkdownV2(`$${milestoneUSD}`)}* wager milestone!\n` +
-                        `A bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* has been added to your casino balance!`,
-                        { parse_mode: 'MarkdownV2' }
-                    ).catch(e => console.warn(`${LOG_PREFIX_PWM} Failed to send milestone bonus notification to referrer ${referrerId}: ${e.message}`));
+                    
+                    const notificationMessage = `🌟 Cha-ching! Your referral ${escapeMarkdownV2(referredName)} crossed the *${escapeMarkdownV2(`$${milestoneUSD}`)}* wager milestone!\nA bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* has been added to your casino balance!`;
+                    notificationsToSend.push({ to: referrerId, message: notificationMessage, options: { parse_mode: 'MarkdownV2' } });
                 }
-
-                // Mark this milestone as processed
                 achievedMilestonesData[milestoneKey] = new Date().toISOString();
                 milestonesUpdated = true;
             }
         }
 
-        // If any milestones were processed, update the database record
         if (milestonesUpdated) {
-            console.log(`${LOG_PREFIX_PWM} Updating referrals table with new achieved milestones.`);
             await dbClient.query(
-                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW()
-                 WHERE referral_id = $3;`,
+                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW() WHERE referral_id = $3;`,
                 [achievedMilestonesData, newTotalWageredLamportsByReferred.toString(), referralLink.referral_id]
             );
         }
         
-        return { success: true };
+        return { success: true, notifications: notificationsToSend };
 
     } catch (error) {
         console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack?.substring(0,700));
-        // We do not re-throw the error here, to ensure the main transaction (like the bet placement) does not fail
-        // because of a non-critical bonus processing issue. The error is logged for review.
-        return { success: false, error: error.message };
+        return { success: false, notifications: [], error: error.message };
     }
 }
 
@@ -11007,163 +10986,164 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 // - Global State: activeGames (Map)
 // - Timeout Constants: ACTIVE_GAME_TURN_TIMEOUT_MS, UNIFIED_OFFER_TIMEOUT_MS, GAME_ACTIVITY_LIMITS
 
-// (handleStartMinesCommand was originally in Part 5a, Section 2, but is included here for completeness of Mines logic)
-async function handleStartMinesCommand(msg, args, userObj) { 
-    const userId = String(userObj.telegram_id); 
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_MINES_START = `[Mines_StartOffer_V4_GranLimit UID:${userId} CH:${chatId}]`; 
+// CORRECTED handleStartMinesCommand (Full Version)
+async function handleStartMinesCommand(msg, args, userObj) { 
+    const userId = String(userObj.telegram_id); 
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_MINES_START = `[Mines_StartOffer_V5_FinalFix UID:${userId} CH:${chatId}]`;
+    let notificationsToSend = []; // Array to hold notifications
 
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(userObj));
-        const blockingGameType = activeUserGameCheck.details.type;
-        const cleanGameName = getCleanGameName(blockingGameType); 
-        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
-        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
-        return;
-    }
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
+    if (activeUserGameCheck.limitReached) {
+        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
+        const blockingGameType = activeUserGameCheck.details.type;
+        const cleanGameName = getCleanGameName(blockingGameType); 
+        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
+        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
+        return;
+    }
 
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-    let betAmountLamports;
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    let betAmountLamports;
 
-    if (chatType === 'private') {
-        await safeSendMessage(chatId, `💣 Hey ${playerRefHTML}, Mines is best in a <b>group chat</b>. Use <code>/mines &lt;bet&gt;</code> there!`, { parse_mode: 'HTML' });
-        return;
-    }
+    if (chatType === 'private') {
+        await safeSendMessage(chatId, `💣 Hey ${playerRefHTML}, Mines is best in a <b>group chat</b>. Use <code>/mines &lt;bet&gt;</code> there!`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    try {
-        betAmountLamports = await parseBetAmount(args[0], chatId, chatType, userId);
-        if (!betAmountLamports || betAmountLamports <= 0n) {
-            await safeSendMessage(chatId, `${playerRefHTML}, please specify a valid bet for Mines.<br>Example: <code>/mines 10</code>`, { parse_mode: 'HTML' });
-            return;
-        }
-    } catch (e) {
-        await safeSendMessage(chatId, `${playerRefHTML}, issue with your bet amount. Use USD or SOL (e.g., <code>0.1 sol</code>). Error: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
-        return;
-    }
- 
-    const currentBalance = BigInt(userObj.balance);
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    try {
+        betAmountLamports = await parseBetAmount(args[0], chatId, chatType, userId);
+        if (!betAmountLamports || betAmountLamports <= 0n) {
+            await safeSendMessage(chatId, `${playerRefHTML}, please specify a valid bet for Mines.<br>Example: <code>/mines 10</code>`, { parse_mode: 'HTML' });
+            return;
+        }
+    } catch (e) {
+        await safeSendMessage(chatId, `${playerRefHTML}, issue with your bet amount. Use USD or SOL (e.g., <code>0.1 sol</code>). Error: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    if (currentBalance < betAmountLamports) {
-        const neededDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports - currentBalance, 'USD'));
-        await safeSendMessage(chatId, `${playerRefHTML}, balance too low for a <b>${betDisplayUSD_HTML}</b> Mines game.<br>Need ~<b>${neededDisplayUSD_HTML}</b> more.`, {
-            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
-        return;
-    }
+    const currentBalance = BigInt(userObj.balance);
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    const offerActivityKey = GAME_IDS.MINES_OFFER; 
-    const currentMinesOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKey) || [];
-    const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKey] || 1; 
+    if (currentBalance < betAmountLamports) {
+        const neededDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports - currentBalance, 'USD'));
+        await safeSendMessage(chatId, `${playerRefHTML}, balance too low for a <b>${betDisplayUSD_HTML}</b> Mines game.<br>Need ~<b>${neededDisplayUSD_HTML}</b> more.`, {
+            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
+        });
+        return;
+    }
 
-    if (currentMinesOffers.length >= limitUnified) {
-        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, max ${limitUnified} Mines offer(s) active here. Please wait.`, { parse_mode: 'HTML' });
-        return;
-    }
+    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
+    const offerActivityKey = GAME_IDS.MINES_OFFER; 
+    const currentMinesOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKey) || [];
+    const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKey] || 1; 
 
-    const offerId = generateGameId(GAME_IDS.MINES_OFFER);
-    let clientBetPlacement = null;
-    let totalWageredAfterBetPlacement; // To store for level check
+    if (currentMinesOffers.length >= limitUnified) {
+        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, max ${limitUnified} Mines offer(s) active here. Please wait.`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    try {
-        clientBetPlacement = await pool.connect();
-        await clientBetPlacement.query('BEGIN');
-        const betResult = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_mines_offer', { custom_offer_id: offerId }, `Mines Offer creation`);
-        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet for Mines offer.");
-        userObj.balance = betResult.newBalanceLamports; 
-        totalWageredAfterBetPlacement = betResult.newTotalWageredLamports; // *** CAPTURE THIS ***
+    const offerId = generateGameId(GAME_IDS.MINES_OFFER);
+    let clientBetPlacement = null;
 
-        const offerData = {
-            type: GAME_IDS.MINES_OFFER, gameId: offerId, chatId: chatId,
-            initiatorId: userId, initiatorMentionHTML: playerRefHTML, 
-            initiatorUserObj: userObj, 
-            betAmount: betAmountLamports, status: 'awaiting_difficulty',
-            creationTime: Date.now(), offerMessageId: null, timeoutId: null,
-            totalWageredForLevelCheck: totalWageredAfterBetPlacement // *** STORE THIS IN OFFER DATA ***
-        };
-        activeGames.set(offerId, offerData);
-        await updateGroupGameDetails(chatId, offerId, offerActivityKey, betAmountLamports);
-        await clientBetPlacement.query('COMMIT');
-        console.log(`${LOG_PREFIX_MINES_START} Mines offer ${offerId} created, bet taken, lock for ${offerActivityKey} set.`);
+    try {
+        clientBetPlacement = await pool.connect();
+        await clientBetPlacement.query('BEGIN');
+        
+        const betResult = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_mines_offer', { custom_offer_id: offerId }, `Mines Offer creation`);
+        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet for Mines offer.");
+        
+        userObj.balance = betResult.newBalanceLamports; 
+        if (betResult.notifications && betResult.notifications.length > 0) {
+            notificationsToSend.push(...betResult.notifications);
+        }
 
-        let difficultyButtons = [];
-        for (const diffKey in MINES_DIFFICULTY_CONFIG) {
-            const diffConfig = MINES_DIFFICULTY_CONFIG[diffKey];
-            difficultyButtons.push({ text: `${diffConfig.emoji || '⚙️'} ${escapeHTML(diffConfig.label)}`, callback_data: `mines_difficulty_select:${offerId}:${diffKey}`});
-        }
-        const difficultyKeyboardRows = [];
-        for (let i = 0; i < difficultyButtons.length; i += 2) difficultyKeyboardRows.push(difficultyButtons.slice(i, i + 2));
-        difficultyKeyboardRows.push([{ text: "❌ Cancel Offer", callback_data: `mines_cancel_offer:${offerId}` }]);
+        const offerData = {
+            type: GAME_IDS.MINES_OFFER, gameId: offerId, chatId: chatId,
+            initiatorId: userId, initiatorMentionHTML: playerRefHTML, 
+            initiatorUserObj: userObj, 
+            betAmount: betAmountLamports, status: 'awaiting_difficulty',
+            creationTime: Date.now(), offerMessageId: null, timeoutId: null,
+            totalWageredForLevelCheck: betResult.newTotalWageredLamports
+        };
+        activeGames.set(offerId, offerData);
+        await updateGroupGameDetails(chatId, offerId, offerActivityKey, betAmountLamports);
+        
+        await clientBetPlacement.query('COMMIT');
+        
+    } catch (error) {
+        if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
+        console.error(`${LOG_PREFIX_MINES_START} Error creating Mines offer: ${error.message}`);
+        await safeSendMessage(chatId, "⚙️ Oops! Couldn't start Mines offer. Please try again.", { parse_mode: 'HTML' });
+        if (offerId && activeGames.has(offerId)) {
+            activeGames.delete(offerId);
+        }
+        if (offerActivityKey) { 
+             await updateGroupGameDetails(chatId, {removeThisId: offerId}, offerActivityKey, null);
+        }
+        return; // Stop execution on error
+    } finally {
+        if (clientBetPlacement) clientBetPlacement.release();
+    }
 
-        const offerMessageTextHTML = `💣 <b>Mines Challenge by ${playerRefHTML}!</b> 💣\n\n` +
-            `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-            `${playerRefHTML}, select difficulty: (Offer expires in ${UNIFIED_OFFER_TIMEOUT_MS / 1000}s, bet refunded on timeout)`;
-        const sentMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: { inline_keyboard: difficultyKeyboardRows }});
+    if (notificationsToSend.length > 0) {
+        console.log(`${LOG_PREFIX_MINES_START} Sending ${notificationsToSend.length} queued notification(s).`);
+        for (const notification of notificationsToSend) {
+            safeSendMessage(notification.to, notification.message, notification.options);
+        }
+    }
 
-        if (sentMessage?.message_id) {
-            const currentOffer = activeGames.get(offerId); 
-            if (currentOffer) { // Check if offer still exists (it should)
-                currentOffer.offerMessageId = String(sentMessage.message_id);
-                currentOffer.timeoutId = setTimeout(async () => {
-                    const timedOutMinesOffer = activeGames.get(offerId);
-                    if (timedOutMinesOffer && timedOutMinesOffer.status === 'awaiting_difficulty') {
-                        console.log(`${LOG_PREFIX_MINES_START} Mines offer ${offerId} (difficulty selection) timed out.`);
-                        activeGames.delete(offerId);
-                        await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKey, null);
-                        console.log(`${LOG_PREFIX_MINES_START} Cleared group lock for timed-out Mines offer ${offerId} using key ${offerActivityKey}.`);
-                        let refundClientTimeout = null;
-                        try {
-                            refundClientTimeout = await pool.connect(); await refundClientTimeout.query('BEGIN');
-                            // Note: The initial bet was taken. If the offer times out, the bet should be refunded.
-                                // The ledger type `refund_mines_offer_timeout` implies the wager is nullified.
-                                // Thus, `checkAndUpdateUserLevel` should NOT be called for this specific path.
-                                // `total_wagered_lamports` would have been decremented by `updateUserBalanceAndLedger` if `betAmountLamports` was credited back.
-                                // However, `updateUserBalanceAndLedger` for refunds usually doesn't adjust `total_wagered_lamports` downwards.
-                                // This means the initial increment to `total_wagered_lamports` from `bet_placed_mines_offer` remains.
-                                // This is consistent: the user *did* place a bet that went into an offer state.
-                                // If the intent is to *only* count wagers for *completed* games, then `total_wagered_lamports`
-                                // should only be incremented upon game completion, not offer creation.
-                                // Given the current fix aims to defer level-up *notification*, the wager counting at offer placement is retained.
-                            await updateUserBalanceAndLedger(refundClientTimeout, timedOutMinesOffer.initiatorId, timedOutMinesOffer.betAmount, 'refund_mines_offer_timeout', { custom_offer_id: offerId }, `Refund for timed out Mines offer ${offerId}`);
-                            await refundClientTimeout.query('COMMIT');
-                        } catch (e) { 
-                            if(refundClientTimeout) await refundClientTimeout.query('ROLLBACK'); 
-                            console.error(`${LOG_PREFIX_MINES_START} CRITICAL REFUND FAIL for Mines offer ${offerId}: ${e.message}`); 
-                            if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL MINES OFFER REFUND TIMEOUT FAIL: Offer ${offerId}, User ${timedOutMinesOffer.initiatorId}. Err: ${e.message}`);
-                        }
-                        finally { if(refundClientTimeout) refundClientTimeout.release(); }
+    let difficultyButtons = [];
+    for (const diffKey in MINES_DIFFICULTY_CONFIG) {
+        const diffConfig = MINES_DIFFICULTY_CONFIG[diffKey];
+        difficultyButtons.push({ text: `${diffConfig.emoji || '⚙️'} ${escapeHTML(diffConfig.label)}`, callback_data: `mines_difficulty_select:${offerId}:${diffKey}`});
+    }
+    const difficultyKeyboardRows = [];
+    for (let i = 0; i < difficultyButtons.length; i += 2) difficultyKeyboardRows.push(difficultyButtons.slice(i, i + 2));
+    difficultyKeyboardRows.push([{ text: "❌ Cancel Offer", callback_data: `mines_cancel_offer:${offerId}` }]);
 
-                        if (timedOutMinesOffer.offerMessageId && bot) {
-                            await bot.editMessageText(`⏳ Mines offer by ${timedOutMinesOffer.initiatorMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutMinesOffer.betAmount, 'USD'))}</b> expired. Bet refunded.`,
-                                { chat_id: String(chatId), message_id: Number(timedOutMinesOffer.offerMessageId), parse_mode: 'HTML', reply_markup: {} }
-                            ).catch(e => {});
-                        }
-                    }
-                }, UNIFIED_OFFER_TIMEOUT_MS); 
-                    // No need to activeGames.set here, as currentOffer is a reference to the map entry
-            }
-        } else {
-            // If sentMessage failed, the transaction which took the bet must be rolled back.
-            await clientBetPlacement.query('ROLLBACK'); // Rollback the initial bet
-            clientBetPlacement = null; // Ensure it's not released again in finally if already rolled back
-            throw new Error("Failed to send Mines difficulty selection message."); 
-        }
-    } catch (error) {
-        if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {}); // Ensure rollback if any error after BEGIN
-        console.error(`${LOG_PREFIX_MINES_START} Error creating Mines offer: ${error.message}`);
-        await safeSendMessage(chatId, "⚙️ Oops! Couldn't start Mines offer. Please try again.", { parse_mode: 'HTML' });
-        if (offerId && activeGames.has(offerId)) {
-            activeGames.delete(offerId);
-        }
-        if (offerActivityKey) { 
-             await updateGroupGameDetails(chatId, {removeThisId: offerId}, offerActivityKey, null);
-        }
-    } finally {
-        if (clientBetPlacement) clientBetPlacement.release();
-    }
+    const offerMessageTextHTML = `💣 <b>Mines Challenge by ${playerRefHTML}!</b> 💣\n\n` +
+        `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+        `${playerRefHTML}, select difficulty: (Offer expires in ${UNIFIED_OFFER_TIMEOUT_MS / 1000}s, bet refunded on timeout)`;
+    const sentMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: { inline_keyboard: difficultyKeyboardRows }});
+
+    if (sentMessage?.message_id) {
+        const currentOffer = activeGames.get(offerId); 
+        if (currentOffer) {
+            currentOffer.offerMessageId = String(sentMessage.message_id);
+            currentOffer.timeoutId = setTimeout(async () => {
+                const timedOutMinesOffer = activeGames.get(offerId);
+                if (timedOutMinesOffer && timedOutMinesOffer.status === 'awaiting_difficulty') {
+                    console.log(`${LOG_PREFIX_MINES_START} Mines offer ${offerId} (difficulty selection) timed out.`);
+                    activeGames.delete(offerId);
+                    await updateGroupGameDetails(chatId, { removeThisId: offerId }, offerActivityKey, null);
+                    let refundClientTimeout = null;
+                    try {
+                        refundClientTimeout = await pool.connect(); await refundClientTimeout.query('BEGIN');
+                        await updateUserBalanceAndLedger(refundClientTimeout, timedOutMinesOffer.initiatorId, timedOutMinesOffer.betAmount, 'refund_mines_offer_timeout', { custom_offer_id: offerId }, `Refund for timed out Mines offer ${offerId}`);
+                        await refundClientTimeout.query('COMMIT');
+                    } catch (e) { 
+                        if(refundClientTimeout) await refundClientTimeout.query('ROLLBACK'); 
+                        console.error(`${LOG_PREFIX_MINES_START} CRITICAL REFUND FAIL for Mines offer ${offerId}: ${e.message}`); 
+                        if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL MINES OFFER REFUND TIMEOUT FAIL: Offer ${offerId}, User ${timedOutMinesOffer.initiatorId}. Err: ${e.message}`);
+                    }
+                    finally { if(refundClientTimeout) refundClientTimeout.release(); }
+
+                    if (timedOutMinesOffer.offerMessageId && bot) {
+                        await bot.editMessageText(`⏳ Mines offer by ${timedOutMinesOffer.initiatorMentionHTML} for <b>${escapeHTML(await formatBalanceForDisplay(timedOutMinesOffer.betAmount, 'USD'))}</b> expired. Bet refunded.`,
+                            { chat_id: String(chatId), message_id: Number(timedOutMinesOffer.offerMessageId), parse_mode: 'HTML', reply_markup: {} }
+                        ).catch(e => {});
+                    }
+                }
+            }, UNIFIED_OFFER_TIMEOUT_MS);
+        }
+    } else {
+        // This is a failsafe. The `try...catch` around the initial transaction should handle this,
+        // but if message sending fails after a successful commit, we need to log it.
+        console.error(`${LOG_PREFIX_MINES_START} Failed to send Mines difficulty message AFTER transaction commit.`);
+        if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL UI FAIL: Mines offer ${offerId} created, but UI message failed to send.`);
+    }
 }
 
 // --- Mines Grid Generation ---
@@ -11531,22 +11511,20 @@ async function handleMinesDifficultySelectionCallback(offerId, userWhoClicked, d
     }
 }
 
-// CORRECTED handleMinesTileClickCallback
+// CORRECTED handleMinesTileClickCallback (Full Version)
 async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str, callbackQueryId, originalMessageId, originalChatId) {
     const userId = String(userWhoClicked.telegram_id || userWhoClicked.id);
     const r = parseInt(r_str, 10);
     const c = parseInt(c_str, 10);
     const logPrefix = `[MinesTileClick_V4_DeadlockFix GID:${gameId} UID:${userId} Tile:${r},${c}]`;
 
-    // --- NEW PATTERN: Get price BEFORE any transaction ---
     let solPrice;
     try {
         solPrice = await getSolUsdPrice();
     } catch (priceError) {
         console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up check will be skipped. Error: ${priceError.message}`);
-        solPrice = 0; // Set to 0 to prevent level-up check from running
+        solPrice = 0;
     }
-    // --- END OF NEW PATTERN ---
 
     let gameData = activeGames.get(gameId);
 
@@ -11579,11 +11557,9 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
             const lossUpdateResult = await updateUserBalanceAndLedger(client, userId, 0n, 'loss_mines_hit', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, gems_found: gameData.gemsFound }, `Mines: Hit mine. Bet lost.`);
             if (lossUpdateResult.success) {
                 balanceUpdateSucceeded = true;
-                // *** MODIFIED PART: Pass the pre-fetched price ***
                 if (gameData.totalWageredForLevelCheck !== undefined && typeof checkAndUpdateUserLevel === 'function') {
                     await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice);
                 }
-                // *** END OF MODIFIED PART ***
                 await client.query('COMMIT');
             } else {
                 await client.query('ROLLBACK');
@@ -11595,13 +11571,13 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
             console.error(`${logPrefix} DB Error logging mine hit: ${e.message}`);
         }
         finally { if (client) client.release(); }
-    } else { // Found a gem
+    } else {
         gameData.gemsFound++;
         gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.gemsFound);
         gameData.potentialPayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
         statusMessageForAnswerCallback = `${TILE_EMOJI_GEM} Gem! x${gameData.currentMultiplier.toFixed(2)}`;
         const totalNonMineCells = (gameData.rows * gameData.cols) - gameData.numMines;
-        if (gameData.gemsFound >= totalNonMineCells) { // Found all gems
+        if (gameData.gemsFound >= totalNonMineCells) {
             gameData.status = 'game_over_all_gems_found';
             gameData.finalPayout = gameData.potentialPayout; gameData.finalMultiplier = gameData.currentMultiplier;
             gameOver = true;
@@ -11610,11 +11586,9 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
                 const winUpdateResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_all_gems', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4) }, `Mines max win.`);
                 if (winUpdateResult.success) {
                     balanceUpdateSucceeded = true;
-                    // *** MODIFIED PART: Pass the pre-fetched price ***
                     if (gameData.totalWageredForLevelCheck !== undefined && typeof checkAndUpdateUserLevel === 'function') {
                         await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice);
                     }
-                    // *** END OF MODIFIED PART ***
                     await client.query('COMMIT');
                 } else {
                     await client.query('ROLLBACK');
@@ -11642,7 +11616,7 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
     }
 }
 
-// CORRECTED handleMinesCashOutCallback
+// CORRECTED handleMinesCashOutCallback (Full Version)
 async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, originalMessageId, originalChatId) {
     const userId = String(userObject.telegram_id);
     const logPrefix = `[MinesCashOut_V4_DeadlockFix GID:${gameId} UID:${userId}]`;
@@ -11769,7 +11743,7 @@ async function handleMinesCancelOfferCallback(offerId, userWhoClicked, originalM
     await safeSendMessage(String(originalChatId), messageTextHTML, { parse_mode: 'HTML' });
 }
 
-// CORRECTED handleMinesGameTimeout
+// CORRECTED handleMinesGameTimeout (Full Version)
 async function handleMinesGameTimeout(gameId) {
     const logPrefix = `[MinesGameTimeout_V3_DeadlockFix GID:${gameId}]`;
 
@@ -15137,117 +15111,69 @@ async function getUserByReferralCode(refCode, client = pool) {
  * @param {string|null} [notes=null] Optional notes for the ledger entry.
  * @returns {Promise<{success: boolean, newBalanceLamports?: bigint, oldBalanceLamports?: bigint, ledgerId?: number, error?: string, errorCode?: string}>}
  */
+// FINAL CORRECTED updateUserBalanceAndLedger (Returns Notifications)
 async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null) {
-    const stringUserId = String(telegramId);
-    const changeAmount = BigInt(changeAmountLamports);
-    const logPrefix = `[UpdateBalLedger UID:${stringUserId} Type:${transactionType} Amt:${changeAmount}]`;
+    const stringUserId = String(telegramId);
+    const changeAmount = BigInt(changeAmountLamports);
+    const logPrefix = `[UpdateBalLedger_V2 UID:${stringUserId} Type:${transactionType} Amt:${changeAmount}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
-        return { success: false, error: 'Invalid database client provided to updateUserBalanceAndLedger.', errorCode: 'INVALID_DB_CLIENT' };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        return { success: false, error: 'Invalid database client provided.', errorCode: 'INVALID_DB_CLIENT' };
+    }
 
-    const relDepositId = (relatedIds?.deposit_id && Number.isInteger(Number(relatedIds.deposit_id))) ? Number(relatedIds.deposit_id) : null;
-    const relWithdrawalId = (relatedIds?.withdrawal_id && Number.isInteger(Number(relatedIds.withdrawal_id))) ? Number(relatedIds.withdrawal_id) : null;
-    // *** MODIFIED PART: relGameLogId to strictly expect an integer from relatedIds.game_log_id ***
-    const relGameLogId = (relatedIds?.game_log_id && Number.isInteger(Number(relatedIds.game_log_id))) ? Number(relatedIds.game_log_id) : null;
-    // *** END OF MODIFIED PART ***
-    const relReferralId = (relatedIds?.referral_id && Number.isInteger(Number(relatedIds.referral_id))) ? Number(relatedIds.referral_id) : null;
-    const relSweepId = (relatedIds?.related_sweep_id && Number.isInteger(Number(relatedIds.related_sweep_id))) ? Number(relatedIds.related_sweep_id) : null;
-    let oldBalanceLamports;
+    try {
+        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
+        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
+        
+        if (balanceRes.rowCount === 0) {
+            return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
+        }
 
-    try {
-        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
-        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
-        
-        if (balanceRes.rowCount === 0) {
-            console.error(`${logPrefix} ❌ User balance record not found for ID ${stringUserId}.`);
-            return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
-        }
-        const userData = balanceRes.rows[0];
-        oldBalanceLamports = BigInt(userData.balance);
-        const balanceAfter = oldBalanceLamports + changeAmount;
+        const userData = balanceRes.rows[0];
+        const oldBalanceLamports = BigInt(userData.balance);
+        const balanceAfter = oldBalanceLamports + changeAmount;
 
-        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_') && transactionType !== 'admin_adjustment_debit') {
-            console.warn(`${logPrefix} ⚠️ Insufficient balance. Current: ${oldBalanceLamports}, Change: ${changeAmount}, Would be: ${balanceAfter}.`);
-            return { success: false, error: 'Insufficient balance for this transaction.', oldBalanceLamports: oldBalanceLamports, newBalanceLamportsWouldBe: balanceAfter, errorCode: 'INSUFFICIENT_FUNDS' };
-        }
+        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_')) {
+            return { success: false, error: 'Insufficient balance.', errorCode: 'INSUFFICIENT_FUNDS' };
+        }
 
-        let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
-        let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
-        let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
-        let newTotalWon = BigInt(userData.total_won_lamports || '0');
-        let actualBetAmountForBonusProcessing = 0n;
+        let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
+        let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
+        let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
+        let newTotalWon = BigInt(userData.total_won_lamports || '0');
+        let notificationsToReturn = [];
 
-        if (transactionType === 'deposit' && changeAmount > 0n) {
-            newTotalDeposited += changeAmount;
-        } else if ((transactionType.startsWith('withdrawal_request') || transactionType.startsWith('withdrawal_fee') || transactionType === 'withdrawal_confirmed') && changeAmount < 0n) {
-            newTotalWithdrawn -= changeAmount;
-        } else if (transactionType.startsWith('bet_placed') && changeAmount < 0n) {
-            actualBetAmountForBonusProcessing = -changeAmount; 
-            newTotalWagered += actualBetAmountForBonusProcessing;
-        } else if ((transactionType.startsWith('loss_') || transactionType.endsWith('_timeout_forfeit') || transactionType.endsWith('_self_forfeit') || transactionType.endsWith('_bust') || transactionType.includes('_forfeit')) && changeAmount === 0n) {
-            // No change to totals here, wager already counted.
-        } else if ((transactionType.startsWith('win_') || transactionType.startsWith('jackpot_win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_')) && changeAmount > 0n) {
-            newTotalWon += changeAmount;
-        } else if (transactionType === 'referral_commission_credit' && changeAmount > 0n) {
-            newTotalWon += changeAmount;
-        } else if (transactionType === 'level_up_bonus_claimed' && changeAmount > 0n) {
-            newTotalWon += changeAmount;
-        }
+        if (transactionType === 'deposit') { newTotalDeposited += changeAmount; }
+        else if (transactionType.startsWith('withdrawal')) { newTotalWithdrawn -= changeAmount; }
+        else if (transactionType.startsWith('bet_placed')) {
+            const betAmount = -changeAmount;
+            newTotalWagered += betAmount;
+            
+            const initialBonusResult = await processQualifyingBetAndInitialBonus(dbClient, stringUserId, betAmount, String(relatedIds?.game_log_id || relatedIds?.custom_offer_id || 'N/A'));
+            if(initialBonusResult.notifications) notificationsToReturn.push(...initialBonusResult.notifications);
 
-        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
-        const updateUserParams = [
-            balanceAfter.toString(),
-            newTotalDeposited.toString(),
-            newTotalWithdrawn.toString(),
-            newTotalWagered.toString(),
-            newTotalWon.toString(),
-            stringUserId
-        ];
-        const updateRes = await dbClient.query(updateUserQuery, updateUserParams);
+        } else if (transactionType.startsWith('win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_') || transactionType.startsWith('level_up') || transactionType.startsWith('referral_')) {
+            newTotalWon += changeAmount;
+        }
 
-        if (updateRes.rowCount === 0) {
-            console.error(`${logPrefix} ❌ Failed to update user balance row after lock for user ${stringUserId}. This should not happen.`);
-            throw new Error('Failed to update user balance row after lock.');
-        }
+        const oldTotalWageredFromDB = BigInt(userData.total_wagered_lamports || '0');
+        if (newTotalWagered > oldTotalWageredFromDB) {
+            const milestoneResult = await processWagerMilestoneBonus(dbClient, stringUserId, newTotalWagered);
+            if (milestoneResult.notifications) notificationsToReturn.push(...milestoneResult.notifications);
+        }
 
-        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING ledger_id;`;
-        const ledgerParams = [
-            stringUserId, transactionType, changeAmount.toString(), oldBalanceLamports.toString(), balanceAfter.toString(),
-            relDepositId, relWithdrawalId, relGameLogId, relReferralId, relSweepId, notes
-        ];
-        const ledgerRes = await dbClient.query(ledgerQuery, ledgerParams);
-        
-        const ledgerId = ledgerRes.rows[0]?.ledger_id;
+        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
+        await dbClient.query(updateUserQuery, [balanceAfter.toString(), newTotalDeposited.toString(), newTotalWithdrawn.toString(), newTotalWagered.toString(), newTotalWon.toString(), stringUserId]);
 
-        if (transactionType.startsWith('bet_placed_') && actualBetAmountForBonusProcessing > 0n) {
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(
-                    dbClient, stringUserId, actualBetAmountForBonusProcessing,
-                    String(relGameLogId || relatedIds?.custom_offer_id || 'N/A') // Pass game_log_id if available
-                );
-                if (!initialBonusResult.success) console.warn(`${logPrefix} Non-critical: Failed to process initial referral bonus for ${stringUserId}. Error: ${initialBonusResult.error}`);
-            } else console.error(`${logPrefix} CRITICAL: processQualifyingBetAndInitialBonus function is undefined!`);
-        }
-        const oldTotalWageredFromDB = BigInt(userData.total_wagered_lamports || '0');
-        if (newTotalWagered > oldTotalWageredFromDB && typeof processWagerMilestoneBonus === 'function') {
-             const milestoneBonusResult = await processWagerMilestoneBonus(dbClient, stringUserId, newTotalWagered);
-             if (!milestoneBonusResult.success) console.warn(`${logPrefix} Non-critical: Failed to process wager milestone bonus for ${stringUserId}. Error: ${milestoneBonusResult.error}`);
-        } else if (newTotalWagered > oldTotalWageredFromDB && typeof processWagerMilestoneBonus !== 'function') {
-            console.error(`${logPrefix} CRITICAL: processWagerMilestoneBonus function is undefined!`);
-        }
+        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING ledger_id;`;
+        const ledgerRes = await dbClient.query(ledgerQuery, [stringUserId, transactionType, changeAmount.toString(), oldBalanceLamports.toString(), balanceAfter.toString(), relatedIds?.deposit_id || null, relatedIds?.withdrawal_id || null, relatedIds?.game_log_id || null, relatedIds?.referral_id || null, relatedIds?.related_sweep_id || null, notes]);
+        
+        return { success: true, newBalanceLamports: balanceAfter, newTotalWageredLamports: newTotalWagered, notifications: notificationsToReturn };
 
-        return { success: true, newBalanceLamports: balanceAfter, oldBalanceLamports: oldBalanceLamports, ledgerId, newTotalWageredLamports: newTotalWagered };
-
-    } catch (err) {
-        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message} (Code: ${err.code || 'N/A'})`, err.stack?.substring(0,500));
-        let errMsg = `Database error during balance/ledger update (Code: ${err.code || 'N/A'})`;
-        if (err.message && err.message.toLowerCase().includes('violates check constraint') && err.message.toLowerCase().includes('balance')) {
-            errMsg = 'Insufficient balance (check constraint violation).';
-        }
-        return { success: false, error: errMsg, errorCode: err.code, oldBalanceLamports };
-    }
+    } catch (err) {
+        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 // --- Deposit Address & Deposit Operations ---
