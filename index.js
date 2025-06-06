@@ -1851,7 +1851,7 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
             return notifications;
         }
         
-        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+        const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solUsdPrice;
 
         const currentUserDetailsQueryText = `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name FROM users u LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id WHERE u.telegram_id = $1 FOR UPDATE OF u`;
         
