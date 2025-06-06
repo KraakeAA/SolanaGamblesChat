@@ -1839,8 +1839,6 @@ async function initializeLevelsDB(extClient = null) {
  * @param {string} userId - The user's Telegram ID.
  * @param {bigint} newTotalWageredLamports - The user's new total wagered amount in lamports.
  */
-// REVISED AND CORRECTED - checkAndUpdateUserLevel
-// REVISED AND CORRECTED - checkAndUpdateUserLevel
 async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports, solUsdPrice, originalGameChatId = null) {
     const LOG_PREFIX_CHECK_LVL = `[CheckUserLevel UID:${userId} GameChat:${originalGameChatId || 'N/A'}]`;
     const notifications = []; // Array to hold notification payloads
@@ -1851,9 +1849,17 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
             return notifications;
         }
         
+        // This is the corrected calculation from our previous discussion
         const totalWageredUSD = Number(newTotalWageredLamports) / Number(LAMPORTS_PER_SOL) * solUsdPrice;
 
-        const currentUserDetailsQueryText = `SELECT u.current_level_id, u.username, u.first_name, u.last_name, ul.order_index AS current_level_order_index, ul.level_name AS current_level_name FROM users u LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id WHERE u.telegram_id = $1 FOR UPDATE OF u`;
+        // THIS IS THE CRITICAL FIX: The "FOR UPDATE OF u" clause has been removed.
+        // The user row is already locked by the calling function's transaction context (via updateUserBalanceAndLedger).
+        const currentUserDetailsQueryText = `
+            SELECT u.current_level_id, u.username, u.first_name, u.last_name, 
+                   ul.order_index AS current_level_order_index, ul.level_name AS current_level_name 
+            FROM users u 
+            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id 
+            WHERE u.telegram_id = $1`;
         
         const currentUserDataRes = await queryDatabase(
             currentUserDetailsQueryText,
@@ -1903,9 +1909,9 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
             const userObjectForDisplay = { telegram_id: userId, username: userFromDb.username, first_name: userFromDb.first_name, last_name: userFromDb.last_name };
             const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObjectForDisplay));
 
-            let dmNotificationTextHTML = `🎉✨ **LEVEL UP!** ✨🎉\n\n` +
+            let dmNotificationTextHTML = `🎉✨ <b>LEVEL UP!</b> ✨🎉\n\n` +
                                          `Huge congrats, ${playerRefHTML}! You've climbed the ranks and reached:\n\n` +
-                                         `🏅 **${escapeHTML(newPotentialLevelName)}** (Level ${newPotentialOrderIndex}) 🏅\n\n`;
+                                         `🏅 <b>${escapeHTML(newPotentialLevelName)}</b> (Level ${newPotentialOrderIndex}) 🏅\n\n`;
             const keyboardRowsDM = [];
 
             if (newLevelDataForNotification && parseFloat(newLevelDataForNotification.bonus_amount_usd) > 0) {
@@ -1931,7 +1937,7 @@ async function checkAndUpdateUserLevel(dbClient, userId, newTotalWageredLamports
 
             if (originalGameChatId && String(originalGameChatId) !== String(userId)) {
                 const groupNotificationHTML = `🎉🥳 Level Up Alert! 🥳🎉\n\n` +
-                                              `Congratulations to ${playerRefHTML} for achieving a new rank: 🏅 **${escapeHTML(newPotentialLevelName)}**!\n\n` +
+                                              `Congratulations to ${playerRefHTML} for achieving a new rank: 🏅 <b>${escapeHTML(newPotentialLevelName)}</b>!\n\n` +
                                               `Keep an eye on your DMs for any new bonus rewards!`;
                 
                 notifications.push({
