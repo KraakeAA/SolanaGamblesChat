@@ -10656,9 +10656,11 @@ async function handleDuelPvPTurnTimeout(gameId, timedOutPlayerId) {
     await resolveDuelPvPGame(gameData);
 }
 
-// CORRECTED resolveDuelPvPGame (with Deadlock and Referral Fixes)
+// CORRECTED resolveDuelPvPGame (with ALL Fixes)
 async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
-    const logPrefix = `[Duel_PvP_Resolve_V7_FullFix GID:${gameData.gameId || 'UNKNOWN_GAME_ID'}]`;
+    // --- FIX APPLIED HERE: gameId is destructured immediately to be available in the catch block ---
+    const { gameId } = gameData; 
+    const logPrefix = `[Duel_PvP_Resolve_V8_FullFix GID:${gameId || 'UNKNOWN_GAME_ID'}]`;
     let allNotificationsToSend = [];
 
     let solPrice;
@@ -10669,34 +10671,35 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
         solPrice = 0;
     }
     
+    const { chatId, betAmount, initiator, opponent, chatType, status: finalStatus, _origin_key_for_limits } = gameData;
     if (gameData.currentTurnTimeoutId) { clearTimeout(gameData.currentTurnTimeoutId); gameData.currentTurnTimeoutId = null; }
-    activeGames.delete(gameData.gameId);
-    if (gameData.chatType && gameData.chatType !== 'private') {
-        await updateGroupGameDetails(gameData.chatId, { removeThisId: gameData.gameId }, gameData._origin_key_for_limits || GAME_IDS.DUEL_PVP, null);
+    activeGames.delete(gameId);
+    if (chatType && chatType !== 'private') {
+        await updateGroupGameDetails(chatId, { removeThisId: gameId }, _origin_key_for_limits || GAME_IDS.DUEL_PVP, null);
     }
     
-    const p1 = gameData.initiator; 
-    const p2 = gameData.opponent;
+    const p1 = initiator; 
+    const p2 = opponent;
     const p1MentionHTML = escapeHTML(p1.displayName); 
     const p2MentionHTML = escapeHTML(p2.displayName);
     let winner = null, loser = null, isPush = false, titleEmoji = "⚔️", resultHeaderHTML = "", outcomeDetails = "", winningsFooterHTML = "";
-    const totalPotLamports = gameData.betAmount * 2n;
+    const totalPotLamports = betAmount * 2n;
     let p1Payout = 0n; 
     let p2Payout = 0n;
     let p1LedgerCode = 'loss_duel_pvp'; 
     let p2LedgerCode = 'loss_duel_pvp';
     let gameOutcomeTextForLog = "";
-    const betDisplayUSD_HTML_Resolve = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
+    const betDisplayUSD_HTML_Resolve = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
     let isConclusiveOutcome = false;
 
-    if (gameData.status === 'game_over_p1_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p1.userId)) {
+    if (finalStatus === 'game_over_p1_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p1.userId)) {
         isConclusiveOutcome = true;
         titleEmoji = "⏳"; winner = p2; loser = p1; p2Payout = totalPotLamports;
         p2LedgerCode = 'win_duel_pvp_opponent_forfeit'; p1LedgerCode = 'loss_duel_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p1MentionHTML} Forfeited!</b>`; 
         outcomeDetails = `${p2MentionHTML} wins!`;
         gameOutcomeTextForLog = `P2 wins by P1 forfeit (timeout)`;
-    } else if (gameData.status === 'game_over_p2_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p2.userId)) {
+    } else if (finalStatus === 'game_over_p2_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p2.userId)) {
         isConclusiveOutcome = true;
         titleEmoji = "⏳"; winner = p1; loser = p2; p1Payout = totalPotLamports;
         p1LedgerCode = 'win_duel_pvp_opponent_forfeit'; p2LedgerCode = 'loss_duel_pvp_self_forfeit';
@@ -10735,7 +10738,7 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
         p1Payout = gameData.betAmount; p2Payout = gameData.betAmount;
         p1LedgerCode = 'refund_duel_pvp_error'; p2LedgerCode = 'refund_duel_pvp_error';
         gameOutcomeTextForLog = `Error - bets refunded (P1: ${p1.status}, P2: ${p2.status}, Game: ${gameData.status})`;
-        console.warn(`${logPrefix} Duel PvP game ${gameData.gameId} resolved inconclusively. Statuses: P1=${p1.status}, P2=${p2.status}, Game=${gameData.status}`);
+        console.warn(`${logPrefix} Duel PvP game ${gameId} resolved inconclusively. Statuses: P1=${p1.status}, P2=${p2.status}, Game=${gameData.status}`);
     }
 
     if (winner) {
@@ -10749,51 +10752,40 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, gameData._origin_key_for_limits || GAME_IDS.DUEL_PVP, gameData.chatId, p1.userId, [p1.userId, p2.userId], gameData.betAmount, gameOutcomeTextForLog, 0n
+            client, gameData._origin_key_for_limits || GAME_IDS.DUEL_PVP, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n
         );
         
-        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
         const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
-        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
-
         const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
         const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
         const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
         const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
 
-        // Process Player A first
-        const p1Upd = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, {game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId, player_score: playerA.score, opponent_score: playerB.score, original_bet_amount: gameData.betAmount.toString() }, `Duel PvP vs ${playerB.displayName || playerB.userId}`, solPrice);
+        const p1Upd = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, {game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId, player_score: playerA.score, opponent_score: playerB.score, original_bet_amount: betAmount.toString() }, `Duel PvP vs ${playerB.displayName || playerB.userId}`, solPrice);
         if(!p1Upd.success) throw new Error(`Player A (${playerA.userId}) update failed: ${p1Upd.error}`);
         if(p1Upd.notifications) allNotificationsToSend.push(...p1Upd.notifications);
         
-        // Process Player B second
-        const p2Upd = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, {game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId, player_score: playerB.score, opponent_score: playerA.score, original_bet_amount: gameData.betAmount.toString() }, `Duel PvP vs ${playerA.displayName || playerA.userId}`, solPrice);
+        const p2Upd = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, {game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId, player_score: playerB.score, opponent_score: playerA.score, original_bet_amount: betAmount.toString() }, `Duel PvP vs ${playerA.displayName || playerA.userId}`, solPrice);
         if(!p2Upd.success) throw new Error(`Player B (${playerB.userId}) update failed: ${p2Upd.error}`);
         if(p2Upd.notifications) allNotificationsToSend.push(...p2Upd.notifications);
-        
+
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
-
-            // 1. ADDED: Check initial bet bonus for both players.
             if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                await processQualifyingBetAndInitialBonus(client, p1.userId, gameData.betAmount, gameId);
-                await processQualifyingBetAndInitialBonus(client, p2.userId, gameData.betAmount, gameId);
+                await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
+                await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
             }
-
-            // 2. MODIFIED: Correctly call level and milestone checks for both players.
             if (p1Upd.success && p1Upd.newTotalWageredLamports !== undefined) {
-                const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice, gameData.chatId);
+                const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p1LevelNotifications);
                 const p1MilestoneResult = await processWagerMilestoneBonus(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice);
                 if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
             }
             if (p2Upd.success && p2Upd.newTotalWageredLamports !== undefined) {
-                const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice, gameData.chatId);
+                const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p2LevelNotifications);
                 const p2MilestoneResult = await processWagerMilestoneBonus(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice);
                 if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
             }
-            // --- END OF MODIFICATION ---
         }
         
         await client.query('COMMIT');
@@ -10804,13 +10796,12 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
         const finalMessageTextHTMLWithError = currentMsg + dbErrorText;
         console.error(`${logPrefix} CRITICAL DB Error: ${e.message}`);
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Duel PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nWinner: ${winner?.displayName || 'N/A'}\nLoser: ${loser?.displayName || 'N/A'}\nError: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, { parse_mode: 'HTML' });
-        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(()=>{});
-        const finalKeyboardError = createPostGameKeyboard(GAME_IDS.DUEL_PVP, gameData.betAmount);
-        await safeSendMessage(gameData.chatId, finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
+        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(()=>{});
+        const finalKeyboardError = createPostGameKeyboard(GAME_IDS.DUEL_PVP, betAmount);
+        await safeSendMessage(chatId, finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
         return; 
     } finally { if (client) client.release(); }
     
-    // Send all collected notifications AFTER the transaction is closed
     for (const notification of allNotificationsToSend) {
         if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
             await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
@@ -10819,9 +10810,9 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
         }
     }
 
-    if (gameData.currentMessageId && bot) await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(()=>{});
+    if (gameData.currentMessageId && bot) await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(()=>{});
     const finalKeyboardSuccess = createPostGameKeyboard(GAME_IDS.DUEL_PVP, betAmount);
-    await safeSendMessage(gameData.chatId, finalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboardSuccess });
+    await safeSendMessage(chatId, finalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboardSuccess });
 }
 // --- End of Part 5c, Section 2 (COMPLETE REWRITE FOR NEW DUEL GAME LOGIC - CONSOLIDATED UPDATES - GRANULAR ACTIVE GAME LIMITS) ---
 // --- Start of Part 5c, Section 3 (NEW) - Segment 1 & 2 (FULLY UPDATED FOR HELPER BOT DICE ROLLS for Ladder, Animated for SevenOut - SEVENOUT REPLACED WITH LUCKY SUM - FIXES APPLIED - GRANULAR ACTIVE GAME LIMITS) ---
@@ -16549,7 +16540,6 @@ async function getDiceRollRequestResult(dbClient, requestId) {
         const res = await dbClient.query(query, [requestId]);
         if (res.rows.length > 0) {
             const data = res.rows[0];
-            // console.log(`${logPrefix} ✅ Fetched status: ${data.status}, value: ${data.roll_value}`); // Reduced log for polling
             return {
                 success: true,
                 status: data.status,
@@ -16557,10 +16547,10 @@ async function getDiceRollRequestResult(dbClient, requestId) {
                 notes: data.notes
             };
         }
-        // console.warn(`${LOG_PREFIX_RCD} ⚠️ Dice roll request ID ${requestId} not found.`); // Corrected logPrefix here, can be noisy during initial polling
         return { success: false, error: 'Request ID not found.' };
     } catch (err) {
-        console.error(`${LOG_PREFIX_RCD} ❌ Error fetching dice roll request result: ${err.message}`, err.stack?.substring(0,500)); // Corrected logPrefix here
+        // --- FIX APPLIED HERE: Using the correct logPrefix variable ---
+        console.error(`${logPrefix} ❌ Error fetching dice roll request result: ${err.message}`, err.stack?.substring(0,500));
         return { success: false, error: err.message, errorCode: err.code };
     }
 }
