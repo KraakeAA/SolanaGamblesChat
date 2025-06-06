@@ -16478,44 +16478,45 @@ async function calculateUserRank(userId, dbClient = pool) {
 // --- Dice Roll Request Database Operations ---
 
 /**
- * Inserts a new dice roll request into the database for the Helper Bot to process.
- * MUST be called within an active DB transaction if atomicity with other operations is required.
- * @param {import('pg').PoolClient} dbClient - The active database client.
- * @param {string} gameId - Identifier for the game requesting the roll.
- * @param {string|number} chatId - The chat ID where the dice should be sent.
- * @param {string|number} [userId=null] - The user ID associated with this roll, if applicable.
- * @param {string} [emojiType='🎲'] - The emoji type for bot.sendDice.
- * @param {string|null} [notes=null] - Optional notes for the request.
- * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
- * @returns {Promise<{success: boolean, requestId?: number, error?: string, errorCode?: string}>}
- */
+ * Inserts a new dice roll request into the database for the Helper Bot to process.
+ * MUST be called within an active DB transaction if atomicity with other operations is required.
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {string} gameId - Identifier for the game requesting the roll.
+ * @param {string|number} chatId - The chat ID where the dice should be sent.
+ * @param {string|number} [userId=null] - The user ID associated with this roll, if applicable.
+ * @param {string} [emojiType='🎲'] - The emoji type for bot.sendDice.
+ * @param {string|null} [notes=null] - Optional notes for the request.
+ * @param {string|null} [handlerType=null] - Optional: Specific handler type for dedicated helpers (e.g., 'DICE_21_ROLL').
+ * @returns {Promise<{success: boolean, requestId?: number, error?: string, errorCode?: string}>}
+ */
 async function insertDiceRollRequest(dbClient, gameId, chatId, userId = null, emojiType = '🎲', notes = null, handlerType = null) {
-    const stringChatId = String(chatId);
-    const stringUserId = userId ? String(userId) : null;
-    const logPrefix = `[InsertDiceReq GID:${gameId} UID:${stringUserId || 'Bot'} HType:${handlerType || 'ANY'}]`;
+    const stringChatId = String(chatId);
+    const stringUserId = userId ? String(userId) : null;
+    const logPrefix = `[InsertDiceReq GID:${gameId} UID:${stringUserId || 'Bot'} HType:${handlerType || 'ANY'}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
-        return { success: false, error: 'Invalid database client for insertDiceRollRequest.' };
-    }
-    const query = `
-        INSERT INTO dice_roll_requests 
-            (game_id, chat_id, user_id, emoji_type, status, notes, requested_at, handler_type)
-        VALUES ($1, $2, $3, $4, 'pending', $5, NOW(), $6) -- Added $6 for handler_type
-        RETURNING request_id;
-    `;
-    try {
-        const params = [gameId, stringChatId, stringUserId, emojiType, notes, handlerType]; // Pass handlerType
-        const res = await dbClient.query(query, params);
-        if (res.rows.length > 0 && res.rows[0].request_id) {
-            // console.log(`${logPrefix} ✅ Dice roll request created. DB ID: ${res.rows[0].request_id}`); // Can be noisy
-            return { success: true, requestId: res.rows[0].request_id };
-        }
-        throw new Error("Dice roll request creation failed to return ID.");
-    } catch (err) {
-        console.error(`${LOG_PREFIX_RCD} ❌ Error creating dice roll request: ${err.message}`, err.stack?.substring(0,500)); // Corrected logPrefix here
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
+        return { success: false, error: 'Invalid database client for insertDiceRollRequest.' };
+    }
+    const query = `
+        INSERT INTO dice_roll_requests 
+            (game_id, chat_id, user_id, emoji_type, status, notes, requested_at, handler_type)
+        VALUES ($1, $2, $3, $4, 'pending', $5, NOW(), $6) -- Added $6 for handler_type
+        RETURNING request_id;
+    `;
+    try {
+        const params = [gameId, stringChatId, stringUserId, emojiType, notes, handlerType]; // Pass handlerType
+        const res = await dbClient.query(query, params);
+        if (res.rows.length > 0 && res.rows[0].request_id) {
+            // console.log(`${logPrefix} ✅ Dice roll request created. DB ID: ${res.rows[0].request_id}`); // Can be noisy
+            return { success: true, requestId: res.rows[0].request_id };
+        }
+        throw new Error("Dice roll request creation failed to return ID.");
+    } catch (err) {
+        // FIX APPLIED HERE: Using the correct logPrefix variable
+        console.error(`${logPrefix} ❌ Error creating dice roll request: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 /**
