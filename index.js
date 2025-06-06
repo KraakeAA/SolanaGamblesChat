@@ -2522,8 +2522,8 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, milestonesProcessed: number, error?: string}>}
  */
-// FINAL CORRECTED processWagerMilestoneBonus (Returns Notifications)
-async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred) {
+// FINAL-FIX processWagerMilestoneBonus
+async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred, solPrice) {
     const stringReferredUserId = String(referredUserTelegramId);
     const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V5_FinalFix UID:${stringReferredUserId}]`;
     const notificationsToSend = [];
@@ -2542,8 +2542,12 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
         const referralLink = referralLinkDetailsRes.rows[0];
         const referrerId = String(referralLink.referrer_telegram_id);
         let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {};
+        
+        if (!solPrice || solPrice <= 0) {
+             console.warn(`${LOG_PREFIX_PWM} Invalid SOL price provided (${solPrice}). Skipping milestone check.`);
+             return { success: true, notifications: [] };
+        }
 
-        const solPrice = await getSolUsdPrice();
         const totalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
         let milestonesUpdated = false;
 
@@ -2551,18 +2555,29 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
             const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
             
             if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
-                console.log(`${LOG_PREFIX_PWM} Milestone of $${milestoneUSD} USD reached by user ${stringReferredUserId}!`);
                 const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
 
                 if (milestoneBonusAmountLamports > 0n) {
-                    await updateUserBalanceAndLedger(dbClient, referrerId, milestoneBonusAmountLamports, 'referral_milestone_bonus', { referral_id: referralLink.referral_id }, `Milestone Bonus: Referred user ${stringReferredUserId} wagered $${milestoneUSD}`);
+                    const creditResult = await updateUserBalanceAndLedger(
+                        dbClient, referrerId, milestoneBonusAmountLamports,
+                        'referral_milestone_bonus',
+                        { referral_id: referralLink.referral_id },
+                        `Milestone Bonus: Referred user ${stringReferredUserId} wagered $${milestoneUSD}`,
+                        solPrice // Pass the price along for any nested checks
+                    );
+
+                    if (!creditResult.success) {
+                        console.error(`${LOG_PREFIX_PWM} Failed to credit milestone bonus to referrer ${referrerId}. Error: ${creditResult.error}`);
+                        continue; // Skip to next milestone
+                    }
                     
-                    const bonusAmountUSDDisplay = await formatBalanceForDisplay(milestoneBonusAmountLamports, 'USD');
+                    const bonusAmountUSDDisplay = convertLamportsToUSDString(milestoneBonusAmountLamports, solPrice);
                     const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
                     
                     const notificationMessage = `🌟 Cha-ching! Your referral ${escapeMarkdownV2(referredName)} crossed the *${escapeMarkdownV2(`$${milestoneUSD}`)}* wager milestone!\nA bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* has been added to your casino balance!`;
                     notificationsToSend.push({ to: referrerId, message: notificationMessage, options: { parse_mode: 'MarkdownV2' } });
                 }
+
                 achievedMilestonesData[milestoneKey] = new Date().toISOString();
                 milestonesUpdated = true;
             }
@@ -2578,7 +2593,7 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
         return { success: true, notifications: notificationsToSend };
 
     } catch (error) {
-        console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack?.substring(0,700));
+        console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack);
         return { success: false, notifications: [], error: error.message };
     }
 }
@@ -10986,12 +11001,23 @@ async function handleStartSlotCommand(msg, betAmountLamports) {
 // - Global State: activeGames (Map)
 // - Timeout Constants: ACTIVE_GAME_TURN_TIMEOUT_MS, UNIFIED_OFFER_TIMEOUT_MS, GAME_ACTIVITY_LIMITS
 
-// CORRECTED handleStartMinesCommand (Full Version)
+// FINAL-FIX handleStartMinesCommand (Full Version)
 async function handleStartMinesCommand(msg, args, userObj) { 
     const userId = String(userObj.telegram_id); 
     const chatId = String(msg.chat.id);
     const chatType = msg.chat.type;
-    const LOG_PREFIX_MINES_START = `[Mines_StartOffer_V5_FinalFix UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_MINES_START = `[Mines_StartOffer_V6_FinalFix UID:${userId} CH:${chatId}]`; 
+    
+    // --- NEW PATTERN: Get price BEFORE the transaction ---
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+    } catch (priceError) {
+        console.error(`${LOG_PREFIX_MINES_START} CRITICAL: Could not get SOL price. Bonus checks may be skipped. Error: ${priceError.message}`);
+        solPrice = 0; // Set to 0 to prevent downstream errors
+    }
+    // --- END OF NEW PATTERN ---
+    
     let notificationsToSend = []; // Array to hold notifications
 
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
@@ -11046,15 +11072,24 @@ async function handleStartMinesCommand(msg, args, userObj) {
 
     const offerId = generateGameId(GAME_IDS.MINES_OFFER);
     let clientBetPlacement = null;
+    let totalWageredAfterBetPlacement;
 
     try {
         clientBetPlacement = await pool.connect();
         await clientBetPlacement.query('BEGIN');
         
-        const betResult = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_mines_offer', { custom_offer_id: offerId }, `Mines Offer creation`);
+        const betResult = await updateUserBalanceAndLedger(
+            clientBetPlacement, userId, BigInt(-betAmountLamports), 
+            'bet_placed_mines_offer', 
+            { custom_offer_id: offerId }, 
+            `Mines Offer creation`,
+            solPrice
+        );
+        
         if (!betResult.success) throw new Error(betResult.error || "Failed to place bet for Mines offer.");
         
         userObj.balance = betResult.newBalanceLamports; 
+        totalWageredAfterBetPlacement = betResult.newTotalWageredLamports;
         if (betResult.notifications && betResult.notifications.length > 0) {
             notificationsToSend.push(...betResult.notifications);
         }
@@ -11065,7 +11100,7 @@ async function handleStartMinesCommand(msg, args, userObj) {
             initiatorUserObj: userObj, 
             betAmount: betAmountLamports, status: 'awaiting_difficulty',
             creationTime: Date.now(), offerMessageId: null, timeoutId: null,
-            totalWageredForLevelCheck: betResult.newTotalWageredLamports
+            totalWageredForLevelCheck: totalWageredAfterBetPlacement
         };
         activeGames.set(offerId, offerData);
         await updateGroupGameDetails(chatId, offerId, offerActivityKey, betAmountLamports);
@@ -11082,7 +11117,7 @@ async function handleStartMinesCommand(msg, args, userObj) {
         if (offerActivityKey) { 
              await updateGroupGameDetails(chatId, {removeThisId: offerId}, offerActivityKey, null);
         }
-        return; // Stop execution on error
+        return;
     } finally {
         if (clientBetPlacement) clientBetPlacement.release();
     }
@@ -11102,12 +11137,12 @@ async function handleStartMinesCommand(msg, args, userObj) {
     const difficultyKeyboardRows = [];
     for (let i = 0; i < difficultyButtons.length; i += 2) difficultyKeyboardRows.push(difficultyButtons.slice(i, i + 2));
     difficultyKeyboardRows.push([{ text: "❌ Cancel Offer", callback_data: `mines_cancel_offer:${offerId}` }]);
-
+    
     const offerMessageTextHTML = `💣 <b>Mines Challenge by ${playerRefHTML}!</b> 💣\n\n` +
         `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
         `${playerRefHTML}, select difficulty: (Offer expires in ${UNIFIED_OFFER_TIMEOUT_MS / 1000}s, bet refunded on timeout)`;
     const sentMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: { inline_keyboard: difficultyKeyboardRows }});
-
+    
     if (sentMessage?.message_id) {
         const currentOffer = activeGames.get(offerId); 
         if (currentOffer) {
@@ -11139,8 +11174,6 @@ async function handleStartMinesCommand(msg, args, userObj) {
             }, UNIFIED_OFFER_TIMEOUT_MS);
         }
     } else {
-        // This is a failsafe. The `try...catch` around the initial transaction should handle this,
-        // but if message sending fails after a successful commit, we need to log it.
         console.error(`${LOG_PREFIX_MINES_START} Failed to send Mines difficulty message AFTER transaction commit.`);
         if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL UI FAIL: Mines offer ${offerId} created, but UI message failed to send.`);
     }
@@ -15111,11 +15144,11 @@ async function getUserByReferralCode(refCode, client = pool) {
  * @param {string|null} [notes=null] Optional notes for the ledger entry.
  * @returns {Promise<{success: boolean, newBalanceLamports?: bigint, oldBalanceLamports?: bigint, ledgerId?: number, error?: string, errorCode?: string}>}
  */
-// FINAL CORRECTED updateUserBalanceAndLedger (Returns Notifications)
-async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null) {
+// FINAL-FIX updateUserBalanceAndLedger
+async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null, solPrice = 0) {
     const stringUserId = String(telegramId);
     const changeAmount = BigInt(changeAmountLamports);
-    const logPrefix = `[UpdateBalLedger_V2 UID:${stringUserId} Type:${transactionType} Amt:${changeAmount}]`;
+    const logPrefix = `[UpdateBalLedger_V3_FinalFix UID:${stringUserId}]`;
 
     if (!dbClient || typeof dbClient.query !== 'function') {
         return { success: false, error: 'Invalid database client provided.', errorCode: 'INVALID_DB_CLIENT' };
@@ -15143,14 +15176,18 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         let newTotalWon = BigInt(userData.total_won_lamports || '0');
         let notificationsToReturn = [];
 
-        if (transactionType === 'deposit') { newTotalDeposited += changeAmount; }
-        else if (transactionType.startsWith('withdrawal')) { newTotalWithdrawn -= changeAmount; }
-        else if (transactionType.startsWith('bet_placed')) {
+        if (transactionType === 'deposit') {
+             newTotalDeposited += changeAmount;
+        } else if (transactionType.startsWith('withdrawal')) {
+             newTotalWithdrawn -= changeAmount;
+        } else if (transactionType.startsWith('bet_placed')) {
             const betAmount = -changeAmount;
             newTotalWagered += betAmount;
             
             const initialBonusResult = await processQualifyingBetAndInitialBonus(dbClient, stringUserId, betAmount, String(relatedIds?.game_log_id || relatedIds?.custom_offer_id || 'N/A'));
-            if(initialBonusResult.notifications) notificationsToReturn.push(...initialBonusResult.notifications);
+            if(initialBonusResult.notifications && initialBonusResult.notifications.length > 0) {
+                notificationsToReturn.push(...initialBonusResult.notifications);
+            }
 
         } else if (transactionType.startsWith('win_') || transactionType.startsWith('push_') || transactionType.startsWith('refund_') || transactionType.startsWith('level_up') || transactionType.startsWith('referral_')) {
             newTotalWon += changeAmount;
@@ -15158,8 +15195,11 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
 
         const oldTotalWageredFromDB = BigInt(userData.total_wagered_lamports || '0');
         if (newTotalWagered > oldTotalWageredFromDB) {
-            const milestoneResult = await processWagerMilestoneBonus(dbClient, stringUserId, newTotalWagered);
-            if (milestoneResult.notifications) notificationsToReturn.push(...milestoneResult.notifications);
+            // Pass the pre-fetched solPrice down into the milestone checker
+            const milestoneResult = await processWagerMilestoneBonus(dbClient, stringUserId, newTotalWagered, solPrice);
+            if (milestoneResult.notifications && milestoneResult.notifications.length > 0) {
+                notificationsToReturn.push(...milestoneResult.notifications);
+            }
         }
 
         const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
@@ -15171,7 +15211,7 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         return { success: true, newBalanceLamports: balanceAfter, newTotalWageredLamports: newTotalWagered, notifications: notificationsToReturn };
 
     } catch (err) {
-        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message}`, err.stack?.substring(0,500));
+        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message}`, err.stack);
         return { success: false, error: err.message, errorCode: err.code };
     }
 }
