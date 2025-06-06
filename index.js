@@ -2522,10 +2522,10 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, milestonesProcessed: number, error?: string}>}
  */
-// FINAL-FIX processWagerMilestoneBonus
+// FINAL-FIX processWagerMilestoneBonus (v6 - Passes Price Correctly)
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred, solPrice) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V5_FinalFix UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V6_FinalFix UID:${stringReferredUserId}]`;
     const notificationsToSend = [];
 
     try {
@@ -2563,7 +2563,7 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
                         'referral_milestone_bonus',
                         { referral_id: referralLink.referral_id },
                         `Milestone Bonus: Referred user ${stringReferredUserId} wagered $${milestoneUSD}`,
-                        solPrice // Pass the price along for any nested checks
+                        solPrice 
                     );
 
                     if (!creditResult.success) {
@@ -2571,7 +2571,7 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
                         continue;
                     }
                     
-                    // Use the pre-fetched price to format the message, avoiding a network call
+                    // THIS IS THE FIX: Use the pre-fetched price via convertLamportsToUSDString instead of formatBalanceForDisplay
                     const bonusAmountUSDDisplay = convertLamportsToUSDString(milestoneBonusAmountLamports, solPrice);
                     const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
                     
