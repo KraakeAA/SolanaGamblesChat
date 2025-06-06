@@ -1253,6 +1253,25 @@ CREATE TABLE IF NOT EXISTS de_jackpot_sessions (
     helper_bot_id VARCHAR(100) NULL
 );`);
 
+        // --- Background Jobs Queue ---
+        console.log("DB Schema: Creating background_jobs table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS background_jobs (
+    job_id SERIAL PRIMARY KEY,
+    job_type VARCHAR(50) NOT NULL,
+    payload JSONB NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    attempts INT DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    process_after TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status_process_after ON background_jobs(status, process_after);`);
+        console.log("DB Schema: background_jobs table created or verified.");
+        // --- END OF NEW TABLE ---
+
+
         // Schema modifications for Referral System
         await client.query(`
 DO $$
@@ -2438,30 +2457,28 @@ function calculateInitialBetBonusPercentage(referralCount, referralTiersConfig) 
 }
 
 /**
- * Processes a referred user's first qualifying bet and triggers the Initial Bet Bonus for the referrer.
- * This function should be called when a user places any bet, after their balance is debited.
- * It needs to be called within the same database transaction as the bet placement.
+ * REFACTORED to queue a job for the Initial Bet Bonus instead of paying directly.
  * @param {import('pg').PoolClient} dbClient - The active database client for the transaction.
  * @param {string|number} referredUserTelegramId - The Telegram ID of the user who placed the bet.
  * @param {bigint} referredUserBetAmountLamports - The amount of the bet in lamports.
  * @param {string} gameIdForBet - The game ID for which the bet was placed (for ledger notes).
- * @returns {Promise<{success: boolean, bonusProcessed?: boolean, error?: string}>}
+ * @returns {Promise<{success: boolean, jobQueued?: boolean, error?: string}>}
  */
-// REVISED AND CORRECTED - processQualifyingBetAndInitialBonus
 async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegramId, referredUserBetAmountLamports, gameIdForBet) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V2_InternalCredit UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V3_AsyncJob UID:${stringReferredUserId}]`;
 
     try {
+        // Lock the referred user's row to prevent race conditions on first_bet_placed_at
         const referredUserDetails = await dbClient.query(
             `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
             [stringReferredUserId]
         );
         if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
-            return { success: true, bonusProcessed: false, message: "Not a referred user." };
+            return { success: true, jobQueued: false, message: "Not a referred user." };
         }
         if (referredUserDetails.rows[0].first_bet_placed_at) {
-            return { success: true, bonusProcessed: false, message: "Initial bonus already handled." };
+            return { success: true, jobQueued: false, message: "Initial bonus already handled." };
         }
         
         const solPrice = await getSolUsdPrice();
@@ -2469,10 +2486,11 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
         
         await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
         if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
-            return { success: true, bonusProcessed: false, message: "Bet too small to qualify." };
+            return { success: true, jobQueued: false, message: "Bet too small to qualify." };
         }
 
         const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
+        // We need to lock the referrer's row to safely read their referral_count
         const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
         const currentReferrerCount = referrerData.rows.length > 0 ? (referrerData.rows[0].referral_count || 0) : 0;
         
@@ -2481,78 +2499,72 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
 
         if (initialBonusAmountLamports <= 0n) {
              console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero. No commission created.`);
-             return { success: true, bonusProcessed: false, message: "Bonus amount was zero." };
+             return { success: true, jobQueued: false, message: "Bonus amount was zero." };
         }
-        
-        // --- THIS IS THE KEY CHANGE ---
-        // Instead of queueing a job, we credit the balance directly.
+
+        // Mark the referral as processed and increment the referrer's count
         const commissionRecordResult = await dbClient.query(
-            `UPDATE referrals SET commission_type = 'initial_bet_bonus', commission_amount_lamports = $1, status = 'paid_out', qualifying_bet_processed_at = NOW()
+            `UPDATE referrals SET commission_type = 'initial_bet_bonus', commission_amount_lamports = $1, status = 'bonus_queued', qualifying_bet_processed_at = NOW()
              WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL
              RETURNING referral_id;`,
             [referrerId, stringReferredUserId]
         );
 
         if (commissionRecordResult.rowCount > 0) {
-             const referralDbId = commissionRecordResult.rows[0].referral_id;
-             await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
+            const referralDbId = commissionRecordResult.rows[0].referral_id;
+            await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
 
-             // Credit the referrer's internal balance
-             await updateUserBalanceAndLedger(
-                 dbClient,
-                 referrerId,
-                 initialBonusAmountLamports,
-                 'referral_commission_credit',
-                 { referral_id: referralDbId },
-                 `Initial Bet Bonus from user ${stringReferredUserId}`
-             );
+            // --- THIS IS THE KEY CHANGE ---
+            // Instead of paying directly, queue a job.
+            const jobPayload = {
+                targetUserId: referrerId,
+                amountLamports: initialBonusAmountLamports.toString(),
+                transactionType: 'referral_commission_credit',
+                notes: `Initial Bet Bonus from user ${stringReferredUserId}. Original Referral ID: ${referralDbId}`
+            };
+
+            await dbClient.query(
+                `INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`,
+                [jobPayload]
+            );
             
-             console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports credited to referrer ${referrerId}.`);
+            console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports for referrer ${referrerId} has been QUEUED.`);
             
-             // Notify referrer
-             const bonusAmountUSDDisplay = await formatBalanceForDisplay(initialBonusAmountLamports, 'USD');
-             const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
-             safeSendMessage(referrerId,
-                 `🎉 Cha-ching! Your referred friend ${escapeMarkdownV2(referredName)} placed their first qualifying bet!\n` +
-                 `You've earned an Initial Bet Bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}*! It has been added to your casino balance. 🤝`,
-                 { parse_mode: 'MarkdownV2' }
-             ).catch(e => console.warn(`${LOG_PREFIX_PQB} Failed to send Initial Bet Bonus notification to referrer ${referrerId}: ${e.message}`));
+            return { success: true, jobQueued: true };
         } else {
-             console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus.`);
+            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus.`);
+            return { success: true, jobQueued: false, message: "No pending referral link found." };
         }
-        
-        return { success: true, bonusProcessed: true };
-
     } catch (error) {
-        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack?.substring(0, 700));
-        return { success: false, bonusProcessed: false, error: error.message };
+        console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack);
+        // Do not throw the error, as the main transaction should still succeed. Log it.
+        // The calling function will continue its commit.
+        return { success: false, jobQueued: false, error: error.message };
     }
 }
 
 
 /**
- * Processes wager milestones for a referred user and creates claimable bonuses for the referrer.
- * This should be called after a game if the referred user's total_wagered_lamports has increased.
- * It needs to be called within the same database transaction as the wager update.
+ * REFACTORED to queue a job for the Wager Milestone Bonus instead of paying directly.
  * @param {import('pg').PoolClient} dbClient - The active database client.
  * @param {string|number} referredUserTelegramId - The Telegram ID of the user whose wager is being checked.
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
- * @returns {Promise<{success: boolean, milestonesProcessed: number, error?: string}>}
+ * @returns {Promise<{success: boolean, jobsQueued: number, error?: string}>}
  */
-// FINAL CORRECTED processWagerMilestoneBonus (Fixes faulty INSERT query)
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred, solPrice) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V7_QueryFix UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V8_AsyncJob UID:${stringReferredUserId}]`;
+    let jobsQueued = 0;
 
     try {
-        const referralLinkDetailsRes = await queryDatabase(
-            `SELECT referral_id, referrer_telegram_id, referred_user_wager_milestones_achieved FROM referrals r WHERE r.referred_telegram_id = $1 LIMIT 1`,
-            [stringReferredUserId],
-            dbClient
+        // Lock the referral row to prevent concurrent milestone processing for the same user
+        const referralLinkDetailsRes = await dbClient.query(
+            `SELECT referral_id, referrer_telegram_id, referred_user_wager_milestones_achieved FROM referrals r WHERE r.referred_telegram_id = $1 FOR UPDATE`,
+            [stringReferredUserId]
         );
 
         if (referralLinkDetailsRes.rowCount === 0) {
-            return { success: true, notifications: [] };
+            return { success: true, jobsQueued: 0 }; // Not a referred user
         }
 
         const referralLink = referralLinkDetailsRes.rows[0];
@@ -2561,12 +2573,11 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
         
         if (!solPrice || solPrice <= 0) {
              console.warn(`${LOG_PREFIX_PWM} Invalid SOL price provided (${solPrice}). Skipping milestone check.`);
-             return { success: true, notifications: [] };
+             return { success: true, jobsQueued: 0 };
         }
 
         const totalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
         let milestonesUpdated = false;
-        const notificationsToSend = [];
 
         for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
             const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
@@ -2575,53 +2586,21 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
                 const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
 
                 if (milestoneBonusAmountLamports > 0n) {
-                    
-                    // THIS IS THE CORRECTED QUERY AND PARAMETER LOGIC
-                    const queryText = `
-                        INSERT INTO referrals (
-                            referrer_telegram_id, 
-                            referred_telegram_id, 
-                            commission_type, 
-                            commission_amount_lamports, 
-                            status, 
-                            notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6)
-                        RETURNING referral_id;
-                    `;
-                    const queryParams = [
-                        referrerId,
-                        stringReferredUserId,
-                        `wager_milestone_${milestoneUSD}_usd`,
-                        milestoneBonusAmountLamports.toString(),
-                        'milestone_bonus_claimable',
-                        `Referred user ${stringReferredUserId} reached $${milestoneUSD} wager milestone.`
-                    ];
-                    
-                    // The original logic tried to insert a new referral link, which is wrong.
-                    // This was my error. The milestone system should not create new rows in the main 'referrals' table.
-                    // It should create a separate record of a claimable bonus.
-                    // Let's adapt this to be a standalone system or piggyback on the ledger.
-                    // For simplicity, we will credit directly and log to the ledger.
+                    // --- THIS IS THE KEY CHANGE ---
+                    // Queue a job instead of paying directly.
+                    const jobPayload = {
+                        targetUserId: referrerId,
+                        amountLamports: milestoneBonusAmountLamports.toString(),
+                        transactionType: 'referral_milestone_bonus',
+                        notes: `Wager Milestone Bonus ($${milestoneUSD}) from referred user ${stringReferredUserId}.`
+                    };
 
-                    const ledgerNotesForMilestone = `Milestone Bonus: Referred user ${stringReferredUserId} wagered $${milestoneUSD}`;
-                    const creditResult = await updateUserBalanceAndLedger(
-                        dbClient, referrerId, milestoneBonusAmountLamports,
-                        'referral_milestone_bonus',
-                        { referral_id: referralLink.referral_id }, // Link it to the original referral record
-                        ledgerNotesForMilestone,
-                        solPrice
+                    await dbClient.query(
+                        `INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`,
+                        [jobPayload]
                     );
-
-                    if (!creditResult.success) {
-                        console.error(`${LOG_PREFIX_PWM} Failed to credit milestone bonus to referrer ${referrerId}. Error: ${creditResult.error}`);
-                        continue; 
-                    }
-                    
-                    const bonusAmountUSDDisplay = convertLamportsToUSDString(milestoneBonusAmountLamports, solPrice);
-                    const referredName = getPlayerDisplayReference(await getOrCreateUser(stringReferredUserId, null, null, null, dbClient));
-                    
-                    const notificationMessage = `🌟 Cha-ching! Your referral ${escapeMarkdownV2(referredName)} crossed the *${escapeMarkdownV2(`$${milestoneUSD}`)}* wager milestone!\nA bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* has been added to your casino balance!`;
-                    notificationsToSend.push({ to: referrerId, message: notificationMessage, options: { parse_mode: 'MarkdownV2' } });
+                    jobsQueued++;
+                    console.log(`${LOG_PREFIX_PWM} Queued $${milestoneUSD} milestone bonus job for referrer ${referrerId}.`);
                 }
 
                 achievedMilestonesData[milestoneKey] = new Date().toISOString();
@@ -2631,16 +2610,17 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
 
         if (milestonesUpdated) {
             await dbClient.query(
-                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2, updated_at = NOW() WHERE referral_id = $3;`,
+                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2 WHERE referral_id = $3;`,
                 [achievedMilestonesData, newTotalWageredLamportsByReferred.toString(), referralLink.referral_id]
             );
         }
         
-        return { success: true, notifications: notificationsToSend };
+        return { success: true, jobsQueued };
 
     } catch (error) {
         console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack);
-        return { success: false, notifications: [], error: error.message };
+        // Do not throw; allow the main transaction to continue.
+        return { success: false, jobsQueued: 0, error: error.message };
     }
 }
 
@@ -2697,6 +2677,115 @@ async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, d
 
 // --- End of NEW Referral System Core Logic Functions ---
 
+// =================================================================================
+// --- NEW: BACKGROUND JOB PROCESSOR ---
+// This system processes tasks like referral payouts asynchronously to prevent deadlocks.
+// =================================================================================
+
+let isJobProcessorRunning = false; // Prevents the processor from running concurrently
+const JOB_PROCESSOR_INTERVAL_MS = 10000; // Run every 10 seconds
+
+async function processBackgroundJobs() {
+    if (isShuttingDown) return;
+    if (isJobProcessorRunning) return;
+
+    isJobProcessorRunning = true;
+    const LOG_PREFIX = '[JobProcessor_V1]';
+
+    let jobsToProcess = [];
+    let mainClient = null;
+
+    try {
+        mainClient = await pool.connect();
+        // Atomically fetch and lock a batch of pending jobs to prevent other instances from grabbing them
+        const jobsResult = await mainClient.query(
+            `SELECT job_id FROM background_jobs WHERE status = 'pending' AND process_after <= NOW() ORDER BY created_at ASC LIMIT 5 FOR UPDATE SKIP LOCKED`
+        );
+        if (jobsResult.rows.length > 0) {
+            jobsToProcess = jobsResult.rows.map(r => r.job_id);
+            // Mark jobs as 'running' in a single query
+            await mainClient.query(`UPDATE background_jobs SET status = 'running', attempts = attempts + 1, last_attempt_at = NOW() WHERE job_id = ANY($1::int[])`, [jobsToProcess]);
+        }
+    } catch (e) {
+        console.error(`${LOG_PREFIX} Error fetching jobs:`, e);
+    } finally {
+        if (mainClient) mainClient.release();
+    }
+
+    if (jobsToProcess.length === 0) {
+        isJobProcessorRunning = false;
+        return;
+    }
+
+    console.log(`${LOG_PREFIX} Picked up ${jobsToProcess.length} jobs to process.`);
+
+    for (const jobId of jobsToProcess) {
+        if (isShuttingDown) break;
+
+        let jobClient = null;
+        try {
+            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1', [jobId]);
+            if (jobDataRes.rows.length === 0) continue;
+            const job = jobDataRes.rows[0];
+
+            jobClient = await pool.connect();
+            await jobClient.query('BEGIN');
+
+            if (job.job_type === 'credit_user_balance') {
+                const { targetUserId, amountLamports, transactionType, notes } = job.payload;
+
+                if (!targetUserId || !amountLamports || !transactionType) {
+                    throw new Error(`Invalid payload for job ${jobId}: Missing required fields.`);
+                }
+
+                const creditResult = await updateUserBalanceAndLedger(
+                    jobClient,
+                    targetUserId,
+                    BigInt(amountLamports),
+                    transactionType,
+                    { background_job_id: jobId },
+                    notes || 'Bonus credit from background job.'
+                );
+
+                if (!creditResult.success) {
+                    throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
+                }
+                
+                // On success, send notification
+                const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
+                const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
+
+                // This notification is sent only AFTER the database transaction is successful
+                await safeSendMessage(targetUserId,
+                    `🎉 Cha-ching! A bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* (${escapeMarkdownV2(bonusAmountSOLDisplay)}) has been added to your casino balance!`,
+                    { parse_mode: 'MarkdownV2' }
+                );
+            }
+            
+            // Mark job as complete
+            await jobClient.query(`UPDATE background_jobs SET status = 'completed' WHERE job_id = $1`, [jobId]);
+            await jobClient.query('COMMIT');
+            console.log(`${LOG_PREFIX} Successfully processed job ${jobId}.`);
+
+        } catch (err) {
+            if (jobClient) await jobClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX} Rollback failed for job ${jobId}`, rbErr));
+            console.error(`${LOG_PREFIX} Error processing job ${jobId}:`, err);
+            // Update job with error message and set it to 'failed' for later review
+            await queryDatabase(`UPDATE background_jobs SET status = 'failed', error_message = $1 WHERE job_id = $2`, [err.message, jobId]);
+        } finally {
+            if (jobClient) jobClient.release();
+        }
+    }
+
+    isJobProcessorRunning = false;
+}
+
+// In your main bot startup logic, after the database is initialized and `bot` is defined,
+// add this line to start the processor. For example, near the bottom before the bot listeners.
+// setInterval(processBackgroundJobs, JOB_PROCESSOR_INTERVAL_MS);
+
+console.log(`[System] Starting background job processor. Interval: ${JOB_PROCESSOR_INTERVAL_MS / 1000} seconds.`);
+setInterval(processBackgroundJobs, JOB_PROCESSOR_INTERVAL_MS);
 // --- End of Part 3 (REVISED for new Group Session Lock Management) ---
 // --- Start of Part 4 --- (Ensure this is placed correctly in your file structure)
 // index.js - Part 4: Simplified Game Logic (Enhanced)
