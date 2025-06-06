@@ -1358,26 +1358,19 @@ $$ LANGUAGE plpgsql;`);
 // Core User Management Functions
 //---------------------------------------------------------------------------
 
+// FINAL CORRECTED getOrCreateUser with Referral Linking Fix
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    const LOG_PREFIX_GOCU_DEBUG = `[DEBUG getOrCreateUser ENTER]`;
-
     if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
         console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
-        console.trace("Trace for undefined telegramId call");
-        if (typeof notifyAdmin === 'function' && ADMIN_USER_ID) {
-            notifyAdmin(`🚨 CRITICAL: getOrCreateUser called with invalid telegramId: ${telegramId}\\. Username hint: ${username}, Name hint: ${firstName}. Check trace in logs.`)
-                .catch(err => console.error("Failed to notify admin about invalid telegramId in getOrCreateUser:", err));
-        }
         return null;
     }
 
     const stringTelegramId = String(telegramId).trim();
-    const LOG_PREFIX_GOCU = `[GetCreateUser_Lvl_RefDebug TG:${stringTelegramId}]`;
+    const LOG_PREFIX_GOCU = `[GetCreateUser_V7_FinalRefFix TG:${stringTelegramId}]`;
 
     const sanitizeString = (str) => {
         if (typeof str !== 'string') return null;
-        let cleaned = str.replace(/[^\w\s.,!?\-#@_]/g, '').trim();
-        return cleaned.substring(0, 255);
+        return str.replace(/[^\w\s.,!?\-#@_]/g, '').trim().substring(0, 255);
     };
 
     const sUsername = username ? sanitizeString(username) : null;
@@ -1389,48 +1382,77 @@ async function getOrCreateUser(telegramId, username = '', firstName = '', lastNa
         await client.query('BEGIN');
 
         let referrerId = null;
-        if (referrerIdInput !== null && referrerIdInput !== undefined) {
-            try { referrerId = BigInt(referrerIdInput); } catch (parseError) { referrerId = null; }
+        if (referrerIdInput) {
+            try { referrerId = BigInt(referrerIdInput); } catch (e) { referrerId = null; }
         }
 
-        let result = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        if (result.rows.length > 0) {
-            // ... (rest of existing user logic remains the same) ...
-            await client.query('COMMIT');
-            return result.rows[0]; // Return existing user
+        let userResult = await client.query('SELECT * FROM users WHERE telegram_id = $1 FOR UPDATE', [stringTelegramId]);
+        let user;
+
+        if (userResult.rows.length > 0) {
+            // --- USER EXISTS ---
+            user = userResult.rows[0];
+
+            // *** THIS IS THE CRITICAL FIX ***
+            // If user exists but has no referrer, AND a referrerId was passed in this call...
+            if (!user.referrer_telegram_id && referrerId) {
+                console.log(`${LOG_PREFIX_GOCU} Existing user detected. Assigning referrer: ${referrerId}`);
+                // 1. Update the user record with the referrer ID
+                await client.query('UPDATE users SET referrer_telegram_id = $1 WHERE telegram_id = $2', [referrerId.toString(), stringTelegramId]);
+                // 2. Create the permanent link in the referrals table
+                await client.query(
+                    `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status) VALUES ($1, $2, 'pending_qual_bet') ON CONFLICT (referred_telegram_id) DO NOTHING;`,
+                    [referrerId.toString(), stringTelegramId]
+                );
+                console.log(`${LOG_PREFIX_GOCU} SUCCESS: Referral link created in DB for existing user.`);
+            }
+            // *** END OF CRITICAL FIX ***
+
+            // Standard update logic for username/name changes
+            const detailsChanged = (sUsername && user.username !== sUsername) || (sFirstName && user.first_name !== sFirstName) || (sLastName && user.last_name !== sLastName);
+            if (detailsChanged) {
+                await client.query(
+                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
+                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
+                );
+            } else {
+                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+            }
+            
         } else {
+            // --- NEW USER ---
             console.log(`${LOG_PREFIX_GOCU} New user detected. Referrer ID to process: ${referrerId}`);
             const newReferralCode = generateReferralCode();
             const insertQuery = `INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at, referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at, current_level_id) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL) RETURNING *;`;
-            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId];
-            result = await client.query(insertQuery, values);
-            const newUser = result.rows[0];
+            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId ? referrerId.toString() : null];
+            const insertResult = await client.query(insertQuery, values);
+            user = insertResult.rows[0];
 
             if (referrerId) {
-                console.log(`${LOG_PREFIX_GOCU} Referrer ID found (${referrerId}). Attempting to insert into 'referrals' table.`);
-                try {
-                    const insertReferralResult = await client.query(
-                        `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, created_at, status, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending_qual_bet', CURRENT_TIMESTAMP) ON CONFLICT (referred_telegram_id) DO NOTHING;`,
-                        [referrerId, newUser.telegram_id]
-                    );
-                    if (insertReferralResult.rowCount > 0) {
-                        console.log(`${LOG_PREFIX_GOCU} SUCCESS: Referral link created in DB for referrer ${referrerId} -> new user ${newUser.telegram_id}.`);
-                    } else {
-                        console.warn(`${LOG_PREFIX_GOCU} WARNING: Referral record already existed for new user ${newUser.telegram_id}, ON CONFLICT prevented re-insertion.`);
-                    }
-                } catch (referralError) {
-                   console.error(`${LOG_PREFIX_GOCU} FAILED to insert into 'referrals' table for referrer ${referrerId} -> new user ${newUser.telegram_id}:`, referralError);
-                }
-            } else {
-                console.log(`${LOG_PREFIX_GOCU} No referrerId provided. Skipping 'referrals' table insert.`);
+                console.log(`${LOG_PREFIX_GOCU} New user created with referrer. Inserting into 'referrals' table.`);
+                await client.query(
+                    `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status) VALUES ($1, $2, 'pending_qual_bet') ON CONFLICT (referred_telegram_id) DO NOTHING;`,
+                    [referrerId.toString(), stringTelegramId]
+                );
             }
-
-            await client.query('COMMIT');
-            return newUser;
         }
+        
+        await client.query('COMMIT');
+        
+        // Return a fresh, complete user object
+        const finalUserResult = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        const finalUser = finalUserResult.rows[0];
+        // Re-parse all BigInt fields before returning
+        Object.keys(finalUser).forEach(key => {
+            if (key.includes('lamports') || key === 'balance') {
+                finalUser[key] = BigInt(finalUser[key] || '0');
+            }
+        });
+        return finalUser;
+
     } catch (error) {
         await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser for telegramId ${stringTelegramId}: ${error.message} (SQL State: ${error.code})`, error.stack?.substring(0,700));
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser: ${error.message} (SQL State: ${error.code})`, error.stack);
         return null;
     } finally {
         client.release();
