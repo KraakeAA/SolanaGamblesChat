@@ -17233,14 +17233,13 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
     const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
     const dmChatId = userId;
     const originalMessageId = msgOrCbMsg.message_id;
-    const logPrefix = `[LTCDepositRequest_V3_Fix UID:${userId}]`;
+    const logPrefix = `[LTCDepositRequest_V4_HTMLFix UID:${userId}]`;
 
-    // Delete the previous menu message if it exists
     if (originalMessageId) {
         await bot.deleteMessage(dmChatId, originalMessageId).catch(() => {});
     }
 
-    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your Litecoin deposit address...", { parse_mode: 'HTML' });
+    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your unique Litecoin deposit address...", { parse_mode: 'HTML' });
     const workingMessageId = workingMsg?.message_id;
 
     if (!workingMessageId) {
@@ -17254,7 +17253,7 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
         await client.query('BEGIN');
 
         const userObject = await getOrCreateUser(userId, msgOrCbMsg.from.username, msgOrCbMsg.from.first_name, msgOrCbMsg.from.last_name);
-        const playerRef = getPlayerDisplayReference(userObject); // This is already MarkdownV2 safe
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
 
         const existingAddressRes = await client.query(
             "SELECT address, expires_at FROM ltc_user_deposit_wallets WHERE user_telegram_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
@@ -17289,26 +17288,20 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
         await client.query('COMMIT');
         
         const timeRemainingMs = expiresAtDate.getTime() - Date.now();
-        const timeRemainingMinutes = Math.max(1, Math.floor(timeRemainingMs / (60 * 1000))); // Use floor for a more accurate "at least"
+        const timeRemainingMinutes = Math.max(1, Math.floor(timeRemainingMs / (60 * 1000)));
         const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short', timeZone: 'UTC' }) + " UTC";
 
-        // --- All dynamic parts are now escaped for MarkdownV2 ---
-        const escapedAddress = escapeMarkdownV2(depositAddress);
-        const timeRemainingMinutesEscaped = escapeMarkdownV2(String(timeRemainingMinutes));
-        const expiryDateTimeStringEscaped = escapeMarkdownV2(expiryDateTimeString);
-        const confirmationLevelEscaped = escapeMarkdownV2(String(LTC_DEPOSIT_CONFIRMATIONS));
-        const botNameEscaped = escapeMarkdownV2(BOT_NAME);
-
-        const message = `💰 *Your ${newAddressGenerated ? 'New' : 'Active'} Litecoin Deposit Address*\n\n` +
-                        `Hi ${playerRef}, please send LTC to your unique deposit address below:\n\n` +
-                        `\`${escapedAddress}\`\n` +
-                        `_\\(Tap the address above to copy\\)_\n\n` +
-                        `This address is valid for approximately *${timeRemainingMinutesEscaped} minutes* \\(expires around ${expiryDateTimeStringEscaped}\\)\\. __Do not use after expiry\\.__\n\n` +
-                        `Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\. Deposits are converted to your main SOL balance upon confirmation\\.\n\n` +
-                        `⚠️ *Important Information:*\n` +
-                        `* Send only Litecoin \\(LTC\\) to this address\\.\n` +
-                        `* Exchange deposits may take longer to confirm\\.\n` +
-                        `* To generate a new address later, use the Deposit option in your \`/wallet\` menu\\.`;
+        const message = `💰 <b>Your ${newAddressGenerated ? 'New' : 'Active'} Litecoin Deposit Address</b>\n\n` +
+                        `Hi ${playerRefHTML}, please send LTC to your unique deposit address below:\n\n` +
+                        `<code>${escapeHTML(depositAddress)}</code>\n` +
+                        `<i>(Tap the address above to copy)</i>\n\n` +
+                        `This address is valid for approximately <b>${timeRemainingMinutes} minutes</b> (expires around ${expiryDateTimeString}). <u>Do not use after expiry.</u>\n\n` +
+                        `Funds require <b>${LTC_DEPOSIT_CONFIRMATIONS}</b> network confirmations to be credited. Deposits are converted to your main SOL balance upon confirmation.\n\n` +
+                        // --- FIX IS HERE: Added closing </b> tag ---
+                        `⚠️ <b>Important Information:</b>\n` +
+                        `• Send only Litecoin (LTC) to this address.\n` +
+                        `• Exchange deposits may take longer to confirm.\n` +
+                        `• To generate a new address later, use the Deposit option in your /wallet menu.`;
 
         const solanaPayUrl = `litecoin:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}`;
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
@@ -17318,7 +17311,7 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
             [{ text: "📱 Scan QR Code", url: qrCodeUrl }],
             [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
         ];
-        const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard}, disable_web_page_preview: true };
+        const options = { parse_mode: 'HTML', reply_markup: { inline_keyboard: depositKeyboard }, disable_web_page_preview: true };
 
         await bot.editMessageText(message, { chat_id: dmChatId, message_id: workingMessageId, ...options });
 
