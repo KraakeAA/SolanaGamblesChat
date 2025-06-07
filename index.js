@@ -30,6 +30,7 @@ import axios from 'axios';
 
 // Assuming this path is correct relative to your project structure
 import RateLimitedConnection from './lib/solana-connection.js';
+import { deriveLitecoinAddress } from './lib/litecoin-payment.js';
 
 // Helper function to stringify objects with BigInts and Functions for logging
 function stringifyWithBigInt(obj) {
@@ -504,6 +505,10 @@ const WITHDRAWAL_FEE_LAMPORTS = BigInt(process.env.WITHDRAWAL_FEE_LAMPORTS);
 const MIN_WITHDRAWAL_LAMPORTS_LEGACY_REFERENCE = BigInt(process.env.MIN_WITHDRAWAL_LAMPORTS || '0');
 const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD);
 
+const LITOSHIS_PER_LTC = 100000000;
+const LTC_DEPOSIT_CONFIRMATIONS = parseInt(process.env.LTC_DEPOSIT_CONFIRMATIONS, 10) || 6;
+const LTC_USD_PRICE_CACHE_TTL_MS = parseInt(process.env.LTC_USD_PRICE_CACHE_TTL_MS, 10) || 300000;
+
 // Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
 if (!DATABASE_URL) { console.error("🚨 FATAL ERROR: DATABASE_URL is not defined. Cannot connect to PostgreSQL."); process.exit(1); }
@@ -689,6 +694,9 @@ const solPriceCache = new Map();
 // For MainBot's Dice Escalator Jackpot Session Poller
 let jackpotSessionPollIntervalId = null;
 
+// NEW: For Litecoin background tasks
+let ltcDepositMonitorIntervalId = null;
+let ltcSweepIntervalId = null;
 
 // CORRECTED checkUserActiveGameLimit (Strict one-game-per-user rule)
 async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectChallengeOffer = false, gameIdBeingActioned = null) {
@@ -1269,6 +1277,44 @@ CREATE TABLE IF NOT EXISTS failed_jobs (
     failed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
         console.log("DB Schema: failed_jobs table created or verified.");
+
+        // --- NEW: Tables for Litecoin Payment System ---
+      console.log("DB Schema: Creating tables for Litecoin payment system...");
+
+      // NEW: Litecoin User Deposit Wallets Table
+      await client.query(`
+CREATE TABLE IF NOT EXISTS ltc_user_deposit_wallets (
+    wallet_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    address VARCHAR(100) NOT NULL UNIQUE,
+    derivation_path VARCHAR(255) NOT NULL UNIQUE,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ,
+    swept_at TIMESTAMPTZ,
+    balance_at_sweep BIGINT, -- Stored in Litoshis
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_ltc_deposit_wallets_user_id ON ltc_user_deposit_wallets(user_telegram_id);`);
+
+      // NEW: Litecoin Deposits Table
+      await client.query(`
+CREATE TABLE IF NOT EXISTS ltc_deposits (
+    deposit_id SERIAL PRIMARY KEY,
+    user_telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    ltc_user_deposit_wallet_id INT REFERENCES ltc_user_deposit_wallets(wallet_id) ON DELETE SET NULL,
+    transaction_hash VARCHAR(64) NOT NULL UNIQUE,
+    source_address VARCHAR(100),
+    deposit_address VARCHAR(100) NOT NULL,
+    amount_litoshis BIGINT NOT NULL, -- 1 LTC = 100,000,000 Litoshis
+    confirmations INT DEFAULT 0,
+    block_time BIGINT,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMPTZ,
+    notes TEXT
+);`);
+      console.log("DB Schema: Litecoin payment system tables created or verified.");
+      // --- END OF LITECOIN TABLES ---
 
 
         // Schema modifications for Referral System
@@ -14642,7 +14688,33 @@ bot.on('callback_query', async (callbackQuery) => {
                 case WITHDRAW_CALLBACK_ACTION_CONST:
                     if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(mockMsgObjectForHandler, params, userId); break;
                 case 'menu':
-                    if (typeof handleMenuAction === 'function') await handleMenuAction(userId, originalChatId, originalMessageId, params[0], params.slice(1), true, originalChatType, msg); break;
+                    const menuAction = params[0];
+                    if (menuAction === 'deposit') {
+                        const currency = params[1]; // 'sol' or 'ltc'
+                        if (currency === 'ltc') {
+                            if (typeof handleLitecoinDepositRequest === 'function') {
+                                await handleLitecoinDepositRequest(mockMsgObject);
+                            } else {
+                                console.error(`${LOG_PREFIX_CBQ} Missing handler: handleLitecoinDepositRequest`);
+                                await bot.answerCallbackQuery(callbackQueryId, { text: "LTC Deposit feature unavailable.", show_alert: true });
+                            }
+                        } else { // Default to SOL
+                            if (typeof handleDepositCommand === 'function') {
+                                await handleDepositCommand(mockMsgObject, [], userId);
+                            } else {
+                                console.error(`${LOG_PREFIX_CBQ} Missing handler: handleDepositCommand`);
+                                await bot.answerCallbackQuery(callbackQueryId, { text: "SOL Deposit feature unavailable.", show_alert: true });
+                            }
+                        }
+                    } else {
+                        // Let the generic handleMenuAction process all other menu items
+                        if (typeof handleMenuAction === 'function') {
+                            await handleMenuAction(userId, originalChatId, originalMessageId, menuAction, params.slice(1), true, originalChatType, msg);
+                        } else {
+                            console.error(`${LOG_PREFIX_CBQ} Missing handler: handleMenuAction`);
+                        }
+                    }
+                    break;
                 case 'process_withdrawal_confirm':
                     if (typeof handleWithdrawalConfirmation === 'function') {
                         const decision = params[0]; const currentState = userStateCache.get(userId);
@@ -15312,6 +15384,11 @@ async function gracefulShutdown(signal = 'SIGINT') {
         catch(e) { console.error("  ❌ Error stopping deposit monitoring:", e.message); }
     } else { console.warn("  ⚠️ stopDepositMonitoring function not defined.");}
 
+    if (typeof stopLitecoinDepositMonitoring === 'function') {
+        console.log("  ⏳ Stopping LTC deposit monitoring...");
+        stopLitecoinDepositMonitoring();
+    }
+
     if (typeof stopSweepingProcess === 'function') {
         console.log("  ⏳ Stopping sweeping process...");
         try { await stopSweepingProcess(); console.log("  ✅ Sweeping process stopped."); }
@@ -15472,6 +15549,12 @@ async function main() {
         } else {
             console.warn("⚠️ Address sweeping (startSweepingProcess) function not defined.");
         }
+
+        if (typeof startLitecoinDepositMonitoring === 'function') {
+        startLitecoinDepositMonitoring();
+    } else {
+        console.warn("⚠️ startLitecoinDepositMonitoring function not defined.");
+    }
 
         if (typeof startJackpotSessionPolling === 'function') {
             startJackpotSessionPolling(); // Call the new function to start the DE Jackpot poller
@@ -16991,15 +17074,19 @@ async function handleWalletCommand(receivedMsgObject) {
         textHTML += `-------------------------------\nWhat would you like to do?`;
 
         const keyboardActions = [
-            [{ text: "➕ Deposit SOL", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }, { text: "➖ Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION_CONST }],
-            [{ text: "📜 Transaction History", callback_data: "menu:history" }],
-            linkedAddress 
-                ? [{ text: "🔄 Update/Unlink Wallet", callback_data: "menu:link_wallet_prompt" }] 
-                : [{ text: "🔗 Link Withdrawal Wallet", callback_data: "menu:link_wallet_prompt" }],
-            [{ text: "🎲 View Games & Rules", callback_data: "menu:rules_list" }, { text: "🤝 Referrals", callback_data: "menu:referral" }], 
-            [{ text: "🌟 Level Up Bonus", callback_data: "menu:bonus_dashboard_back" }],
-            [{ text: "🏛️ Main Menu", callback_data: "menu:main" }] 
-        ];
+        // NEW: Deposit buttons are now on their own row
+        [{ text: "➕ Deposit SOL", callback_data: "menu:deposit:sol" }, { text: "➕ Deposit LTC", callback_data: "menu:deposit:ltc" }],
+        // Withdraw is now on its own dedicated row
+        [{ text: "➖ Withdraw SOL", callback_data: WITHDRAW_CALLBACK_ACTION_CONST }],
+        // The rest of the buttons remain the same
+        [{ text: "📜 Transaction History", callback_data: "menu:history" }],
+        linkedAddress 
+            ? [{ text: "🔄 Update/Unlink Wallet", callback_data: "menu:link_wallet_prompt" }] 
+            : [{ text: "🔗 Link Withdrawal Wallet", callback_data: "menu:link_wallet_prompt" }],
+        [{ text: "🎲 View Games & Rules", callback_data: "menu:rules_list" }, { text: "🤝 Referrals", callback_data: "menu:referral" }], 
+        [{ text: "🌟 Level Up Bonus", callback_data: "menu:bonus_dashboard_back" }],
+        [{ text: "🏛️ Main Menu", callback_data: "menu:main" }] 
+    ];
         if(ADMIN_USER_ID === userId && typeof getAdminPanelKeyboard === "function"){ 
              keyboardActions.unshift([{ text: "👑 Admin Panel", callback_data: "menu:admin_main" }]);
         }
@@ -17021,6 +17108,65 @@ async function handleWalletCommand(receivedMsgObject) {
             await safeSendMessage(targetDmChatId, errorTextForUserHTML, {parse_mode: 'HTML', reply_markup: {inline_keyboard: [[{text: "Try /start", callback_data:"menu:main"}]]} }); 
         });
     }
+}
+
+// Add this new function in Part P3 of your code
+async function handleLitecoinDepositRequest(msgOrCbMsg) {
+    const userId = String(msgOrCbMsg.from.id);
+    const dmChatId = userId;
+    const logPrefix = `[LTCDepositRequest UID:${userId}]`;
+
+    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your unique Litecoin deposit address...", { parse_mode: 'HTML' });
+    
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        // Derive a new, unique address
+        const safeUserAccountIndex = createSafeUserSpecificIndex(userId);
+        const addressIndexResult = await client.query('SELECT COUNT(*) FROM ltc_user_deposit_wallets WHERE user_telegram_id = $1', [userId]);
+        const addressIndex = parseInt(addressIndexResult.rows[0].count, 10);
+        
+        const derivationPath = `m/44'/2'/${safeUserAccountIndex}'/0/${addressIndex}`;
+        const { address } = deriveLitecoinAddress(process.env.LITECOIN_MASTER_SEED_PHRASE, derivationPath);
+
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // LTC addresses can be valid for longer
+
+        await client.query(
+            `INSERT INTO ltc_user_deposit_wallets (user_telegram_id, address, derivation_path, expires_at, is_active) VALUES ($1, $2, $3, $4, TRUE)`,
+            [userId, address, derivationPath, expiresAt]
+        );
+        await client.query('COMMIT');
+        
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=litecoin:${address}`;
+        const depositMessage = `Deposits are converted to your main SOL-based balance upon confirmation (~${LTC_DEPOSIT_CONFIRMATIONS} confirms).\n\n` +
+                               `Please send LTC to:\n<code>${address}</code>\n\n` +
+                               `⚠️ Send ONLY Litecoin (LTC) to this address.`;
+
+        await bot.editMessageText(depositMessage, { 
+            chat_id: dmChatId,
+            message_id: workingMsg.message_id,
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "View QR Code", url: qrCodeUrl }],
+                    [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
+                ]
+            }
+        });
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} Error: ${error.message}`);
+        await bot.editMessageText("❌ Failed to generate Litecoin deposit address. Please try again.", {
+            chat_id: dmChatId,
+            message_id: workingMsg.message_id,
+            parse_mode: 'HTML'
+        });
+    } finally {
+        if (client) client.release();
+    }
 }
 
 // REVISED handleSetWalletCommand function (from Part P3)
@@ -17549,10 +17695,17 @@ async function handleMenuAction(userId, originalChatId, originalMessageId, menuT
                 if (typeof handleWalletCommand === 'function') await handleWalletCommand(actionMsgContext);
                 else console.error(`${logPrefix} Missing handler: handleWalletCommand`);
                 break;
-            case 'deposit': case 'quick_deposit':
+            case 'deposit':
+            case 'quick_deposit':
                 console.log(`${logPrefix} Matched case '${menuType}'`);
-                if (typeof handleDepositCommand === 'function') await handleDepositCommand(actionMsgContext, [], stringUserId);
-                else console.error(`${logPrefix} Missing handler: handleDepositCommand`);
+                const currency = params[0]; // This will be 'sol' or 'ltc' from the callback data
+                if (currency === 'ltc') {
+                    if (typeof handleLitecoinDepositRequest === 'function') await handleLitecoinDepositRequest(actionMsgContext);
+                    else console.error(`${logPrefix} Missing handler: handleLitecoinDepositRequest`);
+                } else { // Default to SOL
+                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(actionMsgContext, [], stringUserId);
+                    else console.error(`${logPrefix} Missing handler: handleDepositCommand`);
+                }
                 break;
             case 'withdraw':
                 console.log(`${logPrefix} Matched case 'withdraw'`);
@@ -18827,6 +18980,99 @@ async function handleReferralPayoutJob(referralDbIdFromJob) { // Renamed paramet
     } finally {
         if (clientForDb) clientForDb.release();
     }
+}
+
+// Add this entire block of code to Part P4 in your index.js
+
+// ===================================================================
+// --- NEW: LITECOIN PAYMENT SYSTEM - BACKGROUND TASKS & PROCESSING ---
+// ===================================================================
+
+async function processLitecoinTransaction(txHash, depositAddress, walletDbId) {
+    const logPrefix = `[ProcessLTC_TX HASH:${txHash.slice(0, 10)}]`;
+    console.log(`${logPrefix} Processing potential LTC deposit...`);
+    let client = null;
+
+    try {
+        const addrInfo = await findLtcDepositAddressInfoDB(depositAddress);
+        if (!addrInfo || !addrInfo.userId) {
+            console.warn(`${logPrefix} No matching user/address info found for ${depositAddress}.`);
+            return;
+        }
+        const { userId } = addrInfo;
+
+        const txDetailsUrl = `${process.env.LITECOIN_API_BASE_URL}/txs/${txHash}`;
+        const txResponse = await axios.get(txDetailsUrl, { params: { token: process.env.BLOCKCYPHER_API_TOKEN } });
+
+        if (!txResponse.data || !txResponse.data.outputs) {
+            throw new Error("Invalid transaction data from API.");
+        }
+
+        let amountInLitoshis = 0n;
+        for (const output of txResponse.data.outputs) {
+            if (output.addresses && output.addresses.includes(depositAddress)) {
+                amountInLitoshis += BigInt(output.value);
+            }
+        }
+
+        if (amountInLitoshis <= 0n) {
+            console.log(`${logPrefix} No positive transfer amount found for this address in TX.`);
+            return;
+        }
+
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const depositRecordResult = await recordConfirmedLtcDepositDB(client, userId, walletDbId, depositAddress, txHash, amountInLitoshis);
+        if (depositRecordResult.alreadyProcessed) {
+            await client.query('ROLLBACK');
+            return;
+        }
+        if (!depositRecordResult.success) throw new Error(depositRecordResult.error);
+        
+        // --- Convert LTC value to SOL lamports for main balance ---
+        const ltcUsdPrice = await getLtcUsdPrice();
+        const solUsdPrice = await getSolUsdPrice();
+        const depositUsdValue = (Number(amountInLitoshis) / LITOSHIS_PER_LTC) * ltcUsdPrice;
+        const equivalentLamports = convertUSDToLamports(depositUsdValue, solUsdPrice);
+
+        const balanceUpdateResult = await updateUserBalanceAndLedger(client, userId, equivalentLamports, 'deposit_ltc', { ltc_deposit_id: depositRecordResult.depositId });
+        if (!balanceUpdateResult.success) throw new Error(balanceUpdateResult.error);
+
+        await client.query('COMMIT');
+
+        // --- Notify User ---
+        const userForNotif = await getOrCreateUser(userId);
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userForNotif));
+        const newBalanceUSD = await formatBalanceForDisplay(balanceUpdateResult.newBalanceLamports, 'USD');
+        const depositAmountLTC = (Number(amountInLitoshis) / LITOSHIS_PER_LTC).toFixed(8);
+
+        const successMsg = `✅ <b>Litecoin Deposit Confirmed!</b>\n\n` +
+                         `Your deposit of <b>${depositAmountLTC} LTC</b> (approx. $${depositUsdValue.toFixed(2)} USD) has been credited to your balance.\n\n` +
+                         `💰 Your New Balance: <b>${newBalanceUSD}</b>`;
+        await safeSendMessage(userId, successMsg, { parse_mode: 'HTML' });
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} CRITICAL ERROR: ${error.message}`);
+        if(typeof notifyAdmin === 'function') await notifyAdmin(`🚨 CRITICAL LTC Deposit Processing Error 🚨\nTX: ${txHash}\nError: ${escapeHTML(error.message)}`, {parse_mode: 'HTML'});
+    } finally {
+        if (client) client.release();
+    }
+}
+
+// These are new database helper functions you need
+async function findLtcDepositAddressInfoDB(depositAddress) {
+    const res = await queryDatabase('SELECT user_telegram_id, wallet_id FROM ltc_user_deposit_wallets WHERE address = $1 AND is_active = TRUE', [depositAddress]);
+    if (res.rows.length > 0) return { userId: String(res.rows[0].user_telegram_id), walletId: res.rows[0].wallet_id };
+    return null;
+}
+
+async function recordConfirmedLtcDepositDB(dbClient, userId, walletId, address, txHash, amountLitoshis) {
+    const query = `INSERT INTO ltc_deposits (user_telegram_id, ltc_user_deposit_wallet_id, deposit_address, transaction_hash, amount_litoshis, processed_at) VALUES ($1, $2, $3, $4, $5, NOW()) ON CONFLICT (transaction_hash) DO NOTHING RETURNING deposit_id;`;
+    const res = await dbClient.query(query, [userId, walletId, address, txHash, amountLitoshis.toString()]);
+    if (res.rowCount > 0) return { success: true, depositId: res.rows[0].deposit_id };
+    return { success: false, alreadyProcessed: true };
 }
 
 // --- End of Part P4 ---
