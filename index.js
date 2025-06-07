@@ -8341,6 +8341,8 @@ async function processDice21BotTurn(gameData) {
 }
 // --- END OF NEW processDice21BotTurn function ---
 
+// REPLACE your existing finalizeDice21PvBGame function with this corrected version:
+
 // CORRECTED finalizeDice21PvBGame (with Referral Fixes)
 async function finalizeDice21PvBGame(gameData) {
     const logPrefix = `[D21_PvB_Finalize_V12_FullFix GID:${gameData.gameId}]`;
@@ -8377,19 +8379,19 @@ async function finalizeDice21PvBGame(gameData) {
     let isConclusiveOutcome = false;
 
     if (finalStatus === 'game_over_player_bust') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         resultTitle = "💥 Player Busts!";
         resultOutcomeText = `Your score: <b>${escapeHTML(String(playerScore))}</b>. Bot wins <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
         ledgerOutcomeCode = 'loss_dice21_pvb_player_bust';
         gameOutcomeTextForLog = `Player busts (Score: ${playerScore})`;
     } else if (finalStatus === 'game_over_player_forfeit') { 
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         resultTitle = "🚫 Game Forfeited";
         resultOutcomeText = `You forfeited the game. Bot wins <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
         ledgerOutcomeCode = 'loss_dice21_pvb_timeout_forfeit';
         gameOutcomeTextForLog = `Player forfeits (Score: ${playerScore})`;
     } else if (finalStatus === 'game_over_bot_error' || finalStatus === 'game_over_error_ui_update') {
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         resultTitle = "⚙️ Game Error";
         resultOutcomeText = `Technical issue. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> refunded.`;
         payoutLamports = betAmount; 
@@ -8398,7 +8400,7 @@ async function finalizeDice21PvBGame(gameData) {
     } else if (finalStatus === 'game_over_bot_played' || finalStatus === 'player_blackjack') { 
         const finalBotScore = (botHandRolls && botHandRolls.length > 0) ? botScore : 0;
         if (playerBlackjack && (finalBotScore !== DICE_21_TARGET_SCORE || (botHandRolls && botHandRolls.length > 2))) {
-            isConclusiveOutcome = true;
+            isConclusiveOutcome = true;
             resultTitle = "✨🎉 BLACKJACK!";
             const profitBlackjack = betAmount * 15n / 10n; 
             payoutLamports = betAmount + profitBlackjack;
@@ -8406,27 +8408,27 @@ async function finalizeDice21PvBGame(gameData) {
             ledgerOutcomeCode = 'win_dice21_pvb_blackjack';
             gameOutcomeTextForLog = `Player Blackjack (Bot score: ${finalBotScore})`;
         } else if (botScore > DICE_21_TARGET_SCORE) {
-            isConclusiveOutcome = true;
+            isConclusiveOutcome = true;
             resultTitle = "🎉 Player Wins!";
             payoutLamports = betAmount * 2n;
             resultOutcomeText = `Bot BUSTED (<b>${escapeHTML(String(botScore))}</b>)! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
             ledgerOutcomeCode = 'win_dice21_pvb_bot_bust';
             gameOutcomeTextForLog = `Player wins - Bot busts (Player: ${playerScore}, Bot: ${botScore})`;
         } else if (playerScore > botScore) {
-            isConclusiveOutcome = true;
+            isConclusiveOutcome = true;
             resultTitle = "🎉 Player Wins!";
             payoutLamports = betAmount * 2n;
             resultOutcomeText = `Your <b>${escapeHTML(String(playerScore))}</b> beats Bot's <b>${escapeHTML(String(botScore))}</b>. You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
             ledgerOutcomeCode = 'win_dice21_pvb_score';
             gameOutcomeTextForLog = `Player wins by score (${playerScore} vs ${botScore})`;
         } else if (botScore > playerScore) {
-            isConclusiveOutcome = true;
+            isConclusiveOutcome = true;
             resultTitle = "🤖 Bot Wins";
             resultOutcomeText = `Bot's <b>${escapeHTML(String(botScore))}</b> beats your <b>${escapeHTML(String(playerScore))}</b>. You lost <b>${escapeHTML(betDisplayUSDShort)}</b>.`;
             ledgerOutcomeCode = 'loss_dice21_pvb_score';
             gameOutcomeTextForLog = `Bot wins by score (${botScore} vs ${playerScore})`;
         } else { // Push
-            isConclusiveOutcome = false;
+            isConclusiveOutcome = false;
             resultTitle = "⚖️ Push!";
             resultOutcomeText = `Scores tied at <b>${escapeHTML(String(playerScore))}</b>. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> returned.`;
             payoutLamports = betAmount;
@@ -8434,7 +8436,7 @@ async function finalizeDice21PvBGame(gameData) {
             gameOutcomeTextForLog = `Push (Draw at ${playerScore})`;
         }
     } else {
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         resultTitle = "❓ Game Undetermined";
         resultOutcomeText = `Unexpected status: <code>${escapeHTML(String(finalStatus))}</code>. Bet <b>${escapeHTML(betDisplayUSDShort)}</b> refunded.`;
         payoutLamports = betAmount;
@@ -8460,29 +8462,30 @@ async function finalizeDice21PvBGame(gameData) {
             throw new Error(balanceUpdateResult.error || "DB Error during Dice 21 PvB payout/ledger update.");
         }
         if (balanceUpdateResult.notifications) allNotificationsToSend.push(...balanceUpdateResult.notifications);
-
+        
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
-
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-            
-            // 2. MODIFIED: Correctly call level and milestone checks.
-            if (balanceUpdateResult.newTotalWageredLamports !== undefined) {
-                const levelNotifications = await checkAndUpdateUserLevel(client, playerId, balanceUpdateResult.newTotalWageredLamports, solPrice, chatId);
-                allNotificationsToSend.push(...levelNotifications);
-                const milestoneResult = await processWagerMilestoneBonus(client, playerId, balanceUpdateResult.newTotalWageredLamports, solPrice);
-                if (!milestoneResult.success) {
-                    console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneResult.error}`);
-                }
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                // <<< FIX IS HERE: Used playerId instead of the undefined userId
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, playerId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${playerId} from game ${gameId}.`);
+                }
             }
-
-            // --- END OF MODIFICATION ---
+            
+            if (balanceUpdateResult.newTotalWageredLamports !== undefined) {
+                if (typeof checkAndUpdateUserLevel === 'function') {
+                    // <<< FIX IS HERE: Used playerId instead of the undefined userId
+                    const levelNotifications = await checkAndUpdateUserLevel(client, playerId, balanceUpdateResult.newTotalWageredLamports, solPrice, chatId);
+                    allNotificationsToSend.push(...levelNotifications);
+                }
+                if (typeof processWagerMilestoneBonus === 'function') {
+                    // <<< FIX IS HERE: Used playerId instead of the undefined userId
+                    const milestoneResult = await processWagerMilestoneBonus(client, playerId, balanceUpdateResult.newTotalWageredLamports, solPrice);
+                    if (!milestoneResult.success) {
+                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneResult.error}`);
+                    }
+                }
+            }
         }
 
         await client.query('COMMIT');
@@ -8491,8 +8494,8 @@ async function finalizeDice21PvBGame(gameData) {
         dbErrorDuringPayoutText = `\n\n⚠️ <i>Critical error settling wager: ${escapeHTML(e.message)}. Admin notified.</i>`;
         console.error(`${logPrefix} CRITICAL DB error during finalization: ${e.message}`);
         if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL D21 PvB Payout/Ledger Failure 🚨\nGame ID: \`${escapeHTML(gameId)}\` User: ${escapeHTML(String(playerId))}\nAmount Due: ${payoutLamports}\nDB Error: \`${escapeHTML(e.message)}\`. MANUAL CHECK REQUIRED.`, {parse_mode: 'MarkdownV2'});
-    } finally {
-        if (client) client.release();
+    } finally { 
+        if (client) client.release(); 
     }
 
     for (const notification of allNotificationsToSend) {
