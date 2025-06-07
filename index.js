@@ -510,6 +510,7 @@ const MIN_WITHDRAWAL_USD_val = parseFloat(process.env.MIN_WITHDRAWAL_USD);
 const LITOSHIS_PER_LTC = 100000000;
 const LTC_DEPOSIT_CONFIRMATIONS = parseInt(process.env.LTC_DEPOSIT_CONFIRMATIONS, 10) || 6;
 const LTC_USD_PRICE_CACHE_TTL_MS = parseInt(process.env.LTC_USD_PRICE_CACHE_TTL_MS, 10) || 300000;
+const LITECOIN_API_BASE_URL = `https://api.blockcypher.com/v1/ltc/main`;
 
 // Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
@@ -17231,14 +17232,14 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
     const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
     const dmChatId = userId;
     const originalMessageId = msgOrCbMsg.message_id;
-    const logPrefix = `[LTCDepositRequest_V2 UID:${userId}]`;
+    const logPrefix = `[LTCDepositRequest_V3_Fix UID:${userId}]`;
 
-    // Delete the previous menu message
+    // Delete the previous menu message if it exists
     if (originalMessageId) {
         await bot.deleteMessage(dmChatId, originalMessageId).catch(() => {});
     }
 
-    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your Litecoin deposit address... Please wait.", { parse_mode: 'HTML' });
+    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your Litecoin deposit address...", { parse_mode: 'HTML' });
     const workingMessageId = workingMsg?.message_id;
 
     if (!workingMessageId) {
@@ -17252,7 +17253,7 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
         await client.query('BEGIN');
 
         const userObject = await getOrCreateUser(userId, msgOrCbMsg.from.username, msgOrCbMsg.from.first_name, msgOrCbMsg.from.last_name);
-        const playerRef = getPlayerDisplayReference(userObject);
+        const playerRef = getPlayerDisplayReference(userObject); // This is already MarkdownV2 safe
 
         const existingAddressRes = await client.query(
             "SELECT address, expires_at FROM ltc_user_deposit_wallets WHERE user_telegram_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
@@ -17274,7 +17275,7 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
             const derivationPath = `m/44'/2'/${safeUserAccountIndex}'/0/${addressIndex}`;
             const { address } = deriveLitecoinAddress(process.env.LITECOIN_MASTER_SEED_PHRASE, derivationPath);
 
-            expiresAtDate = new Date(Date.now() + (24 * 60 * 60 * 1000)); // LTC addresses can be valid for 24 hours
+            expiresAtDate = new Date(Date.now() + (24 * 60 * 60 * 1000));
 
             await client.query(
                 `INSERT INTO ltc_user_deposit_wallets (user_telegram_id, address, derivation_path, expires_at, is_active) VALUES ($1, $2, $3, $4, TRUE)`,
@@ -17287,13 +17288,15 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
         await client.query('COMMIT');
         
         const timeRemainingMs = expiresAtDate.getTime() - Date.now();
-        const timeRemainingMinutes = Math.max(1, Math.ceil(timeRemainingMs / (60 * 1000)));
+        const timeRemainingMinutes = Math.max(1, Math.floor(timeRemainingMs / (60 * 1000))); // Use floor for a more accurate "at least"
         const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short', timeZone: 'UTC' }) + " UTC";
 
+        // --- All dynamic parts are now escaped for MarkdownV2 ---
         const escapedAddress = escapeMarkdownV2(depositAddress);
         const timeRemainingMinutesEscaped = escapeMarkdownV2(String(timeRemainingMinutes));
         const expiryDateTimeStringEscaped = escapeMarkdownV2(expiryDateTimeString);
         const confirmationLevelEscaped = escapeMarkdownV2(String(LTC_DEPOSIT_CONFIRMATIONS));
+        const botNameEscaped = escapeMarkdownV2(BOT_NAME);
 
         const message = `💰 *Your ${newAddressGenerated ? 'New' : 'Active'} Litecoin Deposit Address*\n\n` +
                         `Hi ${playerRef}, please send LTC to your unique deposit address below:\n\n` +
@@ -17314,7 +17317,7 @@ async function handleLitecoinDepositRequest(msgOrCbMsg) {
             [{ text: "📱 Scan QR Code", url: qrCodeUrl }],
             [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
         ];
-        const options = { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: depositKeyboard }, disable_web_page_preview: true };
+        const options = { parse_mode: 'MarkdownV2', reply_markup: {inline_keyboard: depositKeyboard}, disable_web_page_preview: true };
 
         await bot.editMessageText(message, { chat_id: dmChatId, message_id: workingMessageId, ...options });
 
