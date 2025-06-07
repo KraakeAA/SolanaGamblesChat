@@ -13768,10 +13768,9 @@ async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
 async function handleTipCommand(msg, args, senderUserObj) {
     const senderId = String(senderUserObj.telegram_id);
     const chatId = String(msg.chat.id);
-    const logPrefix = `[TipCmd_V2 UID:${senderId} CH:${chatId}]`;
+    const logPrefix = `[TipCmd_V3_Fix UID:${senderId} CH:${chatId}]`;
 
     if (args.length < 2) {
-        // Using HTML for consistency
         await safeSendMessage(chatId, "⚙️ <b>Tip Usage:</b> <code>/tip &lt;@username_or_ID&gt; &lt;amount&gt; [sol]</code>\nExample: <code>/tip @friend 5</code>", { parse_mode: 'HTML' });
         return;
     }
@@ -13818,12 +13817,16 @@ async function handleTipCommand(msg, args, senderUserObj) {
         // To prevent deadlocks, always lock users in a consistent order (by ID)
         const [userA, userB] = [senderUserObj, recipientUser].sort((a, b) => String(a.telegram_id).localeCompare(String(b.telegram_id)));
         
+        // Lock both user rows
         await client.query('SELECT 1 FROM users WHERE telegram_id = $1 FOR UPDATE', [userA.telegram_id]);
-        await client.query('SELECT 1 FROM users WHERE telegram_id = $2 FOR UPDATE', [userB.telegram_id]);
+        // FIX IS HERE: Corrected the placeholder from $2 to $1
+        await client.query('SELECT 1 FROM users WHERE telegram_id = $1 FOR UPDATE', [userB.telegram_id]);
 
+        // Debit Sender
         const debitResult = await updateUserBalanceAndLedger(client, senderId, -tipAmountLamports, 'tip_sent', { opponent_id_custom_field: recipientUser.telegram_id }, `Tip to ${getPlayerDisplayReference(recipientUser)}`);
         if (!debitResult.success) throw new Error(`Failed to debit your account: ${debitResult.error}`);
 
+        // Credit Recipient
         const creditResult = await updateUserBalanceAndLedger(client, recipientUser.telegram_id, tipAmountLamports, 'tip_received', { opponent_id_custom_field: senderId }, `Tip from ${getPlayerDisplayReference(senderUserObj)}`);
         if (!creditResult.success) throw new Error(`Failed to credit recipient's account: ${creditResult.error}`);
 
