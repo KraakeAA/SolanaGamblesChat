@@ -79,7 +79,7 @@ const CASINO_ENV_DEFAULTS = {
   'RULES_CALLBACK_PREFIX': 'rules_game_',
   'DEPOSIT_CALLBACK_ACTION': 'deposit_action',
   'WITHDRAW_CALLBACK_ACTION': 'withdraw_action',
-  'QUICK_DEPOSIT_CALLBACK_ACTION': 'quick_deposit_action',
+  'QUICK_DEPOSIT_CALLBACK_ACTION': 'menu:quick_deposit_choice',
   'MAX_RETRY_POLLING_DELAY': '60000',
   'INITIAL_RETRY_POLLING_DELAY': '5000',
   'BOT_NAME': 'Solana Casino Royale',
