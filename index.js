@@ -19075,4 +19075,161 @@ async function recordConfirmedLtcDepositDB(dbClient, userId, walletId, address, 
     return { success: false, alreadyProcessed: true };
 }
 
+// --- NEW: LITECOIN DEPOSIT & SWEEP BACKGROUND TASKS ---
+// Add this entire block to Part P4 in your index.js
+
+const processedLtcTxs = new Set(); // In-memory cache to prevent double-processing
+
+/**
+ * Starts the polling process for monitoring Litecoin deposits.
+ */
+function startLitecoinDepositMonitoring() {
+    const intervalMs = parseInt(process.env.LTC_DEPOSIT_MONITOR_INTERVAL_MS, 10) || 300000;
+    if (isNaN(intervalMs) || intervalMs <= 10000) {
+        console.warn("⚠️ [LTC Monitor] Invalid or too frequent interval. Monitoring disabled.");
+        return;
+    }
+
+    console.log(`⚙️ [LTC Monitor] Starting Litecoin Deposit Monitor (Interval: ${intervalMs / 1000}s)...`);
+    
+    // Initial run after a short delay
+    setTimeout(() => {
+        if (!isShuttingDown) monitorLitecoinDeposits();
+    }, 10000);
+
+    ltcDepositMonitorIntervalId = setInterval(() => {
+        if (!isShuttingDown) monitorLitecoinDeposits();
+    }, intervalMs);
+}
+
+/**
+ * Stops the Litecoin deposit monitoring interval.
+ */
+function stopLitecoinDepositMonitoring() {
+    if (ltcDepositMonitorIntervalId) {
+        clearInterval(ltcDepositMonitorIntervalId);
+        console.log("🛑 [LTC Monitor] Litecoin deposit monitoring stopped.");
+    }
+}
+
+/**
+ * The main polling function that checks for new Litecoin transactions.
+ */
+async function monitorLitecoinDeposits() {
+    const logPrefix = '[LTC Monitor Polling]';
+    if (monitorLitecoinDeposits.isRunning) return;
+    monitorLitecoinDeposits.isRunning = true;
+
+    try {
+        const activeLtcAddresses = await queryDatabase(
+            `SELECT wallet_id, address, user_telegram_id FROM ltc_user_deposit_wallets WHERE is_active = TRUE AND expires_at > NOW() LIMIT 50`
+        );
+
+        if (activeLtcAddresses.rowCount === 0) {
+            monitorLitecoinDeposits.isRunning = false;
+            return;
+        }
+
+        for (const wallet of activeLtcAddresses.rows) {
+            try {
+                const url = `${LITECOIN_API_BASE_URL}/addrs/${wallet.address}/full`;
+                const response = await axios.get(url, { params: { token: LITECOIN_API_TOKEN }});
+
+                if (response.data && response.data.txs) {
+                    for (const tx of response.data.txs) {
+                        if (!processedLtcTxs.has(tx.tx_hash) && (tx.confirmations || 0) >= LTC_DEPOSIT_CONFIRMATIONS) {
+                            processedLtcTxs.add(tx.tx_hash);
+                            console.log(`${logPrefix} Found confirmed LTC tx ${tx.tx_hash} for address ${wallet.address}. Queuing for processing.`);
+                            // Here you would call your processing function
+                            // For simplicity, we'll process directly, but a queue is better for production
+                            await processLitecoinTransaction(tx.tx_hash, wallet.address, wallet.wallet_id, wallet.user_telegram_id);
+                        }
+                    }
+                }
+            } catch (error) {
+                if (!error.response || error.response.status !== 404) {
+                   console.error(`${logPrefix} Error checking address ${wallet.address}: ${error.message}`);
+                }
+            }
+            await sleep(1000); // Rate limit API calls
+        }
+    } catch (e) {
+        console.error(`${logPrefix} Major error in polling loop: ${e.message}`);
+    } finally {
+        monitorLitecoinDeposits.isRunning = false;
+    }
+}
+
+/**
+ * Starts the process for sweeping funds from deposit addresses.
+ */
+function startLitecoinSweepingProcess() {
+    const intervalMs = parseInt(process.env.LTC_SWEEP_INTERVAL_MS, 10) || 3600000;
+    console.log(`⚙️ [LTC Sweeper] Starting Litecoin Fund Sweeper (Interval: ${intervalMs / 1000 / 60} minutes)...`);
+    
+    setTimeout(() => {
+        if (!isShuttingDown) sweepLitecoinAddresses();
+    }, 30000); // Initial delay
+
+    ltcSweepIntervalId = setInterval(() => {
+        if (!isShuttingDown) sweepLitecoinAddresses();
+    }, intervalMs);
+}
+
+/**
+ * Stops the Litecoin sweeping interval.
+ */
+function stopLitecoinSweepingProcess() {
+    if (ltcSweepIntervalId) {
+        clearInterval(ltcSweepIntervalId);
+        console.log("🛑 [LTC Sweeper] Litecoin sweeping stopped.");
+    }
+}
+
+/**
+ * The main function to find and sweep funds from LTC addresses.
+ */
+async function sweepLitecoinAddresses() {
+    const logPrefix = '[LTC SweepAddresses]';
+    if (sweepLitecoinAddresses.isRunning) return;
+    sweepLitecoinAddresses.isRunning = true;
+    console.log(`🧹 ${logPrefix} Starting new LTC sweep cycle...`);
+
+    try {
+        const addressesToSweep = await queryDatabase(
+            `SELECT wallet_id, address, derivation_path, balance_at_sweep FROM ltc_user_deposit_wallets WHERE swept_at IS NULL AND is_active = FALSE AND balance_at_sweep > 0 LIMIT 10`
+        );
+
+        if (addressesToSweep.rowCount === 0) {
+            console.log(`${logPrefix} No LTC addresses to sweep in this cycle.`);
+            return;
+        }
+
+        for (const addr of addressesToSweep.rows) {
+            try {
+                const { keyPair } = deriveLitecoinAddress(process.env.LITECOIN_MASTER_SEED_PHRASE, addr.derivation_path);
+                const sweepTxHash = await sweepLitecoinAddress(keyPair, process.env.LITECOIN_SWEEP_TARGET_ADDRESS);
+                
+                await queryDatabase(
+                    'UPDATE ltc_user_deposit_wallets SET swept_at = NOW(), notes = $1 WHERE wallet_id = $2',
+                    [`Swept in tx: ${sweepTxHash}`, addr.wallet_id]
+                );
+                console.log(`✅ ${logPrefix} Successfully swept ${addr.address}. TXID: ${sweepTxHash}`);
+
+            } catch (error) {
+                console.error(`❌ ${logPrefix} Failed to sweep ${addr.address}: ${error.message}`);
+                await queryDatabase(
+                    'UPDATE ltc_user_deposit_wallets SET notes = $1 WHERE wallet_id = $2',
+                    [`Sweep failed: ${error.message.substring(0, 200)}`, addr.wallet_id]
+                );
+            }
+            await sleep(5000); // Delay between sweeps
+        }
+    } catch (error) {
+        console.error(`❌ ${logPrefix} Critical error in sweep cycle: ${error.message}`);
+    } finally {
+        sweepLitecoinAddresses.isRunning = false;
+    }
+}
+
 // --- End of Part P4 ---
