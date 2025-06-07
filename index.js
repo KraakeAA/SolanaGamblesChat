@@ -511,6 +511,7 @@ const LITOSHIS_PER_LTC = 100000000;
 const LTC_DEPOSIT_CONFIRMATIONS = parseInt(process.env.LTC_DEPOSIT_CONFIRMATIONS, 10) || 6;
 const LTC_USD_PRICE_CACHE_TTL_MS = parseInt(process.env.LTC_USD_PRICE_CACHE_TTL_MS, 10) || 300000;
 const LITECOIN_API_BASE_URL = `https://api.blockcypher.com/v1/ltc/main`;
+const LITECOIN_API_TOKEN = process.env.BLOCKCYPHER_API_TOKEN;
 
 // Critical Configuration Validations
 if (!BOT_TOKEN) { console.error("🚨 FATAL ERROR: BOT_TOKEN is not defined. Bot cannot start."); process.exit(1); }
