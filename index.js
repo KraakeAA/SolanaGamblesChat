@@ -14775,13 +14775,17 @@ bot.on('callback_query', async (callbackQuery) => {
         } else { await safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'}); }
     }
     const mockMsgObject = {
-        from: userObjectForCallback,
-        chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
-        message_id: isCallbackRedirectedToDm ? null : originalMessageId,
-        isCallbackRedirect: isCallbackRedirectedToDm,
-        originalChatInfo: isCallbackRedirectedToDm ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
-        message: msg,
-        isCallbackEditing: (originalChatType === 'private' && !!originalMessageId) // Flag for handlers to know if they can edit
+        from: {
+            id: userObjectForCallback.telegram_id, // Use the correct property
+            is_bot: false,
+            first_name: userObjectForCallback.first_name,
+            username: userObjectForCallback.username,
+            telegram_id: userObjectForCallback.telegram_id // Keep for compatibility
+        },
+        chat: { id: originalChatId, type: originalChatType },
+        message_id: originalMessageId,
+        isCallbackEditing: (originalChatType === 'private' && !!originalMessageId),
+        message: msg
     };
 
     try {
