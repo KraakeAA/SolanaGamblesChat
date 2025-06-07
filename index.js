@@ -15992,11 +15992,11 @@ async function getUserByReferralCode(refCode, client = pool) {
  * @param {string|null} [notes=null] Optional notes for the ledger entry.
  * @returns {Promise<{success: boolean, newBalanceLamports?: bigint, oldBalanceLamports?: bigint, ledgerId?: number, error?: string, errorCode?: string}>}
  */
-// FINAL-FIX updateUserBalanceAndLedger
+// FINAL-FIX updateUserBalanceAndLedger (with Explicit Type Casting for Nulls)
 async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null, solPrice = 0) {
     const stringUserId = String(telegramId);
     const changeAmount = BigInt(changeAmountLamports);
-    const logPrefix = `[UpdateBalLedger_V4_FinalFix UID:${stringUserId}]`;
+    const logPrefix = `[UpdateBalLedger_V5_TypecastFix UID:${stringUserId}]`;
 
     if (!dbClient || typeof dbClient.query !== 'function') {
         return { success: false, error: 'Invalid database client provided.', errorCode: 'INVALID_DB_CLIENT' };
@@ -16024,48 +16024,47 @@ async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamp
         let newTotalWon = BigInt(userData.total_won_lamports || '0');
         const notificationsToReturn = [];
 
-        // --- REVISED STATS LOGIC ---
         if (transactionType === 'deposit') {
             newTotalDeposited += changeAmount;
         } else if (transactionType.startsWith('withdrawal')) {
-            // changeAmount is negative, so we subtract it to increase total withdrawn
             newTotalWithdrawn -= changeAmount;
         } else if (transactionType.startsWith('bet_placed')) {
-            // A bet is placed. changeAmount is negative.
             const betAmount = -changeAmount;
             newTotalWagered += betAmount;
-            // NOTE: The call to processQualifyingBetAndInitialBonus has been REMOVED from here
-            // to prevent premature bonus awards. It is now correctly handled in finalize functions.
         } else if (transactionType.startsWith('win_')) {
-            // For a win, `changeAmount` is the total payout. Profit is payout - bet.
             const originalBetAmount = BigInt(relatedIds.original_bet_amount || '0');
             const profit = changeAmount - originalBetAmount;
             if (profit > 0n) {
                 newTotalWon += profit;
             }
         } else if (transactionType.startsWith('push_') || transactionType.startsWith('refund_')) {
-            // For a push or refund, `changeAmount` is the positive stake being returned.
-            // This is NOT a win, so total_won is not touched.
-            // CRITICAL FIX: Decrement total_wagered to prevent stat inflation.
             const betAmountRefunded = changeAmount;
-            if (betAmountRefunded > 0n) { // Only decrement if a positive amount is being refunded
+            if (betAmountRefunded > 0n) {
                 newTotalWagered -= betAmountRefunded;
             }
-        } else if (transactionType.startsWith('level_up') || transactionType.startsWith('referral_commission')) {
-            // Bonuses are credited to the user's balance and can be considered a form of "win" for stats.
+        } else if (transactionType.startsWith('level_up') || transactionType.startsWith('referral_commission') || transactionType === 'tip_received') {
             newTotalWon += changeAmount;
         }
-        // NOTE: A 'loss' transaction correctly has a changeAmount of 0, so no specific block is needed.
-        // total_wagered was already incremented when the bet was placed and is not decremented.
         
-        // NOTE: The block that called processWagerMilestoneBonus has been INTENTIONALLY REMOVED from this function.
-        // It is now handled correctly inside the finalize... game functions.
-
         const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
         await dbClient.query(updateUserQuery, [balanceAfter.toString(), newTotalDeposited.toString(), newTotalWithdrawn.toString(), newTotalWagered.toString(), newTotalWon.toString(), stringUserId]);
 
-        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) RETURNING ledger_id;`;
-        await dbClient.query(ledgerQuery, [stringUserId, transactionType, changeAmount.toString(), oldBalanceLamports.toString(), balanceAfter.toString(), relatedIds?.deposit_id || null, relatedIds?.withdrawal_id || null, relatedIds?.game_log_id || null, relatedIds?.referral_id || null, relatedIds?.related_sweep_id || null, notes]);
+        // --- FIX IS HERE: Added ::INTEGER casts to nullable ID parameters ---
+        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6::INTEGER, $7::INTEGER, $8::INTEGER, $9::INTEGER, $10::INTEGER, $11, NOW()) RETURNING ledger_id;`;
+        
+        await dbClient.query(ledgerQuery, [
+            stringUserId, 
+            transactionType, 
+            changeAmount.toString(), 
+            oldBalanceLamports.toString(), 
+            balanceAfter.toString(), 
+            relatedIds?.deposit_id || null, 
+            relatedIds?.withdrawal_id || null, 
+            relatedIds?.game_log_id || null, 
+            relatedIds?.referral_id || null, 
+            relatedIds?.related_sweep_id || null, 
+            notes
+        ]);
         
         return { success: true, newBalanceLamports: balanceAfter, newTotalWageredLamports: newTotalWagered, notifications: notificationsToReturn };
 
