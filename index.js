@@ -13762,6 +13762,94 @@ async function handleClaimLevelBonus(userId, levelIdToClaim, dbClient) {
     }
 }
 
+// Add this function to Part 5a, Section 2
+
+async function handleTipCommand(msg, args, senderUserObj) {
+    const senderId = String(senderUserObj.telegram_id);
+    const chatId = String(msg.chat.id);
+    const logPrefix = `[TipCmd UID:${senderId} CH:${chatId}]`;
+
+    if (args.length < 2) {
+        await safeSendMessage(chatId, "⚙️ **Tip Usage:** `/tip <@username_or_ID> <amount> [sol]`\nExample: `/tip @friend 5`", { parse_mode: 'MarkdownV2' });
+        return;
+    }
+
+    const recipientIdentifier = args[0];
+    const amountArg = args[1];
+    const senderRefHTML = escapeHTML(getPlayerDisplayReference(senderUserObj));
+
+    let tipAmountLamports;
+    let recipientUser;
+
+    try {
+        // 1. Find the recipient
+        recipientUser = await findRecipientUser(recipientIdentifier);
+        if (!recipientUser) {
+            throw new Error(`Player ${escapeHTML(recipientIdentifier)} not found.`);
+        }
+        if (String(recipientUser.telegram_id) === senderId) {
+            throw new Error("You can't tip yourself! That's just moving money from one pocket to another.");
+        }
+
+        // 2. Parse the tip amount (reusing the bot's betting parser)
+        tipAmountLamports = await parseBetAmount(amountArg, chatId, msg.chat.type, senderId);
+        if (!tipAmountLamports || tipAmountLamports <= 0n) {
+            throw new Error("Invalid tip amount. Please provide a positive number.");
+        }
+
+        // 3. Check if the sender has enough balance
+        const senderBalance = BigInt(senderUserObj.balance);
+        if (senderBalance < tipAmountLamports) {
+            const balanceDisplay = escapeHTML(await formatBalanceForDisplay(senderBalance, 'USD'));
+            const neededDisplay = escapeHTML(await formatBalanceForDisplay(tipAmountLamports - senderBalance, 'USD'));
+            throw new Error(`Your balance of <b>${balanceDisplay}</b> is too low to send that tip. You need ~<b>${neededDisplay}</b> more.`);
+        }
+
+        // 4. Perform the transaction
+        let client = null;
+        try {
+            client = await pool.connect();
+            await client.query('BEGIN');
+
+            // To prevent deadlocks, always lock users in a consistent order (by ID)
+            const [userA, userB] = [senderUserObj, recipientUser].sort((a, b) => String(a.telegram_id).localeCompare(String(b.telegram_id)));
+            
+            // Lock both user rows
+            await client.query('SELECT 1 FROM users WHERE telegram_id = $1 FOR UPDATE', [userA.telegram_id]);
+            await client.query('SELECT 1 FROM users WHERE telegram_id = $2 FOR UPDATE', [userB.telegram_id]);
+
+            // Debit Sender
+            const debitResult = await updateUserBalanceAndLedger(client, senderId, -tipAmountLamports, 'tip_sent', { opponent_id_custom_field: recipientUser.telegram_id }, `Tip to ${getPlayerDisplayReference(recipientUser)}`);
+            if (!debitResult.success) throw new Error(`Failed to debit your account: ${debitResult.error}`);
+
+            // Credit Recipient
+            const creditResult = await updateUserBalanceAndLedger(client, recipientUser.telegram_id, tipAmountLamports, 'tip_received', { opponent_id_custom_field: senderId }, `Tip from ${getPlayerDisplayReference(senderUserObj)}`);
+            if (!creditResult.success) throw new Error(`Failed to credit recipient's account: ${creditResult.error}`);
+
+            await client.query('COMMIT');
+
+        } catch (dbError) {
+            if (client) await client.query('ROLLBACK');
+            throw new Error(`A database error occurred during the transfer. The transaction was cancelled. Details: ${dbError.message}`);
+        } finally {
+            if (client) client.release();
+        }
+
+        // 5. Send confirmation messages
+        const tipAmountDisplayHTML = escapeHTML(await formatBalanceForDisplay(tipAmountLamports, 'USD'));
+        const recipientRefHTML = escapeHTML(getPlayerDisplayReference(recipientUser));
+
+        // Confirmation in the chat where the command was used
+        await safeSendMessage(chatId, `✅ ${senderRefHTML} has successfully tipped <b>${tipAmountDisplayHTML}</b> to ${recipientRefHTML}!`, { parse_mode: 'HTML' });
+
+        // DM to the recipient
+        await safeSendMessage(recipientUser.telegram_id, `🎁 You received a tip of <b>${tipAmountDisplayHTML}</b> from ${senderRefHTML}! It has been added to your balance.`, { parse_mode: 'HTML' });
+
+    } catch (e) {
+        console.error(`${logPrefix} Error: ${e.message}`);
+        await safeSendMessage(chatId, `⚠️ Oops, ${senderRefHTML}! Your tip failed.\n<b>Reason:</b> ${e.message}`, { parse_mode: 'HTML' });
+    }
+}
 
 // --- End of Part 5a, Section 2 ---
 // --- Start of Part 5a, Section 4 (REVISED for New Dice Escalator UI & Simplified Post-Game Keyboard) ---
