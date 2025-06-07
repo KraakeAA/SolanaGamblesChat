@@ -14774,14 +14774,15 @@ bot.on('callback_query', async (callbackQuery) => {
             }).catch(e => { if (!e.message?.toLowerCase().includes("message is not modified")) safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'}); });
         } else { await safeSendMessage(originalChatId, redirectText, {parse_mode: 'MarkdownV2'}); }
     }
-    const mockMsgObjectForHandler = {
-        from: userObjectForCallback,
-        chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
-        message_id: isCallbackRedirectedToDm ? null : originalMessageId,
-        isCallbackRedirect: isCallbackRedirectedToDm,
-        originalChatInfo: isCallbackRedirectedToDm ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
-        message: msg 
-    };
+    const mockMsgObject = {
+        from: userObjectForCallback,
+        chat: { id: isCallbackRedirectedToDm ? userId : originalChatId, type: isCallbackRedirectedToDm ? 'private' : originalChatType },
+        message_id: isCallbackRedirectedToDm ? null : originalMessageId,
+        isCallbackRedirect: isCallbackRedirectedToDm,
+        originalChatInfo: isCallbackRedirectedToDm ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
+        message: msg,
+        isCallbackEditing: (originalChatType === 'private' && !!originalMessageId) // Flag for handlers to know if they can edit
+    };
 
     try {
         if (action.startsWith(RULES_CALLBACK_PREFIX_CONST)) { 
