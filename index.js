@@ -17225,59 +17225,107 @@ async function handleWalletCommand(receivedMsgObject) {
     }
 }
 
-// Add this new function in Part P3 of your code
-async function handleLitecoinDepositRequest(msgOrCbMsg) {
-    const userId = String(msgOrCbMsg.from.id);
-    const dmChatId = userId;
-    const logPrefix = `[LTCDepositRequest UID:${userId}]`;
+// REPLACE your existing handleLitecoinDepositRequest function with this new version
 
-    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your unique Litecoin deposit address...", { parse_mode: 'HTML' });
-    
+async function handleLitecoinDepositRequest(msgOrCbMsg) {
+    const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
+    const dmChatId = userId;
+    const originalMessageId = msgOrCbMsg.message_id;
+    const logPrefix = `[LTCDepositRequest_V2 UID:${userId}]`;
+
+    // Delete the previous menu message
+    if (originalMessageId) {
+        await bot.deleteMessage(dmChatId, originalMessageId).catch(() => {});
+    }
+
+    const workingMsg = await safeSendMessage(dmChatId, "⏳ Generating your Litecoin deposit address... Please wait.", { parse_mode: 'HTML' });
+    const workingMessageId = workingMsg?.message_id;
+
+    if (!workingMessageId) {
+        console.error(`${logPrefix} Failed to establish message context for LTC deposit display.`);
+        return;
+    }
+
     let client = null;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // Derive a new, unique address
-        const safeUserAccountIndex = createSafeUserSpecificIndex(userId);
-        const addressIndexResult = await client.query('SELECT COUNT(*) FROM ltc_user_deposit_wallets WHERE user_telegram_id = $1', [userId]);
-        const addressIndex = parseInt(addressIndexResult.rows[0].count, 10);
-        
-        const derivationPath = `m/44'/2'/${safeUserAccountIndex}'/0/${addressIndex}`;
-        const { address } = deriveLitecoinAddress(process.env.LITECOIN_MASTER_SEED_PHRASE, derivationPath);
+        const userObject = await getOrCreateUser(userId, msgOrCbMsg.from.username, msgOrCbMsg.from.first_name, msgOrCbMsg.from.last_name);
+        const playerRef = getPlayerDisplayReference(userObject);
 
-        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // LTC addresses can be valid for longer
-
-        await client.query(
-            `INSERT INTO ltc_user_deposit_wallets (user_telegram_id, address, derivation_path, expires_at, is_active) VALUES ($1, $2, $3, $4, TRUE)`,
-            [userId, address, derivationPath, expiresAt]
+        const existingAddressRes = await client.query(
+            "SELECT address, expires_at FROM ltc_user_deposit_wallets WHERE user_telegram_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
+            [userId]
         );
+
+        let depositAddress;
+        let expiresAtDate;
+        let newAddressGenerated = false;
+
+        if (existingAddressRes.rows.length > 0) {
+            depositAddress = existingAddressRes.rows[0].address;
+            expiresAtDate = new Date(existingAddressRes.rows[0].expires_at);
+        } else {
+            const safeUserAccountIndex = createSafeUserSpecificIndex(userId);
+            const addressIndexResult = await client.query('SELECT COUNT(*) FROM ltc_user_deposit_wallets WHERE user_telegram_id = $1', [userId]);
+            const addressIndex = parseInt(addressIndexResult.rows[0].count, 10);
+            
+            const derivationPath = `m/44'/2'/${safeUserAccountIndex}'/0/${addressIndex}`;
+            const { address } = deriveLitecoinAddress(process.env.LITECOIN_MASTER_SEED_PHRASE, derivationPath);
+
+            expiresAtDate = new Date(Date.now() + (24 * 60 * 60 * 1000)); // LTC addresses can be valid for 24 hours
+
+            await client.query(
+                `INSERT INTO ltc_user_deposit_wallets (user_telegram_id, address, derivation_path, expires_at, is_active) VALUES ($1, $2, $3, $4, TRUE)`,
+                [userId, address, derivationPath, expiresAtDate]
+            );
+            depositAddress = address;
+            newAddressGenerated = true;
+        }
+
         await client.query('COMMIT');
         
-        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=litecoin:${address}`;
-        const depositMessage = `Deposits are converted to your main SOL-based balance upon confirmation (~${LTC_DEPOSIT_CONFIRMATIONS} confirms).\n\n` +
-                               `Please send LTC to:\n<code>${address}</code>\n\n` +
-                               `⚠️ Send ONLY Litecoin (LTC) to this address.`;
+        const timeRemainingMs = expiresAtDate.getTime() - Date.now();
+        const timeRemainingMinutes = Math.max(1, Math.ceil(timeRemainingMs / (60 * 1000)));
+        const expiryDateTimeString = expiresAtDate.toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short', timeZone: 'UTC' }) + " UTC";
 
-        await bot.editMessageText(depositMessage, { 
-            chat_id: dmChatId,
-            message_id: workingMsg.message_id,
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: "View QR Code", url: qrCodeUrl }],
-                    [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
-                ]
-            }
-        });
+        const escapedAddress = escapeMarkdownV2(depositAddress);
+        const timeRemainingMinutesEscaped = escapeMarkdownV2(String(timeRemainingMinutes));
+        const expiryDateTimeStringEscaped = escapeMarkdownV2(expiryDateTimeString);
+        const confirmationLevelEscaped = escapeMarkdownV2(String(LTC_DEPOSIT_CONFIRMATIONS));
+
+        const message = `💰 *Your ${newAddressGenerated ? 'New' : 'Active'} Litecoin Deposit Address*\n\n` +
+                        `Hi ${playerRef}, please send LTC to your unique deposit address below:\n\n` +
+                        `\`${escapedAddress}\`\n` +
+                        `_\\(Tap the address above to copy\\)_\n\n` +
+                        `This address is valid for approximately *${timeRemainingMinutesEscaped} minutes* \\(expires around ${expiryDateTimeStringEscaped}\\)\\. __Do not use after expiry\\.__\n\n` +
+                        `Funds require *${confirmationLevelEscaped}* network confirmations to be credited\\. Deposits are converted to your main SOL balance upon confirmation\\.\n\n` +
+                        `⚠️ *Important Information:*\n` +
+                        `* Send only Litecoin \\(LTC\\) to this address\\.\n` +
+                        `* Exchange deposits may take longer to confirm\\.\n` +
+                        `* To generate a new address later, use the Deposit option in your \`/wallet\` menu\\.`;
+
+        const solanaPayUrl = `litecoin:${depositAddress}?label=${encodeURIComponent(BOT_NAME + " Deposit")}`;
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(solanaPayUrl)}`;
+
+        const depositKeyboard = [
+            [{ text: "🔍 View on Blockchair", url: `https://blockchair.com/litecoin/address/${depositAddress}` }],
+            [{ text: "📱 Scan QR Code", url: qrCodeUrl }],
+            [{ text: "💳 Back to Wallet", callback_data: "menu:wallet" }]
+        ];
+        const options = { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: depositKeyboard }, disable_web_page_preview: true };
+
+        await bot.editMessageText(message, { chat_id: dmChatId, message_id: workingMessageId, ...options });
 
     } catch (error) {
         if (client) await client.query('ROLLBACK');
         console.error(`${logPrefix} Error: ${error.message}`);
         await bot.editMessageText("❌ Failed to generate Litecoin deposit address. Please try again.", {
             chat_id: dmChatId,
-            message_id: workingMsg.message_id,
-            parse_mode: 'HTML'
+            message_id: workingMessageId,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]]}
         });
     } finally {
         if (client) client.release();
