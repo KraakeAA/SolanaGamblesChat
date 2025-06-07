@@ -16500,40 +16500,47 @@ async function insertDiceRollRequest(dbClient, gameId, chatId, userId = null, em
 }
 
 /**
- * Retrieves the status and result of a specific dice roll request.
- * @param {import('pg').PoolClient} dbClient - The active database client.
- * @param {number} requestId - The ID of the dice_roll_requests record.
- * @returns {Promise<{success: boolean, status?: string, roll_value?: number, notes?: string, error?: string}>}
- */
+ * Retrieves the status and result of a specific dice roll request.
+ * @param {import('pg').PoolClient} dbClient - The active database client.
+ * @param {number} requestId - The ID of the dice_roll_requests record.
+ * @returns {Promise<{success: boolean, status?: string, roll_value?: number, notes?: string, error?: string}>}
+ */
 async function getDiceRollRequestResult(dbClient, requestId) {
-    const logPrefix = `[GetDiceReqResult RID:${requestId}]`;
+    const logPrefix = `[GetDiceReqResult RID:${requestId}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
-        return { success: false, error: 'Invalid database client for getDiceRollRequestResult.' };
-    }
-    const query = `
-        SELECT status, roll_value, notes
-        FROM dice_roll_requests
-        WHERE request_id = $1;
-    `;
-    try {
-        const res = await dbClient.query(query, [requestId]);
-        if (res.rows.length > 0) {
-            const data = res.rows[0];
-            return {
-                success: true,
-                status: data.status,
-                roll_value: data.roll_value, 
-                notes: data.notes
-            };
-        }
-        return { success: false, error: 'Request ID not found.' };
-    } catch (err) {
-        // --- FIX APPLIED HERE: Using the correct logPrefix variable ---
-        console.error(`${logPrefix} ❌ Error fetching dice roll request result: ${err.message}`, err.stack?.substring(0,500));
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        console.error(`${logPrefix} 🚨 CRITICAL: dbClient is not a valid database client.`);
+        return { success: false, error: 'Invalid database client for getDiceRollRequestResult.' };
+    }
+    const query = `
+        SELECT status, roll_value, notes
+        FROM dice_roll_requests
+        WHERE request_id = $1;
+    `;
+
+    // --- NEW DEBUG LOGS TO ADD ---
+    console.log(`[DEBUG] Executing query in getDiceRollRequestResult.`);
+    console.log(`[DEBUG] Query Text Length: ${query.length}`);
+    console.log(`[DEBUG] Request ID Parameter: ${requestId} (Type: ${typeof requestId})`);
+    // --- END OF DEBUG LOGS ---
+
+    try {
+        const res = await dbClient.query(query, [requestId]);
+        if (res.rows.length > 0) {
+            const data = res.rows[0];
+            return {
+                success: true,
+                status: data.status,
+                roll_value: data.roll_value,
+                notes: data.notes
+            };
+        }
+        return { success: false, error: 'Request ID not found.' };
+    } catch (err) {
+        // Using the correct logPrefix variable
+        console.error(`${logPrefix} ❌ Error fetching dice roll request result: ${err.message}`, err.stack?.substring(0,500));
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 /**
