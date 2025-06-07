@@ -3712,10 +3712,11 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
     await finalizeCoinflipPvBGame(gameData);
 }
 
-// CORRECTED finalizeCoinflipPvBGame
+// REPLACE your entire finalizeCoinflipPvBGame function with this corrected version
+
 async function finalizeCoinflipPvBGame(gameData) {
     const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, result, userObj } = gameData;
-    const logPrefix = `[CF_PvB_Finalize_V5_DeadlockFix GID:${gameId}]`;
+    const logPrefix = `[CF_PvB_Finalize_V7_RefFix GID:${gameId}]`;
     let allNotificationsToSend = [];
 
     let solPrice;
@@ -3744,8 +3745,9 @@ async function finalizeCoinflipPvBGame(gameData) {
 
         const balanceUpdate = await updateUserBalanceAndLedger(
             client, userId, payoutAmountLamports, ledgerOutcomeCode,
-            { game_log_id: actualGameLogId }, `PvB Coinflip: ${playerChoice} vs Bot ${result}`,
-            solPrice // Pass price for referral checks if any
+            { game_log_id: actualGameLogId, original_bet_amount: betAmount.toString() }, 
+            `PvB Coinflip: ${playerChoice} vs Bot ${result}`,
+            solPrice
         );
 
         if (!balanceUpdate.success) {
@@ -3758,13 +3760,13 @@ async function finalizeCoinflipPvBGame(gameData) {
         
         finalUserBalance = balanceUpdate.newBalanceLamports;
 
-        // Check for level up and milestone bonuses only on a conclusive win or loss
         const isConclusiveOutcome = ledgerOutcomeCode.startsWith('win_') || ledgerOutcomeCode.startsWith('loss_');
         if (isConclusiveOutcome) {
             if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientPayout, player.userId, betAmount, gameId);
+                // --- FIX IS HERE: Changed 'clientPayout' to the correct 'client' variable ---
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
                 if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${player.userId} from game ${gameId}.`);
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
                 }
             }
             if (balanceUpdate.newTotalWageredLamports !== undefined && typeof checkAndUpdateUserLevel === 'function') {
@@ -3772,8 +3774,8 @@ async function finalizeCoinflipPvBGame(gameData) {
                 allNotificationsToSend.push(...levelNotifications);
             }
             if (balanceUpdate.newTotalWageredLamports !== undefined && typeof processWagerMilestoneBonus === 'function') {
-                const milestoneNotifications = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
-                allNotificationsToSend.push(...milestoneNotifications);
+                const milestoneResult = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
+                if (!milestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for PvB Coinflip: ${milestoneResult.error}`);
             }
         }
 
@@ -3786,7 +3788,6 @@ async function finalizeCoinflipPvBGame(gameData) {
         if (client) client.release(); 
     }
 
-    // Send all collected notifications AFTER the transaction is closed
     for (const notification of allNotificationsToSend) {
         if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
             await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
