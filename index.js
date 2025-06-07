@@ -690,27 +690,17 @@ const solPriceCache = new Map();
 let jackpotSessionPollIntervalId = null;
 
 
+// CORRECTED checkUserActiveGameLimit (Strict one-game-per-user rule)
 async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectChallengeOffer = false, gameIdBeingActioned = null) {
     const userIdStr = String(userIdToCheck);
-    let activeInvolvementFound = null; // Renamed for clarity
-
-    const PURE_PVB_GAME_TYPES = [
-        GAME_IDS.COINFLIP_PVB, GAME_IDS.RPS_PVB, GAME_IDS.DICE_ESCALATOR_PVB,
-        GAME_IDS.DICE_21,
-        GAME_IDS.MINES, GAME_IDS.LADDER, GAME_IDS.OVER_UNDER_7, GAME_IDS.SLOT_FRENZY,
-        GAME_IDS.DUEL_PVB, GAME_IDS.SEVEN_OUT
-    ];
+    let activeInvolvementFound = null;
 
     for (const [gameIdInLoop, gameData] of activeGames.entries()) {
-        // If the current gameData in the loop is the specific game/offer the user is trying to action
-        // (e.g., accept this offer, cancel this offer), then it should NOT block itself.
         if (gameIdBeingActioned && gameIdInLoop === gameIdBeingActioned) {
-            // console.log(`[checkUserActiveGameLimit UID:${userIdStr}] Skipping check for gameId '${gameIdInLoop}' as it's the one being actioned.`);
             continue;
         }
 
         let isUserInThisGame = false;
-        // Comprehensive check for user involvement
         if (gameData.userId === userIdStr || gameData.playerId === userIdStr || gameData.initiatorId === userIdStr) {
             isUserInThisGame = true;
         } else if (gameData.player?.userId === userIdStr) {
@@ -723,46 +713,28 @@ async function checkUserActiveGameLimit(userIdToCheck, gameBeingStartedIsDirectC
             isUserInThisGame = true;
         } else if (gameData.type === GAME_IDS.MINES_OFFER && gameData.initiatorId === userIdStr) {
             isUserInThisGame = true;
-        } else if (gameData.targetUserId === userIdStr && // Check if user is the target of a direct challenge
-                     (gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE ||
-                      gameData.type.endsWith('_direct_challenge_offer'))) {
+        } else if (gameData.targetUserId === userIdStr && (gameData.type === GAME_IDS.DIRECT_PVP_CHALLENGE || gameData.type.endsWith('_direct_challenge_offer'))) {
             isUserInThisGame = true;
         }
 
         if (isUserInThisGame) {
-            // Defines states that are truly over and should not block.
-            // Pending offers (like 'pending_offer', 'pending_direct_challenge_response') are NOT in this list anymore.
-            const trulyTerminatedStates = [
-                // All game_over_ states are implicitly handled by startsWith('game_over_')
-                'cancelled',
-                'expired',
-                'resolved', // For unified offers that found a match and became a game
-                // 'bot_game_accepted', 'pvp_accepted' could be here if the offer object is immediately deleted and replaced by a game object.
-                // For this stricter check, any pending offer state is an active involvement.
-            ];
+            const trulyTerminatedStates = ['cancelled', 'expired', 'resolved'];
+            const isEngagementTerminated = gameData.status && (gameData.status.startsWith('game_over_') || trulyTerminatedStates.includes(gameData.status));
 
-            const isEngagementTerminated = gameData.status &&
-                (gameData.status.startsWith('game_over_') || trulyTerminatedStates.includes(gameData.status));
-
-            if (!isEngagementTerminated) { // If the game/offer is NOT truly terminated
-                // The old "isUserOwnPendingOffer" broad `continue` is removed.
-                // Any active involvement (pending offer made, pending offer received, active game) now generally counts.
-
-                // Exception: Allow creating a direct challenge offer if the user's ONLY other involvement is a simple PvB game.
-                if (gameBeingStartedIsDirectChallengeOffer && PURE_PVB_GAME_TYPES.includes(gameData.type)) {
-                    console.log(`[checkUserActiveGameLimit UID:${userIdStr}] User attempting to start a direct challenge offer. Current involvement is PvB game '${gameData.type}'. Allowing this specific creation.`);
-                    continue;
-                }
-                // Otherwise, this is a blocking involvement.
+            if (!isEngagementTerminated) {
+                // The exception block that was here has been removed.
+                // Any active involvement will now trigger the limit.
                 activeInvolvementFound = { type: gameData.type, status: gameData.status, id: gameIdInLoop.slice(-6) };
                 break; // Found a blocking involvement
             }
         }
     }
+
     if (activeInvolvementFound) {
-      console.log(`[checkUserActiveGameLimit UID:${userIdStr}] Limit reached. Active involvement found: Type=${activeInvolvementFound.type}, Status=${activeInvolvementFound.status}, ID=${activeInvolvementFound.id}`);
-      return { limitReached: true, details: activeInvolvementFound };
+        console.log(`[checkUserActiveGameLimit UID:${userIdStr}] Limit reached. Active involvement found: Type=${activeInvolvementFound.type}, Status=${activeInvolvementFound.status}, ID=${activeInvolvementFound.id}`);
+        return { limitReached: true, details: activeInvolvementFound };
     }
+    
     console.log(`[checkUserActiveGameLimit UID:${userIdStr}] No blocking active involvement found. Limit not reached.`);
     return { limitReached: false };
 }
@@ -2491,12 +2463,12 @@ function calculateInitialBetBonusPercentage(referralCount, referralTiersConfig) 
  * @param {string} gameIdForBet - The game ID for which the bet was placed (for ledger notes).
  * @returns {Promise<{success: boolean, jobQueued?: boolean, error?: string}>}
  */
+// CORRECTED processQualifyingBetAndInitialBonus (Fixes referral tracking)
 async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegramId, referredUserBetAmountLamports, gameIdForBet) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V3_AsyncJob UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V4_LogicFix UID:${stringReferredUserId}]`;
 
     try {
-        // Lock the referred user's row to prevent race conditions on first_bet_placed_at
         const referredUserDetails = await dbClient.query(
             `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
             [stringReferredUserId]
@@ -2511,13 +2483,18 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
         const solPrice = await getSolUsdPrice();
         const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
         
-        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+        // --- LOGIC FIX IS HERE ---
+        // First, check if the bet is large enough to qualify.
         if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
-            return { success: true, jobQueued: false, message: "Bet too small to qualify." };
+            // DO NOT set the timestamp here. The user can still make a qualifying "first bet" later.
+            return { success: true, jobQueued: false, message: "Bet too small to qualify. User can try again." };
         }
+        
+        // If we get here, the bet IS a qualifying bet. NOW we set the timestamp.
+        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+        // --- END OF LOGIC FIX ---
 
         const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
-        // We need to lock the referrer's row to safely read their referral_count
         const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
         const currentReferrerCount = referrerData.rows.length > 0 ? (referrerData.rows[0].referral_count || 0) : 0;
         
@@ -2525,24 +2502,21 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
         const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
 
         if (initialBonusAmountLamports <= 0n) {
-             console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero. No commission created.`);
-             return { success: true, jobQueued: false, message: "Bonus amount was zero." };
+            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero. No commission created.`);
+            return { success: true, jobQueued: false, message: "Bonus amount was zero." };
         }
 
-        // Mark the referral as processed and increment the referrer's count
         const commissionRecordResult = await dbClient.query(
             `UPDATE referrals SET commission_type = 'initial_bet_bonus', commission_amount_lamports = $1, status = 'bonus_queued', qualifying_bet_processed_at = NOW()
-             WHERE referrer_telegram_id = $1 AND referred_telegram_id = $2 AND qualifying_bet_processed_at IS NULL
+             WHERE referrer_telegram_id = $2 AND referred_telegram_id = $1 AND qualifying_bet_processed_at IS NULL
              RETURNING referral_id;`,
-            [referrerId, stringReferredUserId]
+            [stringReferredUserId, referrerId]
         );
 
         if (commissionRecordResult.rowCount > 0) {
             const referralDbId = commissionRecordResult.rows[0].referral_id;
             await dbClient.query(`UPDATE users SET referral_count = referral_count + 1 WHERE telegram_id = $1`, [referrerId]);
 
-            // --- THIS IS THE KEY CHANGE ---
-            // Instead of paying directly, queue a job.
             const jobPayload = {
                 targetUserId: referrerId,
                 amountLamports: initialBonusAmountLamports.toString(),
@@ -2564,8 +2538,6 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
         }
     } catch (error) {
         console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack);
-        // Do not throw the error, as the main transaction should still succeed. Log it.
-        // The calling function will continue its commit.
         return { success: false, jobQueued: false, error: error.message };
     }
 }
