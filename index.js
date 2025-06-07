@@ -170,7 +170,9 @@ const PAYMENT_ENV_DEFAULTS = {
   'PAYMENT_WEBHOOK_PORT': '3000',
   'PAYMENT_WEBHOOK_PATH': '/webhook/solana-payments',
   'SOL_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+  'LTC_PRICE_API_URL': 'https://api.coingecko.com/api/v3/simple/price?ids=litecoin&vs_currencies=usd',
   'SOL_USD_PRICE_CACHE_TTL_MS': (60 * 60 * 1000).toString(),
+  'LTC_USD_PRICE_CACHE_TTL_MS': (60 * 60 * 1000).toString(),
   'MIN_BET_USD': '1.00',
   'MAX_BET_USD': '100.00',
 };
@@ -963,6 +965,114 @@ async function getSolUsdPrice() {
     if (cachedEntry) return cachedEntry.price; // Should have been caught above, but as a failsafe
     const finalPrimaryErrorMsg = primaryError ? primaryError.message : "Unknown primary API error";
     throw new Error (`Critical: Price fetch logic ended unexpectedly. Last Primary (Binance) Error: ${finalPrimaryErrorMsg}`);
+}
+
+// Ltc price
+
+async function fetchLtcUsdPriceFromBinanceAPI() {
+    const apiUrl = 'https://api.binance.com/api/v3/ticker/price?symbol=LTCUSDT';
+    const logPrefix = '[PriceFeed LTC Binance]';
+
+    try {
+        const response = await axios.get(apiUrl, { timeout: 8000 });
+
+        if (response.data && typeof response.data.price === 'string') {
+            const price = parseFloat(response.data.price);
+            if (isNaN(price) || price <= 0) {
+                throw new Error('Invalid or non-positive price data from Binance API for LTC.');
+            }
+            return price;
+        } else {
+            console.error(`${logPrefix} ⚠️ LTCUSDT price not found or invalid structure in Binance API response.`);
+            throw new Error('LTCUSDT price not found or invalid structure in Binance API response.');
+        }
+    } catch (error) {
+        const errMsg = error.isAxiosError ? error.message : String(error);
+        let detailedError = errMsg;
+        if (error.response) {
+            if (error.response.status === 429 || error.response.status === 418) {
+                detailedError = `Request failed (status ${error.response.status}): Rate Limit Exceeded or IP Ban with Binance.`;
+            }
+        }
+        console.error(`${logPrefix} ❌ Error fetching LTC/USDT price from Binance: ${detailedError}`);
+        throw new Error(`Failed to fetch LTC/USDT price from Binance: ${detailedError}`);
+    }
+}
+
+async function fetchLtcUsdPriceFromCoinGeckoAPI() {
+    const LTC_PRICE_API_URL = process.env.LTC_PRICE_API_URL;
+    const logPrefix = '[PriceFeed LTC CoinGecko]';
+
+    try {
+        const response = await axios.get(LTC_PRICE_API_URL, { timeout: 8000 });
+
+        if (response.data && response.data.litecoin && typeof response.data.litecoin.usd === 'number') {
+            const price = parseFloat(response.data.litecoin.usd);
+            if (isNaN(price) || price <= 0) {
+                throw new Error('Invalid or non-positive price data from CoinGecko API for LTC.');
+            }
+            return price;
+        } else {
+            console.error(`${logPrefix} ⚠️ LTC price not found or invalid structure in CoinGecko API response.`);
+            throw new Error('LTC price not found or invalid structure in CoinGecko API response.');
+        }
+    } catch (error) {
+        const errMsg = error.isAxiosError ? error.message : String(error);
+        console.error(`${logPrefix} ❌ Error fetching LTC/USD price from CoinGecko: ${errMsg}`);
+        // Re-throw the error to be handled by the manager function
+        throw new Error(`Failed to fetch LTC/USD price from CoinGecko: ${errMsg}`);
+    }
+}
+
+async function getLtcUsdPrice() {
+    const logPrefix = '[GetLtcUsdPrice V3_Failover]';
+    const cachedEntry = ltcPriceCache.get('ltc_usd_price');
+
+    // 1. Check the cache first (this enforces the 1-hour rule)
+    if (cachedEntry && (Date.now() - cachedEntry.timestamp < LTC_USD_PRICE_CACHE_TTL_MS)) {
+        return cachedEntry.price;
+    }
+
+    let price;
+    let primaryError = null;
+
+    // 2. Attempt to fetch from the primary API (Binance)
+    try {
+        console.log(`${logPrefix} Cache stale. Attempting fetch from Primary (Binance)...`);
+        price = await fetchLtcUsdPriceFromBinanceAPI();
+        ltcPriceCache.set('ltc_usd_price', { price, timestamp: Date.now() });
+        console.log(`${logPrefix} Successfully fetched and cached LTC price from Binance: $${price.toFixed(2)}`);
+        return price;
+    } catch (error) {
+        console.warn(`${logPrefix} ⚠️ Primary API (Binance) for LTC failed: ${error.message}`);
+        primaryError = error;
+    }
+
+    // 3. If primary failed, attempt to fetch from the Backup API (CoinGecko)
+    if (price === undefined) {
+        console.log(`${logPrefix} Primary failed. Attempting fetch from Backup (CoinGecko)...`);
+        try {
+            price = await fetchLtcUsdPriceFromCoinGeckoAPI();
+            ltcPriceCache.set('ltc_usd_price', { price, timestamp: Date.now() });
+            console.log(`${logPrefix} Successfully fetched and cached LTC price from CoinGecko (backup): $${price.toFixed(2)}`);
+            return price;
+        } catch (backupError) {
+            console.warn(`${logPrefix} ⚠️ Backup API (CoinGecko) for LTC also failed: ${backupError.message}`);
+            
+            // 4. If both APIs fail, try to use a stale cache entry as a last resort
+            if (cachedEntry) {
+                console.warn(`${logPrefix} Using stale cached LTC/USD price: $${cachedEntry.price.toFixed(2)}`);
+                return cachedEntry.price;
+            }
+            
+            // 5. If there's no cache and both APIs fail, this is a critical failure
+            const finalErrorMsg = `Primary (Binance) Error: ${primaryError.message}. Backup (CoinGecko) Error: ${backupError.message}`;
+            if(typeof notifyAdmin === 'function') {
+                await notifyAdmin(`🚨 CRITICAL LTC PRICE FEED FAILURE 🚨\n\nUnable to fetch LTC/USD price from ALL sources and no cache is available. LTC deposits will fail to be credited.`);
+            }
+            throw new Error(`Critical: Could not retrieve LTC/USD price. ${finalErrorMsg}`);
+        }
+    }
 }
 
 function convertLamportsToUSDString(lamports, solUsdPrice, displayDecimals = 2) {
