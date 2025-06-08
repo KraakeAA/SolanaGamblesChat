@@ -2788,10 +2788,8 @@ const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
 async function processBackgroundJobs() {
     if (isShuttingDown) return;
     if (isJobProcessorRunning) {
-        // console.log("[JobProcessor_V2_Robust] Processor already running. Skipping this cycle.");
-        return;
-    }
-
+        return;
+    }
     isJobProcessorRunning = true;
     const LOG_PREFIX = '[JobProcessor_V2_Robust]';
 
@@ -2825,13 +2823,15 @@ async function processBackgroundJobs() {
 
         let jobClient = null;
         let job = null;
+        let notificationPayload = null; // To hold data for notification after commit
 
         try {
             jobClient = await pool.connect();
-            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1', [jobId], jobClient);
+            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1 FOR UPDATE', [jobId], jobClient);
+            
             if (jobDataRes.rows.length === 0) {
-                console.warn(`${LOG_PREFIX} Job ${jobId} was picked but not found. It may have been processed by another instance. Skipping.`);
-                continue;
+                console.warn(`${LOG_PREFIX} Job ${jobId} was locked but gone before processing. Another instance may have handled it. Skipping.`);
+                continue;
             }
             job = jobDataRes.rows[0];
 
@@ -2858,71 +2858,72 @@ async function processBackgroundJobs() {
                     console.warn(`${LOG_PREFIX} Job ${jobId} of type ${transactionType} does not have a deterministic unique ID. Idempotency not guaranteed.`);
                 }
 
-                try {
-                    await jobClient.query('INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)', [uniqueActionId, jobId]);
-                } catch (e) {
-                    if (e.code === '23505') {
-                        console.warn(`${LOG_PREFIX} Action ${uniqueActionId} for job ${jobId} has already been processed. Skipping duplicate execution and deleting job.`);
-                        await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-                        await jobClient.query('COMMIT');
-                        continue;
-                    }
-                    throw e;
-                }
-                
-                        console.log(`[JobProcessor_DEBUG] Preparing to credit user. JobID: ${jobId}, UserID: ${targetUserId}, Amount: ${amountLamports}, Type: ${transactionType}`);
-                const creditResult = await updateUserBalanceAndLedger(jobClient, targetUserId, BigInt(amountLamports), transactionType, { background_job_id: jobId }, notes || 'Bonus credit from background job.');
+                const idempotencyCheckRes = await jobClient.query('SELECT 1 FROM processed_job_actions WHERE action_id = $1', [uniqueActionId]);
 
-                if (!creditResult.success) {
-                            console.error(`[JobProcessor_DEBUG] updateUserBalanceAndLedger returned failure for JobID: ${jobId}. Error: ${creditResult.error}`);
-                    throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
-                }
-                        console.log(`[JobProcessor_DEBUG] Successfully credited user and updated stats for JobID: ${jobId}.`);
-                
-                        const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
-                const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
-                        let notificationMessageHTML = '';
+                if (idempotencyCheckRes.rowCount > 0) {
+                    console.warn(`${LOG_PREFIX} Job ${jobId} is a duplicate (action ID: ${uniqueActionId}). Skipping and deleting.`);
+                } else {
+                    // Not a duplicate, process the credit
+                    const creditResult = await updateUserBalanceAndLedger(jobClient, targetUserId, BigInt(amountLamports), transactionType, { background_job_id: jobId }, notes || 'Bonus credit from background job.');
 
-                        if (transactionType === 'referral_commission_credit' && notes) {
-                            const referredUserIdMatch = notes.match(/from user (\d+)/);
-                            let referredUserDisplay = "your referred friend";
-                            if (referredUserIdMatch && referredUserIdMatch[1]) {
-                                const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
-                                if (referredUser) {
-                                    referredUserDisplay = escapeHTML(getPlayerDisplayReference(referredUser));
-                                }
-                            }
-                            notificationMessageHTML = `🎉 <b>Initial Bet Bonus!</b> 🎉\n\n` +
-                                                `Your referred friend, <i>${referredUserDisplay}</i>, just made their first qualifying bet! As a reward, we've added a bonus to your balance.\n\n` +
-                                                `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
-                                                `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
-                        } else if (transactionType === 'referral_wager_rebate' && notes) {
-                            const referredUserIdMatch = notes.match(/from user (\d+)/);
-                            const rebateMatch = notes.match(/(\d+) x \$(\d+(\.\d+)?)/);
-                            let referredUserDisplay = "Your referred friend";
-                            if (referredUserIdMatch && referredUserIdMatch[1]) {
-                                const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
-                                if (referredUser) {
-                                    referredUserDisplay = escapeHTML(getPlayerDisplayReference(referredUser));
-                                }
-                            }
-                            const rebateDisplay = rebateMatch ? `${rebateMatch[1]} x $${rebateMatch[2]}` : "a new";
-                            notificationMessageHTML = `🏆 <b>Referral Wager Rebate!</b> 🏆\n\n` +
-                                                `Congratulations! <i>${referredUserDisplay}</i> has completed <b>${escapeHTML(rebateDisplay)}</b> wager block(s)! For their dedication, you've been awarded a bonus.\n\n` +
-                                                `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
-                                                `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
-                        } else {
-                            notificationMessageHTML = `🎉 <b>Bonus Received!</b> 🎉\n\n` +
-                                                `A bonus has been credited to your casino balance.\n\n` +
-                                                `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
-                                                `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
-                        }
-                await safeSendMessage(targetUserId, notificationMessageHTML, { parse_mode: 'HTML' });
+                    if (!creditResult.success) {
+                        throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
+                    }
+
+                    // If credit is successful, record the action as processed
+                    await jobClient.query('INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)', [uniqueActionId, jobId]);
+                    
+                    // Prepare notification to be sent AFTER commit
+                    notificationPayload = { targetUserId, amountLamports, transactionType, notes };
+                }
             }
             
             await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
             await jobClient.query('COMMIT');
-            console.log(`${LOG_PREFIX} ✅ Successfully processed and deleted job ${jobId}.`);
+            console.log(`${LOG_PREFIX} ✅ Successfully finalized transaction for job ${jobId}.`);
+
+            // --- Send Notification After Successful Commit ---
+            if (notificationPayload) {
+                const { targetUserId, amountLamports, transactionType, notes } = notificationPayload;
+                const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
+                const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
+                let notificationMessageHTML = '';
+                if (transactionType === 'referral_commission_credit' && notes) {
+                    const referredUserIdMatch = notes.match(/from user (\d+)/);
+                    let referredUserDisplay = "your referred friend";
+                    if (referredUserIdMatch && referredUserIdMatch[1]) {
+                        const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
+                        if (referredUser) {
+                            referredUserDisplay = escapeHTML(getPlayerDisplayReference(referredUser));
+                        }
+                    }
+                    notificationMessageHTML = `🎉 <b>Initial Bet Bonus!</b> 🎉\n\n` +
+                                        `Your referred friend, <i>${referredUserDisplay}</i>, just made their first qualifying bet! As a reward, we've added a bonus to your balance.\n\n` +
+                                        `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
+                                        `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
+                } else if (transactionType === 'referral_wager_rebate' && notes) {
+                    const referredUserIdMatch = notes.match(/from user (\d+)/);
+                    const rebateMatch = notes.match(/(\d+) x \$(\d+(\.\d+)?)/);
+                    let referredUserDisplay = "Your referred friend";
+                    if (referredUserIdMatch && referredUserIdMatch[1]) {
+                        const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
+                        if (referredUser) {
+                            referredUserDisplay = escapeHTML(getPlayerDisplayReference(referredUser));
+                        }
+                    }
+                    const rebateDisplay = rebateMatch ? `${rebateMatch[1]} x $${rebateMatch[2]}` : "a new";
+                    notificationMessageHTML = `🏆 <b>Referral Wager Rebate!</b> 🏆\n\n` +
+                                        `Congratulations! <i>${referredUserDisplay}</i> has completed <b>${escapeHTML(rebateDisplay)}</b> wager block(s)! For their dedication, you've been awarded a bonus.\n\n` +
+                                        `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
+                                        `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
+                } else {
+                    notificationMessageHTML = `🎉 <b>Bonus Received!</b> 🎉\n\n` +
+                                        `A bonus has been credited to your casino balance.\n\n` +
+                                        `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
+                                        `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
+                }
+                await safeSendMessage(targetUserId, notificationMessageHTML, { parse_mode: 'HTML' });
+            }
 
         } catch (err) {
             if (jobClient) await jobClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX} Rollback failed for job ${jobId}`, rbErr));
