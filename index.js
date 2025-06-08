@@ -325,7 +325,7 @@ const REFERRAL_INITIAL_BET_TIERS_CONFIG = [
 ];
 
 const REFERRAL_WAGER_REBATE_INTERVAL_USD = 50.00;
-const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.05; // 5%
+const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.01; // 1%
 // --- End of NEW Referral System Configurations ---
 // --- NEW Level Up Bonus System Configurations ---
 const LEVEL_CONFIG = [
