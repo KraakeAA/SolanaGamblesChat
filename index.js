@@ -2773,59 +2773,6 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
     }
 }
 
-// REVISED AND CORRECTED - handleClaimMilestoneBonus
-async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, dbClient) {
-    const LOG_PREFIX_HCMB = `[ClaimMilestoneBonus_V2_InternalCredit UID:${userIdClicking} CommID:${commissionReferralId}]`;
-
-    try {
-        // 1. Fetch and lock the specific milestone bonus record to prevent race conditions.
-        const commissionRes = await dbClient.query(
-            `SELECT * FROM referrals WHERE referral_id = $1 AND referrer_telegram_id = $2 AND status = 'milestone_bonus_claimable' FOR UPDATE`,
-            [commissionReferralId, userIdClicking]
-        );
-
-        if (commissionRes.rowCount === 0) {
-            return { success: false, error: "This milestone bonus is not available, already claimed, or does not belong to you." };
-        }
-        const commissionData = commissionRes.rows[0];
-        const commissionAmountLamports = BigInt(commissionData.commission_amount_lamports);
-        
-        // --- THIS IS THE KEY CHANGE ---
-        // Instead of queueing a job, we credit the balance and finalize the record.
-
-        // 2. Credit the referrer's internal balance
-        const creditResult = await updateUserBalanceAndLedger(
-            dbClient,
-            userIdClicking,
-            commissionAmountLamports,
-            'referral_commission_credit',
-            { referral_id: commissionReferralId },
-            `Milestone Bonus: ${commissionData.commission_type}`
-        );
-
-        if (!creditResult.success) {
-            throw new Error(creditResult.error || "Failed to credit milestone bonus to user balance.");
-        }
-
-        // 3. Update its status to 'paid_out'.
-        await dbClient.query(
-            `UPDATE referrals SET status = 'paid_out', updated_at = NOW() WHERE referral_id = $1`,
-            [commissionReferralId]
-        );
-
-        console.log(`${LOG_PREFIX_HCMB} Milestone bonus ${commissionReferralId} credited to internal balance. Amount: ${commissionAmountLamports}`);
-
-        const bonusAmountUSDDisplay = await formatBalanceForDisplay(commissionAmountLamports, 'USD');
-        return { success: true, messageForUser: `Milestone bonus of approx. ${escapeHTML(bonusAmountUSDDisplay)} claimed! It has been added to your casino balance.` };
-
-    } catch (error) {
-        console.error(`${LOG_PREFIX_HCMB} Error claiming milestone bonus: ${error.message}`);
-        return { success: false, error: error.message || "Could not claim bonus at this time." };
-    }
-}
-
-// --- End of NEW Referral System Core Logic Functions ---
-
 // =================================================================================
 // --- NEW: ROBUST BACKGROUND JOB PROCESSOR (IMPLEMENTING IDEMPOTENCY & DEAD-LETTER QUEUE) ---
 // This system processes tasks like referral payouts asynchronously to prevent deadlocks.
