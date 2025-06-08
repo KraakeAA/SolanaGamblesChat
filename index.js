@@ -2788,7 +2788,7 @@ const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
 async function processBackgroundJobs() {
     if (isShuttingDown) return;
     if (isJobProcessorRunning) {
-        console.log("[JobProcessor_V2_Robust] Processor already running. Skipping this cycle.");
+        // console.log("[JobProcessor_V2_Robust] Processor already running. Skipping this cycle.");
         return;
     }
 
@@ -2933,7 +2933,7 @@ async function processBackgroundJobs() {
                 const moveClient = await pool.connect();
                 try {
                     await moveClient.query('BEGIN');
-                    const failedJobsInsertQuery = `
+                    const failedJobsInsertQuery = `
                         INSERT INTO failed_jobs (
                             job_id, job_type, payload, status, attempts, 
                             last_attempt_at, final_error_message, created_at
