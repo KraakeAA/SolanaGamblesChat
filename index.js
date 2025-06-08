@@ -12876,96 +12876,13 @@ function startInteractiveGamePolling() {
 // --- End of 5e Background Task Initializers ---
 // --- Start of Part 5f, Section 1 (Pinpoint Bowling Game Logic) ---
 
-// REPLACEMENT for handleStartPinpointBowlingCommand
-
+/**
+ * Starts the Pinpoint Bowling game by creating a session for the helper bot.
+ */
 async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_BOWL_START = `[Bowling_Start_V3_HandoffFix UID:${userId} CH:${chatId}]`;
-
-    // --- All initial checks (active game, balance, etc.) remain the same ---
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
-        const blockingGameType = getCleanGameName(activeUserGameCheck.details.type);
-        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. ✨`, { parse_mode: 'HTML' });
-        return;
-    }
-
-    let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-
-    if (BigInt(userObj.balance) < betAmountLamports) {
-        await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> game of Pinpoint Bowling.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
-        return;
-    }
-
-    const activeGameKey = GAME_IDS.BOWLING; // Using the canonical GAME_ID
-    const gameSession = await getGroupSession(chatId, msg.chat.title);
-    const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
-
-    if (currentActiveGames.length >= limitActive) {
-        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit of ${limitActive} concurrent Bowling games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
-        return;
-    }
-
-    const gameId = generateGameId("bwl_main");
-    let client = null;
-
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-
-        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_bowling', { game_id_custom_field: gameId });
-        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
-        
-        const initialGameState = {};
-        
-        // *** THIS IS THE FIX: We now store the canonical GAME_ID as the game_type ***
-        await client.query(
-            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
-            [gameId, GAME_IDS.BOWLING, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
-        );
-        
-        await client.query('COMMIT');
-
-    } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_BOWL_START} Error placing bet or creating session: ${e.message}`);
-        await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
-        return;
-    } finally {
-        if (client) client.release();
-    }
-
-    activeGames.set(gameId, { type: 'bowling_placeholder', status: 'delegated' });
-    await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
-
-    await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your <b>Pinpoint Bowling</b> game has begun!\n\nOur Game Bot will now present the board for you to make your choice...`, { parse_mode: 'HTML' });
-}
-// --- End of Part 5f, Section 1 ----
-// --- Start of Part 5f, Section 2 (Darts Fortune Game Logic) ---
-
-const DARTS_FORTUNE_PAYOUTS = {
-    6: 3.5,  // Bullseye
-    5: 1.5,  // Inner Ring
-    4: 0.5,  // On the board (partial loss)
-    3: 0.2,  // Outer edge (partial loss)
-    2: 0.1,  // Barely on (partial loss)
-    1: 0.0,  // Complete miss (total loss)
-};
-
-// REPLACEMENT for handleStartBullseyeBetCommand
-async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
-    const userId = String(msg.from.id);
-    const chatId = String(msg.chat.id);
-    const LOG_PREFIX_DARTS_START = `[DartsFortune_Start_V1 UID:${userId} CH:${chatId}]`;
-    let allNotificationsToSend = [];
+    const LOG_PREFIX_BOWL_START = `[PinpointBowling_Start_V1 UID:${userId} CH:${chatId}]`;
 
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
     if (activeUserGameCheck.limitReached) {
@@ -12980,114 +12897,56 @@ async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
     if (BigInt(userObj.balance) < betAmountLamports) {
-        await safeSendMessage(chatId, `🎯 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> game of Darts Fortune.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
+        await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> game.`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] } });
         return;
     }
-    
-    const activeGameKey = GAME_IDS.DARTS;
+
+    const activeGameKey = GAME_IDS.BOWLING;
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
-
-    if (currentActiveGames.length >= limitActive) {
-        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit of ${limitActive} concurrent Darts games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+    if (currentActiveGames.length >= (GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1)) {
+        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit for Bowling games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
         return;
     }
 
-    const gameId = generateGameId("darts");
-    activeGames.set(gameId, { type: 'darts_placeholder' });
-    await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
-
-    const sentInitialMsg = await safeSendMessage(chatId, `🎯 <b>Darts Fortune!</b>\n\n${playerRefHTML} has wagered <b>${betDisplayUSD_HTML}</b>.\nThrowing the dart...`, { parse_mode: 'HTML' });
-    
-    let diceMessage;
-    let rollValue;
-    try {
-        diceMessage = await bot.sendDice(chatId, { emoji: '🎯' });
-        rollValue = diceMessage.dice.value;
-        await sleep(4000);
-    } catch (e) {
-        console.error(`${LOG_PREFIX_DARTS_START} Failed to send dice animation. Aborting game. Error: ${e.message}`);
-        await safeSendMessage(chatId, `⚙️ There was an error with the dice animation. Please try again.`, { parse_mode: 'HTML' });
-        activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
-        return;
-    }
-
+    const gameId = generateGameId("bwl_main");
     let client = null;
+
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-
-        // The bet deduction is now part of the final transaction
-        const payoutMultiplier = DARTS_FORTUNE_PAYOUTS[rollValue];
-        const payoutAmount = (betAmountLamports * BigInt(Math.floor(payoutMultiplier * 100))) / 100n;
-        const netChange = payoutAmount - betAmountLamports; // This will be positive for a win, negative for a loss
-
-        let resultText = "";
-        let ledgerCode = "";
-        let gameLogText = `Rolled ${rollValue}, Multiplier x${payoutMultiplier}`;
+        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_bowling', { game_id_custom_field: gameId });
+        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
         
-        if (payoutMultiplier > 1) {
-            resultText = `🎯 **Bullseye!**`;
-            if (rollValue === 5) resultText = `👍 **Great Shot!**`;
-            ledgerCode = 'win_darts';
-        } else if (payoutMultiplier > 0) {
-            resultText = `😅 **On the board...**`;
-            ledgerCode = 'loss_darts_partial';
-        } else {
-            resultText = `💔 **A complete miss!**`;
-            ledgerCode = 'loss_darts_full';
-        }
-
-        const gameLogId = await logGameResultToGamesTable(client, 'darts_fortune', chatId, userId, [userId], betAmountLamports, gameLogText, 0n, 0n); // No separate house fee
-        const finalUpdateResult = await updateUserBalanceAndLedger(client, userId, netChange, ledgerCode, { game_log_id: gameLogId });
-        if (!finalUpdateResult.success) throw new Error("DB update failed on finalization.");
-        
-        const solPrice = await getSolUsdPrice();
-        await processQualifyingBetAndInitialBonus(client, userId, betAmountLamports, gameId);
-        await checkAndUpdateUserLevel(client, userId, finalUpdateResult.newTotalWageredLamports, solPrice, chatId);
-        await processWagerMilestoneBonus(client, userId, finalUpdateResult.newTotalWageredLamports, solPrice);
-        
+        await client.query(
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
+            [gameId, GAME_IDS.BOWLING, userId, chatId, betAmountLamports.toString()]
+        );
         await client.query('COMMIT');
-        
-        const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
-        resultText += `\n\nYour <b>${betDisplayUSD_HTML}</b> bet returns <b>${escapeHTML(payoutDisplay)}</b>.`;
-
-        await bot.deleteMessage(chatId, sentInitialMsg.message_id).catch(() => {});
-        await bot.deleteMessage(chatId, diceMessage.message_id).catch(() => {});
-
-        await safeSendMessage(chatId, `<b>Result for ${playerRefHTML}:</b>\n${resultText}`, {
-            parse_mode: 'HTML',
-            reply_markup: createPostGameKeyboard('darts', betAmountLamports)
-        });
-
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_DARTS_START} Error during game: ${e.message}`);
-        await safeSendMessage(chatId, `⚙️ An error occurred during the Darts game. The transaction was cancelled. Error: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+        console.error(`${LOG_PREFIX_BOWL_START} Error starting game: ${e.message}`);
+        await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+        return;
     } finally {
         if (client) client.release();
-        activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
     }
+
+    activeGames.set(gameId, { type: 'bowling_placeholder', status: 'delegated' });
+    await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
+    await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your <b>Pinpoint Bowling</b> game for <b>${betDisplayUSD_HTML}</b> is starting!\n\nOur Game Bot will now present the board for you to make your choice...`, { parse_mode: 'HTML' });
 }
-// --- End of 5f, Section 2 ---
-// --- Start of Part 5f, Section 3 (3-Point Shootout Game Logic) ---
+// --- End of Part 5f, Section 1 ----
+// --- Start of Part 5f, Section 2 (Darts Fortune Game Logic) ---
 
-const THREE_POINT_PAYOUTS = [1.5, 2.2, 3.5, 5, 10, 20, 50]; // Multipliers for 1, 2, 3... successful shots
-
-// REPLACEMENT for handleStartThreePointShootoutCommand
-
-async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
+/**
+ * Starts the Darts Fortune game by creating a session for the helper bot.
+ */
+async function handleStartDartsFortuneCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_3PT_START = `[3PT_Start_V3_HandoffFix UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_DARTS_START = `[DartsFortune_Start_V1 UID:${userId} CH:${chatId}]`;
 
-    // --- All initial checks (active game, balance, etc.) remain the same ---
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
     if (activeUserGameCheck.limitReached) {
         const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
@@ -13101,20 +12960,77 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
     if (BigInt(userObj.balance) < betAmountLamports) {
-        await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> 3-Point Shootout game.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
+        await safeSendMessage(chatId, `🎯 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> game.`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] } });
         return;
     }
 
-    const activeGameKey = GAME_IDS.BASKETBALL; // Using the canonical GAME_ID
+    const activeGameKey = GAME_IDS.DARTS;
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
+    if (currentActiveGames.length >= (GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1)) {
+        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit for Darts games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    if (currentActiveGames.length >= limitActive) {
-        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit of ${limitActive} concurrent Shootout games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+    const gameId = generateGameId("drt_main");
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_darts', { game_id_custom_field: gameId });
+        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
+        
+        await client.query(
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
+            [gameId, GAME_IDS.DARTS, userId, chatId, betAmountLamports.toString()]
+        );
+        await client.query('COMMIT');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${LOG_PREFIX_DARTS_START} Error starting game: ${e.message}`);
+        await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+        return;
+    } finally {
+        if (client) client.release();
+    }
+
+    activeGames.set(gameId, { type: 'darts_placeholder', status: 'delegated' });
+    await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
+    await safeSendMessage(chatId, `🎯 ${playerRefHTML}, your <b>Darts Fortune</b> game for <b>${betDisplayUSD_HTML}</b> is starting!\n\nOur Game Bot will now throw the dart...`, { parse_mode: 'HTML' });
+}
+// --- End of 5f, Section 2 ---
+// --- Start of Part 5f, Section 3 (3-Point Shootout Game Logic) ---
+
+/**
+ * Starts the 3-Point Shootout game by creating a session for the helper bot.
+ */
+async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
+    const userId = String(msg.from.id);
+    const chatId = String(msg.chat.id);
+    const LOG_PREFIX_3PT_START = `[3PT_Start_V3_HandoffFix UID:${userId} CH:${chatId}]`;
+
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
+    if (activeUserGameCheck.limitReached) {
+        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
+        const blockingGameType = getCleanGameName(activeUserGameCheck.details.type);
+        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. ✨`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+
+    if (BigInt(userObj.balance) < betAmountLamports) {
+        await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> 3-Point Shootout game.`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] } });
+        return;
+    }
+    
+    const activeGameKey = GAME_IDS.BASKETBALL;
+    const gameSession = await getGroupSession(chatId, msg.chat.title);
+    const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
+    if (currentActiveGames.length >= (GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1)) {
+        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit for Shootout games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
         return;
     }
 
@@ -13125,7 +13041,6 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-
         const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_3pt', { game_id_custom_field: gameId });
         if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
         totalWageredForLevelCheck = betResult.newTotalWageredLamports;
@@ -13134,28 +13049,24 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
             successfulShots: 0,
             totalWageredForLevelCheck: totalWageredForLevelCheck.toString()
         };
-
-        // *** THIS IS THE FIX: We now store the canonical GAME_ID as the game_type ***
+        
         await client.query(
             `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
             [gameId, GAME_IDS.BASKETBALL, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
         );
-        
         await client.query('COMMIT');
-
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_3PT_START} Error starting game and creating session: ${e.message}`);
+        console.error(`${LOG_PREFIX_3PT_START} Error starting game: ${e.message}`);
         await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
         return;
     } finally {
         if (client) client.release();
     }
-    
+
     activeGames.set(gameId, { type: '3pt_placeholder', status: 'delegated' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
-
-    await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your <b>3-Point Shootout</b> has begun for <b>${betDisplayUSD_HTML}</b>!\n\nOur Game Bot is setting up the court and will take over the action...`, { parse_mode: 'HTML' });
+    await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your <b>3-Point Shootout</b> for <b>${betDisplayUSD_HTML}</b> is starting!\n\nOur Game Bot will now take over the action...`, { parse_mode: 'HTML' });
 }
 // --- End of 5f, Section 3 ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
@@ -15026,11 +14937,11 @@ bot.on('message', async (msg) => {
             break;
 
         case 'darts':
-            if (typeof handleStartBullseyeBetCommand === 'function') {
+            if (typeof handleStartDartsFortuneCommand === 'function') {
                 const bet = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                if (bet) await handleStartBullseyeBetCommand(msg, bet);
+                if (bet) await handleStartDartsFortuneCommand(msg, bet);
             } else {
-                console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartBullseyeBetCommand`);
+                console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartDartsFortuneCommand`);
             }
             break;
 
