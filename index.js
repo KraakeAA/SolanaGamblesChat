@@ -16789,14 +16789,27 @@ async function unlinkUserWalletDB(userId, dbClient) {
     }
 }
 
+// REPLACEMENT for logGameResultToGamesTable in Part P2
+
 async function logGameResultToGamesTable(dbClient, gameType, chatId, initiatorId, participantsIds, betAmountLamports, outcomeText, jackpotContributionLamports = null, houseFeeLamports = null) {
     const LOG_PREFIX_LOG_GAME = `[LogGameToGamesTable Type:${gameType}]`;
     try {
         const query = `
-            INSERT INTO games (game_type, chat_id, initiator_telegram_id, participants_ids, bet_amount_lamports, outcome, jackpot_contribution_lamports, house_fee_lamports, game_timestamp)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-            RETURNING game_log_id;
-        `;
+            INSERT INTO games (
+                game_type, 
+                chat_id, 
+                initiator_telegram_id, 
+                participants_ids, 
+                bet_amount_lamports, 
+                outcome, 
+                jackpot_contribution_lamports, 
+                house_fee_lamports, 
+                game_timestamp
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, NOW()
+            )
+            RETURNING game_log_id;
+        `;
         // Ensure participantsIds is an array of strings or null for the DB
         const participantsDbArray = participantsIds ? participantsIds.map(id => String(id)) : null;
 
