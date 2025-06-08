@@ -14868,9 +14868,9 @@ bot.on('callback_query', async (callbackQuery) => {
                  const originalUserIdForBonus = params[0];
                 const levelIdToClaimStr = params[1];
                  if (typeof handleClaimLevelBonusCallback === 'function') {
-                     await handleClaimLevelBonusCallback(callbackQueryId, userObjectForCallback, originalUserIdForBonus, levelIdToClaimStr);
+                     await handleClaimLevelBonusCallback(callbackQuery, userObjectForCallback, originalUserIdForBonus, levelIdToClaimStr);
                  } else {
-                     await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Level bonus claim feature unavailable.", show_alert: true });
+                     await bot.answerCallbackQuery(callbackQuery.id, { text: "Error: Level bonus claim feature unavailable.", show_alert: true });
                  }
                  break;
             default:
