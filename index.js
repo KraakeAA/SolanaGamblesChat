@@ -2784,8 +2784,6 @@ const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
 
 // REPLACEMENT for processBackgroundJobs in Part 3
 
-// REPLACEMENT for processBackgroundJobs in Part 3
-
 async function processBackgroundJobs() {
     if (isShuttingDown) return;
     if (isJobProcessorRunning) return;
@@ -2839,7 +2837,6 @@ async function processBackgroundJobs() {
                     throw new Error(`Invalid payload for job ${jobId}: Missing required fields.`);
                 }
                 
-                // --- IDEMPOTENCY CHECK ---
                 let uniqueActionId;
                 if (transactionType === 'referral_commission_credit' && notes.includes('Initial Bet Bonus')) {
                     const parsedReferralId = notes.match(/Referral ID: (\d+)/)[1];
@@ -2855,21 +2852,19 @@ async function processBackgroundJobs() {
                 }
 
                 try {
-                    await jobClient.query(
-                        'INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)',
-                        [uniqueActionId, jobId]
-                    );
+                    await jobClient.query('INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)', [uniqueActionId, jobId]);
                 } catch (e) {
-                    if (e.code === '23505') { // Unique violation
+                    if (e.code === '23505') {
                         console.warn(`${LOG_PREFIX} Action ${uniqueActionId} for job ${jobId} has already been processed. Skipping duplicate execution and deleting job.`);
                         await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
                         await jobClient.query('COMMIT');
-                        continue; // Move to the next job
+                        continue;
                     }
-                    throw e; // Re-throw other errors
+                    throw e;
                 }
-                // --- END OF IDEMPOTENCY CHECK ---
-
+                
+                        // --- ADDED DIAGNOSTIC LOGGING ---
+                        console.log(`[JobProcessor_DEBUG] Preparing to credit user. JobID: ${jobId}, UserID: ${targetUserId}, Amount: ${amountLamports}, Type: ${transactionType}`);
                 const creditResult = await updateUserBalanceAndLedger(
                     jobClient,
                     targetUserId,
@@ -2880,8 +2875,11 @@ async function processBackgroundJobs() {
                 );
 
                 if (!creditResult.success) {
+                        console.error(`[JobProcessor_DEBUG] updateUserBalanceAndLedger returned failure for JobID: ${jobId}. Error: ${creditResult.error}`);
                     throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
                 }
+                        console.log(`[JobProcessor_DEBUG] Successfully credited user and updated stats for JobID: ${jobId}.`);
+                        // --- END OF DIAGNOSTIC LOGGING ---
                 
                         const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
                 const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
@@ -2930,16 +2928,14 @@ async function processBackgroundJobs() {
                 );
             }
             
-                // On success, delete the job instead of marking it 'completed'
             await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-            await jobClient.query('COMMIT');
+            await client.query('COMMIT');
             console.log(`${LOG_PREFIX} ✅ Successfully processed and deleted job ${jobId}.`);
 
         } catch (err) {
             if (jobClient) await jobClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX} Rollback failed for job ${jobId}`, rbErr));
             console.error(`${LOG_PREFIX} ❌ Error processing job ${jobId} on attempt ${job?.attempts || 'N/A'}:`, err);
 
-            // --- DEAD-LETTER QUEUE & RETRY LOGIC ---
             if (job && job.attempts >= MAX_JOB_ATTEMPTS) {
                 console.error(`${LOG_PREFIX} Job ${jobId} reached max retries. Moving to failed_jobs.`);
                 const moveClient = await pool.connect();
@@ -2963,8 +2959,7 @@ async function processBackgroundJobs() {
                     moveClient.release();
                 }
             } else if (job) {
-                // Not max retries yet, schedule for another attempt with exponential backoff
-                const delaySeconds = Math.pow(2, job.attempts) * 5; // e.g., 10s, 20s, 40s
+                const delaySeconds = Math.pow(2, job.attempts) * 5;
                 const processAfter = new Date(Date.now() + delaySeconds * 1000);
                 console.log(`${LOG_PREFIX} Scheduling job ${jobId} for retry after ${delaySeconds} seconds.`);
                 await queryDatabase(
