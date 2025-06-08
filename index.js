@@ -2837,6 +2837,8 @@ const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
 
 // REPLACEMENT for processBackgroundJobs in Part 3
 
+// REPLACEMENT for processBackgroundJobs in Part 3
+
 async function processBackgroundJobs() {
     if (isShuttingDown) return;
     if (isJobProcessorRunning) return;
@@ -2895,6 +2897,9 @@ async function processBackgroundJobs() {
                 if (transactionType === 'referral_commission_credit' && notes.includes('Initial Bet Bonus')) {
                     const parsedReferralId = notes.match(/Referral ID: (\d+)/)[1];
                     uniqueActionId = `credit-initial-bonus-${parsedReferralId}`;
+                } else if (transactionType === 'referral_wager_rebate' && referralId && notes) {
+                    const notesIdentifier = createHash('sha256').update(notes).digest('hex').substring(0, 16);
+                    uniqueActionId = `credit-rebate-${referralId}-${notesIdentifier}`;
                 } else if (transactionType === 'referral_milestone_bonus' && referralId && milestoneKey) {
                     uniqueActionId = `credit-milestone-${referralId}-${milestoneKey}`;
                 } else {
@@ -2933,7 +2938,7 @@ async function processBackgroundJobs() {
                 
                         const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
                 const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
-                        let notificationMessage = '';
+                        let notificationMessageHTML = '';
 
                         if (transactionType === 'referral_commission_credit' && notes) {
                             const referredUserIdMatch = notes.match(/from user (\d+)/);
@@ -2941,41 +2946,40 @@ async function processBackgroundJobs() {
                             if (referredUserIdMatch && referredUserIdMatch[1]) {
                                 const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
                                 if (referredUser) {
-                                    referredUserDisplay = getPlayerDisplayReference(referredUser); // This is already MDV2 safe
+                                    referredUserDisplay = escapeHTML(getPlayerDisplayReference(referredUser));
                                 }
                             }
-                            notificationMessage = `🎉 *Initial Bet Bonus\\!* 🎉\n\n` +
-                                                `Your referred friend, ${referredUserDisplay}, just made their first qualifying bet\\! As a reward, we've added a bonus to your balance\\.\n\n` +
-                                                `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
-                                                `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+                            notificationMessageHTML = `🎉 <b>Initial Bet Bonus!</b> 🎉\n\n` +
+                                                `Your referred friend, <i>${referredUserDisplay}</i>, just made their first qualifying bet! As a reward, we've added a bonus to your balance.\n\n` +
+                                                `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
+                                                `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
 
-                        } else if (transactionType === 'referral_milestone_bonus' && notes) {
-                            const referredUserIdMatch = notes.match(/from referred user (\d+)/);
-                            const milestoneMatch = notes.match(/\(\$(\d+(\.\d+)?)\)/); // Handle decimals in milestone
+                        } else if (transactionType === 'referral_wager_rebate' && notes) {
+                            const referredUserIdMatch = notes.match(/from user (\d+)/);
+                            const rebateMatch = notes.match(/(\d+) x \$(\d+(\.\d+)?)/);
                             let referredUserDisplay = "Your referred friend";
                             if (referredUserIdMatch && referredUserIdMatch[1]) {
                                 const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
                                 if (referredUser) {
-                                    referredUserDisplay = getPlayerDisplayReference(referredUser);
+                                    referredUserDisplay = escapeHTML(getPlayerDisplayReference(referredUser));
                                 }
                             }
-                            const milestoneDisplay = milestoneMatch ? `$${milestoneMatch[1]}` : "a new";
+                            const rebateDisplay = rebateMatch ? `${rebateMatch[1]} x $${rebateMatch[2]}` : "a new";
 
-                            notificationMessage = `🏆 *Referral Milestone Bonus\\!* 🏆\n\n` +
-                                                `Congratulations\\! ${referredUserDisplay} has reached the *${escapeMarkdownV2(milestoneDisplay)}* wager milestone\\! For their dedication, you've been awarded a bonus\\.\n\n` +
-                                                `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
-                                                `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+                            notificationMessageHTML = `🏆 <b>Referral Wager Rebate!</b> 🏆\n\n` +
+                                                `Congratulations! <i>${referredUserDisplay}</i> has completed <b>${escapeHTML(rebateDisplay)}</b> wager block(s)! For their dedication, you've been awarded a bonus.\n\n` +
+                                                `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
+                                                `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
                         } else {
-                            // Fallback for other credit types
-                            notificationMessage = `🎉 *Bonus Received\\!* 🎉\n\n` +
-                                                `A bonus has been credited to your casino balance\\.\n\n` +
-                                                `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
-                                                `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+                            notificationMessageHTML = `🎉 <b>Bonus Received!</b> 🎉\n\n` +
+                                                `A bonus has been credited to your casino balance.\n\n` +
+                                                `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
+                                                `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
                         }
 
                 await safeSendMessage(targetUserId,
-                    notificationMessage,
-                    { parse_mode: 'MarkdownV2' }
+                    notificationMessageHTML,
+                    { parse_mode: 'HTML' }
                 );
             }
             
