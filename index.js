@@ -5506,213 +5506,219 @@ async function getThreeDiceRollsViaHelper_DE_New(gameIdForLog, chatIdForLogConte
 }
 
 // --- START OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New function ---
+// REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New in Part 5b, Section 1
+
 async function handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betAmountLamports, targetUsernameRaw = null) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const logPrefix = `[DE_OfferOrDirect_V7_GranLimit UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const logPrefix = `[DE_OfferOrDirect_V7_GranLimit UID:${userId} CH:${chatId}]`;
 
-    // MODIFIED CALL to checkUserActiveGameLimit and NEW ERROR MESSAGE
-    const isDirectChallengeOfferAttempt = (targetUsernameRaw != null);
-    // Ensure the third parameter 'null' (for gameIdBeingActioned) is passed
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt, null);
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
-        const blockingGameType = activeUserGameCheck.details.type;
-        // Use getCleanGameName for consistent and user-friendly game type display
-        const cleanGameName = getCleanGameName(blockingGameType);
-        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
-        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
-        return;
-    }
-    // END OF MODIFICATION
+    const isDirectChallengeOfferAttempt = (targetUsernameRaw != null);
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, isDirectChallengeOfferAttempt, null);
+    if (activeUserGameCheck.limitReached) {
+        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
+        const blockingGameType = activeUserGameCheck.details.type;
+        const cleanGameName = getCleanGameName(blockingGameType);
+        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
+        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
+        return;
+    }
 
-    if (chatType === 'private') {
-        await safeSendMessage(chatId, `🎲 The Dice Escalator arena is in <b>group chats</b>! Use <code>/de &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
-        return;
-    }
+    if (chatType === 'private') {
+        await safeSendMessage(chatId, `🎲 The Dice Escalator arena is in <b>group chats</b>! Use <code>/de &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!initiatorUserObj) {
-        await safeSendMessage(chatId, "⚠️ Error fetching your player profile. Please try <code>/start</code> with me first.", { parse_mode: 'HTML' });
-        return;
-    }
-    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!initiatorUserObj) {
+        await safeSendMessage(chatId, "⚠️ Error fetching your player profile. Please try <code>/start</code> with me first.", { parse_mode: 'HTML' });
+        return;
+    }
+    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
-        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
-        await safeSendMessage(chatId, `💰 ${initiatorPlayerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> Dice Escalator game! You need approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💸 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
-        return;
-    }
+    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
+        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
+        await safeSendMessage(chatId, `💰 ${initiatorPlayerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> Dice Escalator game! You need approx. <b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: "💸 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
+        });
+        return;
+    }
 
-    let targetUserObjectForChallenge = null;
-    let isDirectChallenge = (targetUsernameRaw != null); // This was already correct
+    let targetUserObjectForChallenge = null;
+    let isDirectChallenge = (targetUsernameRaw != null);
 
-    if (isDirectChallenge) {
-        targetUserObjectForChallenge = await findRecipientUser(targetUsernameRaw);
-        if (!targetUserObjectForChallenge || !targetUserObjectForChallenge.telegram_id) {
-            await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found. To make a general Dice Escalator offer, use <code>/de ${escapeHTML(String(betAmountLamports/LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
-            return;
-        } else if (String(targetUserObjectForChallenge.telegram_id) === userId) {
-            await safeSendMessage(chatId, `😅 You can't directly challenge yourself, ${initiatorPlayerRefHTML}! To make a general offer, use <code>/de ${escapeHTML(String(betAmountLamports/LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
-            return;
-        }
-    }
+    if (isDirectChallenge) {
+        targetUserObjectForChallenge = await findRecipientUser(targetUsernameRaw);
+        if (!targetUserObjectForChallenge || !targetUserObjectForChallenge.telegram_id) {
+            await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found. To make a general Dice Escalator offer, use <code>/de ${escapeHTML(String(betAmountLamports/LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
+            return;
+        } else if (String(targetUserObjectForChallenge.telegram_id) === userId) {
+            await safeSendMessage(chatId, `😅 You can't directly challenge yourself, ${initiatorPlayerRefHTML}! To make a general offer, use <code>/de ${escapeHTML(String(betAmountLamports/LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
+            return;
+        }
+    }
 
-    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock;
-    let limit;
+    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
+    let offerActivityKeyForLock;
+    let limit;
 
-    if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER;
-        const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
-        if (currentDirectChallenges.length >= limit) {
-            await safeSendMessage(chatId, `⏳ Hold your dice, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent direct Dice Escalator challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
-            return;
-        }
-    } else { // Unified Offer Path
-        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER;
-        const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR] || 1;
-        if (currentUnifiedOffers.length >= limit) {
-            await safeSendMessage(chatId, `⏳ Slow down, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent Dice Escalator offer(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
-            return;
-        }
-    }
+    if (isDirectChallenge) {
+        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER;
+        const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
+        limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1;
+        if (currentDirectChallenges.length >= limit) {
+            await safeSendMessage(chatId, `⏳ Hold your dice, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent direct Dice Escalator challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+            return;
+        }
+    } else { // Unified Offer Path
+        offerActivityKeyForLock = GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER;
+        const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
+        limit = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER] || GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[GAME_IDS.DICE_ESCALATOR] || 1;
+        if (currentUnifiedOffers.length >= limit) {
+            await safeSendMessage(chatId, `⏳ Slow down, ${initiatorPlayerRefHTML}! The limit of ${limit} concurrent Dice Escalator offer(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+            return;
+        }
+    }
 
-    let offerId;
-    let offerData;
-    let clientBetPlacement = null;
-    let timeoutDuration;
+    let offerId;
+    let offerData;
+    let clientBetPlacement = null;
+    let timeoutDuration;
 
-    try {
-        clientBetPlacement = await pool.connect();
-        await clientBetPlacement.query('BEGIN');
+    try {
+        clientBetPlacement = await pool.connect();
+        await clientBetPlacement.query('BEGIN');
 
-        if (isDirectChallenge) {
-            offerId = generateGameId(`dde_${userId.slice(-3)}_${String(targetUserObjectForChallenge.telegram_id).slice(-3)}`);
-            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS;
+        if (isDirectChallenge) {
+            offerId = generateGameId(`dde_${userId.slice(-3)}_${String(targetUserObjectForChallenge.telegram_id).slice(-3)}`);
+            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS;
 
-            const betResultDirect = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_direct_challenge_offer', { custom_offer_id: offerId, opponent_id_custom_field: targetUserObjectForChallenge.telegram_id }, `Direct Dice Escalator Challenge Offer to ${targetUserObjectForChallenge.username || targetUserObjectForChallenge.telegram_id}`);
-            if (!betResultDirect.success) throw new Error(betResultDirect.error || "Failed to place your bet for the direct challenge.");
-            initiatorUserObj.balance = betResultDirect.newBalanceLamports;
+            const betResultDirect = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_direct_challenge_offer', { custom_offer_id: offerId, opponent_id_custom_field: targetUserObjectForChallenge.telegram_id }, `Direct Dice Escalator Challenge Offer to ${targetUserObjectForChallenge.username || targetUserObjectForChallenge.telegram_id}`);
+            if (!betResultDirect.success) throw new Error(betResultDirect.error || "Failed to place your bet for the direct challenge.");
+            initiatorUserObj.balance = betResultDirect.newBalanceLamports;
 
-            const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObjectForChallenge));
-            const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> duel for <b>${betDisplayUSD_HTML}</b>! You have ${timeoutDuration / 1000} seconds to respond.`;
-            const groupChallengeKeyboard = {
-                inline_keyboard: [
-                    [{ text: "✅ Accept Challenge", callback_data: `de_direct_accept:${offerId}` }],
-                    [{ text: "❌ Decline Challenge", callback_data: `de_direct_decline:${offerId}` }],
-                    [{ text: "🚫 Withdraw My Challenge", callback_data: `de_direct_cancel:${offerId}` }]
-                ]
-            };
-            const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
-            if (!sentGroupMessage || !sentGroupMessage.message_id) throw new Error("Could not send the direct challenge message.");
+            const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObjectForChallenge));
+            const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a <b>Dice Escalator</b> duel for <b>${betDisplayUSD_HTML}</b>! You have ${timeoutDuration / 1000} seconds to respond.`;
+            const groupChallengeKeyboard = {
+                inline_keyboard: [
+                    [{ text: "✅ Accept Challenge", callback_data: `de_direct_accept:${offerId}` }],
+                    [{ text: "❌ Decline Challenge", callback_data: `de_direct_decline:${offerId}` }],
+                    [{ text: "🚫 Withdraw My Challenge", callback_data: `de_direct_cancel:${offerId}` }]
+                ]
+            };
+            const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
+            if (!sentGroupMessage || !sentGroupMessage.message_id) throw new Error("Could not send the direct challenge message.");
 
-            offerData = {
-                type: GAME_IDS.DIRECT_PVP_CHALLENGE, offerId: offerId, gameId: offerId, initiatorId: userId,
-                initiatorUserObj: initiatorUserObj, initiatorMentionHTML: initiatorPlayerRefHTML,
-                targetUserId: String(targetUserObjectForChallenge.telegram_id), targetUserObj: targetUserObjectForChallenge, targetUserMentionHTML: targetPlayerRefHTML,
-                betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: String(sentGroupMessage.message_id),
-                chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
-                gameToStart: GAME_IDS.DICE_ESCALATOR_PVP,
-                _offerKeyUsedForGroupLock: GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER,
-                creationTime: Date.now(), timeoutId: null
-            };
-        } else { // Unified Offer
-            offerId = generateGameId("de_uo");
-            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
+            offerData = {
+                type: GAME_IDS.DIRECT_PVP_CHALLENGE, offerId: offerId, gameId: offerId, initiatorId: userId,
+                initiatorUserObj: initiatorUserObj, initiatorMentionHTML: initiatorPlayerRefHTML,
+                targetUserId: String(targetUserObjectForChallenge.telegram_id), targetUserObj: targetUserObjectForChallenge, targetUserMentionHTML: targetPlayerRefHTML,
+                betAmount: betAmountLamports, originalGroupId: chatId, offerMessageIdInGroup: String(sentGroupMessage.message_id),
+                chatTitle: msg.chat.title || `Group Chat ${chatId}`, status: 'pending_direct_challenge_response',
+                gameToStart: GAME_IDS.DICE_ESCALATOR_PVP,
+                _offerKeyUsedForGroupLock: GAME_IDS.DICE_ESCALATOR_DIRECT_CHALLENGE_OFFER,
+                creationTime: Date.now(), timeoutId: null
+            };
+        } else { // Unified Offer
+            offerId = generateGameId("de_uo");
+            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
 
-            const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_unified_offer', { custom_offer_id: offerId }, `Dice Escalator Unified Offer`);
-            if (!betResultUnified.success) throw new Error(betResultUnified.error || "Failed to place your bet for the unified offer.");
-            initiatorUserObj.balance = betResultUnified.newBalanceLamports;
+            const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_de_unified_offer', { custom_offer_id: offerId }, `Dice Escalator Unified Offer`);
+            if (!betResultUnified.success) throw new Error(betResultUnified.error || "Failed to place your bet for the unified offer.");
+            initiatorUserObj.balance = betResultUnified.newBalanceLamports;
 
-            const offerMessageTextHTML = `🎲 <b>Dice Escalator Challenge by ${initiatorPlayerRefHTML}!</b> 🎲\n\n` +
-                `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
-                `Do you want to challenge the Bot Dealer or another player? This offer expires in ${timeoutDuration / 1000} seconds. Bet refunded on timeout.`;
-            const offerKeyboard = {
-                inline_keyboard: [
-                    [{ text: `⚔️ Accept PvP Challenge!`, callback_data: `de_accept_pvp_challenge:${offerId}` }],
-                    [{ text: `🤖 Challenge Bot Dealer`, callback_data: `de_accept_bot_game:${offerId}` }],
-                    [{ text: "🚫 Cancel My Offer", callback_data: `de_cancel_unified_offer:${offerId}` }]
-                ]
-            };
-            const sentOfferMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: offerKeyboard });
-            if (!sentOfferMessage?.message_id) throw new Error("Could not send the unified offer message.");
-
-            offerData = {
-                type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId),
-                chatType: chatType, initiatorId: userId, initiatorMentionHTML: initiatorPlayerRefHTML,
-                initiatorUserObj: initiatorUserObj, betAmount: betAmountLamports, status: 'pending_unified_offer',
-                creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
-            };
-        }
-
-        await clientBetPlacement.query('COMMIT');
-        activeGames.set(offerId, offerData);
-        await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
-
-        offerData.timeoutId = setTimeout(async () => {
-            const timedOutOffer = activeGames.get(offerId);
-            if (timedOutOffer && (timedOutOffer.status === 'pending_unified_offer' || timedOutOffer.status === 'pending_direct_challenge_response')) {
-                console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for Dice Escalator has timed out.`);
-                activeGames.delete(offerId);
-                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
-                console.log(`${logPrefix} Cleared group lock for timed-out offer ${offerId} using key ${keyForTimeoutRemoval}.`);
-
-                let refundClientTimeout = null;
-                try {
-                    refundClientTimeout = await pool.connect();
-                    await refundClientTimeout.query('BEGIN');
-                    const refundReason = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ? 'direct_challenge_expired_unanswered' : 'unified_offer_expired_unanswered';
-                    const refundNotes = `Refund for expired ${timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ? 'direct Dice Escalator challenge' : 'unified Dice Escalator offer'} ${offerId}.`;
-                    await updateUserBalanceAndLedger(refundClientTimeout, timedOutOffer.initiatorId, timedOutOffer.betAmount, `refund_de_${refundReason}`, { custom_offer_id: offerId }, refundNotes);
-                    await refundClientTimeout.query('COMMIT');
-                } catch (e) {
-                    if (refundClientTimeout) await refundClientTimeout.query('ROLLBACK').catch(() => {});
-                    console.error(`${logPrefix} CRITICAL: Failed to refund initiator ${timedOutOffer.initiatorId} for timed out DE offer ${offerId}: ${e.message}`);
-                    if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL REFUND FAILURE for timed out DE offer ${offerId}, Initiator: ${timedOutOffer.initiatorId}. Error: ${e.message}`);
-                } finally {
-                    if (refundClientTimeout) refundClientTimeout.release();
-                }
-
-                const messageIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.gameSetupMessageId;
-                const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'));
-                const timeoutMsgHTML = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ?
-                    `⏳ The Dice Escalator challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.` :
-                    `⏳ The Dice Escalator offer by ${timedOutOffer.initiatorMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
-
-                if (messageIdToEdit && bot) {
-                    await bot.editMessageText(timeoutMsgHTML, {
-                        chat_id: String(chatId), message_id: Number(messageIdToEdit),
-                        parse_mode: 'HTML', reply_markup: {}
-                    }).catch(e => console.warn(`${logPrefix} Failed to edit expired DE offer message ${messageIdToEdit}: ${e.message}`));
-                }
+            const jackpotContribution = BigInt(Math.floor(Number(betAmountLamports) * HOUSE_FEE_PERCENT));
+            if (jackpotContribution > 0n) {
+                await clientBetPlacement.query(
+                    'UPDATE jackpots SET current_amount = current_amount + $1, updated_at = NOW() WHERE jackpot_id = $2',
+                    [jackpotContribution.toString(), MAIN_JACKPOT_ID]
+                );
+                console.log(`${logPrefix} Contributed ${jackpotContribution} to jackpot.`);
             }
-        }, timeoutDuration);
-        activeGames.set(offerId, offerData); // Save timeoutId
 
-    } catch (error) {
-        if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} Error creating DE offer or placing bet: ${error.message}`);
-        await safeSendMessage(chatId, `⚠️ Error creating your Dice Escalator offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
-        if (offerId && activeGames.has(offerId)) {
-            activeGames.delete(offerId);
-            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock;
-            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
-        }
-    } finally {
-        if (clientBetPlacement) clientBetPlacement.release();
-    }
+            const offerMessageTextHTML = `🎲 <b>Dice Escalator Challenge by ${initiatorPlayerRefHTML}!</b> 🎲\n\n` +
+                `Wager: <b>${betDisplayUSD_HTML}</b>\n\n` +
+                `Do you want to challenge the Bot Dealer or another player? This offer expires in ${timeoutDuration / 1000} seconds. Bet refunded on timeout.`;
+            const offerKeyboard = {
+                inline_keyboard: [
+                    [{ text: `⚔️ Accept PvP Challenge!`, callback_data: `de_accept_pvp_challenge:${offerId}` }],
+                    [{ text: `🤖 Challenge Bot Dealer`, callback_data: `de_accept_bot_game:${offerId}` }],
+                    [{ text: "🚫 Cancel My Offer", callback_data: `de_cancel_unified_offer:${offerId}` }]
+                ]
+            };
+            const sentOfferMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: offerKeyboard });
+            if (!sentOfferMessage?.message_id) throw new Error("Could not send the unified offer message.");
+
+            offerData = {
+                type: GAME_IDS.DICE_ESCALATOR_UNIFIED_OFFER, gameId: offerId, chatId: String(chatId),
+                chatType: chatType, initiatorId: userId, initiatorMentionHTML: initiatorPlayerRefHTML,
+                initiatorUserObj: initiatorUserObj, betAmount: betAmountLamports, status: 'pending_unified_offer',
+                creationTime: Date.now(), gameSetupMessageId: String(sentOfferMessage.message_id), timeoutId: null
+            };
+        }
+
+        await clientBetPlacement.query('COMMIT');
+        activeGames.set(offerId, offerData);
+        await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
+        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created. Bet placed. Lock updated.`);
+
+        offerData.timeoutId = setTimeout(async () => {
+            const timedOutOffer = activeGames.get(offerId);
+            if (timedOutOffer && (timedOutOffer.status === 'pending_unified_offer' || timedOutOffer.status === 'pending_direct_challenge_response')) {
+                console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) for Dice Escalator has timed out.`);
+                activeGames.delete(offerId);
+                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
+                console.log(`${logPrefix} Cleared group lock for timed-out offer ${offerId} using key ${keyForTimeoutRemoval}.`);
+
+                let refundClientTimeout = null;
+                try {
+                    refundClientTimeout = await pool.connect();
+                    await refundClientTimeout.query('BEGIN');
+                    const refundReason = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ? 'direct_challenge_expired_unanswered' : 'unified_offer_expired_unanswered';
+                    const refundNotes = `Refund for expired ${timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ? 'direct Dice Escalator challenge' : 'unified Dice Escalator offer'} ${offerId}.`;
+                    await updateUserBalanceAndLedger(refundClientTimeout, timedOutOffer.initiatorId, timedOutOffer.betAmount, `refund_de_${refundReason}`, { custom_offer_id: offerId }, refundNotes);
+                    await refundClientTimeout.query('COMMIT');
+                } catch (e) {
+                    if (refundClientTimeout) await refundClientTimeout.query('ROLLBACK').catch(() => {});
+                    console.error(`${logPrefix} CRITICAL: Failed to refund initiator ${timedOutOffer.initiatorId} for timed out DE offer ${offerId}: ${e.message}`);
+                    if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL REFUND FAILURE for timed out DE offer ${offerId}, Initiator: ${timedOutOffer.initiatorId}. Error: ${e.message}`);
+                } finally {
+                    if (refundClientTimeout) refundClientTimeout.release();
+                }
+
+                const messageIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.gameSetupMessageId;
+                const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'));
+                const timeoutMsgHTML = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ?
+                    `⏳ The Dice Escalator challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.` :
+                    `⏳ The Dice Escalator offer by ${timedOutOffer.initiatorMentionHTML} for <b>${currentBetDisplayHTML_Timeout}</b> has expired unanswered. Initiator's bet refunded.`;
+
+                if (messageIdToEdit && bot) {
+                    await bot.editMessageText(timeoutMsgHTML, {
+                        chat_id: String(chatId), message_id: Number(messageIdToEdit),
+                        parse_mode: 'HTML', reply_markup: {}
+                    }).catch(e => console.warn(`${logPrefix} Failed to edit expired DE offer message ${messageIdToEdit}: ${e.message}`));
+                }
+            }
+        }, timeoutDuration);
+        activeGames.set(offerId, offerData); 
+
+    } catch (error) {
+        if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
+        console.error(`${logPrefix} Error creating DE offer or placing bet: ${error.message}`);
+        await safeSendMessage(chatId, `⚠️ Error creating your Dice Escalator offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
+        if (offerId && activeGames.has(offerId)) {
+            activeGames.delete(offerId);
+            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock;
+            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
+        }
+    } finally {
+        if (clientBetPlacement) clientBetPlacement.release();
+    }
 }
-// --- END OF FULL REPLACEMENT for handleStartDiceEscalatorUnifiedOfferCommand_New ---
 // --- START OF FULL REPLACEMENT for handleDiceEscalatorAcceptBotGame_New function ---
 async function handleDiceEscalatorAcceptBotGame_New(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
     const userId = String(userWhoClicked.telegram_id || userWhoClicked.id); 
