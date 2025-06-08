@@ -2786,7 +2786,10 @@ const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
 
 async function processBackgroundJobs() {
     if (isShuttingDown) return;
-    if (isJobProcessorRunning) return;
+    if (isJobProcessorRunning) {
+        console.log("[JobProcessor_V2_Robust] Processor already running. Skipping this cycle.");
+        return;
+    }
 
     isJobProcessorRunning = true;
     const LOG_PREFIX = '[JobProcessor_V2_Robust]';
@@ -2823,11 +2826,14 @@ async function processBackgroundJobs() {
         let job = null;
 
         try {
-            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1', [jobId]);
-            if (jobDataRes.rows.length === 0) continue;
+            jobClient = await pool.connect();
+            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1', [jobId], jobClient);
+            if (jobDataRes.rows.length === 0) {
+                console.warn(`${LOG_PREFIX} Job ${jobId} was picked but not found. It may have been processed by another instance. Skipping.`);
+                continue;
+            }
             job = jobDataRes.rows[0];
 
-            jobClient = await pool.connect();
             await jobClient.query('BEGIN');
 
             if (job.job_type === 'credit_user_balance') {
@@ -2863,23 +2869,14 @@ async function processBackgroundJobs() {
                     throw e;
                 }
                 
-                        // --- ADDED DIAGNOSTIC LOGGING ---
                         console.log(`[JobProcessor_DEBUG] Preparing to credit user. JobID: ${jobId}, UserID: ${targetUserId}, Amount: ${amountLamports}, Type: ${transactionType}`);
-                const creditResult = await updateUserBalanceAndLedger(
-                    jobClient,
-                    targetUserId,
-                    BigInt(amountLamports),
-                    transactionType,
-                    { background_job_id: jobId },
-                    notes || 'Bonus credit from background job.'
-                );
+                const creditResult = await updateUserBalanceAndLedger(jobClient, targetUserId, BigInt(amountLamports), transactionType, { background_job_id: jobId }, notes || 'Bonus credit from background job.');
 
                 if (!creditResult.success) {
-                        console.error(`[JobProcessor_DEBUG] updateUserBalanceAndLedger returned failure for JobID: ${jobId}. Error: ${creditResult.error}`);
+                            console.error(`[JobProcessor_DEBUG] updateUserBalanceAndLedger returned failure for JobID: ${jobId}. Error: ${creditResult.error}`);
                     throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
                 }
                         console.log(`[JobProcessor_DEBUG] Successfully credited user and updated stats for JobID: ${jobId}.`);
-                        // --- END OF DIAGNOSTIC LOGGING ---
                 
                         const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
                 const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
@@ -2898,7 +2895,6 @@ async function processBackgroundJobs() {
                                                 `Your referred friend, <i>${referredUserDisplay}</i>, just made their first qualifying bet! As a reward, we've added a bonus to your balance.\n\n` +
                                                 `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
                                                 `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
-
                         } else if (transactionType === 'referral_wager_rebate' && notes) {
                             const referredUserIdMatch = notes.match(/from user (\d+)/);
                             const rebateMatch = notes.match(/(\d+) x \$(\d+(\.\d+)?)/);
@@ -2910,7 +2906,6 @@ async function processBackgroundJobs() {
                                 }
                             }
                             const rebateDisplay = rebateMatch ? `${rebateMatch[1]} x $${rebateMatch[2]}` : "a new";
-
                             notificationMessageHTML = `🏆 <b>Referral Wager Rebate!</b> 🏆\n\n` +
                                                 `Congratulations! <i>${referredUserDisplay}</i> has completed <b>${escapeHTML(rebateDisplay)}</b> wager block(s)! For their dedication, you've been awarded a bonus.\n\n` +
                                                 `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
@@ -2921,15 +2916,11 @@ async function processBackgroundJobs() {
                                                 `<b>Amount:</b> ~${escapeHTML(bonusAmountUSDDisplay)}\n` +
                                                 `<b>Equivalent:</b> ${escapeHTML(bonusAmountSOLDisplay)}`;
                         }
-
-                await safeSendMessage(targetUserId,
-                    notificationMessageHTML,
-                    { parse_mode: 'HTML' }
-                );
+                await safeSendMessage(targetUserId, notificationMessageHTML, { parse_mode: 'HTML' });
             }
             
             await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-            await client.query('COMMIT');
+            await jobClient.query('COMMIT');
             console.log(`${LOG_PREFIX} ✅ Successfully processed and deleted job ${jobId}.`);
 
         } catch (err) {
@@ -2941,22 +2932,29 @@ async function processBackgroundJobs() {
                 const moveClient = await pool.connect();
                 try {
                     await moveClient.query('BEGIN');
-                    await moveClient.query(
-                        `INSERT INTO failed_jobs (job_id, job_type, payload, status, attempts, last_attempt_at, final_error_message, created_at)
-                         SELECT job_id, job_type, payload, status, attempts, last_attempt_at, $2, created_at FROM background_jobs WHERE job_id = $1`,
-                         [jobId, err.message]
-                    );
+                    const failedJobsInsertQuery = `
+                        INSERT INTO failed_jobs (
+                            job_id, job_type, payload, status, attempts, 
+                            last_attempt_at, final_error_message, created_at
+                        )
+                        SELECT 
+                            job_id, job_type, payload, status, attempts, 
+                            last_attempt_at, $2, created_at 
+                        FROM background_jobs 
+                        WHERE job_id = $1
+                    `;
+                    await moveClient.query(failedJobsInsertQuery, [jobId, err.message]);
                     await moveClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
                     await moveClient.query('COMMIT');
                     if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``);
+                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``, {parse_mode: 'MarkdownV2'});
                     }
                 } catch (moveError) {
-                    await moveClient.query('ROLLBACK');
+                    if (moveClient) await moveClient.query('ROLLBACK');
                     console.error(`${LOG_PREFIX} CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE!`, moveError);
-                    if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE! It will be retried indefinitely.`);
+                    if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE! It will be retried indefinitely.`, {parse_mode: 'MarkdownV2'});
                 } finally {
-                    moveClient.release();
+                    if (moveClient) moveClient.release();
                 }
             } else if (job) {
                 const delaySeconds = Math.pow(2, job.attempts) * 5;
