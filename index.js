@@ -12759,123 +12759,133 @@ function startJackpotSessionPolling() {
     }, initialPollDelay);
 }
 
-// Add these two functions to Part 5e
+// Add these two new functions to Part 5e of index.js
 
-// REPLACEMENT for pollCompletedInteractiveGames in Part 5e
-
-async function pollCompletedInteractiveGames() {
-    if (isShuttingDown) return;
-    if (pollCompletedInteractiveGames.isRunning) return;
-    pollCompletedInteractiveGames.isRunning = true;
-
-    const logPrefix = '[InteractiveGamePoller_V5_MsgFix]';
-    let client = null;
+/**
+ * This is the new finalizer function. It processes a single completed game session.
+ * It's triggered instantly by the notification listener.
+ */
+async function finalizeInteractiveGame(sessionId) {
+    const logPrefix = `[FinalizeInteractiveGame SID:${sessionId}]`;
+    let finalizationClient = null;
 
     try {
-        const completedSessionsRes = await queryDatabase(
-            `SELECT * FROM interactive_game_sessions WHERE status LIKE 'completed_%' ORDER BY updated_at ASC LIMIT 10`
-        );
+        finalizationClient = await pool.connect();
+        await finalizationClient.query('BEGIN');
 
-        if (completedSessionsRes.rowCount === 0) {
+        // Get the completed session data and lock the row
+        const sessionRes = await finalizationClient.query("SELECT * FROM interactive_game_sessions WHERE session_id = $1 FOR UPDATE", [sessionId]);
+        if (sessionRes.rowCount === 0) {
+            console.warn(`${logPrefix} Session not found or already processed.`);
+            await finalizationClient.query('ROLLBACK');
+            return;
+        }
+        const session = sessionRes.rows[0];
+
+        // Ensure we don't process it twice
+        if (!session.status.startsWith('completed_')) {
+            console.warn(`${logPrefix} Session status is '${session.status}', not 'completed'. Aborting.`);
+            await finalizationClient.query('ROLLBACK');
             return;
         }
 
-        console.log(`${logPrefix} Found ${completedSessionsRes.rowCount} completed interactive game session(s) to process.`);
+        await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
 
-        for (const session of completedSessionsRes.rows) {
-            if (isShuttingDown) break;
-            
-            const sessionLogPrefix = `${logPrefix} SessionID:${session.session_id} MainGID:${session.main_bot_game_id}`;
-            let finalizationClient = null;
+        const payoutAmount = BigInt(session.final_payout_lamports || '0');
+        const betAmount = BigInt(session.bet_amount_lamports);
+        const gameState = session.game_state_json || {};
+        const totalWageredForLevelCheck = BigInt(gameState.totalWageredForLevelCheck || '0');
+        
+        const userObject = await getOrCreateUser(session.user_id);
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
+        let notificationMessageHTML = '';
+        
+        // Finalize balance and create ledger entry
+        const ledgerCode = `result_${session.game_type}`;
+        const ledgerNotes = `Result from Helper Bot for game ${session.main_bot_game_id}. Payout: ${payoutAmount}`;
+        // The net change is the payout - the original bet. This credits profit or deducts loss.
+        const netChangeToBalance = payoutAmount - betAmount;
+        const updateResult = await updateUserBalanceAndLedger(finalizationClient, session.user_id, netChangeToBalance, ledgerCode, { game_id_custom_field: session.main_bot_game_id }, ledgerNotes);
 
-            try {
-                finalizationClient = await pool.connect();
-                await finalizationClient.query('BEGIN');
-
-                await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_processing' WHERE session_id = $1 AND status = $2", [session.session_id, session.status]);
-
-                const payoutAmount = BigInt(session.final_payout_lamports || '0');
-                const betAmount = BigInt(session.bet_amount_lamports);
-                const gameState = session.game_state_json || {};
-                const totalWageredForLevelCheck = BigInt(gameState.totalWageredForLevelCheck || '0');
-                
-                const userObject = await getOrCreateUser(session.user_id);
-                const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
-                let notificationMessageHTML = '';
-                
-                const ledgerCode = `result_${session.game_type}`;
-                const ledgerNotes = `Result from Helper Bot for game ${session.main_bot_game_id}. Payout: ${payoutAmount}`;
-                const updateResult = await updateUserBalanceAndLedger(finalizationClient, session.user_id, payoutAmount, ledgerCode, { game_id_custom_field: session.main_bot_game_id }, ledgerNotes);
-
-                if (!updateResult.success) {
-                    throw new Error(`Failed to update balance for user ${session.user_id} for session ${session.session_id}. Error: ${updateResult.error}`);
-                }
-
-                if (totalWageredForLevelCheck > 0n) {
-                    const solPrice = await getSolUsdPrice();
-                    await processQualifyingBetAndInitialBonus(finalizationClient, session.user_id, betAmount, session.main_bot_game_id);
-                    await checkAndUpdateUserLevel(finalizationClient, session.user_id, totalWageredForLevelCheck, solPrice, session.chat_id);
-                    await processWagerMilestoneBonus(finalizationClient, session.user_id, totalWageredForLevelCheck, solPrice);
-                }
-
-                await finalizationClient.query('COMMIT');
-                console.log(`${sessionLogPrefix} Successfully finalized payout and ledger.`);
-
-                // --- START OF MESSAGING FIX ---
-                // The logic now compares the payout to the original bet to determine the correct message tone.
-                const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
-                const cleanGameName = escapeHTML(getCleanGameName(session.game_type));
-                
-                if (session.status === 'completed_cashout' || session.status === 'completed_cashout_timeout') {
-                    notificationMessageHTML = `💰 **Cashed Out!**\n\nNice play, ${playerRefHTML}! You cashed out in <b>${cleanGameName}</b> for a total of <b>${payoutDisplay}</b>!`;
-                } else if (session.status.includes('timeout')) {
-                    notificationMessageHTML = `⏱️ ${playerRefHTML}, your <b>${cleanGameName}</b> game timed out and was forfeited.`;
-                } else if (payoutAmount > betAmount) {
-                    notificationMessageHTML = `🎉 **Winner!** 🎉\n\nCongratulations, ${playerRefHTML}! Your <b>${cleanGameName}</b> game concluded with a total payout of <b>${payoutDisplay}</b>!`;
-                } else if (payoutAmount > 0n && payoutAmount <= betAmount) {
-                    notificationMessageHTML = `😅 **Partial Return!**\n\n${playerRefHTML}, your <b>${cleanGameName}</b> game returned <b>${payoutDisplay}</b>. Better than a total loss!`;
-                } else { // Total loss (payoutAmount is 0)
-                    notificationMessageHTML = `💔 **Loss.**\n\nUnlucky, ${playerRefHTML}. Your <b>${cleanGameName}</b> game resulted in a loss. Better luck on the next roll!`;
-                }
-                // --- END OF MESSAGING FIX ---
-
-                if (notificationMessageHTML) {
-                    await safeSendMessage(session.chat_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
-                }
-
-                const gameKeyForGroupLock = GAME_IDS[session.game_type.toUpperCase()] || session.game_type;
-                activeGames.delete(session.main_bot_game_id);
-                await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, gameKeyForGroupLock, null);
-                console.log(`${sessionLogPrefix} Game lock cleared from activeGames and group session for key: ${gameKeyForGroupLock}.`);
-
-            } catch (e) {
-                if (finalizationClient) await finalizationClient.query('ROLLBACK');
-                console.error(`${sessionLogPrefix} CRITICAL error processing session: ${e.message}`);
-                await notifyAdmin(`🚨 CRITICAL Error Finalizing Game Session 🚨\nSessionID: \`${session.session_id}\`\nUser: \`${session.user_id}\`\nError: \`${escapeHTML(e.message)}\``);
-                await queryDatabase("UPDATE interactive_game_sessions SET status = 'archived_error' WHERE session_id = $1", [session.session_id]);
-            } finally {
-                if (finalizationClient) finalizationClient.release();
-            }
+        if (!updateResult.success) {
+            throw new Error(`Failed to update balance for user ${session.user_id}. Error: ${updateResult.error}`);
         }
+
+        if (totalWageredForLevelCheck > 0n) {
+            const solPrice = await getSolUsdPrice();
+            await processQualifyingBetAndInitialBonus(finalizationClient, session.user_id, betAmount, session.main_bot_game_id);
+            await checkAndUpdateUserLevel(finalizationClient, session.user_id, totalWageredForLevelCheck, solPrice, session.chat_id);
+            await processWagerMilestoneBonus(finalizationClient, session.user_id, totalWageredForLevelCheck, solPrice);
+        }
+
+        await finalizationClient.query('COMMIT');
+        console.log(`${logPrefix} Successfully finalized.`);
+
+        // *** CORRECTED MESSAGING LOGIC ***
+        const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
+        const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
+        const cleanGameName = escapeHTML(getCleanGameName(session.game_type));
+
+        if (session.status === 'completed_cashout' || session.status === 'completed_cashout_timeout') {
+            notificationMessageHTML = `💰 **Cashed Out!**\n\nNice play, ${playerRefHTML}! You cashed out in <b>${cleanGameName}</b> for a total of <b>${payoutDisplay}</b>!`;
+        } else if (session.status.includes('timeout')) {
+            notificationMessageHTML = `⏱️ ${playerRefHTML}, your <b>${cleanGameName}</b> game timed out and was forfeited.`;
+        } else if (payoutAmount > betAmount) {
+            notificationMessageHTML = `🎉 **Winner!** 🎉\n\nCongratulations, ${playerRefHTML}! Your <b>${betDisplay}</b> bet in <b>${cleanGameName}</b> returned a total payout of <b>${payoutDisplay}</b>!`;
+        } else if (payoutAmount > 0n && payoutAmount <= betAmount) {
+            notificationMessageHTML = `😅 **Partial Return!**\n\n${playerRefHTML}, your <b>${betDisplay}</b> bet in <b>${cleanGameName}</b> returned <b>${payoutDisplay}</b>. Better than a total loss!`;
+        } else {
+            notificationMessageHTML = `💔 **Loss.**\n\nUnlucky, ${playerRefHTML}. Your <b>${betDisplay}</b> bet in <b>${cleanGameName}</b> was lost. Better luck on the next one!`;
+        }
+
+        if (notificationMessageHTML) {
+            await safeSendMessage(session.chat_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
+        }
+
+        // Clean up the game locks
+        activeGames.delete(session.main_bot_game_id);
+        await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, session.game_type, null);
+        console.log(`${logPrefix} Game lock cleared for key: ${session.game_type}.`);
+
     } catch (e) {
-        console.error(`${logPrefix} Major error in polling loop: ${e.message}`);
+        if (finalizationClient) await finalizationClient.query('ROLLBACK');
+        console.error(`${logPrefix} CRITICAL error processing session: ${e.message}`);
+        await notifyAdmin(`🚨 CRITICAL Error Finalizing Game Session 🚨\nSessionID: \`${session.session_id}\`\nUser: \`${session.user_id}\`\nError: \`${escapeHTML(e.message)}\``);
     } finally {
-        pollCompletedInteractiveGames.isRunning = false;
+        if (finalizationClient) finalizationClient.release();
     }
 }
 
-function startInteractiveGamePolling() {
-    const intervalMs = 7500; // Check every 7.5 seconds
-    console.log(`⚙️ [InteractiveGamePoller] Starting Interactive Game Poller (Interval: ${intervalMs / 1000}s)...`);
+/**
+ * Connects a dedicated client to the database to listen for game completion notifications.
+ */
+async function setupNotificationListener() {
+    console.log("⚙️ [NotificationListener] Setting up instant game completion listener...");
+    const listeningClient = await pool.connect();
     
-    setTimeout(() => {
-        if (!isShuttingDown) pollCompletedInteractiveGames();
-    }, 5000); // Initial delay
+    listeningClient.on('error', (err) => {
+        console.error('[NotificationListener] Dedicated client error:', err);
+        // Attempt to re-establish the listener
+        setTimeout(setupNotificationListener, 5000);
+    });
 
-    setInterval(() => {
-        if (!isShuttingDown) pollCompletedInteractiveGames();
-    }, intervalMs);
+    listeningClient.on('notification', (msg) => {
+        console.log(`[NotificationListener] ⚡ Received notification on channel: ${msg.channel}`);
+        try {
+            const payload = JSON.parse(msg.payload);
+            if (payload.session_id) {
+                // Instantly call the finalizer instead of waiting for a poll
+                finalizeInteractiveGame(payload.session_id);
+            }
+        } catch (e) {
+            console.error('[NotificationListener] Error processing notification payload:', e);
+        }
+    });
+
+    await listeningClient.query('LISTEN game_completed');
+    console.log("✅ [NotificationListener] Now listening for 'game_completed' notifications.");
 }
+
 // --- End of 5e Background Task Initializers ---
 // --- Start of Part 5f, Section 1 (Pinpoint Bowling Game Logic) ---
 
@@ -15821,10 +15831,10 @@ async function main() {
         console.warn("⚠️ startLitecoinDepositMonitoring function not defined.");
     }
 
-        if (typeof startInteractiveGamePolling === 'function') {
-    startInteractiveGamePolling();
+        if (typeof setupNotificationListener === 'function') {
+    setupNotificationListener();
 } else {
-    console.warn("⚠️ Interactive Game polling (startInteractiveGamePolling) function not defined.");
+    console.warn("⚠️ Instant Notification Listener (setupNotificationListener) function not defined.");
 }
 
         if (typeof startJackpotSessionPolling === 'function') {
