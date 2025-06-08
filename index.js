@@ -12761,12 +12761,14 @@ function startJackpotSessionPolling() {
 
 // Add these two functions to Part 5e
 
+// REPLACEMENT for pollCompletedInteractiveGames in Part 5e
+
 async function pollCompletedInteractiveGames() {
     if (isShuttingDown) return;
     if (pollCompletedInteractiveGames.isRunning) return;
     pollCompletedInteractiveGames.isRunning = true;
 
-    const logPrefix = '[InteractiveGamePoller_V1]';
+    const logPrefix = '[InteractiveGamePoller_V2]'; // V2 with fix
     let client = null;
 
     try {
@@ -12795,7 +12797,9 @@ async function pollCompletedInteractiveGames() {
 
                 const payoutAmount = BigInt(session.final_payout_lamports || '0');
                 const betAmount = BigInt(session.bet_amount_lamports);
-                const gameState = JSON.parse(session.game_state_json || '{}');
+                
+                // *** THIS IS THE FIX: Removed the redundant JSON.parse(). ***
+                const gameState = session.game_state_json || {};
                 const totalWageredForLevelCheck = BigInt(gameState.totalWageredForLevelCheck || '0');
                 
                 const userObject = await getOrCreateUser(session.user_id);
@@ -12819,18 +12823,19 @@ async function pollCompletedInteractiveGames() {
                     await processWagerMilestoneBonus(finalizationClient, session.user_id, totalWageredForLevelCheck, solPrice);
                 }
 
-                await client.query('COMMIT');
+                await finalizationClient.query('COMMIT');
                 console.log(`${sessionLogPrefix} Successfully finalized.`);
 
                 // Notify user
                 const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
-                if (session.status === 'completed_win' || session.status === 'completed_cashout') {
-                    notificationMessageHTML = `🎉 Congratulations, ${playerRefHTML}!\n\nYour <b>${escapeHTML(getCleanGameName(session.game_type))}</b> game has concluded with a win of <b>${escapeHTML(payoutDisplay)}</b>! The funds have been added to your balance.`;
+                const cleanGameName = escapeHTML(getCleanGameName(session.game_type));
+
+                if (session.status === 'completed_win' || session.status === 'completed_cashout' || session.status === 'completed_cashout_timeout') {
+                    notificationMessageHTML = `🎉 Congratulations, ${playerRefHTML}!\n\nYour <b>${cleanGameName}</b> game has concluded with a win of <b>${payoutDisplay}</b>! The funds have been added to your balance.`;
                 } else if (session.status === 'completed_loss' || session.status === 'completed_miss') {
-                    notificationMessageHTML = `💔 Unlucky, ${playerRefHTML}.\n\nYour <b>${escapeHTML(getCleanGameName(session.game_type))}</b> game resulted in a loss. Better luck next time!`;
-                }
-                 else if (session.status === 'completed_timeout') {
-                    notificationMessageHTML = `⏱️ ${playerRefHTML}, your <b>${escapeHTML(getCleanGameName(session.game_type))}</b> game timed out and was forfeited.`;
+                    notificationMessageHTML = `💔 Unlucky, ${playerRefHTML}.\n\nYour <b>${cleanGameName}</b> game resulted in a loss. Better luck next time!`;
+                } else if (session.status === 'completed_timeout') {
+                    notificationMessageHTML = `⏱️ ${playerRefHTML}, your <b>${cleanGameName}</b> game timed out and was forfeited.`;
                 }
 
                 if (notificationMessageHTML) {
