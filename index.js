@@ -2842,7 +2842,7 @@ async function processBackgroundJobs() {
                             amountLamports: totalBonusToPayLamports.toString(),
                             transactionType: 'referral_wager_rebate',
                             referralId: referralLink.referral_id,
-                            notes: `Referral Wager Rebate for ${chunksToPay} x $${REFERRAL_WAGER_REBATE_INTERVAL_USD.toFixed(2)} block(s) from user ${referredUserTelegramId}.`
+                            notes: `Referral Wager Rebate for ${chunksToPay} chunks, paid out at milestone ${lastMilestonePaidInThisLoop.toString()} lamports.`
                         };
                         await jobClient.query(`INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`, [creditJobPayload]);
                         console.log(`${LOG_PREFIX_WAGER_CHECK} Queued 'credit_user_balance' job for ${chunksToPay} rebate chunk(s) for referrer ${referrerId}.`);
