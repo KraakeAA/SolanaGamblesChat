@@ -12949,28 +12949,29 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
     await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your <b>Pinpoint Bowling</b> game has begun!\n\nOur Game Bot will now present the board for you to make your choice...`, { parse_mode: 'HTML' });
 }
 // --- End of Part 5f, Section 1 ----
-// --- Start of Part 5f, Section 2 (Bullseye Bet Game Logic) ---
+// --- Start of Part 5f, Section 2 (Darts Fortune Game Logic) ---
 
-const BULLSEYE_PAYOUTS = {
-    6: { multiplier: 5, type: 'win' },    // Bullseye
-    5: { multiplier: 2, type: 'win' },    // Inner Ring
-    4: { multiplier: 0, type: 'push' },   // Push (0 profit)
-    3: { multiplier: 0, type: 'push' },   // Push
-    2: { multiplier: 0, type: 'push' },   // Push
-    1: { multiplier: -1, type: 'loss' },  // Miss
+const DARTS_FORTUNE_PAYOUTS = {
+    6: 3.5,  // Bullseye
+    5: 1.5,  // Inner Ring
+    4: 0.5,  // On the board (partial loss)
+    3: 0.2,  // Outer edge (partial loss)
+    2: 0.1,  // Barely on (partial loss)
+    1: 0.0,  // Complete miss (total loss)
 };
 
+// REPLACEMENT for handleStartBullseyeBetCommand
 async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_DARTS_START = `[Darts_Start_V2 UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_DARTS_START = `[DartsFortune_Start_V1 UID:${userId} CH:${chatId}]`;
     let allNotificationsToSend = [];
 
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
     if (activeUserGameCheck.limitReached) {
         const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
         const blockingGameType = getCleanGameName(activeUserGameCheck.details.type);
-        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. ✨`, { parse_mode: 'HTML' });
+        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. Please finish it first. ✨`, { parse_mode: 'HTML' });
         return;
     }
 
@@ -12979,15 +12980,14 @@ async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
     if (BigInt(userObj.balance) < betAmountLamports) {
-        await safeSendMessage(chatId, `🎯 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> game of Bullseye Bet.`, {
+        await safeSendMessage(chatId, `🎯 ${playerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> game of Darts Fortune.`, {
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
         });
         return;
     }
     
-    // NOTE: For this to work, you must add 'DARTS: 'darts'' to your GAME_IDS constant in Part 1.
-    const activeGameKey = GAME_IDS.DARTS || GAME_IDS.SEVEN_OUT;
+    const activeGameKey = GAME_IDS.DARTS;
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
@@ -13001,14 +13001,14 @@ async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
     activeGames.set(gameId, { type: 'darts_placeholder' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
 
-    const sentInitialMsg = await safeSendMessage(chatId, `🎯 <b>Bullseye Bet!</b>\n\n${playerRefHTML} has wagered <b>${betDisplayUSD_HTML}</b>.\nThrowing the dart...`, { parse_mode: 'HTML' });
+    const sentInitialMsg = await safeSendMessage(chatId, `🎯 <b>Darts Fortune!</b>\n\n${playerRefHTML} has wagered <b>${betDisplayUSD_HTML}</b>.\nThrowing the dart...`, { parse_mode: 'HTML' });
     
     let diceMessage;
     let rollValue;
     try {
         diceMessage = await bot.sendDice(chatId, { emoji: '🎯' });
         rollValue = diceMessage.dice.value;
-        await sleep(4000); // Wait for Telegram's animation
+        await sleep(4000);
     } catch (e) {
         console.error(`${LOG_PREFIX_DARTS_START} Failed to send dice animation. Aborting game. Error: ${e.message}`);
         await safeSendMessage(chatId, `⚙️ There was an error with the dice animation. Please try again.`, { parse_mode: 'HTML' });
@@ -13022,55 +13022,41 @@ async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_darts', { game_id_custom_field: gameId });
-        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
-        
-        const totalWageredAfterBet = betResult.newTotalWageredLamports;
-        
-        const payoutRule = BULLSEYE_PAYOUTS[rollValue];
-        let payoutAmount = 0n;
-        let houseFee = 0n;
+        // The bet deduction is now part of the final transaction
+        const payoutMultiplier = DARTS_FORTUNE_PAYOUTS[rollValue];
+        const payoutAmount = (betAmountLamports * BigInt(Math.floor(payoutMultiplier * 100))) / 100n;
+        const netChange = payoutAmount - betAmountLamports; // This will be positive for a win, negative for a loss
+
         let resultText = "";
         let ledgerCode = "";
-        let gameLogText = "";
-        let isConclusiveOutcome = (payoutRule.type === 'win' || payoutRule.type === 'loss');
-
-        if (payoutRule.type === 'win') {
-            const profit = betAmountLamports * BigInt(payoutRule.multiplier);
-            const preFeePayout = betAmountLamports + profit;
-            houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
-            payoutAmount = preFeePayout - houseFee;
-            ledgerCode = 'win_darts';
-            const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
-            resultText = rollValue === 6 ? `🎯 **BULLSEYE!** A massive win!` : `👍 **Nice Shot!** You hit the board for a win!`;
-            resultText += `\n\nPayout: <b>${escapeHTML(payoutDisplay)}</b>`;
-            gameLogText = `Win (Rolled ${rollValue})`;
-        } else if (payoutRule.type === 'push') {
-            payoutAmount = betAmountLamports;
-            ledgerCode = 'push_darts';
-            resultText = `😐 **On the board, but no prize.** Your bet has been returned.`;
-            gameLogText = `Push (Rolled ${rollValue})`;
-        } else { // Loss
-            payoutAmount = 0n;
-            ledgerCode = 'loss_darts';
-            resultText = `💨 **WOOSH!** A complete miss. Better luck next time!`;
-            gameLogText = `Loss (Rolled ${rollValue})`;
-        }
+        let gameLogText = `Rolled ${rollValue}, Multiplier x${payoutMultiplier}`;
         
-        const gameLogId = await logGameResultToGamesTable(client, 'darts', chatId, userId, [userId], betAmountLamports, gameLogText, 0n, houseFee);
-        const finalUpdateResult = await updateUserBalanceAndLedger(client, userId, payoutAmount, ledgerCode, { game_log_id: gameLogId });
-        if (!finalUpdateResult.success) throw new Error("DB update failed on finalization.");
-
-        if (isConclusiveOutcome && totalWageredAfterBet) {
-            const solPrice = await getSolUsdPrice();
-            const bonusNotifications = await checkAndUpdateUserLevel(client, userId, totalWageredAfterBet, solPrice, chatId);
-            allNotificationsToSend.push(...bonusNotifications);
-            await processQualifyingBetAndInitialBonus(client, userId, betAmountLamports, gameId);
-            await processWagerMilestoneBonus(client, userId, totalWageredAfterBet, solPrice);
+        if (payoutMultiplier > 1) {
+            resultText = `🎯 **Bullseye!**`;
+            if (rollValue === 5) resultText = `👍 **Great Shot!**`;
+            ledgerCode = 'win_darts';
+        } else if (payoutMultiplier > 0) {
+            resultText = `😅 **On the board...**`;
+            ledgerCode = 'loss_darts_partial';
+        } else {
+            resultText = `💔 **A complete miss!**`;
+            ledgerCode = 'loss_darts_full';
         }
 
+        const gameLogId = await logGameResultToGamesTable(client, 'darts_fortune', chatId, userId, [userId], betAmountLamports, gameLogText, 0n, 0n); // No separate house fee
+        const finalUpdateResult = await updateUserBalanceAndLedger(client, userId, netChange, ledgerCode, { game_log_id: gameLogId });
+        if (!finalUpdateResult.success) throw new Error("DB update failed on finalization.");
+        
+        const solPrice = await getSolUsdPrice();
+        await processQualifyingBetAndInitialBonus(client, userId, betAmountLamports, gameId);
+        await checkAndUpdateUserLevel(client, userId, finalUpdateResult.newTotalWageredLamports, solPrice, chatId);
+        await processWagerMilestoneBonus(client, userId, finalUpdateResult.newTotalWageredLamports, solPrice);
+        
         await client.query('COMMIT');
         
+        const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
+        resultText += `\n\nYour <b>${betDisplayUSD_HTML}</b> bet returns <b>${escapeHTML(payoutDisplay)}</b>.`;
+
         await bot.deleteMessage(chatId, sentInitialMsg.message_id).catch(() => {});
         await bot.deleteMessage(chatId, diceMessage.message_id).catch(() => {});
 
@@ -13082,18 +13068,11 @@ async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         console.error(`${LOG_PREFIX_DARTS_START} Error during game: ${e.message}`);
-        // Attempt to refund if the bet was already taken in a previous, failed transaction.
-        // As logic is now in one TX, this just informs the user.
         await safeSendMessage(chatId, `⚙️ An error occurred during the Darts game. The transaction was cancelled. Error: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
     } finally {
         if (client) client.release();
         activeGames.delete(gameId);
         await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
-    }
-
-    // Send any queued notifications after the transaction is complete
-    for (const notification of allNotificationsToSend) {
-        await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
     }
 }
 // --- End of 5f, Section 2 ---
