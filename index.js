@@ -12768,7 +12768,7 @@ async function pollCompletedInteractiveGames() {
     if (pollCompletedInteractiveGames.isRunning) return;
     pollCompletedInteractiveGames.isRunning = true;
 
-    const logPrefix = '[InteractiveGamePoller_V4]'; // V4 with Lock Fix
+    const logPrefix = '[InteractiveGamePoller_V5]'; // V5 with Key Fix
     let client = null;
 
     try {
@@ -12836,14 +12836,11 @@ async function pollCompletedInteractiveGames() {
                     await safeSendMessage(session.chat_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
                 }
 
-                // *** THIS IS THE FIX: Clean up the game locks after processing is complete ***
-                // You may need to add new GAME_IDS constants (e.g., BOWLING) for this to find the correct key
-                const gameKeyForGroupLock = GAME_IDS[session.game_type.toUpperCase().replace('_PINPOINT','').replace('_SHOOTOUT','')] || session.game_type;
+                // *** THIS IS THE FIX: We now use the reliable game_type from the database session ***
+                const gameKeyForGroupLock = session.game_type;
                 activeGames.delete(session.main_bot_game_id);
                 await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, gameKeyForGroupLock, null);
                 console.log(`${sessionLogPrefix} Game lock cleared from activeGames and group session for key: ${gameKeyForGroupLock}.`);
-                // *** END OF FIX ***
-
 
             } catch (e) {
                 if (finalizationClient) await finalizationClient.query('ROLLBACK');
@@ -12879,17 +12876,19 @@ function startInteractiveGamePolling() {
 // --- End of 5e Background Task Initializers ---
 // --- Start of Part 5f, Section 1 (Pinpoint Bowling Game Logic) ---
 
+// REPLACEMENT for handleStartPinpointBowlingCommand
+
 async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_BOWL_START = `[Bowling_Start_V2_Handoff UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_BOWL_START = `[Bowling_Start_V3_HandoffFix UID:${userId} CH:${chatId}]`;
 
-    // 1. Standard player & game limit checks
+    // --- All initial checks (active game, balance, etc.) remain the same ---
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
     if (activeUserGameCheck.limitReached) {
         const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
         const blockingGameType = getCleanGameName(activeUserGameCheck.details.type);
-        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. Please finish it first. ✨`, { parse_mode: 'HTML' });
+        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. ✨`, { parse_mode: 'HTML' });
         return;
     }
 
@@ -12905,9 +12904,7 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
         return;
     }
 
-    // NOTE: For this to work, you must add 'BOWLING: 'bowling'' to your GAME_IDS constant in Part 1.
-    // Until then, we'll use an existing key for the group lock.
-    const activeGameKey = GAME_IDS.BOWLING || GAME_IDS.LADDER;
+    const activeGameKey = GAME_IDS.BOWLING; // Using the canonical GAME_ID
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
@@ -12920,7 +12917,6 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
     const gameId = generateGameId("bwl_main");
     let client = null;
 
-    // 2. Perform the database transaction: deduct bet & create session
     try {
         client = await pool.connect();
         await client.query('BEGIN');
@@ -12928,10 +12924,12 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
         const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_bowling', { game_id_custom_field: gameId });
         if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
         
-        const initialGameState = {}; // Bowling requires no initial state before user choice
+        const initialGameState = {};
+        
+        // *** THIS IS THE FIX: We now store the canonical GAME_ID as the game_type ***
         await client.query(
             `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
-            [gameId, 'bowling_pinpoint', userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
+            [gameId, GAME_IDS.BOWLING, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
         );
         
         await client.query('COMMIT');
@@ -12945,8 +12943,7 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
         if (client) client.release();
     }
 
-    // 3. Inform the user of the handoff and clean up group locks
-    activeGames.set(gameId, { type: 'bowling_placeholder', status: 'delegated' }); // A lightweight placeholder
+    activeGames.set(gameId, { type: 'bowling_placeholder', status: 'delegated' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
 
     await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your <b>Pinpoint Bowling</b> game has begun!\n\nOur Game Bot will now present the board for you to make your choice...`, { parse_mode: 'HTML' });
@@ -13104,17 +13101,19 @@ async function handleStartBullseyeBetCommand(msg, betAmountLamports) {
 
 const THREE_POINT_PAYOUTS = [1.5, 2.2, 3.5, 5, 10, 20, 50]; // Multipliers for 1, 2, 3... successful shots
 
+// REPLACEMENT for handleStartThreePointShootoutCommand
+
 async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const LOG_PREFIX_3PT_START = `[3PT_Start_V2_Handoff UID:${userId} CH:${chatId}]`;
+    const LOG_PREFIX_3PT_START = `[3PT_Start_V3_HandoffFix UID:${userId} CH:${chatId}]`;
 
-    // 1. Standard player & game limit checks
+    // --- All initial checks (active game, balance, etc.) remain the same ---
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
     if (activeUserGameCheck.limitReached) {
         const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
         const blockingGameType = getCleanGameName(activeUserGameCheck.details.type);
-        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. Please finish it first. ✨`, { parse_mode: 'HTML' });
+        await safeSendMessage(chatId, `✨ ${userDisplayName}, you already have an active game of <b>${escapeHTML(blockingGameType)}</b>. ✨`, { parse_mode: 'HTML' });
         return;
     }
 
@@ -13130,8 +13129,7 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
         return;
     }
 
-    // NOTE: For this to work, you must add 'BASKETBALL: 'basketball'' to your GAME_IDS constant in Part 1.
-    const activeGameKey = GAME_IDS.BASKETBALL || GAME_IDS.SLOT_FRENZY;
+    const activeGameKey = GAME_IDS.BASKETBALL; // Using the canonical GAME_ID
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
     const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
@@ -13143,9 +13141,8 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
 
     const gameId = generateGameId("3pt_main");
     let client = null;
-    let totalWageredForLevelCheck; // Will be passed to the session for the finalizer to use
+    let totalWageredForLevelCheck;
 
-    // 2. Perform the database transaction: deduct bet & create session
     try {
         client = await pool.connect();
         await client.query('BEGIN');
@@ -13156,30 +13153,30 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
         
         const initialGameState = { 
             successfulShots: 0,
-            totalWageredForLevelCheck: totalWageredForLevelCheck.toString() // Pass this along for the finalizer
+            totalWageredForLevelCheck: totalWageredForLevelCheck.toString()
         };
 
+        // *** THIS IS THE FIX: We now store the canonical GAME_ID as the game_type ***
         await client.query(
             `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
-            [gameId, '3pt_shootout', userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
+            [gameId, GAME_IDS.BASKETBALL, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
         );
         
         await client.query('COMMIT');
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_3PT_START} Error placing bet or creating session: ${e.message}`);
+        console.error(`${LOG_PREFIX_3PT_START} Error starting game and creating session: ${e.message}`);
         await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
         return;
     } finally {
         if (client) client.release();
     }
-
-    // 3. Inform the user of the handoff and clean up group locks
+    
     activeGames.set(gameId, { type: '3pt_placeholder', status: 'delegated' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
 
-    await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your <b>3-Point Shootout</b> has started for <b>${betDisplayUSD_HTML}</b>!\n\nOur Game Bot is setting up the court and will take over the action...`, { parse_mode: 'HTML' });
+    await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your <b>3-Point Shootout</b> has begun for <b>${betDisplayUSD_HTML}</b>!\n\nOur Game Bot is setting up the court and will take over the action...`, { parse_mode: 'HTML' });
 }
 // --- End of 5f, Section 3 ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
