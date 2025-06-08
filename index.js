@@ -14856,21 +14856,14 @@ bot.on('callback_query', async (callbackQuery) => {
                 if(originalMessageId) await bot.deleteMessage(originalChatId, Number(originalMessageId)).catch(()=>{});
                 await bot.answerCallbackQuery(callbackQueryId).catch(()=>{});
                 break;
-            case 'claim_milestone_bonus':
-                 const commissionReferralIdToClaim = params[0];
-                 if (typeof handleClaimMilestoneBonusCallback === 'function') {
-                     await handleClaimMilestoneBonusCallback(callbackQueryId, userObjectForCallback, commissionReferralIdToClaim, originalMessageId, originalChatId);
-                 } else {
-                     await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Claim feature unavailable.", show_alert: true });
-                 }
-                 break;
             case 'claim_level_bonus':
                  const originalUserIdForBonus = params[0];
                 const levelIdToClaimStr = params[1];
                  if (typeof handleClaimLevelBonusCallback === 'function') {
+                     // Pass the entire callbackQuery object, not just the ID
                      await handleClaimLevelBonusCallback(callbackQuery, userObjectForCallback, originalUserIdForBonus, levelIdToClaimStr);
                  } else {
-                     await bot.answerCallbackQuery(callbackQuery.id, { text: "Error: Level bonus claim feature unavailable.", show_alert: true });
+                     await bot.answerCallbackQuery(callbackQuery.id, { text: "Error: Level bonus claim feature is unavailable.", show_alert: true });
                  }
                  break;
             default:
@@ -14884,90 +14877,6 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
-// --- NEW Callback Handler for Claiming Milestone Bonuses ---
-// (Place this where other callback query handlers are routed, e.g., within or called by your main bot.on('callback_query', ...) logic)
-
-/**
- * Handles the callback query when a user clicks to claim a specific milestone bonus.
- * @param {string} callbackQueryId - The ID of the callback query.
- * @param {object} userWhoClicked - The user object of the person who clicked the button.
- * @param {string} commissionReferralIdStr - The referral_id of the specific commission to claim, as a string.
- * @param {string} originalMessageId - The ID of the message (the referral dashboard) that had the button.
- * @param {string} originalChatId - The chat ID (should be the user's DM).
- */
-async function handleClaimMilestoneBonusCallback(callbackQueryId, userWhoClicked, commissionReferralIdStr, originalMessageId, originalChatId) {
-    const userId = String(userWhoClicked.id || userWhoClicked.telegram_id);
-    const commissionReferralId = parseInt(commissionReferralIdStr, 10);
-    const LOG_PREFIX_CLAIM_CB = `[ClaimMilestoneBonusCB UID:${userId} CommID:${commissionReferralId}]`;
-
-    if (isNaN(commissionReferralId)) {
-        console.error(`${LOG_PREFIX_CLAIM_CB} Invalid commissionReferralId: ${commissionReferralIdStr}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid bonus ID.", show_alert: true }).catch(() => {});
-        return;
-    }
-
-    let client = null;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN'); // Start transaction for the claim process
-
-        // Call the helper function that contains the core logic
-        const claimResult = await handleClaimMilestoneBonus(userId, commissionReferralId, client);
-
-        if (claimResult.success) {
-            await client.query('COMMIT');
-            console.log(`${LOG_PREFIX_CLAIM_CB} Successfully claimed bonus. Message: ${claimResult.messageForUser}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.messageForUser || "Bonus claimed and queued for payout!", show_alert: false }).catch(() => {});
-
-            // Refresh the referral dashboard for the user in DM
-            // Construct a mock msgOrCbMsg object for handleReferralCommand
-            const mockMsgForDashboardRefresh = {
-                from: userWhoClicked, // User object
-                chat: { id: originalChatId, type: 'private' }, // Should be DM
-                message_id: originalMessageId, // The message to be edited/replaced
-                isCallbackRedirect: false // Not a redirect, it's an action within DM
-            };
-            if (typeof handleReferralCommand === 'function') {
-                await handleReferralCommand(mockMsgForDashboardRefresh);
-            } else {
-                console.error(`${LOG_PREFIX_CLAIM_CB} CRITICAL: handleReferralCommand is not defined. Cannot refresh dashboard.`);
-                // Send a simple success if dashboard can't be refreshed
-                await safeSendMessage(originalChatId, claimResult.messageForUser || "Bonus claimed and queued!", {parse_mode: 'MarkdownV2'});
-            }
-        } else {
-            await client.query('ROLLBACK');
-            console.warn(`${LOG_PREFIX_CLAIM_CB} Failed to claim bonus: ${claimResult.error}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.error || "Could not claim bonus at this time.", show_alert: true }).catch(() => {});
-            // Optionally, refresh the dashboard even on failure to show the current state
-             const mockMsgForDashboardRefresh = {
-                from: userWhoClicked,
-                chat: { id: originalChatId, type: 'private' },
-                message_id: originalMessageId,
-                isCallbackRedirect: false
-            };
-            if (typeof handleReferralCommand === 'function') {
-                 await handleReferralCommand(mockMsgForDashboardRefresh);
-            }
-        }
-    } catch (error) {
-        if (client) {
-            try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_CLAIM_CB} Rollback error: ${rbErr.message}`); }
-        }
-        console.error(`${LOG_PREFIX_CLAIM_CB} Critical error during claim processing: ${error.message}`, error.stack);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Server error while claiming bonus. Please try again later.", show_alert: true }).catch(() => {});
-        if (typeof notifyAdmin === 'function') {
-            notifyAdmin(`🚨 CRITICAL Error Claiming Milestone Bonus\nUID: ${userId}, CommID: ${commissionReferralId}\nError: ${error.message}`, {parse_mode: 'MarkdownV2'});
-        }
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
-}
-
-// --- NEW Callback Handler for Claiming Level Up Bonuses ---
-// (Place this where other callback query handlers are routed)
-
 /**
  * Handles the callback query when a user clicks the "Claim $X Bonus (Level Name)" button.
  * @param {string} callbackQueryId - The ID of the callback query.
@@ -14978,7 +14887,10 @@ async function handleClaimMilestoneBonusCallback(callbackQueryId, userWhoClicked
  */
 // REPLACEMENT for handleClaimLevelBonusCallback in Part 5a, Section 1
 
-async function handleClaimLevelBonusCallback(callbackQueryId, userWhoClicked, originalUserId, levelIdToClaimStr) {
+async function handleClaimLevelBonusCallback(callbackQuery, userWhoClicked, originalUserId, levelIdToClaimStr) {
+    const callbackQueryId = callbackQuery.id;
+    const originalMessageId = callbackQuery.message.message_id;
+    const originalChatId = callbackQuery.message.chat.id;
     const clickerId = String(userWhoClicked.id || userWhoClicked.telegram_id);
     const intendedUserId = String(originalUserId);
     const levelIdToClaim = parseInt(levelIdToClaimStr, 10);
@@ -15008,11 +14920,11 @@ async function handleClaimLevelBonusCallback(callbackQueryId, userWhoClicked, or
             console.log(`${LOG_PREFIX_CLAIM_LVL_CB} Successfully claimed bonus. Message: ${claimResult.messageForUser}`);
             await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.messageForUser || "Bonus claimed successfully!", show_alert: false }).catch(() => {});
 
-            // Refresh the bonus dashboard in the group where it was actioned
+            // Refresh the bonus dashboard after a successful claim
             const mockMsgForDashboardRefresh = {
                 from: userWhoClicked,
-                chat: { id: callbackQuery.message.chat.id, type: callbackQuery.message.chat.type },
-                message_id: callbackQuery.message.message_id,
+                chat: { id: originalChatId, type: callbackQuery.message.chat.type },
+                message_id: originalMessageId,
                 isCallbackEditing: true
             };
             if (typeof handleBonusCommand === 'function') {
