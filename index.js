@@ -324,7 +324,6 @@ const REFERRAL_INITIAL_BET_TIERS_CONFIG = [
     { upToReferrals: Infinity, percentage: 0.25 }
 ];
 
-const REFERRAL_WAGER_MILESTONES_USD_CONFIG = [10, 25, 50, 100, 250, 500, 1000];
 const REFERRAL_WAGER_REBATE_INTERVAL_USD = 50.00;
 const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.05; // 5%
 // --- End of NEW Referral System Configurations ---
@@ -2699,6 +2698,8 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, jobsQueued: number, error?: string}>}
  */
+
+// REPLACEMENT for processWagerMilestoneBonus in Part 3
 
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred, solPrice) {
     const stringReferredUserId = String(referredUserTelegramId);
