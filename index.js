@@ -13536,7 +13536,7 @@ async function handleBonusCommand(msg) {
         try {
             client = await pool.connect();
             
-            const currentUserDetailsQueryGroup = `
+            const currentUserDetailsQueryGroup = `
                 SELECT
                     u.total_wagered_lamports,
                     ul.order_index AS current_level_order_index,
@@ -13555,7 +13555,7 @@ async function handleBonusCommand(msg) {
             let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Check</b> ✨\n\n` +
                                        `🏆 Current Tier: <b>${escapeHTML(currentLevelNameGroup)}</b>\n\n`;
             
-            const claimableBonusQueryGroup = `
+            const claimableBonusQueryGroup = `
                 SELECT
                     ul.level_id,
                     ul.bonus_amount_usd,
@@ -13637,13 +13637,16 @@ async function handleBonusCommand(msg) {
         const keyboardRows = [];
 
         const currentUserDetailsQueryDm = `
-            SELECT u.total_wagered_lamports, u.current_level_id, 
-                   ul.level_name AS current_level_name, 
-                   ul.wager_threshold_usd AS current_level_threshold_usd, 
-                   ul.order_index AS current_level_order_index
-            FROM users u
-            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-            WHERE u.telegram_id = $1`;
+            SELECT
+                u.total_wagered_lamports,
+                u.current_level_id,
+                ul.level_name AS current_level_name,
+                ul.wager_threshold_usd AS current_level_threshold_usd,
+                ul.order_index AS current_level_order_index
+            FROM users u
+            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+            WHERE u.telegram_id = $1
+        `;
         const currentUserDetailsDm = await clientDm.query(currentUserDetailsQueryDm, [userId]);
 
         if (currentUserDetailsDm.rowCount === 0) {
@@ -13661,9 +13664,15 @@ async function handleBonusCommand(msg) {
                              `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamportsDm, 'USD'))}</b>\n\n`;
 
         const nextLevelDataQueryDm = `
-            SELECT level_name, wager_threshold_usd, bonus_amount_usd 
-            FROM user_levels
-            WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
+            SELECT
+                level_name,
+                wager_threshold_usd,
+                bonus_amount_usd
+            FROM user_levels
+            WHERE order_index > $1
+            ORDER BY order_index ASC
+            LIMIT 1
+        `;
         const nextLevelDataDm = await clientDm.query(nextLevelDataQueryDm, [currentLevelOrderIndexDm]);
 
         if (nextLevelDataDm.rowCount > 0) {
@@ -13678,13 +13687,21 @@ async function handleBonusCommand(msg) {
         }
         
         const claimableBonusesQueryDm = `
-            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd, ul.order_index 
-            FROM user_levels ul
-            WHERE ul.order_index <= $1 AND ul.bonus_amount_usd > 0 
-            AND NOT EXISTS (
-                SELECT 1 FROM user_claimed_level_bonuses uclb
-                WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-            ) ORDER BY ul.order_index ASC`;
+            SELECT
+                ul.level_id,
+                ul.level_name,
+                ul.bonus_amount_usd,
+                ul.order_index
+            FROM user_levels ul
+            WHERE
+                ul.order_index <= $1 AND
+                ul.bonus_amount_usd > 0 AND
+                NOT EXISTS (
+                    SELECT 1 FROM user_claimed_level_bonuses uclb
+                    WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+                )
+            ORDER BY ul.order_index ASC
+        `;
         const claimableBonusesResDm = await clientDm.query(claimableBonusesQueryDm, [currentLevelOrderIndexDm, userId]);
 
         if (claimableBonusesResDm.rows.length > 0) {
