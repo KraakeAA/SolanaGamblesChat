@@ -12768,7 +12768,7 @@ async function pollCompletedInteractiveGames() {
     if (pollCompletedInteractiveGames.isRunning) return;
     pollCompletedInteractiveGames.isRunning = true;
 
-    const logPrefix = '[InteractiveGamePoller_V2]'; // V2 with fix
+    const logPrefix = '[InteractiveGamePoller_V3]'; // V3 with ChatID fix
     let client = null;
 
     try {
@@ -12777,7 +12777,7 @@ async function pollCompletedInteractiveGames() {
         );
 
         if (completedSessionsRes.rowCount === 0) {
-            return; // No completed games to process
+            return;
         }
 
         console.log(`${logPrefix} Found ${completedSessionsRes.rowCount} completed interactive game session(s) to process.`);
@@ -12792,13 +12792,10 @@ async function pollCompletedInteractiveGames() {
                 finalizationClient = await pool.connect();
                 await finalizationClient.query('BEGIN');
 
-                // Mark as being processed to prevent double-processing
                 await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_processing' WHERE session_id = $1 AND status = $2", [session.session_id, session.status]);
 
                 const payoutAmount = BigInt(session.final_payout_lamports || '0');
                 const betAmount = BigInt(session.bet_amount_lamports);
-                
-                // *** THIS IS THE FIX: Removed the redundant JSON.parse(). ***
                 const gameState = session.game_state_json || {};
                 const totalWageredForLevelCheck = BigInt(gameState.totalWageredForLevelCheck || '0');
                 
@@ -12806,7 +12803,6 @@ async function pollCompletedInteractiveGames() {
                 const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject));
                 let notificationMessageHTML = '';
                 
-                // Finalize balance and create ledger entry
                 const ledgerCode = `result_${session.game_type}`;
                 const ledgerNotes = `Result from Helper Bot for game ${session.main_bot_game_id}. Payout: ${payoutAmount}`;
                 const updateResult = await updateUserBalanceAndLedger(finalizationClient, session.user_id, payoutAmount, ledgerCode, { game_id_custom_field: session.main_bot_game_id }, ledgerNotes);
@@ -12815,7 +12811,6 @@ async function pollCompletedInteractiveGames() {
                     throw new Error(`Failed to update balance for user ${session.user_id} for session ${session.session_id}. Error: ${updateResult.error}`);
                 }
 
-                // If the game was a conclusive bet (not a refund/error), run bonus checks
                 if (totalWageredForLevelCheck > 0n) {
                     const solPrice = await getSolUsdPrice();
                     await processQualifyingBetAndInitialBonus(finalizationClient, session.user_id, betAmount, session.main_bot_game_id);
@@ -12826,7 +12821,7 @@ async function pollCompletedInteractiveGames() {
                 await finalizationClient.query('COMMIT');
                 console.log(`${sessionLogPrefix} Successfully finalized.`);
 
-                // Notify user
+                // Prepare notification message
                 const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
                 const cleanGameName = escapeHTML(getCleanGameName(session.game_type));
 
@@ -12839,14 +12834,14 @@ async function pollCompletedInteractiveGames() {
                 }
 
                 if (notificationMessageHTML) {
-                    await safeSendMessage(session.user_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
+                    // *** THIS IS THE FIX: Changed session.user_id to session.chat_id ***
+                    await safeSendMessage(session.chat_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
                 }
 
             } catch (e) {
                 if (finalizationClient) await finalizationClient.query('ROLLBACK');
                 console.error(`${sessionLogPrefix} CRITICAL error processing session: ${e.message}`);
                 await notifyAdmin(`🚨 CRITICAL Error Finalizing Game Session 🚨\nSessionID: \`${session.session_id}\`\nUser: \`${session.user_id}\`\nError: \`${escapeHTML(e.message)}\``);
-                // Mark as failed to avoid retrying a broken session indefinitely
                 await queryDatabase("UPDATE interactive_game_sessions SET status = 'archived_error' WHERE session_id = $1", [session.session_id]);
             } finally {
                 if (finalizationClient) finalizationClient.release();
