@@ -2742,7 +2742,7 @@ async function processBackgroundJobs() {
     if (isJobProcessorRunning) return;
 
     isJobProcessorRunning = true;
-    const LOG_PREFIX = '[JobProcessor_V4_RefFix]'; // V4 with Referral Fix
+    const LOG_PREFIX = '[JobProcessor_V5_FinalFix]'; // V5 with Final Fixes
 
     let jobsToProcess = [];
     let mainClient = null;
@@ -2790,7 +2790,7 @@ async function processBackgroundJobs() {
 
             if (job.job_type === 'check_referral_wager') {
                 const { referredUserTelegramId, newTotalWageredLamports, solPrice } = job.payload;
-                const LOG_PREFIX_WAGER_CHECK = `[ProcessWagerRebate_V2_Iterative UID:${referredUserTelegramId}]`;
+                const LOG_PREFIX_WAGER_CHECK = `[ProcessWagerRebate_V3_FinalFix UID:${referredUserTelegramId}]`;
 
                 if (!solPrice || solPrice <= 0) {
                     throw new Error("Invalid or missing solPrice in 'check_referral_wager' job payload. Cannot calculate bonuses.");
@@ -2804,39 +2804,33 @@ async function processBackgroundJobs() {
                     const lastPaidOutWagerLamports = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
                     const newTotalWageredLamportsNum = BigInt(newTotalWageredLamports);
 
-                    // --- START OF NEW, ROBUST LOGIC ---
-                    // Convert interval to lamports once to avoid repeated USD conversions
                     const wagerIntervalLamports = convertUSDToLamports(REFERRAL_WAGER_REBATE_INTERVAL_USD, solPrice);
                     if (wagerIntervalLamports <= 0n) {
                          console.error(`${LOG_PREFIX_WAGER_CHECK} Wager interval calculates to 0 lamports. Aborting bonus check.`);
-                         // Exit gracefully without throwing, as this is a config/price issue
                          await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
                          await jobClient.query('COMMIT');
-                         continue; // Move to the next job
+                         continue;
                     }
 
-                    // Pre-calculate the bonus amount per chunk in lamports
                     const bonusPerChunkUSD = REFERRAL_WAGER_REBATE_INTERVAL_USD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST;
                     const bonusPerChunkLamports = convertUSDToLamports(bonusPerChunkUSD, solPrice);
 
-                    // Determine the next milestone to check against
                     let nextMilestoneLamports = ( (lastPaidOutWagerLamports / wagerIntervalLamports) + 1n ) * wagerIntervalLamports;
                     
                     let totalBonusToPayLamports = 0n;
                     let chunksToPay = 0;
+                    let lastMilestonePaidInThisLoop = lastPaidOutWagerLamports;
 
-                    // Iterate through each unpaid milestone the user has crossed
                     while (newTotalWageredLamportsNum >= nextMilestoneLamports) {
                         totalBonusToPayLamports += bonusPerChunkLamports;
                         chunksToPay++;
-                        // Move to the next milestone
+                        lastMilestonePaidInThisLoop = nextMilestoneLamports;
                         nextMilestoneLamports += wagerIntervalLamports;
                     }
 
                     if (chunksToPay > 0) {
                         console.log(`${LOG_PREFIX_WAGER_CHECK} Found ${chunksToPay} new milestone(s) to pay for a total bonus of ${totalBonusToPayLamports} lamports.`);
                         
-                        // Queue a SINGLE credit job for the total calculated bonus
                         const creditJobPayload = {
                             targetUserId: referrerId,
                             amountLamports: totalBonusToPayLamports.toString(),
@@ -2844,15 +2838,14 @@ async function processBackgroundJobs() {
                             referralId: referralLink.referral_id,
                             notes: `Referral Wager Rebate for ${chunksToPay} chunks, paid out at milestone ${lastMilestonePaidInThisLoop.toString()} lamports.`
                         };
+                        
                         await jobClient.query(`INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`, [creditJobPayload]);
-                        console.log(`${LOG_PREFIX_WAGER_CHECK} Queued 'credit_user_balance' job for ${chunksToPay} rebate chunk(s) for referrer ${referrerId}.`);
+                        console.log(`${LOG_PREFIX_WAGER_CHECK} Queued 'credit_user_balance' job for referrer ${referrerId}.`);
 
-                        // Update the last paid milestone to the level of the last milestone we just paid for.
-                        const newLastMilestonePaidLamports = nextMilestoneLamports - wagerIntervalLamports;
-                        await jobClient.query(`UPDATE referrals SET last_milestone_bonus_check_wager_lamports = $1 WHERE referral_id = $2;`, [newLastMilestonePaidLamports.toString(), referralLink.referral_id]);
-                        console.log(`${LOG_PREFIX_WAGER_CHECK} Updated last_milestone_bonus_check_wager_lamports to ${newLastMilestonePaidLamports}.`);
+                        // *** FIX #1: Using the correct variable `lastMilestonePaidInThisLoop` ***
+                        await jobClient.query(`UPDATE referrals SET last_milestone_bonus_check_wager_lamports = $1 WHERE referral_id = $2;`, [lastMilestonePaidInThisLoop.toString(), referralLink.referral_id]);
+                        console.log(`${LOG_PREFIX_WAGER_CHECK} Updated last_milestone_bonus_check_wager_lamports to ${lastMilestonePaidInThisLoop}.`);
                     }
-                    // --- END OF NEW, ROBUST LOGIC ---
                 }
             } else if (job.job_type === 'credit_user_balance') {
                 const { targetUserId, amountLamports, transactionType, notes, referralId } = job.payload;
@@ -2920,7 +2913,9 @@ async function processBackgroundJobs() {
                     await moveClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
                     await moveClient.query('COMMIT');
                     if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``, {parse_mode: 'MarkdownV2'});
+                        // *** FIX #2: Escaping parentheses in the notification message ***
+                        const jobTypeDisplay = escapeMarkdownV2(job.job_type);
+                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` \\(${jobTypeDisplay}\\) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``, {parse_mode: 'MarkdownV2'});
                     }
                 } catch (moveError) {
                     if (moveClient) await moveClient.query('ROLLBACK');
