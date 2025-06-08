@@ -13437,6 +13437,8 @@ async function handleLeaderboardsCommand(msg, args) {
     await safeSendMessage(chatId, leaderboardMessage, { parse_mode: 'MarkdownV2' });
 }
 
+// REPLACEMENT for handleGrantCommand in Part 5a, Section 2
+
 async function handleGrantCommand(msg, args, adminUserObj) {
     const LOG_PREFIX_GRANT = `[GrantCmd UID:${adminUserObj.telegram_id}]`;
     const chatId = String(msg.chat.id);
@@ -13447,13 +13449,14 @@ async function handleGrantCommand(msg, args, adminUserObj) {
     }
 
     if (args.length < 2) {
-        await safeSendMessage(chatId, "⚙️ **Admin Grant Usage:** `/grant <target_user_id_or_@username> <amount_SOL_or_Lamports> [Optional: reason]`\n*Examples:*\n`/grant @LuckyPlayer 10 SOL Welcome Bonus`\n`/grant 123456789 50000000 lamports Correction`\n`/grant @RiskTaker -2 SOL BetSettleFix`", { parse_mode: 'MarkdownV2' });    
+        await safeSendMessage(chatId, "⚙️ **Admin Grant Usage:** `/grant <target_user_id_or_@username> <amount> [usd|sol|lamports] [Optional: reason]`\n*Examples:*\n`/grant @LuckyPlayer 10.50` (defaults to USD)\n`/grant 123456789 0.5 sol Correction`\n`/grant @RiskTaker -2 usd BetSettleFix`", { parse_mode: 'MarkdownV2' });    
         return;
     }
 
     const targetUserIdentifier = args[0];
     const amountArg = args[1];
-    const reason = args.slice(2).join(' ') || `Admin grant by ${adminUserObj.username || adminUserIdStr}`;
+    const currencySuffixArg = (args[2] || '').toLowerCase();
+    let reason;
     let amountToGrantLamports;
     let targetUser;
 
@@ -13470,35 +13473,30 @@ async function handleGrantCommand(msg, args, adminUserObj) {
         }
         if (!targetUser) throw new Error(`Could not find or create target user \`${escapeMarkdownV2(targetUserIdentifier)}\`.`);
         
-        const amountArgLower = String(amountArg).toLowerCase();
-        let parsedAmount;
+        const validSuffixes = ['usd', 'sol', 'lamports'];
+        let hasSuffix = validSuffixes.includes(currencySuffixArg);
+        
+        reason = hasSuffix ? args.slice(3).join(' ') : args.slice(2).join(' ');
+        if (!reason) {
+            reason = `Admin grant by ${adminUserObj.username || adminUserIdStr}`;
+        }
+        
+        const parsedValueFloat = parseFloat(amountArg);
+        if (isNaN(parsedValueFloat)) {
+            throw new Error("Invalid number provided for amount.");
+        }
 
-        if (amountArgLower.endsWith('sol')) {
-            parsedAmount = parseFloat(amountArgLower.replace('sol', '').trim());
-            if (isNaN(parsedAmount)) throw new Error("Invalid SOL amount.");
-            amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
-        } else if (amountArgLower.endsWith('lamports')) {
-            const lamportsStr = amountArgLower.replace('lamports','').trim();
-            try {
-                amountToGrantLamports = BigInt(lamportsStr);
-            } catch (bigIntError){
-                 throw new Error("Invalid lamports amount: not a whole number.");
-            }
-        } else {
-            try {
-                parsedAmount = parseFloat(amountArg);
-                if (isNaN(parsedAmount)) throw new Error("Invalid numeric amount.");
-                if (String(amountArg).includes('.') || (Number.isInteger(parsedAmount) && Math.abs(parsedAmount) < 1000000) ) {
-                    amountToGrantLamports = BigInt(Math.floor(parsedAmount * Number(LAMPORTS_PER_SOL)));
-                } else {
-                    amountToGrantLamports = BigInt(amountArg);
-                }
-            } catch (e) {
-                 throw new Error("Could not parse grant amount. Use SOL (e.g., 10 or 10.5 sol) or lamports (e.g., 10000000 lamports).");
-            }
-        }
+        const effectiveSuffix = hasSuffix ? currencySuffixArg : 'usd'; // Default to USD if no valid suffix
 
-        if (isNaN(Number(amountToGrantLamports))) throw new Error("Could not resolve grant amount to a valid number of lamports.");
+        if (effectiveSuffix === 'sol') {
+            amountToGrantLamports = BigInt(Math.floor(parsedValueFloat * Number(LAMPORTS_PER_SOL)));
+        } else if (effectiveSuffix === 'lamports') {
+            if (!Number.isInteger(parsedValueFloat)) throw new Error("Lamports amount must be a whole number.");
+            amountToGrantLamports = BigInt(amountArg);
+        } else { // Defaults to USD
+            const solPrice = await getSolUsdPrice();
+            amountToGrantLamports = convertUSDToLamports(parsedValueFloat, solPrice);
+        }
 
     } catch (e) {
         await safeSendMessage(chatId, `⚠️ **Grant Parameter Error:**\n${escapeMarkdownV2(e.message)}`, { parse_mode: 'MarkdownV2' });
@@ -13525,15 +13523,16 @@ async function handleGrantCommand(msg, args, adminUserObj) {
         if (grantResult.success) {
             await grantClient.query('COMMIT');
             const grantAmountDisplay = escapeMarkdownV2(formatCurrency(amountToGrantLamports, 'SOL'));
+            const grantAmountUSDDisplay = escapeMarkdownV2(await formatBalanceForDisplay(amountToGrantLamports, 'USD'));
             const newBalanceDisplay = escapeMarkdownV2(await formatBalanceForDisplay(grantResult.newBalanceLamports, 'USD')); 
             const targetUserDisplay = getPlayerDisplayReference(targetUser); 
             const verb = amountToGrantLamports >= 0n ? "credited to" : "debited from";
 
-            await safeSendMessage(chatId, `✅ **Admin Action Successful!**\n*${grantAmountDisplay}* has been ${verb} ${targetUserDisplay} (ID: \`${targetUser.telegram_id}\`).\nNew balance for user: *${newBalanceDisplay}*.`, { parse_mode: 'MarkdownV2' });    
+            await safeSendMessage(chatId, `✅ **Admin Action Successful!**\n*${grantAmountDisplay}* \\(approx\\. ${grantAmountUSDDisplay}\\) has been ${verb} ${targetUserDisplay} (ID: \`${targetUser.telegram_id}\`).\nNew balance for user: *${newBalanceDisplay}*.`, { parse_mode: 'MarkdownV2' });    
             
             const userNotifText = amountToGrantLamports >= 0n
-                ? `🎉 Good news! You have received an admin credit of *${grantAmountDisplay}* from the Casino Royale team! Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`
-                : `⚖️ Admin Adjustment: Your account has been debited by *${grantAmountDisplay}* by the Casino Royale team. Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`;
+                ? `🎉 Good news! You have received an admin credit of *${grantAmountDisplay}* \\(approx\\. ${grantAmountUSDDisplay}\\) from the Casino Royale team! Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`
+                : `⚖️ Admin Adjustment: Your account has been debited by *${grantAmountDisplay}* \\(approx\\. ${grantAmountUSDDisplay}\\) by the Casino Royale team. Your new balance is *${newBalanceDisplay}*. Reason: _${escapeMarkdownV2(reason)}_`;
             await safeSendMessage(targetUser.telegram_id, userNotifText, { parse_mode: 'MarkdownV2' });
         } else {
             await grantClient.query('ROLLBACK');
