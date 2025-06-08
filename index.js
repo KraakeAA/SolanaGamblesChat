@@ -12768,7 +12768,7 @@ async function pollCompletedInteractiveGames() {
     if (pollCompletedInteractiveGames.isRunning) return;
     pollCompletedInteractiveGames.isRunning = true;
 
-    const logPrefix = '[InteractiveGamePoller_V5]'; // V5 with Key Fix
+    const logPrefix = '[InteractiveGamePoller_V5_MsgFix]';
     let client = null;
 
     try {
@@ -12821,23 +12821,29 @@ async function pollCompletedInteractiveGames() {
                 await finalizationClient.query('COMMIT');
                 console.log(`${sessionLogPrefix} Successfully finalized payout and ledger.`);
 
+                // --- START OF MESSAGING FIX ---
+                // The logic now compares the payout to the original bet to determine the correct message tone.
                 const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
                 const cleanGameName = escapeHTML(getCleanGameName(session.game_type));
-
-                if (session.status === 'completed_win' || session.status === 'completed_cashout' || session.status === 'completed_cashout_timeout') {
-                    notificationMessageHTML = `🎉 Congratulations, ${playerRefHTML}!\n\nYour <b>${cleanGameName}</b> game has concluded with a win of <b>${payoutDisplay}</b>! The funds have been added to your balance.`;
-                } else if (session.status === 'completed_loss' || session.status === 'completed_miss') {
-                    notificationMessageHTML = `💔 Unlucky, ${playerRefHTML}.\n\nYour <b>${cleanGameName}</b> game resulted in a loss. Better luck next time!`;
-                } else if (session.status === 'completed_timeout') {
+                
+                if (session.status === 'completed_cashout' || session.status === 'completed_cashout_timeout') {
+                    notificationMessageHTML = `💰 **Cashed Out!**\n\nNice play, ${playerRefHTML}! You cashed out in <b>${cleanGameName}</b> for a total of <b>${payoutDisplay}</b>!`;
+                } else if (session.status.includes('timeout')) {
                     notificationMessageHTML = `⏱️ ${playerRefHTML}, your <b>${cleanGameName}</b> game timed out and was forfeited.`;
+                } else if (payoutAmount > betAmount) {
+                    notificationMessageHTML = `🎉 **Winner!** 🎉\n\nCongratulations, ${playerRefHTML}! Your <b>${cleanGameName}</b> game concluded with a total payout of <b>${payoutDisplay}</b>!`;
+                } else if (payoutAmount > 0n && payoutAmount <= betAmount) {
+                    notificationMessageHTML = `😅 **Partial Return!**\n\n${playerRefHTML}, your <b>${cleanGameName}</b> game returned <b>${payoutDisplay}</b>. Better than a total loss!`;
+                } else { // Total loss (payoutAmount is 0)
+                    notificationMessageHTML = `💔 **Loss.**\n\nUnlucky, ${playerRefHTML}. Your <b>${cleanGameName}</b> game resulted in a loss. Better luck on the next roll!`;
                 }
+                // --- END OF MESSAGING FIX ---
 
                 if (notificationMessageHTML) {
                     await safeSendMessage(session.chat_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
                 }
 
-                // *** THIS IS THE FIX: We now use the reliable game_type from the database session ***
-                const gameKeyForGroupLock = session.game_type;
+                const gameKeyForGroupLock = GAME_IDS[session.game_type.toUpperCase()] || session.game_type;
                 activeGames.delete(session.main_bot_game_id);
                 await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, gameKeyForGroupLock, null);
                 console.log(`${sessionLogPrefix} Game lock cleared from activeGames and group session for key: ${gameKeyForGroupLock}.`);
@@ -12857,9 +12863,6 @@ async function pollCompletedInteractiveGames() {
         pollCompletedInteractiveGames.isRunning = false;
     }
 }
-// Add a running state property to the function
-pollCompletedInteractiveGames.isRunning = false;
-
 
 function startInteractiveGamePolling() {
     const intervalMs = 7500; // Check every 7.5 seconds
