@@ -249,6 +249,9 @@ const GAME_IDS = {
     SLOT_FRENZY: 'slotfrenzy',
     MINES: 'mines',
     MINES_OFFER: 'mines_offer',
+    BOWLING: 'bowling',
+    DARTS: 'darts',
+    BASKETBALL: 'basketball',
 
     DIRECT_PVP_CHALLENGE: 'direct_pvp_challenge',
 };
