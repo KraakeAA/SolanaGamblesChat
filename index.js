@@ -14818,7 +14818,7 @@ bot.on('callback_query', async (callbackQuery) => {
                  const originalUserIdForBonus = params[0];
                 const levelIdToClaimStr = params[1];
                  if (typeof handleClaimLevelBonusCallback === 'function') {
-                     // Pass the entire callbackQuery object, not just the ID
+                     // This line is critical: It passes the full `callbackQuery` object.
                      await handleClaimLevelBonusCallback(callbackQuery, userObjectForCallback, originalUserIdForBonus, levelIdToClaimStr);
                  } else {
                      await bot.answerCallbackQuery(callbackQuery.id, { text: "Error: Level bonus claim feature is unavailable.", show_alert: true });
