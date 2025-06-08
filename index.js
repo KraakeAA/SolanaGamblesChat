@@ -17610,189 +17610,203 @@ async function handleHistoryCommand(msgOrCbMsg) {
     }
 }
 
-// REPLACE your entire handleMenuAction function with this corrected version.
+// REPLACEMENT for handleMenuAction in Part P3
 
 async function handleMenuAction(userId, originalChatId, originalMessageId, menuTypeInput, params = [], isFromCallback = true, originalChatType = 'private', originalMsgObject = null) {
-    const stringUserId = String(userId);
-    const menuType = String(menuTypeInput).trim();
-    const logPrefix = `[MenuAction UID:${stringUserId} Type:${menuType} OrigChat:${originalChatId}]`;
-    console.log(`${logPrefix} Processing menu action. Cleaned menuType: '${menuType}', Params: [${params.join(',')}]`);
+    const stringUserId = String(userId);
+    const menuType = String(menuTypeInput).trim();
+    const logPrefix = `[MenuAction UID:${stringUserId} Type:${menuType} OrigChat:${originalChatId}]`;
+    console.log(`${logPrefix} Processing menu action. Cleaned menuType: '${menuType}', Params: [${params.join(',')}]`);
 
-    if (stringUserId === "undefined" || stringUserId === "") {
-        console.error(`${logPrefix} CRITICAL: stringUserId is problematic: '${stringUserId}'`);
-        return;
-    }
-    let userObject = await getOrCreateUser(stringUserId);
+    if (stringUserId === "undefined" || stringUserId === "") {
+        console.error(`${logPrefix} CRITICAL: stringUserId is problematic: '${stringUserId}'`);
+        return;
+    }
+    let userObject = await getOrCreateUser(stringUserId);
 
-    if(!userObject) {
-        console.error(`${logPrefix} Could not fetch user profile for menu action. User ID: ${stringUserId}`);
-        if (originalChatId) {
-            await safeSendMessage(originalChatId, "Error fetching your player profile. Please try <code>/start</code> again.", {parse_mode:'HTML'});
-        }
-        return;
-    }
+    if(!userObject) {
+        console.error(`${logPrefix} Could not fetch user profile for menu action. User ID: ${stringUserId}`);
+        if (originalChatId) {
+            await safeSendMessage(originalChatId, "Error fetching your player profile. Please try <code>/start</code> again.", {parse_mode:'HTML'});
+        }
+        return;
+    }
 
-    let botUsername = BOT_NAME || "our bot";
-    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* ignore */ }
+    let botUsername = BOT_NAME || "our bot";
+    try { const selfInfo = await bot.getMe(); if(selfInfo.username) botUsername = selfInfo.username; } catch(e) { /* ignore */ }
 
-    let targetChatIdForAction = stringUserId; 
-    let messageIdToEdit = (isFromCallback && originalChatType === 'private' && originalMessageId) ? originalMessageId : null;
-    let isGroupActionRedirect = false;
-    
-    const sensitiveMenuTypes = ['deposit', 'quick_deposit', 'withdraw', 'menu:wallet', 'menu:history', 'menu:link_wallet_prompt', 'menu:referral', 'process_withdrawal_confirm', 'unlink_wallet_confirm', 'unlink_wallet_execute', 'menu:quick_deposit_choice'];
-    const dmPreferredMenuTypes = [...sensitiveMenuTypes, 'rules_list', 'games_overview', 'levels_info', 'main', 'bonus_dashboard_back'];
+    let targetChatIdForAction = stringUserId; 
+    let messageIdToEdit = (isFromCallback && originalChatType === 'private' && originalMessageId) ? originalMessageId : null;
+    let isGroupActionRedirect = false;
+    
+    const sensitiveMenuTypes = ['deposit', 'quick_deposit', 'withdraw', 'menu:wallet', 'menu:history', 'menu:link_wallet_prompt', 'menu:referral', 'process_withdrawal_confirm', 'unlink_wallet_confirm', 'unlink_wallet_execute', 'menu:quick_deposit_choice'];
+    const dmPreferredMenuTypes = [...sensitiveMenuTypes, 'rules_list', 'games_overview', 'levels_info', 'main', 'bonus_dashboard_back'];
 
-    // This block handles redirecting group actions to DM for privacy/security
-    if ((originalChatType === 'group' || originalChatType === 'supergroup') && dmPreferredMenuTypes.includes(menuType)) {
-        isGroupActionRedirect = true;
-        const playerRefForRedirect = escapeHTML(getPlayerDisplayReference(userObject));
-        const redirectText = `${playerRefForRedirect}, for privacy, please continue this in our direct message: @${escapeHTML(botUsername)}`;
-        const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
-        
-        if (originalMessageId && bot) {
-            try {
-                await bot.editMessageText(redirectText, {
-                    chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeHTML(botUsername)}`, url: `https://t.me/${botUsername}?start=menu_${menuType}${callbackParamsForUrl}`}]] }
-                });
-            } catch (e) {
-                if (!e.message?.toLowerCase().includes("message is not modified")) {
-                    await safeSendMessage(originalChatId, redirectText, {parse_mode: 'HTML'});
-                }
-            }
-        } else {
-            await safeSendMessage(originalChatId, redirectText, {parse_mode: 'HTML'});
-        }
-        messageIdToEdit = null; 
-    } else if (originalChatType === 'private') {
-        targetChatIdForAction = originalChatId;
-    }
-    
-    const statefulActionsToPreserveState = ['awaiting_withdrawal_address', 'awaiting_withdrawal_amount', 'awaiting_withdrawal_confirmation'];
-    if (userStateCache && !statefulActionsToPreserveState.includes(userStateCache.get(stringUserId)?.state)) {
-        if (typeof clearUserState === 'function') clearUserState(stringUserId); else userStateCache.delete(stringUserId);
-    }
+    if ((originalChatType === 'group' || originalChatType === 'supergroup') && dmPreferredMenuTypes.includes(menuType)) {
+        isGroupActionRedirect = true;
+        const playerRefForRedirect = escapeHTML(getPlayerDisplayReference(userObject));
+        const redirectText = `${playerRefForRedirect}, for privacy, please continue this in our direct message: @${escapeHTML(botUsername)}`;
+        const callbackParamsForUrl = params && params.length > 0 ? `_${params.join('_')}` : '';
+        
+        if (originalMessageId && bot) {
+            try {
+                await bot.editMessageText(redirectText, {
+                    chat_id: originalChatId, message_id: Number(originalMessageId), parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: [[{text: `📬 Open DM with @${escapeHTML(botUsername)}`, url: `https://t.me/${botUsername}?start=menu_${menuType}${callbackParamsForUrl}`}]] }
+                });
+            } catch (e) {
+                 if (!e.message?.toLowerCase().includes("message is not modified")) {
+                    await safeSendMessage(originalChatId, redirectText, {parse_mode: 'HTML'});
+                }
+            }
+        } else {
+            await safeSendMessage(originalChatId, redirectText, {parse_mode: 'HTML'});
+        }
+        messageIdToEdit = null; 
+    } else if (originalChatType === 'private') {
+        targetChatIdForAction = originalChatId;
+    }
+    
+    const statefulActionsToPreserveState = ['awaiting_withdrawal_address', 'awaiting_withdrawal_amount', 'awaiting_withdrawal_confirmation'];
+    if (userStateCache && !statefulActionsToPreserveState.includes(userStateCache.get(stringUserId)?.state)) {
+        if (typeof clearUserState === 'function') clearUserState(stringUserId); else userStateCache.delete(stringUserId);
+    }
 
-    // --- FIX IS HERE: This object is now built correctly ---
-    // It creates a `from` object that consistently uses `.id` as the property for the user's ID.
-    const actionMsgContext = {
-        from: {
-            id: userObject.telegram_id,
-            is_bot: false,
-            first_name: userObject.first_name,
-            username: userObject.username,
-            telegram_id: userObject.telegram_id
-        },
-        chat: { id: targetChatIdForAction, type: 'private' },
-        message_id: messageIdToEdit,
-        isCallbackRedirect: isGroupActionRedirect,
-        originalChatInfo: isGroupActionRedirect ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
-        message: originalMsgObject
-    };
-    // --- END OF FIX ---
-    
-    const alwaysNewMessageInDM = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main', 'rules_list', 'games_overview', 'levels_info', 'bonus_dashboard_back', 'unlink_wallet_confirm', 'unlink_wallet_execute', 'quick_deposit_choice'];
-    if (targetChatIdForAction === stringUserId && actionMsgContext.message_id && alwaysNewMessageInDM.includes(menuType)) {
-        await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
-        actionMsgContext.message_id = null;
-    }
+    const actionMsgContext = {
+        from: {
+            id: userObject.telegram_id,
+            is_bot: false,
+            first_name: userObject.first_name,
+            username: userObject.username,
+            telegram_id: userObject.telegram_id
+        },
+        chat: { id: targetChatIdForAction, type: 'private' },
+        message_id: messageIdToEdit,
+        isCallbackRedirect: isGroupActionRedirect,
+        originalChatInfo: isGroupActionRedirect ? { id: originalChatId, type: originalChatType, messageId: originalMessageId } : null,
+        message: originalMsgObject
+    };
+    
+    const alwaysNewMessageInDM = ['deposit', 'quick_deposit', 'withdraw', 'referral', 'history', 'link_wallet_prompt', 'main', 'rules_list', 'games_overview', 'levels_info', 'bonus_dashboard_back', 'unlink_wallet_confirm', 'unlink_wallet_execute', 'quick_deposit_choice'];
+    if (targetChatIdForAction === stringUserId && actionMsgContext.message_id && alwaysNewMessageInDM.includes(menuType)) {
+        await bot.deleteMessage(targetChatIdForAction, Number(actionMsgContext.message_id)).catch(()=>{});
+        actionMsgContext.message_id = null;
+    }
 
-    let client = null; 
+    let client = null; 
 
-    try {
-        if (menuType === 'levels_info' || menuType === 'unlink_wallet_confirm' || menuType === 'unlink_wallet_execute') {
-            client = await pool.connect();
-        }
+    try {
+        if (menuType === 'levels_info' || menuType === 'unlink_wallet_confirm' || menuType === 'unlink_wallet_execute') {
+            client = await pool.connect();
+        }
 
-        switch(menuType) {
-            case 'wallet':
-                if (typeof handleWalletCommand === 'function') await handleWalletCommand(actionMsgContext);
-                else console.error(`${logPrefix} Missing handler: handleWalletCommand`);
-                break;
-            case 'deposit':
-                const currency = params[0];
-                if (currency === 'ltc') {
-                    if (typeof handleLitecoinDepositRequest === 'function') await handleLitecoinDepositRequest(actionMsgContext);
-                    else console.error(`${logPrefix} Missing handler: handleLitecoinDepositRequest`);
+        switch(menuType) {
+            case 'wallet':
+                if (typeof handleWalletCommand === 'function') await handleWalletCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleWalletCommand`);
+                break;
+            case 'deposit':
+                const currency = params[0];
+                if (currency === 'ltc') {
+                    if (typeof handleLitecoinDepositRequest === 'function') await handleLitecoinDepositRequest(actionMsgContext);
+                    else console.error(`${logPrefix} Missing handler: handleLitecoinDepositRequest`);
+                } else {
+                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(actionMsgContext, [], stringUserId);
+                    else console.error(`${logPrefix} Missing handler: handleDepositCommand`);
+                }
+                break;
+            case 'quick_deposit_choice':
+                 const choiceText = `Hi ${escapeHTML(getPlayerDisplayReference(userObject))}! Which currency would you like to deposit?`;
+                 const choiceKeyboard = {
+                     inline_keyboard: [
+                         [{ text: "➕ Deposit SOL", callback_data: "menu:deposit:sol" }],
+                         [{ text: "➕ Deposit LTC", callback_data: "menu:deposit:ltc" }],
+                         [{ text: "❌ Cancel", callback_data: "menu:wallet" }] 
+                     ]
+                 };
+                 if (actionMsgContext.message_id) {
+                     await bot.editMessageText(choiceText, { chat_id: targetChatIdForAction, message_id: Number(actionMsgContext.message_id), parse_mode: 'HTML', reply_markup: choiceKeyboard });
+                 } else {
+                     await safeSendMessage(targetChatIdForAction, choiceText, { parse_mode: 'HTML', reply_markup: choiceKeyboard });
+                 }
+                 break;
+            case 'withdraw':
+                if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(actionMsgContext, [], stringUserId);
+                else console.error(`${logPrefix} Missing handler: handleWithdrawCommand`);
+                break;
+            case 'referral':
+                if (typeof handleReferralCommand === 'function') await handleReferralCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleReferralCommand`);
+                break;
+            case 'history':
+                if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleHistoryCommand`);
+                break;
+            case 'link_wallet_prompt':
+                const linkedWallet = await getUserLinkedWallet(stringUserId);
+                const promptText = `🔗 <b>Link/Update Your Withdrawal Wallet</b>\n\n` +
+                                   (linkedWallet ? `Your current linked wallet is: <code>${escapeHTML(linkedWallet)}</code>\n\nTo update, please reply with your new Solana wallet address.\n\n` : `Please reply to this message with your personal Solana wallet address.\n\n`) +
+                                   `Ensure it's correct as transactions are irreversible.`;
+                
+                const keyboardButtons = [];
+                if (linkedWallet) {
+                    keyboardButtons.push([{ text: '🗑️ Unlink Current Wallet', callback_data: 'menu:unlink_wallet_confirm' }]);
+                }
+                keyboardButtons.push([{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }]);
+                const kbd = { inline_keyboard: keyboardButtons };
+                
+                const sentDmPrompt = await safeSendMessage(stringUserId, promptText, { parse_mode: 'HTML', reply_markup: kbd });
+
+                if (sentDmPrompt?.message_id) {
+                    userStateCache.set(stringUserId, {
+                        state: 'awaiting_withdrawal_address', chatId: stringUserId, messageId: sentDmPrompt.message_id,
+                        data: { originalPromptMessageId: sentDmPrompt.message_id },
+                        timestamp: Date.now()
+                    });
+                }
+                break;
+            case 'bonus_dashboard_back':
+                if (typeof handleBonusCommand === 'function') {
+                    await handleBonusCommand(actionMsgContext);
                 } else {
-                    if (typeof handleDepositCommand === 'function') await handleDepositCommand(actionMsgContext, [], stringUserId);
-                    else console.error(`${logPrefix} Missing handler: handleDepositCommand`);
+                    console.error(`${logPrefix} Missing handler: handleBonusCommand`);
+                    await safeSendMessage(targetChatIdForAction, "Error: Bonus dashboard is currently unavailable.", {});
                 }
                 break;
-            case 'quick_deposit_choice':
-                 const choiceText = `Hi ${escapeHTML(getPlayerDisplayReference(userObject))}! Which currency would you like to deposit?`;
-                 const choiceKeyboard = {
-                     inline_keyboard: [
-                         [{ text: "➕ Deposit SOL", callback_data: "menu:deposit:sol" }],
-                         [{ text: "➕ Deposit LTC", callback_data: "menu:deposit:ltc" }],
-                         [{ text: "❌ Cancel", callback_data: "menu:wallet" }] // Go back to wallet on cancel
-                     ]
-                 };
-                 if (actionMsgContext.message_id) {
-                     await bot.editMessageText(choiceText, { chat_id: targetChatIdForAction, message_id: Number(actionMsgContext.message_id), parse_mode: 'HTML', reply_markup: choiceKeyboard });
-                 } else {
-                     await safeSendMessage(targetChatIdForAction, choiceText, { parse_mode: 'HTML', reply_markup: choiceKeyboard });
-                 }
-                 break;
-            case 'withdraw':
-                if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(actionMsgContext, [], stringUserId);
-                else console.error(`${logPrefix} Missing handler: handleWithdrawCommand`);
-                break;
-            case 'referral':
-                if (typeof handleReferralCommand === 'function') await handleReferralCommand(actionMsgContext);
-                else console.error(`${logPrefix} Missing handler: handleReferralCommand`);
-                break;
-            case 'history':
-                if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(actionMsgContext);
-                else console.error(`${logPrefix} Missing handler: handleHistoryCommand`);
-                break;
-            case 'link_wallet_prompt':
-                const linkedWallet = await getUserLinkedWallet(stringUserId);
-                const promptText = `🔗 <b>Link/Update Your Withdrawal Wallet</b>\n\n` +
-                                   (linkedWallet ? `Your current linked wallet is: <code>${escapeHTML(linkedWallet)}</code>\n\nTo update, please reply with your new Solana wallet address.\n\n` : `Please reply to this message with your personal Solana wallet address.\n\n`) +
-                                   `Ensure it's correct as transactions are irreversible.`;
-                
-                const keyboardButtons = [];
-                if (linkedWallet) {
-                    keyboardButtons.push([{ text: '🗑️ Unlink Current Wallet', callback_data: 'menu:unlink_wallet_confirm' }]);
-                }
-                keyboardButtons.push([{ text: '❌ Cancel & Back to Wallet', callback_data: 'menu:wallet' }]);
-                const kbd = { inline_keyboard: keyboardButtons };
-                
-                const sentDmPrompt = await safeSendMessage(stringUserId, promptText, { parse_mode: 'HTML', reply_markup: kbd });
-
-                if (sentDmPrompt?.message_id) {
-                    userStateCache.set(stringUserId, {
-                        state: 'awaiting_withdrawal_address', chatId: stringUserId, messageId: sentDmPrompt.message_id,
-                        data: { originalPromptMessageId: sentDmPrompt.message_id },
-                        timestamp: Date.now()
-                    });
-                }
-                break;
-            // ... (All your other cases like unlink_wallet, main, rules_list, etc. remain here) ...
-            
-            default:
-                console.warn(`${logPrefix} Unrecognized menu type in handleMenuAction: '${menuType}'`);
-                const unrecognizedMenuMsg = `❓ Unrecognized menu option: <code>${escapeHTML(menuType)}</code>. Please try again or use <code>/help</code>.`;
-                const unrecognizedMenuKbd = createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu');
-                if (actionMsgContext.message_id && bot) { 
-                    await bot.editMessageText(unrecognizedMenuMsg, { chat_id: targetChatIdForAction, message_id: Number(actionMsgContext.message_id), parse_mode: 'HTML', reply_markup: unrecognizedMenuKbd}).catch(async (e) => {
-                        if (!e.message?.toLowerCase().includes("message is not modified")) await safeSendMessage(targetChatIdForAction, unrecognizedMenuMsg, { parse_mode: 'HTML', reply_markup: unrecognizedMenuKbd });
-                    });
-                } else {
-                    await safeSendMessage(targetChatIdForAction, unrecognizedMenuMsg, { parse_mode: 'HTML', reply_markup: unrecognizedMenuKbd });
-                }
-        }
-    } catch (error) { 
-        console.error(`${logPrefix} Outer error in handleMenuAction for menuType ${menuType}: ${error.message}`, error.stack);
-        if(actionMsgContext.chat?.id) { 
-            await safeSendMessage(actionMsgContext.chat.id, `⚙️ An unexpected error occurred while processing your menu selection. Please try again.`, { parse_mode: 'HTML', reply_markup: createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu')});
-        }
-    } finally {
-        if (client) { 
-            client.release();
-        }
-    }
+            case 'main':
+                if (typeof handleHelpCommand === 'function') await handleHelpCommand(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleHelpCommand`);
+                break;
+            case 'rules_list':
+                if (typeof handleRulesCommand === 'function') await handleRulesCommand(targetChatIdForAction, userObject, actionMsgContext.message_id, true, 'private');
+                else console.error(`${logPrefix} Missing handler: handleRulesCommand`);
+                break;
+            case 'games_overview':
+                if (typeof handleGamesOverviewMenu === 'function') await handleGamesOverviewMenu(actionMsgContext);
+                else console.error(`${logPrefix} Missing handler: handleGamesOverviewMenu`);
+                break;
+            default:
+                console.warn(`${logPrefix} Unrecognized menu type in handleMenuAction: '${menuType}'`);
+                const unrecognizedMenuMsg = `❓ Unrecognized menu option: <code>${escapeHTML(menuType)}</code>. Please try again or use <code>/help</code>.`;
+                const unrecognizedMenuKbd = createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu');
+                if (actionMsgContext.message_id && bot) { 
+                    await bot.editMessageText(unrecognizedMenuMsg, { chat_id: targetChatIdForAction, message_id: Number(actionMsgContext.message_id), parse_mode: 'HTML', reply_markup: unrecognizedMenuKbd}).catch(async (e) => {
+                        if (!e.message?.toLowerCase().includes("message is not modified")) await safeSendMessage(targetChatIdForAction, unrecognizedMenuMsg, { parse_mode: 'HTML', reply_markup: unrecognizedMenuKbd });
+                    });
+                } else {
+                    await safeSendMessage(targetChatIdForAction, unrecognizedMenuMsg, { parse_mode: 'HTML', reply_markup: unrecognizedMenuKbd });
+                }
+        }
+    } catch (error) { 
+        console.error(`${logPrefix} Outer error in handleMenuAction for menuType ${menuType}: ${error.message}`, error.stack);
+        if(actionMsgContext.chat?.id) { 
+            await safeSendMessage(actionMsgContext.chat.id, `⚙️ An unexpected error occurred while processing your menu selection. Please try again.`, { parse_mode: 'HTML', reply_markup: createBackToMenuKeyboard('menu:main', '⬅️ Back to Main Menu')});
+        }
+    } finally {
+        if (client) { 
+            client.release();
+        }
+    }
 }
 
 
