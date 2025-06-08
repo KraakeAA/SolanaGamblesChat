@@ -325,7 +325,7 @@ const REFERRAL_INITIAL_BET_TIERS_CONFIG = [
 ];
 
 const REFERRAL_WAGER_MILESTONES_USD_CONFIG = [10, 25, 50, 100, 250, 500, 1000];
-
+const REFERRAL_WAGER_REBATE_INTERVAL_USD = 50.00;
 const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.05; // 5%
 // --- End of NEW Referral System Configurations ---
 // --- NEW Level Up Bonus System Configurations ---
@@ -13240,49 +13240,42 @@ async function handleReferralCommand(msgOrCbMsg) {
     const userId = String(msgOrCbMsg.from.id || msgOrCbMsg.from.telegram_id);
     const commandChatId = String(msgOrCbMsg.chat.id);
     const originalMessageId = msgOrCbMsg.message_id;
-    // Determine if this is a menu action in DM (which might involve editing a message)
-    // or a command typed directly (which might involve deleting the command message).
     const isFromMenuActionEditingInDm = msgOrCbMsg.message && msgOrCbMsg.message.chat && msgOrCbMsg.message.chat.id === userId && originalMessageId && (msgOrCbMsg.isCallbackEditing === true || (msgOrCbMsg.data && msgOrCbMsg.data.startsWith("menu:referral")));
 
-    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V6_HTML_GroupInfo UID:${userId} Chat:${commandChatId}]`; // V6
+    const LOG_PREFIX_REF_CMD = `[ReferralCmd_V6_HTML_GroupInfo UID:${userId} Chat:${commandChatId}]`;
 
     let user = await getOrCreateUser(userId, msgOrCbMsg.from?.username, msgOrCbMsg.from?.first_name, msgOrCbMsg.from?.last_name);
     if (!user) {
         await safeSendMessage(commandChatId === userId ? userId : commandChatId, "Error fetching your player profile for referral info. Please try <code>/start</code>.", { parse_mode: 'HTML' });
         return;
     }
-    // For HTML messages, use escapeHTML with the raw display name functions
-    const playerRefHTML = escapeHTML(getRawPlayerDisplayReference(user)); // Assumes getRawPlayerDisplayReference is defined
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(user));
     let botUsername = BOT_NAME || "our_bot";
     try {
         const selfInfo = await bot.getMe();
         if (selfInfo.username) botUsername = selfInfo.username;
     } catch (e) { console.warn(`${LOG_PREFIX_REF_CMD} Could not fetch bot username: ${e.message}`); }
 
-    clearUserState(userId); // Assuming clearUserState is defined
-    const targetDmChatId = userId; // All detailed dashboards go to DM
+    clearUserState(userId);
+    const targetDmChatId = userId;
 
-    // --- Group Chat Logic ---
-    if (commandChatId !== targetDmChatId) { // Command was used in a group
-        if (originalMessageId && msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) { // Delete the typed /referral command
+    if (commandChatId !== targetDmChatId) {
+        if (originalMessageId && msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) {
              await bot.deleteMessage(commandChatId, originalMessageId).catch(() => {});
         }
 
         const successfulReferralsGroup = user.referral_count || 0;
         const totalEarningsPaidLamportsGroup = user.total_referral_earnings_paid_lamports || 0n;
-        const totalEarningsPaidUSDGroup = await formatBalanceForDisplay(totalEarningsPaidLamportsGroup, 'USD'); // Assumes formatBalanceForDisplay is HTML-safe or escaped
+        const totalEarningsPaidUSDGroup = await formatBalanceForDisplay(totalEarningsPaidLamportsGroup, 'USD');
 
         let groupReferralMessageHTML = `✨ <b>${playerRefHTML}'s Referral Quick Stats</b> ✨\n\n` +
                                      `🤝 Successful Referrals: <b>${successfulReferralsGroup}</b>\n` +
-                                     `💸 Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDGroup)}</b>\n\n` + // escapeHTML for safety
+                                     `💸 Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDGroup)}</b>\n\n` +
                                      `📬 Your full Referral Dashboard has been sent to your DMs with @${escapeHTML(botUsername)}.`;
 
         await safeSendMessage(commandChatId, groupReferralMessageHTML, { parse_mode: 'HTML' });
     }
 
-    // --- DM Logic (Send full dashboard to DM) ---
-    // If the command was typed in DM, delete the original /referral command.
-    // If it's a menu action in DM trying to edit, delete the old menu message.
     if (commandChatId === targetDmChatId && originalMessageId) {
         if ((msgOrCbMsg.text && msgOrCbMsg.text.startsWith('/referral')) || isFromMenuActionEditingInDm) {
             await bot.deleteMessage(targetDmChatId, originalMessageId).catch(() => {});
@@ -13291,7 +13284,7 @@ async function handleReferralCommand(msgOrCbMsg) {
 
     let referralCode = user.referral_code;
     if (!referralCode) {
-        referralCode = generateReferralCode(); // Assuming generateReferralCode is defined
+        referralCode = generateReferralCode();
         try {
             await queryDatabase("UPDATE users SET referral_code = $1, updated_at = NOW() WHERE telegram_id = $2", [referralCode, userId]);
             user.referral_code = referralCode;
@@ -13306,69 +13299,28 @@ async function handleReferralCommand(msgOrCbMsg) {
     const successfulReferralsCountDM = user.referral_count || 0;
     const totalEarningsPaidLamportsDM = user.total_referral_earnings_paid_lamports || 0n;
     const totalEarningsPaidUSDDisplayDM = await formatBalanceForDisplay(totalEarningsPaidLamportsDM, 'USD');
+    const rebateBonusAmount = REFERRAL_WAGER_REBATE_INTERVAL_USD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST;
 
     let messageTextHTML = `🤝 <b>Your Referral Dashboard</b> 🤝\n\n` +
-                          `<b>Invite Friends & Earn SOL!</b>\n\n` +
-                          `🔗 <b>Your Unique Referral Link:</b>\n<a href="${escapeHTML(referralLink)}">${escapeHTML(referralLink)}</a>\n` +
-                          `<i>(Use the "Share Your Link!" button below for an enticing, pre-filled message.)</i>\n\n` +
-                          `📊 <b>Your Stats:</b>\n` +
-                          ` ▫️ Successful Referrals: <b>${successfulReferralsCountDM}</b>\n` +
-                          ` ▫️ Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDDisplayDM)}</b>\n\n` + // escapeHTML for safety
-                          `🎁 <b>How You Earn:</b>\n\n` +
-                          ` 1️⃣ <b>Initial Bet Bonus:</b>\n` +
-                          ` 💰 When your friend places their first qualifying bet (min. <b>$${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)} USD</b>), you earn a percentage of their bet amount! The more friends you refer, the higher your percentage:\n`;
+        `<b>Invite Friends & Earn SOL!</b>\n\n` +
+        `🔗 <b>Your Unique Referral Link:</b>\n<a href="${escapeHTML(referralLink)}">${escapeHTML(referralLink)}</a>\n` +
+        `<i>(Use the "Share Your Link!" button below for an enticing, pre-filled message.)</i>\n\n` +
+        `📊 <b>Your Stats:</b>\n` +
+        ` ▫️ Successful Referrals: <b>${successfulReferralsCountDM}</b>\n` +
+        ` ▫️ Total Earnings Paid Out: ~<b>${escapeHTML(totalEarningsPaidUSDDisplayDM)}</b>\n\n` +
+        `🎁 <b>How You Earn:</b>\n\n` +
+        ` 1️⃣ <b>Initial Bet Bonus:</b>\n` +
+        ` 💰 When your friend places their first qualifying bet (min. <b>$${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)} USD</b>), you earn a percentage of their bet amount! The more friends you refer, the higher your percentage:\n`;
 
     REFERRAL_INITIAL_BET_TIERS_CONFIG.forEach(tier => {
         const upTo = tier.upToReferrals === Infinity ? "100+" : `Up to ${tier.upToReferrals}`;
         messageTextHTML += ` ▫️ ${escapeHTML(upTo)} Referrals: <b>${(tier.percentage * 100).toFixed(1)}%</b>\n`;
     });
 
-    messageTextHTML += `\n 2️⃣ <b>Wager Milestone Bonus:</b>\n` +
-                       ` 💸 As your referred friends play and reach wagering milestones (e.g., they've wagered <b>$${REFERRAL_WAGER_MILESTONES_USD_CONFIG[0]} USD</b>, <b>$${REFERRAL_WAGER_MILESTONES_USD_CONFIG[1]} USD</b> total, etc.), you'll receive <b>${(REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST * 100).toFixed(1)}%</b> of that milestone amount. These bonuses will appear below for you to claim!\n\n`;
+    messageTextHTML += `\n 2️⃣ <b>Wager Rebate Bonus:</b>\n` +
+                       ` 💸 For every <b>$${REFERRAL_WAGER_REBATE_INTERVAL_USD.toFixed(2)} USD</b> your referred friends wager in total, you will receive a <b>${(REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST * 100).toFixed(0)}%</b> bonus (approx. <b>$${rebateBonusAmount.toFixed(2)} USD</b>) credited to your balance!\n\n`;
 
     const keyboardRows = [];
-    let claimableBonusesMessageHTML = "";
-    try {
-        // --- FIXED: This logic has been rewritten to use multiple simple queries instead of one complex one, avoiding the syntax error. ---
-        const getClaimableBonusesQuery = `
-            SELECT referral_id, commission_type, commission_amount_lamports, referred_telegram_id
-            FROM referrals
-            WHERE referrer_telegram_id = $1 AND status = 'milestone_bonus_claimable'
-            ORDER BY created_at ASC`;
-        const claimableRes = await queryDatabase(getClaimableBonusesQuery, [userId]);
-
-        if (claimableRes.rows.length > 0) {
-            claimableBonusesMessageHTML = "✨ <b>Claim Your Milestone Bonuses:</b>\n";
-            for (const bonus of claimableRes.rows) {
-                // For each bonus, fetch the referred user's details separately
-                const referredUserRes = await queryDatabase(
-                    'SELECT username, first_name FROM users WHERE telegram_id = $1',
-                    [bonus.referred_telegram_id]
-                );
-                
-                const referredUserTempObj = { 
-                    username: referredUserRes.rows[0]?.username, 
-                    first_name: referredUserRes.rows[0]?.first_name, 
-                    telegram_id: bonus.referred_telegram_id 
-                };
-
-                const bonusAmountDisplay = await formatBalanceForDisplay(BigInt(bonus.commission_amount_lamports), 'USD');
-                const referredUserDisplay = escapeHTML(getRawPlayerDisplayReference(referredUserTempObj));
-                const milestoneType = escapeHTML(bonus.commission_type.replace('wager_milestone_', '').replace('_usd', ' USD Wagered'));
-
-                claimableBonusesMessageHTML += ` ▫️ Approx. <b>${escapeHTML(bonusAmountDisplay)}</b> from ${referredUserDisplay} (${milestoneType})\n`;
-                keyboardRows.push([{ text: `💰 Claim ~${escapeHTML(bonusAmountDisplay)} (from ${escapeHTML(getRawPlayerDisplayReference(referredUserTempObj, false).substring(0,10))}...)`, callback_data: `claim_milestone_bonus:${bonus.referral_id}` }]);
-            }
-            claimableBonusesMessageHTML += "\n";
-        }
-    } catch (e) {
-        console.error(`${LOG_PREFIX_REF_CMD} Error fetching claimable bonuses: ${e.message}`);
-        claimableBonusesMessageHTML = "Error fetching claimable bonuses.\n";
-    }
-
-    messageTextHTML += claimableBonusesMessageHTML;
-    messageTextHTML += `Keep sharing and earning! ✨`;
-
     keyboardRows.push([{ text: "🔗 Share Your Link!", switch_inline_query: enticingShareMessage }]);
     keyboardRows.push([{ text: '💳 Back to Wallet', callback_data: 'menu:wallet' }]);
     const keyboard = { inline_keyboard: keyboardRows };
@@ -13606,120 +13558,100 @@ async function handleGrantCommand(msg, args, adminUserObj) {
 
 // --- NEW Command Handler for /bonus (Place in Part 5a, Section 2) ---
 
-// REVISED handleBonusCommand function (to be placed in Part 5a, Section 2)
+// REPLACEMENT for handleBonusCommand in Part 5a, Section 2
 
 async function handleBonusCommand(msg) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V6_SyntaxReview UID:${userId} CH:${chatId} Type:${chatType}]`; // V6
+    const chatType = msg.chat.type;
+    const LOG_PREFIX_BONUS_CMD = `[BonusCmd_V6_SyntaxReview UID:${userId} CH:${chatId} Type:${chatType}]`;
 
     let userObject = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
     if (!userObject) {
         await safeSendMessage(chatId, "Error fetching your player profile. Please try `/start` again.", { parse_mode: 'MarkdownV2' });
         return;
     }
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); 
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObject)); 
 
-    let botUsername = BOT_NAME || "our_bot"; 
-    try {
-        const selfInfo = await bot.getMe();
-        if (selfInfo.username) botUsername = selfInfo.username;
-    } catch (e) { console.warn(`${LOG_PREFIX_BONUS_CMD} Could not fetch bot username: ${e.message}`); }
+    let botUsername = BOT_NAME || "our_bot"; 
+    try {
+        const selfInfo = await bot.getMe();
+        if (selfInfo.username) botUsername = selfInfo.username;
+    } catch (e) { console.warn(`${LOG_PREFIX_BONUS_CMD} Could not fetch bot username: ${e.message}`); }
 
-    // --- Group Chat Logic ---
-    if (chatType === 'group' || chatType === 'supergroup') {
-        if (msg.message_id && msg.text && msg.text.startsWith('/bonus') ) { 
-            await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-        }
+    // --- Group Chat Logic ---
+    if (chatType === 'group' || chatType === 'supergroup') {
+        if (msg.message_id && msg.text && msg.text.startsWith('/bonus') ) { 
+            await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+        }
 
-        let client = null;
-        try {
-            client = await pool.connect();
+        let client = null;
+        try {
+            client = await pool.connect();
+            
+            const currentUserDetailsQueryGroup = `
+                SELECT u.total_wagered_lamports, ul.order_index AS current_level_order_index, ul.level_name as current_level_name
+                FROM users u
+                LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+                WHERE u.telegram_id = $1`;
+            const currentUserDetailsResGroup = await client.query(currentUserDetailsQueryGroup, [userId]);
+            if (currentUserDetailsResGroup.rowCount === 0) throw new Error("User not found for group bonus info.");
+            
+            const currentUserDataGroup = currentUserDetailsResGroup.rows[0];
+            const currentLevelNameGroup = currentUserDataGroup.current_level_name || "Newcomer";
+            const currentLevelOrderIndexGroup = currentUserDataGroup.current_level_order_index || 0;
+
+            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Check</b> ✨\n\n` +
+                                       `🏆 Current Tier: <b>${escapeHTML(currentLevelNameGroup)}</b>\n\n`;
+            
+            const claimableBonusQueryGroup = `
+                SELECT ul.level_id, ul.bonus_amount_usd, ul.level_name
+                FROM user_levels ul
+                WHERE ul.order_index <= $1 
+                AND ul.bonus_amount_usd > 0
+                AND NOT EXISTS (
+                    SELECT 1 FROM user_claimed_level_bonuses uclb
+                    WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+                ) ORDER BY ul.order_index ASC;`;
+            const claimableBonusesResGroup = await client.query(claimableBonusQueryGroup, [currentLevelOrderIndexGroup, userId]);
             
-            // Fetch necessary data for group message
-            const currentUserDetailsQueryGroup = `
-                SELECT u.total_wagered_lamports, ul.order_index AS current_level_order_index, ul.level_name as current_level_name
-                FROM users u
-                LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-                WHERE u.telegram_id = $1`;
-            const currentUserDetailsResGroup = await client.query(currentUserDetailsQueryGroup, [userId]);
-            if (currentUserDetailsResGroup.rowCount === 0) throw new Error("User not found for group bonus info.");
-            
-            const currentUserDataGroup = currentUserDetailsResGroup.rows[0];
-            const totalWageredLamportsGroup = BigInt(currentUserDataGroup.total_wagered_lamports || '0');
-            const currentLevelOrderIndexGroup = currentUserDataGroup.current_level_order_index || 0;
-            const currentLevelNameGroup = currentUserDataGroup.current_level_name || "Newcomer";
+            const keyboardRows = [];
+            if (claimableBonusesResGroup.rows.length > 0) {
+                groupBonusMessageHTML += `🎉 <b>Bonuses Available!</b> Click below to claim:\n`;
+                claimableBonusesResGroup.rows.forEach(bonus => {
+                    const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
+                    groupBonusMessageHTML += ` ▫️ ${escapeHTML(bonus.level_name)}: <b>$${bonusAmountToClaimUSD}</b>\n`;
+                    keyboardRows.push([{text: `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus`, callback_data: `claim_level_bonus:${bonus.level_id}`}]);
+                });
+            } else {
+                groupBonusMessageHTML += `💡 No new bonuses are ready to claim right now. Keep playing to level up!`;
+            }
 
-            const solPriceGroup = await getSolUsdPrice();
-            const totalWageredUSDGroup = Number(totalWageredLamportsGroup) / Number(LAMPORTS_PER_SOL) * solPriceGroup;
+            groupBonusMessageHTML += `\n\n📬 For full details, check your DMs with @${escapeHTML(botUsername)}.`;
+            keyboardRows.push([{ text: "View Full Dashboard (DM)", url: `https://t.me/${botUsername}?start=menu_bonus_dashboard_back` }]);
+            const groupKeyboard = { inline_keyboard: keyboardRows };
+            await safeSendMessage(chatId, groupBonusMessageHTML, { parse_mode: 'HTML', reply_markup: groupKeyboard });
 
-            const nextLevelQueryGroup = `
-                SELECT level_name, wager_threshold_usd, bonus_amount_usd 
-                FROM user_levels 
-                WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
-            const nextLevelResGroup = await client.query(nextLevelQueryGroup, [currentLevelOrderIndexGroup]);
-            const nextLevelDataGroup = nextLevelResGroup.rows.length > 0 ? nextLevelResGroup.rows[0] : null;
+        } catch (error) {
+            console.error(`${LOG_PREFIX_BONUS_CMD} Error generating group bonus message: ${error.message}`, error.stack);
+            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. Please try again or check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
+        } finally {
+            if (client) client.release();
+        }
+        return; 
+    }
 
-            let wagerNeededUSDText = "🏅 You've reached the highest tier! Congratulations!";
-            if (nextLevelDataGroup) {
-                const nextLevelThresholdUSD = parseFloat(nextLevelDataGroup.wager_threshold_usd);
-                const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSDGroup);
-                const nextLevelBonusUSD = parseFloat(nextLevelDataGroup.bonus_amount_usd).toFixed(2);
-                wagerNeededUSDText = `🎯 Next Tier: <b>${escapeHTML(nextLevelDataGroup.level_name)}</b>. Wager ~<b>$${wagerNeededUSD.toFixed(2)} USD</b> more (Bonus: ~$${nextLevelBonusUSD}!)`;
-            }
-
-            const claimableBonusQueryGroup = `
-                SELECT ul.level_id, ul.bonus_amount_usd, ul.level_name
-                FROM user_levels ul
-                WHERE ul.order_index <= $1 
-                AND ul.bonus_amount_usd > 0
-                AND NOT EXISTS (
-                    SELECT 1 FROM user_claimed_level_bonuses uclb
-                    WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-                ) ORDER BY ul.order_index ASC LIMIT 1;`;
-            const claimableBonusResGroup = await client.query(claimableBonusQueryGroup, [currentLevelOrderIndexGroup, userId]);
-            const nextClaimableBonusGroup = claimableBonusResGroup.rows.length > 0 ? claimableBonusResGroup.rows[0] : null;
-
-            let groupBonusMessageHTML = `✨ <b>${playerRefHTML}'s Bonus Check</b> ✨\n\n` +
-                                       `🏆 Current Tier: <b>${escapeHTML(currentLevelNameGroup)}</b>\n` +
-                                       `${wagerNeededUSDText}\n\n`;
-            
-            let buttonText = "💰 My Bonus Dashboard (DM)";
-            if (nextClaimableBonusGroup) {
-                const bonusAmountToClaimUSD = parseFloat(nextClaimableBonusGroup.bonus_amount_usd).toFixed(2);
-                groupBonusMessageHTML += `🎉 Bonus available! Check DMs with @${escapeHTML(botUsername)} to claim.`;
-                buttonText = `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus (DM)`;
-            } else {
-                groupBonusMessageHTML += `💡 No new bonuses ready to claim right now. Keep playing!`;
-            }
-
-            const groupKeyboard = {
-                inline_keyboard: [
-                    [{ text: buttonText, url: `https://t.me/${botUsername}?start=menu_bonus_dashboard_back` }]
-                ]
-            };
-            await safeSendMessage(chatId, groupBonusMessageHTML, { parse_mode: 'HTML', reply_markup: groupKeyboard });
-
-        } catch (error) {
-            console.error(`${LOG_PREFIX_BONUS_CMD} Error generating group bonus message: ${error.message}`, error.stack);
-            await safeSendMessage(chatId, `${playerRefHTML}, sorry, I couldn't fetch your bonus quick view. Please try again or check your DM with @${escapeHTML(botUsername)}.`, { parse_mode: 'HTML' });
-        } finally {
-            if (client) client.release();
-        }
-        return; 
-    }
-
-    // --- Private Chat (DM) Logic ---
-    let workingMessageId = msg.message_id; 
+    // --- Private Chat (DM) Logic ---
+    // This part remains unchanged but is included for completeness
+    let workingMessageId = msg.message_id; 
     const isEditingExistingDashboard = msg.message_id && msg.isCallbackEditing === true;
 
     if (!isEditingExistingDashboard && msg.message_id && msg.text && msg.text.startsWith('/bonus')) {
         await bot.deleteMessage(chatId, msg.message_id).catch(() => {});
         workingMessageId = null; 
     }
-    
-    if (workingMessageId) { 
+    
+    if (workingMessageId) { 
         try {
             await bot.editMessageText("⏳ Fetching your Level Up Bonus status...", {
                 chat_id: chatId, message_id: Number(workingMessageId),
@@ -13731,7 +13663,7 @@ async function handleBonusCommand(msg) {
         }
     }
     
-    if (!workingMessageId) { 
+    if (!workingMessageId) { 
         const loadingMsg = await safeSendMessage(chatId, "⏳ Fetching your Level Up Bonus status...", { parse_mode: 'HTML' });
         workingMessageId = loadingMsg?.message_id;
     }
@@ -13742,20 +13674,20 @@ async function handleBonusCommand(msg) {
         return;
     }
 
-    let clientDm = null; 
+    let clientDm = null; 
     try {
         clientDm = await pool.connect();
         let messageTextHTML = `🌟 <b>Level Up Bonus Dashboard</b> 🌟\n\nHi ${playerRefHTML}! Play games, boost your wagers, and climb the ranks to unlock awesome level-up bonuses!\n\n`;
         const keyboardRows = [];
 
         const currentUserDetailsQueryDm = `
-            SELECT u.total_wagered_lamports, u.current_level_id, 
-                   ul.level_name AS current_level_name, 
-                   ul.wager_threshold_usd AS current_level_threshold_usd, 
-                   ul.order_index AS current_level_order_index
-            FROM users u
-            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-            WHERE u.telegram_id = $1`;
+            SELECT u.total_wagered_lamports, u.current_level_id, 
+                   ul.level_name AS current_level_name, 
+                   ul.wager_threshold_usd AS current_level_threshold_usd, 
+                   ul.order_index AS current_level_order_index
+            FROM users u
+            LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+            WHERE u.telegram_id = $1`;
         const currentUserDetailsDm = await clientDm.query(currentUserDetailsQueryDm, [userId]);
 
         if (currentUserDetailsDm.rowCount === 0) {
@@ -13770,33 +13702,33 @@ async function handleBonusCommand(msg) {
         const currentLevelOrderIndexDm = userDataDm.current_level_order_index || 0;
         
         messageTextHTML += `🏆 Your Current Tier: <b>${escapeHTML(currentLevelNameDm)}</b>\n` +
-                             `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamportsDm, 'USD'))}</b>\n\n`;
+                             `💰 Total Wagered: ~<b>${escapeHTML(await formatBalanceForDisplay(totalWageredLamportsDm, 'USD'))}</b>\n\n`;
 
         const nextLevelDataQueryDm = `
-            SELECT level_name, wager_threshold_usd, bonus_amount_usd 
-            FROM user_levels
-            WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
+            SELECT level_name, wager_threshold_usd, bonus_amount_usd 
+            FROM user_levels
+            WHERE order_index > $1 ORDER BY order_index ASC LIMIT 1`;
         const nextLevelDataDm = await clientDm.query(nextLevelDataQueryDm, [currentLevelOrderIndexDm]);
 
         if (nextLevelDataDm.rowCount > 0) {
             const nl = nextLevelDataDm.rows[0];
             const nextLevelThresholdUSD = parseFloat(nl.wager_threshold_usd);
             const wagerNeededUSD = Math.max(0, nextLevelThresholdUSD - totalWageredUSDDm);
-            const nextBonusUSD = parseFloat(nl.bonus_amount_usd).toFixed(2);
+            const nextBonusUSD = parseFloat(nl.bonus_amount_usd).toFixed(2);
             messageTextHTML += `🏅 Next Tier: <b>${escapeHTML(nl.level_name)}</b>\n` +
-                                 `🎯 Wager <b>$${wagerNeededUSD.toFixed(2)} USD</b> more to reach it and unlock a bonus of approx. <b>$${nextBonusUSD} USD</b>!\n\n`;
+                                 `🎯 Wager <b>$${wagerNeededUSD.toFixed(2)} USD</b> more to reach it and unlock a bonus of approx. <b>$${nextBonusUSD} USD</b>!\n\n`;
         } else {
             messageTextHTML += `🏅 You've reached the Highest Tier! Truly a casino legend! Congratulations!\n\n`;
         }
         
         const claimableBonusesQueryDm = `
-            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd, ul.order_index 
-            FROM user_levels ul
-            WHERE ul.order_index <= $1 AND ul.bonus_amount_usd > 0 
-            AND NOT EXISTS (
-                SELECT 1 FROM user_claimed_level_bonuses uclb
-                WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-            ) ORDER BY ul.order_index ASC`;
+            SELECT ul.level_id, ul.level_name, ul.bonus_amount_usd, ul.order_index 
+            FROM user_levels ul
+            WHERE ul.order_index <= $1 AND ul.bonus_amount_usd > 0 
+            AND NOT EXISTS (
+                SELECT 1 FROM user_claimed_level_bonuses uclb
+                WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+            ) ORDER BY ul.order_index ASC`;
         const claimableBonusesResDm = await clientDm.query(claimableBonusesQueryDm, [currentLevelOrderIndexDm, userId]);
 
         if (claimableBonusesResDm.rows.length > 0) {
@@ -13816,7 +13748,7 @@ async function handleBonusCommand(msg) {
         
         const keyboard = { inline_keyboard: keyboardRows };
         await bot.editMessageText(messageTextHTML, { 
-            chat_id: chatId, 
+            chat_id: chatId, 
             message_id: Number(workingMessageId), 
             parse_mode: 'HTML', 
             reply_markup: keyboard, 
