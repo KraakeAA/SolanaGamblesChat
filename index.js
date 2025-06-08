@@ -16174,86 +16174,97 @@ async function getUserByReferralCode(refCode, client = pool) {
  * @param {string|null} [notes=null] Optional notes for the ledger entry.
  * @returns {Promise<{success: boolean, newBalanceLamports?: bigint, oldBalanceLamports?: bigint, ledgerId?: number, error?: string, errorCode?: string}>}
  */
-// FINAL-FIX updateUserBalanceAndLedger (with Explicit Type Casting for Nulls)
+// REPLACEMENT for updateUserBalanceAndLedger in Part P2
+
 async function updateUserBalanceAndLedger(dbClient, telegramId, changeAmountLamports, transactionType, relatedIds = {}, notes = null, solPrice = 0) {
-    const stringUserId = String(telegramId);
-    const changeAmount = BigInt(changeAmountLamports);
-    const logPrefix = `[UpdateBalLedger_V5_TypecastFix UID:${stringUserId}]`;
+    const stringUserId = String(telegramId);
+    const changeAmount = BigInt(changeAmountLamports);
+    const logPrefix = `[UpdateBalLedger_V5_TypecastFix UID:${stringUserId}]`;
 
-    if (!dbClient || typeof dbClient.query !== 'function') {
-        return { success: false, error: 'Invalid database client provided.', errorCode: 'INVALID_DB_CLIENT' };
-    }
+    if (!dbClient || typeof dbClient.query !== 'function') {
+        return { success: false, error: 'Invalid database client provided.', errorCode: 'INVALID_DB_CLIENT' };
+    }
 
-    try {
-        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
-        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
-        
-        if (balanceRes.rowCount === 0) {
-            return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
-        }
+    try {
+        const selectUserSQL = `SELECT balance, total_deposited_lamports, total_withdrawn_lamports, total_wagered_lamports, total_won_lamports, total_referral_earnings_paid_lamports FROM users WHERE telegram_id = $1 FOR UPDATE`;
+        const balanceRes = await dbClient.query(selectUserSQL, [stringUserId]);
+        
+        if (balanceRes.rowCount === 0) {
+            return { success: false, error: 'User profile not found for balance update.', errorCode: 'USER_NOT_FOUND' };
+        }
 
-        const userData = balanceRes.rows[0];
-        const oldBalanceLamports = BigInt(userData.balance);
-        const balanceAfter = oldBalanceLamports + changeAmount;
+        const userData = balanceRes.rows[0];
+        const oldBalanceLamports = BigInt(userData.balance);
+        const balanceAfter = oldBalanceLamports + changeAmount;
 
-        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_')) {
-            return { success: false, error: 'Insufficient balance.', errorCode: 'INSUFFICIENT_FUNDS' };
-        }
+        if (balanceAfter < 0n && !transactionType.startsWith('admin_grant_')) {
+            return { success: false, error: 'Insufficient balance.', errorCode: 'INSUFFICIENT_FUNDS' };
+        }
 
-        let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
-        let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
-        let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
-        let newTotalWon = BigInt(userData.total_won_lamports || '0');
-        const notificationsToReturn = [];
+        let newTotalDeposited = BigInt(userData.total_deposited_lamports || '0');
+        let newTotalWithdrawn = BigInt(userData.total_withdrawn_lamports || '0');
+        let newTotalWagered = BigInt(userData.total_wagered_lamports || '0');
+        let newTotalWon = BigInt(userData.total_won_lamports || '0');
+        let newTotalReferralEarningsPaid = BigInt(userData.total_referral_earnings_paid_lamports || '0');
+        const notificationsToReturn = [];
 
-        if (transactionType === 'deposit') {
-            newTotalDeposited += changeAmount;
-        } else if (transactionType.startsWith('withdrawal')) {
-            newTotalWithdrawn -= changeAmount;
-        } else if (transactionType.startsWith('bet_placed')) {
-            const betAmount = -changeAmount;
-            newTotalWagered += betAmount;
-        } else if (transactionType.startsWith('win_')) {
-            const originalBetAmount = BigInt(relatedIds.original_bet_amount || '0');
-            const profit = changeAmount - originalBetAmount;
-            if (profit > 0n) {
-                newTotalWon += profit;
-            }
-        } else if (transactionType.startsWith('push_') || transactionType.startsWith('refund_')) {
-            const betAmountRefunded = changeAmount;
-            if (betAmountRefunded > 0n) {
-                newTotalWagered -= betAmountRefunded;
-            }
-        } else if (transactionType.startsWith('level_up') || transactionType.startsWith('referral_commission') || transactionType === 'tip_received') {
-            newTotalWon += changeAmount;
-        }
-        
-        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, updated_at = NOW() WHERE telegram_id = $6;`;
-        await dbClient.query(updateUserQuery, [balanceAfter.toString(), newTotalDeposited.toString(), newTotalWithdrawn.toString(), newTotalWagered.toString(), newTotalWon.toString(), stringUserId]);
-
-        // --- FIX IS HERE: Added ::INTEGER casts to nullable ID parameters ---
-        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6::INTEGER, $7::INTEGER, $8::INTEGER, $9::INTEGER, $10::INTEGER, $11, NOW()) RETURNING ledger_id;`;
-        
-        await dbClient.query(ledgerQuery, [
-            stringUserId, 
-            transactionType, 
-            changeAmount.toString(), 
-            oldBalanceLamports.toString(), 
+        if (transactionType === 'deposit') {
+            newTotalDeposited += changeAmount;
+        } else if (transactionType.startsWith('withdrawal')) {
+            newTotalWithdrawn -= changeAmount;
+        } else if (transactionType.startsWith('bet_placed')) {
+            const betAmount = -changeAmount;
+            newTotalWagered += betAmount;
+        } else if (transactionType.startsWith('win_')) {
+            const originalBetAmount = BigInt(relatedIds.original_bet_amount || '0');
+            const profit = changeAmount - originalBetAmount;
+            if (profit > 0n) {
+                newTotalWon += profit;
+            }
+        } else if (transactionType.startsWith('push_') || transactionType.startsWith('refund_')) {
+            const betAmountRefunded = changeAmount;
+            if (betAmountRefunded > 0n) {
+                newTotalWagered -= betAmountRefunded;
+            }
+        } else if (transactionType.startsWith('referral_')) {
+            newTotalReferralEarningsPaid += changeAmount;
+        } else if (transactionType.startsWith('level_up') || transactionType === 'tip_received') {
+            newTotalWon += changeAmount;
+        }
+        
+        const updateUserQuery = `UPDATE users SET balance = $1, total_deposited_lamports = $2, total_withdrawn_lamports = $3, total_wagered_lamports = $4, total_won_lamports = $5, total_referral_earnings_paid_lamports = $6, updated_at = NOW() WHERE telegram_id = $7;`;
+        await dbClient.query(updateUserQuery, [
             balanceAfter.toString(), 
-            relatedIds?.deposit_id || null, 
-            relatedIds?.withdrawal_id || null, 
-            relatedIds?.game_log_id || null, 
-            relatedIds?.referral_id || null, 
-            relatedIds?.related_sweep_id || null, 
-            notes
+            newTotalDeposited.toString(), 
+            newTotalWithdrawn.toString(), 
+            newTotalWagered.toString(), 
+            newTotalWon.toString(), 
+            newTotalReferralEarningsPaid.toString(), 
+            stringUserId
         ]);
-        
-        return { success: true, newBalanceLamports: balanceAfter, newTotalWageredLamports: newTotalWagered, notifications: notificationsToReturn };
 
-    } catch (err) {
-        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message}`, err.stack);
-        return { success: false, error: err.message, errorCode: err.code };
-    }
+        const ledgerQuery = `INSERT INTO ledger (user_telegram_id, transaction_type, amount_lamports, balance_before_lamports, balance_after_lamports, deposit_id, withdrawal_id, game_log_id, referral_id, related_sweep_id, notes, created_at) VALUES ($1, $2, $3, $4, $5, $6::INTEGER, $7::INTEGER, $8::INTEGER, $9::INTEGER, $10::INTEGER, $11, NOW()) RETURNING ledger_id;`;
+        
+        await dbClient.query(ledgerQuery, [
+            stringUserId, 
+            transactionType, 
+            changeAmount.toString(), 
+            oldBalanceLamports.toString(), 
+            balanceAfter.toString(), 
+            relatedIds?.deposit_id || null, 
+            relatedIds?.withdrawal_id || null, 
+            relatedIds?.game_log_id || null, 
+            relatedIds?.referral_id || null, 
+            relatedIds?.related_sweep_id || null, 
+            notes
+        ]);
+        
+        return { success: true, newBalanceLamports: balanceAfter, newTotalWageredLamports: newTotalWagered, notifications: notificationsToReturn };
+
+    } catch (err) {
+        console.error(`${logPrefix} ❌ Error in updateUserBalanceAndLedger: ${err.message}`, err.stack);
+        return { success: false, error: err.message, errorCode: err.code };
+    }
 }
 
 // --- Deposit Address & Deposit Operations ---
