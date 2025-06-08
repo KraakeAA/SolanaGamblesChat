@@ -470,6 +470,7 @@ const SHUTDOWN_FAIL_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_FAIL_TIMEOUT_MS, 
 const MAX_RETRY_POLLING_DELAY = parseInt(process.env.MAX_RETRY_POLLING_DELAY, 10);
 const INITIAL_RETRY_POLLING_DELAY = parseInt(process.env.INITIAL_RETRY_POLLING_DELAY, 10);
 const JACKPOT_CONTRIBUTION_PERCENT = parseFloat(process.env.JACKPOT_CONTRIBUTION_PERCENT);
+const HOUSE_FEE_PERCENT = 0.01;
 const MAIN_JACKPOT_ID = 'dice_escalator_main_pvb';
 const TARGET_JACKPOT_SCORE = parseInt(process.env.TARGET_JACKPOT_SCORE, 10); // Reverted from _CONST
 
@@ -1204,6 +1205,7 @@ CREATE TABLE IF NOT EXISTS games (
     bet_amount_lamports BIGINT,
     outcome TEXT,
     jackpot_contribution_lamports BIGINT,
+    house_fee_lamports BIGINT DEFAULT 0,
     game_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
 
@@ -3712,106 +3714,114 @@ async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, or
     await finalizeCoinflipPvBGame(gameData);
 }
 
-// REPLACE your entire finalizeCoinflipPvBGame function with this corrected version
+// REPLACEMENT for finalizeCoinflipPvBGame in Part 5a, Section 3
 
 async function finalizeCoinflipPvBGame(gameData) {
-    const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, result, userObj } = gameData;
-    const logPrefix = `[CF_PvB_Finalize_V7_RefFix GID:${gameId}]`;
-    let allNotificationsToSend = [];
+    const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, result, userObj } = gameData;
+    const logPrefix = `[CF_PvB_Finalize_V7_RefFix GID:${gameId}]`;
+    let allNotificationsToSend = [];
 
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-    } catch (priceError) {
-        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up/milestone checks will be skipped. Error: ${priceError.message}`);
-        solPrice = 0;
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+    } catch (priceError) {
+        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up/milestone checks will be skipped. Error: ${priceError.message}`);
+        solPrice = 0;
+    }
+
+    await updateGroupGameDetails(chatId, { removeThisId: gameId }, GAME_IDS.COINFLIP_PVB, null);
+
+    const playerWins = playerChoice === result;
+    const totalPot = betAmount * 2n;
+    let houseFee = 0n;
+    let payoutAmountLamports = 0n;
+
+    if (playerWins) {
+        houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+        payoutAmountLamports = totalPot - houseFee;
     }
 
-    await updateGroupGameDetails(chatId, { removeThisId: gameId }, GAME_IDS.COINFLIP_PVB, null);
+    let ledgerOutcomeCode = playerWins ? `win_coinflip_pvb_${playerChoice}` : `loss_coinflip_pvb_${playerChoice}_vs_${result}`;
+    let gameOutcomeTextForLog = playerWins ? `Player wins (${playerChoice})` : `Bot wins (Player chose ${playerChoice}, result ${result})`;
+    let finalUserBalance = BigInt(userObj.balance);
 
-    const playerWins = playerChoice === result;
-    let payoutAmountLamports = playerWins ? betAmount * 2n : 0n;
-    let ledgerOutcomeCode = playerWins ? `win_coinflip_pvb_${playerChoice}` : `loss_coinflip_pvb_${playerChoice}_vs_${result}`;
-    let gameOutcomeTextForLog = playerWins ? `Player wins (${playerChoice})` : `Bot wins (Player chose ${playerChoice}, result ${result})`;
-    let finalUserBalance = BigInt(userObj.balance);
+    let client = null;
+    try {
+        client = await pool.connect(); await client.query('BEGIN');
 
-    let client = null;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
+        const actualGameLogId = await logGameResultToGamesTable(
+            client, GAME_IDS.COINFLIP_PVB, chatId, userId, [userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
+        );
 
-        const actualGameLogId = await logGameResultToGamesTable(
-            client, GAME_IDS.COINFLIP_PVB, chatId, userId, [userId], betAmount, gameOutcomeTextForLog, 0n
-        );
+        const balanceUpdate = await updateUserBalanceAndLedger(
+            client, userId, payoutAmountLamports, ledgerOutcomeCode,
+            { game_log_id: actualGameLogId, original_bet_amount: betAmount.toString() }, 
+            `PvB Coinflip: ${playerChoice} vs Bot ${result}`,
+            solPrice
+        );
 
-        const balanceUpdate = await updateUserBalanceAndLedger(
-            client, userId, payoutAmountLamports, ledgerOutcomeCode,
-            { game_log_id: actualGameLogId, original_bet_amount: betAmount.toString() }, 
-            `PvB Coinflip: ${playerChoice} vs Bot ${result}`,
-            solPrice
-        );
+        if (!balanceUpdate.success) {
+            throw new Error(balanceUpdate.error || "DB Error during Coinflip PvB payout.");
+        }
+        
+        if (balanceUpdate.notifications && balanceUpdate.notifications.length > 0) {
+            allNotificationsToSend.push(...balanceUpdate.notifications);
+        }
+        
+        finalUserBalance = balanceUpdate.newBalanceLamports;
 
-        if (!balanceUpdate.success) {
-            throw new Error(balanceUpdate.error || "DB Error during Coinflip PvB payout.");
-        }
-        
-        if (balanceUpdate.notifications && balanceUpdate.notifications.length > 0) {
-            allNotificationsToSend.push(...balanceUpdate.notifications);
-        }
-        
-        finalUserBalance = balanceUpdate.newBalanceLamports;
+        const isConclusiveOutcome = ledgerOutcomeCode.startsWith('win_') || ledgerOutcomeCode.startsWith('loss_');
+        if (isConclusiveOutcome) {
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                // --- FIX IS HERE: Changed 'clientPayout' to the correct 'client' variable ---
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+                }
+            }
+            if (balanceUpdate.newTotalWageredLamports !== undefined && typeof checkAndUpdateUserLevel === 'function') {
+                const levelNotifications = await checkAndUpdateUserLevel(client, userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
+                allNotificationsToSend.push(...levelNotifications);
+            }
+            if (balanceUpdate.newTotalWageredLamports !== undefined && typeof processWagerMilestoneBonus === 'function') {
+                const milestoneResult = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
+                if (!milestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for PvB Coinflip: ${milestoneResult.error}`);
+            }
+        }
 
-        const isConclusiveOutcome = ledgerOutcomeCode.startsWith('win_') || ledgerOutcomeCode.startsWith('loss_');
-        if (isConclusiveOutcome) {
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                // --- FIX IS HERE: Changed 'clientPayout' to the correct 'client' variable ---
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-            if (balanceUpdate.newTotalWageredLamports !== undefined && typeof checkAndUpdateUserLevel === 'function') {
-                const levelNotifications = await checkAndUpdateUserLevel(client, userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                allNotificationsToSend.push(...levelNotifications);
-            }
-            if (balanceUpdate.newTotalWageredLamports !== undefined && typeof processWagerMilestoneBonus === 'function') {
-                const milestoneResult = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
-                if (!milestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for PvB Coinflip: ${milestoneResult.error}`);
-            }
-        }
+        await client.query('COMMIT');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
+        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed.`, { parse_mode: 'HTML'});
+    } finally { 
+        if (client) client.release(); 
+    }
 
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed.`, { parse_mode: 'HTML'});
-    } finally { 
-        if (client) client.release(); 
-    }
+    for (const notification of allNotificationsToSend) {
+        if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
+            await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
+        } else {
+            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
+        }
+    }
 
-    for (const notification of allNotificationsToSend) {
-        if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
-            await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
-        } else {
-            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
-        }
-    }
+    const resultDisplay = result === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
+    const titleResultHTML = playerWins ? `🎉🏆 <b>YOU WIN, ${playerRefHTML}!</b> 🏆🎉` : `💔😥 <b>Better Luck Next Time, ${playerRefHTML}!</b> 😥💔`;
+    const resultMessageHTML = `${titleResultHTML}\n\n` +
+        `You called: <b>${escapeHTML(playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails")}</b>\n` +
+        `The coin landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
+        (playerWins ? `Congratulations! Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b> (after a 1% house fee).` : `The Bot Dealer claims the pot of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`);
 
-    const resultDisplay = result === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-    const titleResultHTML = playerWins ? `🎉🏆 <b>YOU WIN, ${playerRefHTML}!</b> 🏆🎉` : `💔😥 <b>Better Luck Next Time, ${playerRefHTML}!</b> 😥💔`;
-    const resultMessageHTML = `${titleResultHTML}\n\n` +
-        `You called: <b>${escapeHTML(playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails")}</b>\n` +
-        `The coin landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
-        (playerWins ? `Congratulations! You won <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> in profit (total payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)!` : `The Bot Dealer claims the pot of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`);
-
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, betAmount);
-    if (gameData.gameMessageId && bot) {
-        await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e) => {
-            if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-        });
-    } else {
-        await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-    }
-    activeGames.delete(gameId);
+    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, betAmount);
+    if (gameData.gameMessageId && bot) {
+        await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e) => {
+            if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
+        });
+    } else {
+        await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
+    }
+    activeGames.delete(gameId);
 }
 
 // --- Coinflip Player vs. Player (PvP) Logic ---
@@ -3994,8 +4004,8 @@ async function handleCoinflipPvPCallCallback(gameId, callerIdCheck, callChoice, 
     await finalizeCoinflipPvPGame(gameData);
 }
 
-// CORRECTED finalizeCoinflipPvPGame
-// CORRECTED finalizeCoinflipPvPGame (with Deadlock and Referral Fixes)
+// REPLACEMENT for finalizeCoinflipPvPGame in Part 5a, Section 3
+
 async function finalizeCoinflipPvPGame(gameData) {
     const { gameId, chatId, betAmount, p1, p2, callerId, callerChoice, result, status: finalStatus, _origin_key_for_limits } = gameData;
     const logPrefix = `[CF_PvP_Finalize_V7_FullFix GID:${gameId}]`;
@@ -4017,12 +4027,13 @@ async function finalizeCoinflipPvPGame(gameData) {
     let winnerObj, loserObj;
     let p1Payout = 0n;
     let p2Payout = 0n;
+    let houseFee = 0n;
     let p1LedgerCode = '';
     let p2LedgerCode = '';
     let titleResultHTML = `🎊 ${COIN_EMOJI_DISPLAY} <b>Coinflip PvP - The Outcome is Revealed!</b> ${COIN_EMOJI_DISPLAY} 🎊`;
     let resultDetailsHTML = "";
     let gameOutcomeTextForLog = "";
-    let isConclusiveOutcome = false;
+    let isConclusiveOutcome = false;
 
     const p1MentionHTML = p1.mentionHTML || escapeHTML(getPlayerDisplayReference(p1.userObj));
     const p2MentionHTML = p2.mentionHTML || escapeHTML(getPlayerDisplayReference(p2.userObj));
@@ -4030,25 +4041,27 @@ async function finalizeCoinflipPvPGame(gameData) {
     const totalPotLamports = betAmount * 2n;
 
     if (finalStatus === 'game_over_p1_timeout_forfeit') {
-        isConclusiveOutcome = true;
-        winnerObj = p2; loserObj = p1; 
-        p2Payout = totalPotLamports; 
+        isConclusiveOutcome = true;
+        winnerObj = p2; loserObj = p1;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee; 
         p1Payout = 0n; 
         p2LedgerCode = 'win_coinflip_pvp_opponent_timeout'; p1LedgerCode = 'loss_coinflip_pvp_self_forfeit';
         titleResultHTML = `⏳🏆 <b>${p2MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
-        resultDetailsHTML = `${p1MentionHTML} (the caller) timed out making a choice.\n🥳 <b>${p2MentionHTML}</b> wins the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
+        resultDetailsHTML = `${p1MentionHTML} (the caller) timed out making a choice.\n🥳 <b>${p2MentionHTML}</b> wins the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
         gameOutcomeTextForLog = `P2 wins by P1 forfeit (timeout)`;
     } else if (finalStatus === 'game_over_p2_timeout_forfeit') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         winnerObj = p1; loserObj = p2; 
-        p1Payout = totalPotLamports; 
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
         p2Payout = 0n; 
         p1LedgerCode = 'win_coinflip_pvp_opponent_timeout'; p2LedgerCode = 'loss_coinflip_pvp_self_timeout';
         titleResultHTML = `⏳🏆 <b>${p1MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
-        resultDetailsHTML = `${p2MentionHTML} (the caller) timed out making a choice.\n🥳 <b>${p1MentionHTML}</b> wins the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
+        resultDetailsHTML = `${p2MentionHTML} (the caller) timed out making a choice.\n🥳 <b>${p1MentionHTML}</b> wins the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
         gameOutcomeTextForLog = `P1 wins by P2 forfeit (timeout)`;
     } else if (finalStatus === 'game_over_error_ui_update' || finalStatus === 'game_over_error_timeout_logic') {
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         p1Payout = betAmount; p2Payout = betAmount; 
         p1LedgerCode = 'refund_coinflip_pvp_error'; p2LedgerCode = 'refund_coinflip_pvp_error';
         titleResultHTML = `⚙️ <b>Coinflip PvP - Game Error</b> ⚙️`;
@@ -4061,13 +4074,17 @@ async function finalizeCoinflipPvPGame(gameData) {
         loserObj = callerWon ? (callerId === p1.userId ? p2 : p1) : (callerId === p1.userId ? p1 : p2);
         
         if (winnerObj.userId === p1.userId) {
-            isConclusiveOutcome = true;
-            p1Payout = totalPotLamports; p2Payout = 0n;
+            isConclusiveOutcome = true;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p1Payout = totalPotLamports - houseFee;
+            p2Payout = 0n;
             p1LedgerCode = `win_coinflip_pvp_result`; p2LedgerCode = `loss_coinflip_pvp_result`;
             gameOutcomeTextForLog = `P1 wins (Called: ${callerChoice}, Result: ${result})`;
         } else {
-            isConclusiveOutcome = true;
-            p2Payout = totalPotLamports; p1Payout = 0n;
+            isConclusiveOutcome = true;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p2Payout = totalPotLamports - houseFee;
+            p1Payout = 0n;
             p2LedgerCode = `win_coinflip_pvp_result`; p1LedgerCode = `loss_coinflip_pvp_result`;
             gameOutcomeTextForLog = `P2 wins (Called: ${callerChoice}, Result: ${result})`;
         }
@@ -4078,10 +4095,11 @@ async function finalizeCoinflipPvPGame(gameData) {
         const winnerMentionToUse = winnerObj.userId === p1.userId ? p1MentionHTML : p2MentionHTML;
         const loserMentionToUse = loserObj.userId === p1.userId ? p1MentionHTML : p2MentionHTML;
 
+        const winnerPayout = winnerObj.userId === p1.userId ? p1Payout : p2Payout;
         resultDetailsHTML = `The epic duel between ${p1MentionHTML} and ${p2MentionHTML} (wager: <b>${betDisplayUSD_HTML_Final}</b> each) has concluded!\n\n` +
             `<b>${callerActualMentionHTML}</b> was chosen to make the call and predicted: <b>${escapeHTML(callDisplay)}</b>!\n` +
             `The coin majestically landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
-            `And thus, the champion of this fateful flip is... 🥳🏆 <b>${winnerMentionToUse}</b>! You seize the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!\n\n` +
+            `And thus, the champion of this fateful flip is... 🥳🏆 <b>${winnerMentionToUse}</b>! You seize the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(winnerPayout, 'USD'))}</b> (after a 1% house fee)!\n\n` +
             `Commiserations, ${loserMentionToUse}! Better luck on the next toss.`;
     }
     
@@ -4091,43 +4109,43 @@ async function finalizeCoinflipPvPGame(gameData) {
         let p1BalanceUpdate, p2BalanceUpdate;
 
         const actualGameLogId = await logGameResultToGamesTable(
-            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n
+            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
-        
-        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
-        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
-        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
+        
+        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
+        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
+        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
 
-        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
-        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
-        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
+        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
+        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
 
-        // Process Player A first
-        const updateA = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, 
-            { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId }, 
-            `PvP Coinflip vs ${playerB.displayName || playerB.userId}. Caller: ${callerId === playerA.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice || 'N/A (Timeout)'}, Result: ${result || 'N/A (Timeout)'}`, 
-            solPrice
-        );
-        if (!updateA.success) throw new Error(`Player A (${playerA.userId}) balance update failed: ${updateA.error}`);
-        if(updateA.notifications) allNotificationsToSend.push(...updateA.notifications);
+        // Process Player A first
+        const updateA = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, 
+            { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId }, 
+            `PvP Coinflip vs ${playerB.displayName || playerB.userId}. Caller: ${callerId === playerA.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice || 'N/A (Timeout)'}, Result: ${result || 'N/A (Timeout)'}`, 
+            solPrice
+        );
+        if (!updateA.success) throw new Error(`Player A (${playerA.userId}) balance update failed: ${updateA.error}`);
+        if(updateA.notifications) allNotificationsToSend.push(...updateA.notifications);
 
-        // Process Player B second
-        const updateB = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, 
-            { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId }, 
-            `PvP Coinflip vs ${playerA.displayName || playerA.userId}. Caller: ${callerId === playerB.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice || 'N/A (Timeout)'}, Result: ${result || 'N/A (Timeout)'}`, 
-            solPrice
-        );
-        if (!updateB.success && updateB.errorCode !== 'INSUFFICIENT_FUNDS') {
-            console.warn(`${logPrefix} Non-critical error updating Player B (${playerB.userId}) ledger: ${updateB.error}`);
-        } else if (!updateB.success) {
-            throw new Error(`Player B (${playerB.userId}) balance update failed: ${updateB.error}`);
-        }
-        if(updateB.notifications) allNotificationsToSend.push(...updateB.notifications);
-        
-        // Map results back to original p1 and p2 for subsequent logic
-        p1BalanceUpdate = (p1.userId === playerA.userId) ? updateA : updateB;
-        p2BalanceUpdate = (p2.userId === playerA.userId) ? updateA : updateB;
+        // Process Player B second
+        const updateB = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, 
+            { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId }, 
+            `PvP Coinflip vs ${playerA.displayName || playerA.userId}. Caller: ${callerId === playerB.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice || 'N/A (Timeout)'}, Result: ${result || 'N/A (Timeout)'}`, 
+            solPrice
+        );
+        if (!updateB.success && updateB.errorCode !== 'INSUFFICIENT_FUNDS') {
+            console.warn(`${logPrefix} Non-critical error updating Player B (${playerB.userId}) ledger: ${updateB.error}`);
+        } else if (!updateB.success) {
+            throw new Error(`Player B (${playerB.userId}) balance update failed: ${updateB.error}`);
+        }
+        if(updateB.notifications) allNotificationsToSend.push(...updateB.notifications);
+        
+        // Map results back to original p1 and p2 for subsequent logic
+        p1BalanceUpdate = (p1.userId === playerA.userId) ? updateA : updateB;
+        p2BalanceUpdate = (p2.userId === playerA.userId) ? updateA : updateB;
 
         if (isConclusiveOutcome) {
             // --- ADDED: Check initial bet bonus for both players ---
@@ -4136,18 +4154,18 @@ async function finalizeCoinflipPvPGame(gameData) {
                 await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
             }
 
-            // --- Level up and milestone bonus checks ---
+            // --- Level up and milestone bonus checks ---
             if (p1BalanceUpdate.success && p1BalanceUpdate.newTotalWageredLamports !== undefined) {
                 const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1BalanceUpdate.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p1LevelNotifications);
                 const p1MilestoneResult = await processWagerMilestoneBonus(client, p1.userId, p1BalanceUpdate.newTotalWageredLamports, solPrice);
-                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
+                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
             }
             if (p2BalanceUpdate.success && p2BalanceUpdate.newTotalWageredLamports !== undefined) {
                 const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2BalanceUpdate.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p2LevelNotifications);
                 const p2MilestoneResult = await processWagerMilestoneBonus(client, p2.userId, p2BalanceUpdate.newTotalWageredLamports, solPrice);
-                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
+                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
             }
         }
 
@@ -4754,8 +4772,8 @@ async function handleRPSPvBChoiceCallback(gameId, playerChoiceKey, userObj, orig
     await finalizeRPSPvBGame(gameData);
 }
 
-// CORRECTED finalizeRPSPvBGame
-// CORRECTED finalizeRPSPvBGame (with Referral Fixes)
+// REPLACEMENT for finalizeRPSPvBGame in Part 5a, Section 3
+
 async function finalizeRPSPvBGame(gameData) {
     const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, botChoice, userObj } = gameData;
     const logPrefix = `[RPS_PvB_Finalize_V6_FullFix GID:${gameId}]`;
@@ -4772,30 +4790,33 @@ async function finalizeRPSPvBGame(gameData) {
     await updateGroupGameDetails(chatId, { removeThisId: gameId }, GAME_IDS.RPS_PVB, null);
     const rpsOutcome = determineRPSOutcome(playerChoice, botChoice, playerRefHTML, "Bot Dealer");
     let payoutAmountLamports = 0n;
+    let houseFee = 0n;
     let ledgerOutcomeCode = `loss_rps_pvb_${playerChoice}_vs_${botChoice}`;
     let financialOutcomeText = "";
     let gameOutcomeTextForLog = `Player: ${playerChoice}, Bot: ${botChoice} - ${rpsOutcome.result}`;
-    let isConclusiveOutcome = false;
+    let isConclusiveOutcome = false;
 
     if (rpsOutcome.result === 'win_player1') {
-        isConclusiveOutcome = true;
-        payoutAmountLamports = betAmount * 2n;
-        const profitAmount = betAmount;
-        financialOutcomeText = `Congratulations! You won <b>${escapeHTML(await formatBalanceForDisplay(profitAmount, 'USD'))}</b> in profit (total payout: ${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))})!`;
+        isConclusiveOutcome = true;
+        const totalPot = betAmount * 2n;
+        houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+        payoutAmountLamports = totalPot - houseFee;
+        financialOutcomeText = `Congratulations! Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b> (after a 1% house fee)!`;
         ledgerOutcomeCode = `win_rps_pvb_${playerChoice}_vs_${botChoice}`;
     } else if (rpsOutcome.result === 'draw') {
-        isConclusiveOutcome = false; // A push does not trigger wager-based bonuses
+        isConclusiveOutcome = false; // A push does not trigger wager-based bonuses
         payoutAmountLamports = betAmount;
         financialOutcomeText = `Your wager of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> has been returned.`;
         ledgerOutcomeCode = `draw_rps_pvb_${playerChoice}_vs_${botChoice}`;
     } else if (rpsOutcome.result === 'error') { 
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         payoutAmountLamports = betAmount; // Refund in case of game logic error
         ledgerOutcomeCode = `refund_rps_pvb_logic_error`;
         financialOutcomeText = `There was an issue determining the RPS outcome. Your bet of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> is refunded.`;
         gameOutcomeTextForLog = `Game Logic Error - Player: ${playerChoice}, Bot: ${botChoice}`;
     } else { // Bot wins
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
+        payoutAmountLamports = 0n;
         financialOutcomeText = `The Bot Dealer claims your wager of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`;
     }
 
@@ -4803,7 +4824,7 @@ async function finalizeRPSPvBGame(gameData) {
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, GAME_IDS.RPS_PVB, chatId, userId, [userId], betAmount, gameOutcomeTextForLog, 0n
+            client, GAME_IDS.RPS_PVB, chatId, userId, [userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
 
         const balanceUpdate = await updateUserBalanceAndLedger(
@@ -4819,31 +4840,31 @@ async function finalizeRPSPvBGame(gameData) {
         }
         
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
+            // --- START OF MODIFICATION ---
 
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-            
-            // 2. MODIFIED: Correctly call level and milestone checks.
+            // 1. ADDED: Check for the initial bet bonus.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+                }
+            }
+            
+            // 2. MODIFIED: Correctly call level and milestone checks.
             if (balanceUpdate.newTotalWageredLamports !== undefined) {
-                if (typeof checkAndUpdateUserLevel === 'function') {
-                    const levelNotifications = await checkAndUpdateUserLevel(client, userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                    allNotificationsToSend.push(...levelNotifications);
-                }
-                if (typeof processWagerMilestoneBonus === 'function') {
-                    const milestoneResult = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
-                    if (!milestoneResult.success) {
-                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneResult.error}`);
-                    }
-                }
+                if (typeof checkAndUpdateUserLevel === 'function') {
+                    const levelNotifications = await checkAndUpdateUserLevel(client, userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
+                    allNotificationsToSend.push(...levelNotifications);
+                }
+                if (typeof processWagerMilestoneBonus === 'function') {
+                    const milestoneResult = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
+                    if (!milestoneResult.success) {
+                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneResult.error}`);
+                    }
+                }
             }
 
-            // --- END OF MODIFICATION ---
+            // --- END OF MODIFICATION ---
         }
 
         await client.query('COMMIT');
@@ -5108,7 +5129,8 @@ async function handleRPSPvPTurnTimeout(gameId, timedOutPlayerId) {
     await finalizeRPSPvPGame(gameData);
 }
 
-// CORRECTED finalizeRPSPvPGame (with Deadlock and Referral Fixes)
+// REPLACEMENT for finalizeRPSPvPGame in Part 5a, Section 3
+
 async function finalizeRPSPvPGame(gameData) {
     const { gameId, chatId, betAmount, p1, p2, status: finalStatus, _origin_key_for_limits } = gameData;
     const logPrefix = `[RPS_PvP_Finalize_V7_FullFix GID:${gameId}]`;
@@ -5136,32 +5158,37 @@ async function finalizeRPSPvPGame(gameData) {
     const p1MentionHTML = p1.mentionHTML;
     const p2MentionHTML = p2.mentionHTML;
     let p1Payout = 0n; let p2Payout = 0n;
+    let houseFee = 0n;
     let p1LedgerCode = `loss_rps_pvp`; let p2LedgerCode = `loss_rps_pvp`;
     let financialOutcomeTextPvP = "";
     let rpsOutcome = null;
     let resultDescriptionForMessage = "";
     let gameOutcomeTextForLog = "";
-    const totalPotDisplay = escapeHTML(await formatBalanceForDisplay(betAmount * 2n, 'USD'));
+    const totalPotLamports = betAmount * 2n;
     const singleBetDisplay = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
     let titleResultHTML = `💥✨ <b>RPS PvP - The Reckoning!</b> ✨💥`;
     let isConclusiveOutcome = false;
 
     if (finalStatus === 'game_over_p1_timeout_forfeit') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleResultHTML = `⏳🏆 <b>${p2MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
         resultDescriptionForMessage = `${p1MentionHTML} timed out making a choice.`;
-        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p2Payout = betAmount * 2n; p2LedgerCode = 'win_rps_pvp_opponent_forfeit'; p1LedgerCode = 'loss_rps_pvp_self_forfeit';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p2LedgerCode = 'win_rps_pvp_opponent_forfeit'; p1LedgerCode = 'loss_rps_pvp_self_forfeit';
         gameOutcomeTextForLog = `P2 wins by P1 forfeit (timeout)`;
     } else if (finalStatus === 'game_over_p2_timeout_forfeit') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleResultHTML = `⏳🏆 <b>${p1MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
         resultDescriptionForMessage = `${p2MentionHTML} timed out making a choice.`;
-        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p1Payout = betAmount * 2n; p1LedgerCode = 'win_rps_pvp_opponent_forfeit'; p2LedgerCode = 'loss_rps_pvp_self_forfeit';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p1LedgerCode = 'win_rps_pvp_opponent_forfeit'; p2LedgerCode = 'loss_rps_pvp_self_forfeit';
         gameOutcomeTextForLog = `P1 wins by P2 forfeit (timeout)`;
     } else if (finalStatus === 'game_over_error_timeout_logic' || finalStatus === 'game_over_error_ui_update' || !p1.choice || !p2.choice) {
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         titleResultHTML = `⚙️ <b>RPS PvP - Game Concluded Inconclusively</b> ⚙️`;
         resultDescriptionForMessage = `The game concluded due to an unexpected error or missing choices.`;
         financialOutcomeTextPvP = `Bets of <b>${singleBetDisplay}</b> each are refunded for fairness.`;
@@ -5172,22 +5199,26 @@ async function finalizeRPSPvPGame(gameData) {
         rpsOutcome = determineRPSOutcome(p1.choice, p2.choice, p1MentionHTML, p2MentionHTML);
         resultDescriptionForMessage = `<i>${rpsOutcome.description}</i>`;
         if (rpsOutcome.result === 'win_player1') {
-            isConclusiveOutcome = true;
-            p1Payout = betAmount * 2n; financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
+            isConclusiveOutcome = true;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p1Payout = totalPotLamports - houseFee;
+            financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
             p1LedgerCode = `win_rps_pvp_${p1.choice}_vs_${p2.choice}`; p2LedgerCode = `loss_rps_pvp_${p2.choice}_vs_${p1.choice}`;
             gameOutcomeTextForLog = `P1 wins (${p1.choice} vs ${p2.choice})`;
         } else if (rpsOutcome.result === 'win_player2') {
-            isConclusiveOutcome = true;
-            p2Payout = betAmount * 2n; financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
+            isConclusiveOutcome = true;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p2Payout = totalPotLamports - houseFee;
+            financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
             p2LedgerCode = `win_rps_pvp_${p2.choice}_vs_${p1.choice}`; p1LedgerCode = `loss_rps_pvp_${p1.choice}_vs_${p2.choice}`;
             gameOutcomeTextForLog = `P2 wins (${p2.choice} vs ${p1.choice})`;
         } else if (rpsOutcome.result === 'draw') {
-            isConclusiveOutcome = false; // A push does not trigger wager bonuses
+            isConclusiveOutcome = false; // A push does not trigger wager bonuses
             p1Payout = betAmount; p2Payout = betAmount; financialOutcomeTextPvP = `It's a draw! Bets of <b>${singleBetDisplay}</b> each are returned.`;
             p1LedgerCode = `draw_rps_pvp_${p1.choice}_vs_${p2.choice}`; p2LedgerCode = `draw_rps_pvp_${p2.choice}_vs_${p1.choice}`;
             gameOutcomeTextForLog = `Draw (${p1.choice} vs ${p2.choice})`;
         } else { // Error from determineRPSOutcome
-            isConclusiveOutcome = false;
+            isConclusiveOutcome = false;
             p1Payout = betAmount; p2Payout = betAmount; financialOutcomeTextPvP = `Bets refunded due to unclear outcome.`;
             p1LedgerCode = 'refund_rps_pvp_internal_error'; p2LedgerCode = 'refund_rps_pvp_internal_error';
             gameOutcomeTextForLog = `Internal game error - bets refunded (P1: ${p1.choice}, P2: ${p2.choice})`;
@@ -5198,58 +5229,58 @@ async function finalizeRPSPvPGame(gameData) {
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n
+            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
 
-        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
-        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
-        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
+        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
+        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
+        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
 
-        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
-        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
-        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-        
-        // Process Player A first
-        const pA_Update = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId }, `PvP RPS vs ${playerB.displayName || playerB.userId}. Choice: ${playerA.choice || 'N/A (Timeout)'}`, solPrice);
-        if (!pA_Update.success) { dbErrorOccurred = true; console.error(`${logPrefix} Player A (${playerA.userId}) update failed: ${pA_Update.error}`); }
-        if (pA_Update.notifications) allNotificationsToSend.push(...pA_Update.notifications);
-        
-        // Process Player B second
-        const pB_Update = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId }, `PvP RPS vs ${playerA.displayName || playerA.userId}. Choice: ${playerB.choice || 'N/A (Timeout)'}`, solPrice);
-        if (!pB_Update.success) { dbErrorOccurred = true; console.error(`${logPrefix} Player B (${playerB.userId}) update failed: ${pB_Update.error}`); }
-        if (pB_Update.notifications) allNotificationsToSend.push(...pB_Update.notifications);
-        
-        // Map results back to original p1 and p2 for subsequent logic
-        const p1Update = (p1.userId === playerA.userId) ? pA_Update : pB_Update;
-        const p2Update = (p2.userId === playerA.userId) ? pA_Update : pB_Update;
+        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
+        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
+        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        
+        // Process Player A first
+        const pA_Update = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId }, `PvP RPS vs ${playerB.displayName || playerB.userId}. Choice: ${playerA.choice || 'N/A (Timeout)'}`, solPrice);
+        if (!pA_Update.success) { dbErrorOccurred = true; console.error(`${logPrefix} Player A (${playerA.userId}) update failed: ${pA_Update.error}`); }
+        if (pA_Update.notifications) allNotificationsToSend.push(...pA_Update.notifications);
+        
+        // Process Player B second
+        const pB_Update = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId }, `PvP RPS vs ${playerA.displayName || playerA.userId}. Choice: ${playerB.choice || 'N/A (Timeout)'}`, solPrice);
+        if (!pB_Update.success) { dbErrorOccurred = true; console.error(`${logPrefix} Player B (${playerB.userId}) update failed: ${pB_Update.error}`); }
+        if (pB_Update.notifications) allNotificationsToSend.push(...pB_Update.notifications);
+        
+        // Map results back to original p1 and p2 for subsequent logic
+        const p1Update = (p1.userId === playerA.userId) ? pA_Update : pB_Update;
+        const p2Update = (p2.userId === playerA.userId) ? pA_Update : pB_Update;
         
         if (dbErrorOccurred) throw new Error("One or more balance updates failed during RPS PvP finalization.");
 
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
+            // --- START OF MODIFICATION ---
 
-            // 1. ADDED: Check initial bet bonus for both players.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
-                await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
-            }
+            // 1. ADDED: Check initial bet bonus for both players.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
+                await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
+            }
 
-            // 2. MODIFIED: Correctly call level and milestone checks for both players.
+            // 2. MODIFIED: Correctly call level and milestone checks for both players.
             if (p1Update.success && p1Update.newTotalWageredLamports !== undefined) {
                 const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1Update.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p1LevelNotifications);
                 const p1MilestoneResult = await processWagerMilestoneBonus(client, p1.userId, p1Update.newTotalWageredLamports, solPrice);
-                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
+                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
             }
             if (p2Update.success && p2Update.newTotalWageredLamports !== undefined) {
                 const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2Update.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p2LevelNotifications);
                 const p2MilestoneResult = await processWagerMilestoneBonus(client, p2.userId, p2Update.newTotalWageredLamports, solPrice);
-                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
+                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
             }
 
-            // --- END OF MODIFICATION ---
+            // --- END OF MODIFICATION ---
         }
         
         await client.query('COMMIT');
@@ -6299,7 +6330,8 @@ async function processDiceEscalatorBotTurnPvB_New(gameData) {
     await finalizeDiceEscalatorPvBGame_New(gameData, gameData.botScore);
 }
 
-// CORRECTED finalizeDiceEscalatorPvBGame_New (with Referral Fixes)
+// REPLACEMENT for finalizeDiceEscalatorPvBGame_New in Part 5b, Section 1
+
 async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
     const { gameId, chatId, player, betAmount, userObj, status: finalStatusInput, chatType } = gameData;
     const logPrefix = `[FinalizeDE_PvB_V7_FullFix GID:${gameId}]`;
@@ -6322,6 +6354,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
     let resultTextOutcomeHTML = "";
     let titleEmoji = "🏁";
     let payoutLamports = 0n;
+    let houseFee = 0n;
     let ledgerOutcomeCode = 'loss_de_pvb';
     let jackpotWon = false;
     let jackpotAmountClaimed = 0n;
@@ -6337,13 +6370,13 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
     const currentBustOnValue = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10) || DICE_ESCALATOR_BUST_ON;
 
     if (finalStatus === 'game_over_player_forfeit') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleEmoji = "⏳"; finalTitle = `Game Forfeited, ${playerRefHTML}!`;
         resultTextOutcomeHTML = `Your turn timed out, or you forfeited. The Bot Dealer wins <b>${wagerDisplayUSD_HTML}</b>.`;
         ledgerOutcomeCode = 'loss_de_pvb_timeout_forfeit';
         gameOutcomeTextForLog = `Player forfeit (score: ${player.score})`;
     } else if (player.busted) {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleEmoji = "💥"; finalTitle = `BUSTED, ${playerRefHTML}!`;
         const lastRollDisplay = escapeHTML(String(gameData.lastPlayerRoll !== undefined && gameData.lastPlayerRoll !== null ? gameData.lastPlayerRoll : '?'));
         const bustOnDisplay = escapeHTML(String(currentBustOnValue));
@@ -6351,7 +6384,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
         ledgerOutcomeCode = 'loss_de_pvb_bust';
         gameOutcomeTextForLog = `Player busted (roll: ${lastRollDisplay}, score: ${player.score})`;
     } else if (finalStatus === 'game_over_error_helper') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleEmoji = "⚙️"; finalTitle = `Problem during Jackpot Run, ${playerRefHTML}!`;
         resultTextOutcomeHTML = `There was an issue reported by the Jackpot Helper Bot. Your bet of <b>${wagerDisplayUSD_HTML}</b> will be treated as a loss for this game round against the bot. Notes: ${escapeHTML(gameData.outcome_notes || "Helper error")}`;
         ledgerOutcomeCode = 'loss_de_pvb_helper_error';
@@ -6359,10 +6392,11 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
     } else if (player.score > botFinalScore) {
         isConclusiveOutcome = true;
         titleEmoji = "🎉"; finalTitle = `VICTORY, ${playerRefHTML}!`;
-        payoutLamports = betAmount * 2n; 
+        const gamePot = betAmount * 2n;
+        houseFee = BigInt(Math.floor(Number(gamePot) * HOUSE_FEE_PERCENT));
+        payoutLamports = gamePot - houseFee;
         ledgerOutcomeCode = 'win_de_pvb';
-        const potWonHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
-        resultTextOutcomeHTML = `Your score of <b>${player.score}</b> conquers the Bot Dealer's <i>${botFinalScore}</i>!\nYou win <b>${potWonHTML}</b> in profit!`;
+        resultTextOutcomeHTML = `Your score of <b>${player.score}</b> conquers the Bot Dealer's <i>${botFinalScore}</i>!\nYour total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'))}</b> (after a 1% house fee).`;
         gameOutcomeTextForLog = `Player wins (${player.score} vs ${botFinalScore})`;
 
         if (player.score >= currentTargetJackpotScore) {
@@ -6382,7 +6416,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
                                            `🎇✨✨✨✨✨✨✨✨✨✨✨✨🎇</pre>\n` +
                                            `<b>INCREDIBLE, ${playerRefHTML}!</b>\nYour score of <b>${player.score}</b> beat the Bot's <i>${botFinalScore}</i>, AND you've smashed the Super Jackpot, claiming an additional astounding:\n\n`+
                                            `💰💰💰🔥 <b>${escapeHTML(await formatBalanceForDisplay(jackpotAmountClaimed, 'USD'))}</b> 🔥💰💰💰\n\n` +
-                                           `Total Payout: An unbelievable <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'))}</b>!\n` +
+                                           `Total Payout: An unbelievable <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD'))}</b>! (Game winnings include a 1% house fee).\n` +
                                            `Truly a legendary performance! 🥳🎉`;
                     ledgerOutcomeCode = 'win_de_pvb_jackpot';
                     gameOutcomeTextForLog = `Player JACKPOT WIN! (${player.score} vs ${botFinalScore})`;
@@ -6396,7 +6430,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
             } finally { if (clientJackpot) clientJackpot.release(); }
         }
     } else if (player.score === botFinalScore) {
-        isConclusiveOutcome = false; // A push does not trigger wager bonuses
+        isConclusiveOutcome = false; // A push does not trigger wager bonuses
         titleEmoji = "⚖️"; finalTitle = `A Close Call - It's a Push!`;
         payoutLamports = betAmount; 
         ledgerOutcomeCode = 'push_de_pvb';
@@ -6417,7 +6451,7 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
 
         const actualGameLogId = await logGameResultToGamesTable(
             clientPayout, GAME_IDS.DICE_ESCALATOR_PVB, chatId, player.userId, [player.userId], betAmount,
-            gameOutcomeTextForLog, jackpotWon ? jackpotAmountClaimed : gameData.jackpotContribution
+            gameOutcomeTextForLog, jackpotWon ? jackpotAmountClaimed : gameData.jackpotContribution, houseFee
         );
 
         const notes = `DE PvB Result. Player: ${player.score}, Bot: ${botFinalScore}. Jackpot Claimed: ${jackpotAmountClaimed > 0n ? formatCurrency(jackpotAmountClaimed, 'SOL') : '0'}. GameID: ${gameId}. Final Status: ${finalStatus}`;
@@ -6434,31 +6468,31 @@ async function finalizeDiceEscalatorPvBGame_New(gameData, botScoreArgument) {
         if (balanceUpdate.notifications) allNotificationsToSend.push(...balanceUpdate.notifications);
         
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
+            // --- START OF MODIFICATION ---
 
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientPayout, player.userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${player.userId} from game ${gameId}.`);
-                }
-            }
-            
-            // 2. MODIFIED: Correctly call level and milestone checks.
+            // 1. ADDED: Check for the initial bet bonus.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientPayout, player.userId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${player.userId} from game ${gameId}.`);
+                }
+            }
+            
+            // 2. MODIFIED: Correctly call level and milestone checks.
             if (balanceUpdate.newTotalWageredLamports !== undefined) {
                 if (typeof checkAndUpdateUserLevel === 'function') {
-                    const levelNotifications = await checkAndUpdateUserLevel(clientPayout, player.userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                    allNotificationsToSend.push(...levelNotifications);
-                }
+                    const levelNotifications = await checkAndUpdateUserLevel(clientPayout, player.userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
+                    allNotificationsToSend.push(...levelNotifications);
+                }
                 if (typeof processWagerMilestoneBonus === 'function') {
-                    const milestoneNotifications = await processWagerMilestoneBonus(clientPayout, player.userId, balanceUpdate.newTotalWageredLamports, solPrice);
-                    if (!milestoneNotifications.success) {
-                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneNotifications.error}`);
-                    }
+                    const milestoneNotifications = await processWagerMilestoneBonus(clientPayout, player.userId, balanceUpdate.newTotalWageredLamports, solPrice);
+                    if (!milestoneNotifications.success) {
+                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneNotifications.error}`);
+                    }
                 }
             }
 
-            // --- END OF MODIFICATION ---
+            // --- END OF MODIFICATION ---
         }
         
         await clientPayout.query('COMMIT');
@@ -7017,10 +7051,11 @@ async function handleDiceEscalatorPvPStand_New(gameId, userWhoClicked, originalM
         await updateDiceEscalatorPvPMessage_New(gameData); // Update UI for next player's turn & set their timeout
     }
 }
-// --- END OF FULL REPLACEMENT for handleDiceEscalatorPvPStand_New function ---
-// CORRECTED resolveDiceEscalatorPvPGame_New (with Deadlock and Referral Fixes)
+// REPLACEMENT for resolveDiceEscalatorPvPGame_New in Part 5b, Section 1
+
 async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = null) {
-    const logPrefix = `[DE_PvP_Resolve_V7_FullFix GID:${gameData.gameId || 'UNKNOWN_GAME_ID'}]`;
+    const { gameId, chatId, betAmount, initiator, opponent, status: finalStatus, chatType, _origin_key_for_limits } = gameData;
+    const logPrefix = `[DE_PvP_Resolve_V7_FullFix GID:${gameId || 'UNKNOWN_GAME_ID'}]`;
     let allNotificationsToSend = [];
 
     let solPrice;
@@ -7036,50 +7071,59 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         gameData.currentTurnTimeoutId = null;
     }
 
-    activeGames.delete(gameData.gameId);
+    activeGames.delete(gameId);
     if (gameData.chatType && gameData.chatType !== 'private') {
-        await updateGroupGameDetails(gameData.chatId, { removeThisId: gameData.gameId }, gameData._origin_key_for_limits || GAME_IDS.DICE_ESCALATOR_PVP, null);
+        await updateGroupGameDetails(chatId, { removeThisId: gameId }, _origin_key_for_limits || GAME_IDS.DICE_ESCALATOR_PVP, null);
     }
     
-    const p1 = gameData.initiator;
-    const p2 = gameData.opponent;
+    const p1 = initiator;
+    const p2 = opponent;
     const p1MentionHTML = escapeHTML(p1.displayName);
     const p2MentionHTML = escapeHTML(p2.displayName);
     let winner = null, loser = null, isPush = false, titleEmoji = "⚔️", resultHeaderHTML = "", outcomeDetails = "", winningsFooterHTML = "";
     const totalPotLamports = gameData.betAmount * 2n;
     let p1Payout = 0n;
     let p2Payout = 0n;
+    let houseFee = 0n;
     let p1LedgerCode = 'loss_de_pvp';
     let p2LedgerCode = 'loss_de_pvp';
     let gameOutcomeTextForLog = "";
-    const betDisplayUSD_HTML_Resolve = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
+    const betDisplayUSD_HTML_Resolve = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
     let isConclusiveOutcome = false;
 
     if (p1.busted) {
-        isConclusiveOutcome = true;
-        titleEmoji = "💥"; winner = p2; loser = p1; p2Payout = totalPotLamports;
+        isConclusiveOutcome = true;
+        titleEmoji = "💥"; winner = p2; loser = p1;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
         p2LedgerCode = 'win_de_pvp_opponent_bust'; p1LedgerCode = 'loss_de_pvp_bust';
         resultHeaderHTML = `💣 <b>${p1MentionHTML} BUSTED!</b> (Rolled a ${DICE_ESCALATOR_BUST_ON})`;
         outcomeDetails = `${p2MentionHTML} seizes victory!`;
         gameOutcomeTextForLog = `P2 wins by P1 bust`;
     } else if (p2.busted) {
-        isConclusiveOutcome = true;
-        titleEmoji = "💥"; winner = p1; loser = p2; p1Payout = totalPotLamports;
+        isConclusiveOutcome = true;
+        titleEmoji = "💥"; winner = p1; loser = p2;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
         p1LedgerCode = 'win_de_pvp_opponent_bust'; p2LedgerCode = 'loss_de_pvp_bust';
         resultHeaderHTML = `💣 <b>${p2MentionHTML} BUSTED!</b> (Rolled a ${DICE_ESCALATOR_BUST_ON})`;
         outcomeDetails = `${p1MentionHTML} masterfully claims the win!`;
         gameOutcomeTextForLog = `P1 wins by P2 bust`;
-    } else if (gameData.status === 'game_over_p1_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p1.userId)) {
-        isConclusiveOutcome = true;
-        titleEmoji = "⏳"; winner = p2; loser = p1; p2Payout = totalPotLamports;
+    } else if (finalStatus === 'game_over_p1_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p1.userId)) {
+        isConclusiveOutcome = true;
+        titleEmoji = "⏳"; winner = p2; loser = p1;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
         p2LedgerCode = 'win_de_pvp_opponent_forfeit'; p1LedgerCode = 'loss_de_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p1MentionHTML} Forfeited (Timeout)!</b>`;
         outcomeDetails = `${p2MentionHTML} wins by default!`;
         if (p1.status !== 'timeout_forfeit') p1.status = 'timeout_forfeit';
         gameOutcomeTextForLog = `P2 wins by P1 forfeit`;
-    } else if (gameData.status === 'game_over_p2_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p2.userId)) {
-        isConclusiveOutcome = true;
-        titleEmoji = "⏳"; winner = p1; loser = p2; p1Payout = totalPotLamports;
+    } else if (finalStatus === 'game_over_p2_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p2.userId)) {
+        isConclusiveOutcome = true;
+        titleEmoji = "⏳"; winner = p1; loser = p2;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
         p1LedgerCode = 'win_de_pvp_opponent_forfeit'; p2LedgerCode = 'loss_de_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p2MentionHTML} Forfeited (Timeout)!</b>`;
         outcomeDetails = `${p1MentionHTML} wins by default!`;
@@ -7087,21 +7131,25 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         gameOutcomeTextForLog = `P1 wins by P2 forfeit`;
     } else if (p1.stood && p2.stood) {
         if (p1.score > p2.score) {
-            isConclusiveOutcome = true;
-            titleEmoji = "🏆"; winner = p1; loser = p2; p1Payout = totalPotLamports;
+            isConclusiveOutcome = true;
+            titleEmoji = "🏆"; winner = p1; loser = p2;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p1Payout = totalPotLamports - houseFee;
             p1LedgerCode = 'win_de_pvp_score';
             resultHeaderHTML = `🏆 <b>${p1MentionHTML} WINS!</b>`;
             outcomeDetails = `Their score of <b>${p1.score}</b> beats ${p2MentionHTML}'s <i>${p2.score}</i>.`;
             gameOutcomeTextForLog = `P1 wins by score (${p1.score} vs ${p2.score})`;
         } else if (p2.score > p1.score) {
-            isConclusiveOutcome = true;
-            titleEmoji = "🏆"; winner = p2; loser = p1; p2Payout = totalPotLamports;
+            isConclusiveOutcome = true;
+            titleEmoji = "🏆"; winner = p2; loser = p1;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p2Payout = totalPotLamports - houseFee;
             p2LedgerCode = 'win_de_pvp_score';
             resultHeaderHTML = `🏆 <b>${p2MentionHTML} WINS!</b>`;
             outcomeDetails = `Their score of <b>${p2.score}</b> beats ${p1MentionHTML}'s <i>${p1.score}</i>.`;
             gameOutcomeTextForLog = `P2 wins by score (${p2.score} vs ${p1.score})`;
         } else { // Scores are equal
-            isConclusiveOutcome = false; // A push does not trigger wager bonuses
+            isConclusiveOutcome = false;
             titleEmoji = "⚖️"; isPush = true;
             resultHeaderHTML = `⚖️ <b>IT'S A DRAW!</b>`;
             outcomeDetails = `Both players stood with <b>${p1.score}</b> points.`;
@@ -7110,7 +7158,7 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
             gameOutcomeTextForLog = `Push (Draw at ${p1.score})`;
         }
     } else { 
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         titleEmoji = "⚙️"; isPush = true; 
         resultHeaderHTML = `⚙️ <b>Unexpected Game End</b>`; 
         outcomeDetails = `The game concluded unexpectedly. Bets refunded. P1 Status: ${p1.status}, P2 Status: ${p2.status}, Game: ${gameData.status}`;
@@ -7121,7 +7169,8 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
     }
 
     if (winner) {
-        winningsFooterHTML = `🎉 <b>${escapeHTML(winner.displayName)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
+        const winnerPayout = winner.userId === p1.userId ? p1Payout : p2Payout;
+        winningsFooterHTML = `🎉 <b>${escapeHTML(winner.displayName)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(winnerPayout, 'USD'))}</b> (after a 1% house fee)!`;
     } else if (isPush) {
         winningsFooterHTML = `💰 Wagers of <b>${betDisplayUSD_HTML_Resolve}</b> each are returned.`;
     }
@@ -7156,52 +7205,51 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
             [p1.userId, p2.userId],
             gameData.betAmount,
             gameOutcomeTextForLog,
-            0n
+            0n,
+            houseFee
         );
 
-        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
-        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
-        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
+        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
+        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
+        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
 
-        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
-        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
-        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
+        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
+        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        
+        const p1Upd = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId, player_score: playerA.score, opponent_score: playerB.score, original_bet_amount: gameData.betAmount.toString() }, `DE PvP Result vs ${playerB.displayName || playerB.userId}`, solPrice);
+        if(!p1Upd.success) throw new Error(`Player A (${playerA.userId}) update failed: ${p1Upd.error}`);
+        if(p1Upd.notifications) allNotificationsToSend.push(...p1Upd.notifications);
 
-        // Process Player A first
-        const p1Upd = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId, player_score: playerA.score, opponent_score: playerB.score, original_bet_amount: gameData.betAmount.toString() }, `DE PvP Result vs ${playerB.displayName || playerB.userId}`, solPrice);
-        if(!p1Upd.success) throw new Error(`Player A (${playerA.userId}) update failed: ${p1Upd.error}`);
-        if(p1Upd.notifications) allNotificationsToSend.push(...p1Upd.notifications);
-
-        // Process Player B second
-        const p2Upd = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId, player_score: playerB.score, opponent_score: playerA.score, original_bet_amount: gameData.betAmount.toString() }, `DE PvP Result vs ${playerA.displayName || playerA.userId}`, solPrice);
-        if(!p2Upd.success) throw new Error(`Player B (${playerB.userId}) update failed: ${p2Upd.error}`);
-        if(p2Upd.notifications) allNotificationsToSend.push(...p2Upd.notifications);
+        const p2Upd = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId, player_score: playerB.score, opponent_score: playerA.score, original_bet_amount: gameData.betAmount.toString() }, `DE PvP Result vs ${playerA.displayName || playerA.userId}`, solPrice);
+        if(!p2Upd.success) throw new Error(`Player B (${playerB.userId}) update failed: ${p2Upd.error}`);
+        if(p2Upd.notifications) allNotificationsToSend.push(...p2Upd.notifications);
         
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
+            // --- START OF MODIFICATION ---
 
-            // 1. ADDED: Check initial bet bonus for both players.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                await processQualifyingBetAndInitialBonus(client, p1.userId, gameData.betAmount, gameId);
-                await processQualifyingBetAndInitialBonus(client, p2.userId, gameData.betAmount, gameId);
-            }
+            // 1. ADDED: Check initial bet bonus for both players.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                await processQualifyingBetAndInitialBonus(client, p1.userId, gameData.betAmount, gameId);
+                await processQualifyingBetAndInitialBonus(client, p2.userId, gameData.betAmount, gameId);
+            }
 
-            // 2. MODIFIED: Correctly call level and milestone checks for both players.
+            // 2. MODIFIED: Correctly call level and milestone checks for both players.
             if (p1Upd.success && p1Upd.newTotalWageredLamports !== undefined) {
                 const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice, gameData.chatId);
                 allNotificationsToSend.push(...p1LevelNotifications);
                 const p1MilestoneResult = await processWagerMilestoneBonus(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice);
-                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
+                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
             }
             if (p2Upd.success && p2Upd.newTotalWageredLamports !== undefined) {
                 const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice, gameData.chatId);
                 allNotificationsToSend.push(...p2LevelNotifications);
                 const p2MilestoneResult = await processWagerMilestoneBonus(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice);
-                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
+                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
             }
 
-            // --- END OF MODIFICATION ---
+            // --- END OF MODIFICATION ---
         }
         
         await client.query('COMMIT');
@@ -7212,13 +7260,12 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
         const finalMessageTextHTMLWithError = currentMsg + dbErrorText; 
         console.error(`${logPrefix} CRITICAL DB Error: ${e.message}`);
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL DE PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameData.gameId)}</code>\nWinner: ${winner?.displayName || 'N/A'}\nLoser: ${loser?.displayName || 'N/A'}\nError: ${escapeHTML(e.message)}. Manual check required.`, { parse_mode: 'HTML' });
-        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(()=>{});
+        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(()=>{});
         const finalKeyboardError = createPostGameKeyboard(GAME_IDS.DICE_ESCALATOR_PVP, gameData.betAmount);
-        await safeSendMessage(String(gameData.chatId), finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
+        await safeSendMessage(String(chatId), finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
         return; 
     } finally { if (client) client.release(); }
     
-    // Send all collected notifications AFTER the transaction is closed
     for (const notification of allNotificationsToSend) {
         if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
             await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
@@ -7228,11 +7275,11 @@ async function resolveDiceEscalatorPvPGame_New(gameData, playerWhoForfeitedId = 
     }
 
     if (gameData.currentMessageId && bot) {
-        await bot.deleteMessage(String(gameData.chatId), Number(gameData.currentMessageId)).catch(() => {});
+        await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(() => {});
     }
     
     const finalKeyboardSuccess = createPostGameKeyboard(GAME_IDS.DICE_ESCALATOR_PVP, betAmount);
-    await safeSendMessage(String(gameData.chatId), finalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboardSuccess });
+    await safeSendMessage(String(chatId), finalMessageHTML, { parse_mode: 'HTML', reply_markup: finalKeyboardSuccess });
 }
 // --- END OF FULL REPLACEMENT for resolveDiceEscalatorPvPGame_New function ---
 // --- End of Part 5b, Section 1 (COMPLETE DICE ESCALATOR LOGIC - GRANULAR ACTIVE GAME LIMITS) ---
@@ -8379,7 +8426,7 @@ async function processDice21BotTurn(gameData) {
 }
 // --- END OF NEW processDice21BotTurn function ---
 
-// REPLACE your existing finalizeDice21PvBGame function with this new, complete version:
+// REPLACEMENT for finalizeDice21PvBGame in Part 5b, Section 2
 
 async function finalizeDice21PvBGame(gameData) {
     const logPrefix = `[D21_PvB_Finalize_V13_Dice18 GID:${gameData.gameId}]`;
@@ -8409,6 +8456,7 @@ async function finalizeDice21PvBGame(gameData) {
     let resultTitle = "🏁 Dice 18 Result 🏁";
     let resultOutcomeText = "";
     let payoutLamports = 0n;
+    let houseFee = 0n;
     const betDisplayUSDShort = await formatBalanceForDisplay(betAmount, 'USD', 2);
     let ledgerOutcomeCode = 'loss_dice21_pvb'; 
     let gameOutcomeTextForLog = "";
@@ -8434,19 +8482,21 @@ async function finalizeDice21PvBGame(gameData) {
         ledgerOutcomeCode = 'refund_dice21_pvb_error';
         gameOutcomeTextForLog = `Game error - refund (Player: ${playerScore}, Bot: ${botScore})`;
     } else if (finalStatus === 'game_over_bot_played' || finalStatus === 'player_blackjack') {
-        // This block now handles all standard win/loss/push scenarios without a special bonus
+        const totalPot = betAmount * 2n;
         if (botScore > DICE_21_TARGET_SCORE) { // DICE_21_TARGET_SCORE now equals 18
             isConclusiveOutcome = true;
             resultTitle = "🎉 Player Wins!";
-            payoutLamports = betAmount * 2n;
-            resultOutcomeText = `Bot BUSTED (<b>${escapeHTML(String(botScore))}</b>)! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
+            houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+            payoutLamports = totalPot - houseFee;
+            resultOutcomeText = `Bot BUSTED (<b>${escapeHTML(String(botScore))}</b>)! You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b> (after a 1% house fee)!`;
             ledgerOutcomeCode = 'win_dice21_pvb_bot_bust';
             gameOutcomeTextForLog = `Player wins - Bot busts (Player: ${playerScore}, Bot: ${botScore})`;
         } else if (playerScore > botScore) {
             isConclusiveOutcome = true;
             resultTitle = "🎉 Player Wins!";
-            payoutLamports = betAmount * 2n;
-            resultOutcomeText = `Your <b>${escapeHTML(String(playerScore))}</b> beats Bot's <b>${escapeHTML(String(botScore))}</b>. You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b>!`;
+            houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+            payoutLamports = totalPot - houseFee;
+            resultOutcomeText = `Your <b>${escapeHTML(String(playerScore))}</b> beats Bot's <b>${escapeHTML(String(botScore))}</b>. You win <b>${escapeHTML(await formatBalanceForDisplay(payoutLamports, 'USD', 2))}</b> (after a 1% house fee)!`;
             ledgerOutcomeCode = 'win_dice21_pvb_score';
             gameOutcomeTextForLog = `Player wins by score (${playerScore} vs ${botScore})`;
         } else if (botScore > playerScore) {
@@ -8477,7 +8527,7 @@ async function finalizeDice21PvBGame(gameData) {
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, GAME_IDS.DICE_21, chatId, playerId, [playerId], betAmount, gameOutcomeTextForLog, 0n
+            client, GAME_IDS.DICE_21, chatId, playerId, [playerId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
 
         const notes = `Dice 18 PvB Result: ${finalStatus}. Payout: ${payoutLamports}. Player Hand: ${playerHandRolls.join(',')}. Bot Hand: ${botHandRolls.join(',')}.`;
@@ -8962,7 +9012,7 @@ async function handleDice21PvPStand(gameId, userIdWhoStood, originalMessageId, c
     }
 }
 
-// REPLACE your existing finalizeDice21PvPGame function with this:
+// REPLACEMENT for finalizeDice21PvPGame in Part 5b, Section 2
 
 async function finalizeDice21PvPGame(gameData) {
     const { gameId, chatId, betAmount, initiator, opponent, status: finalStatus, _origin_key_for_limits } = gameData;
@@ -8994,58 +9044,69 @@ async function finalizeDice21PvPGame(gameData) {
     const p1MentionHTML = p1.mentionHTML;
     const p2MentionHTML = p2.mentionHTML;
     let p1Payout = 0n; let p2Payout = 0n;
+    let houseFee = 0n;
     let p1LedgerCode = 'loss_dice21_pvp'; let p2LedgerCode = 'loss_dice21_pvp';
     let financialOutcomeTextPvP = "";
     let resultDescriptionForMessage = "";
     let gameOutcomeTextForLog = "";
     const totalPotLamports = betAmount * 2n;
-    const totalPotDisplay = escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'));
     const singleBetDisplay = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
     let titleResultHTML = `💥✨ <b>Dice 18 PvP - The Reckoning!</b> ✨💥`;
     let isConclusiveOutcome = false;
 
-    // Simplified logic starts here - no more blackjack checks
     if (finalStatus === 'game_over_initiator_timeout_forfeit' || (p1.status === 'timeout_forfeit')) {
         isConclusiveOutcome = true;
         titleResultHTML = `⏳🏆 <b>${p2MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
         resultDescriptionForMessage = `${p1MentionHTML} timed out making a choice.`;
-        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p2Payout = totalPotLamports; p2LedgerCode = 'win_dice21_pvp_forfeit'; p1LedgerCode = 'loss_dice21_pvp_forfeit';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p2LedgerCode = 'win_dice21_pvp_forfeit'; p1LedgerCode = 'loss_dice21_pvp_forfeit';
         gameOutcomeTextForLog = `P2 wins by P1 forfeit`;
     } else if (finalStatus === 'game_over_opponent_timeout_forfeit' || (p2.status === 'timeout_forfeit')) {
         isConclusiveOutcome = true;
         titleResultHTML = `⏳🏆 <b>${p1MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
         resultDescriptionForMessage = `${p2MentionHTML} timed out making a choice.`;
-        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p1Payout = totalPotLamports; p1LedgerCode = 'win_dice21_pvp_forfeit'; p2LedgerCode = 'loss_dice21_pvp_forfeit';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p1LedgerCode = 'win_dice21_pvp_forfeit'; p2LedgerCode = 'loss_dice21_pvp_forfeit';
         gameOutcomeTextForLog = `P1 wins by P2 forfeit`;
     } else if (p1.status === 'bust' || finalStatus === 'game_over_initiator_bust_during_turn') {
         isConclusiveOutcome = true;
         titleResultHTML = `💥🏆 <b>${p2MentionHTML} Wins!</b>`;
         resultDescriptionForMessage = `${p1MentionHTML} BUSTED with <b>${p1.score}</b>!`;
-        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p2Payout = totalPotLamports; p2LedgerCode = 'win_dice21_pvp_opponent_bust'; p1LedgerCode = 'loss_dice21_pvp_bust';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p2LedgerCode = 'win_dice21_pvp_opponent_bust'; p1LedgerCode = 'loss_dice21_pvp_bust';
         gameOutcomeTextForLog = `P2 wins - P1 busts (P1: ${p1.score})`;
     } else if (p2.status === 'bust' || finalStatus === 'game_over_opponent_bust_during_turn') {
         isConclusiveOutcome = true;
         titleResultHTML = `💥🏆 <b>${p1MentionHTML} Wins!</b>`;
         resultDescriptionForMessage = `${p2MentionHTML} BUSTED with <b>${p2.score}</b>!`;
-        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p1Payout = totalPotLamports; p1LedgerCode = 'win_dice21_pvp_opponent_bust'; p2LedgerCode = 'loss_dice21_pvp_bust';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p1LedgerCode = 'win_dice21_pvp_opponent_bust'; p2LedgerCode = 'loss_dice21_pvp_bust';
         gameOutcomeTextForLog = `P1 wins - P2 busts (P2: ${p2.score})`;
     } else if (p1.score > p2.score) {
         isConclusiveOutcome = true;
         titleResultHTML = `🏆 <b>${p1MentionHTML} Wins!</b>`;
         resultDescriptionForMessage = `Their score of <b>${p1.score}</b> beats ${p2MentionHTML}'s <i>${p2.score}</i>.`;
-        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p1Payout = totalPotLamports; p1LedgerCode = 'win_dice21_pvp_score'; p2LedgerCode = 'loss_dice21_pvp_score';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p1MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p1LedgerCode = 'win_dice21_pvp_score'; p2LedgerCode = 'loss_dice21_pvp_score';
         gameOutcomeTextForLog = `P1 wins by score (${p1.score} vs ${p2.score})`;
     } else if (p2.score > p1.score) {
         isConclusiveOutcome = true;
         titleResultHTML = `🏆 <b>${p2MentionHTML} Wins!</b>`;
         resultDescriptionForMessage = `Their score of <b>${p2.score}</b> beats ${p1MentionHTML}'s <i>${p1.score}</i>.`;
-        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${totalPotDisplay}</b>!`;
-        p2Payout = totalPotLamports; p2LedgerCode = 'win_dice21_pvp_score'; p1LedgerCode = 'loss_dice21_pvp_score';
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
+        financialOutcomeTextPvP = `${p2MentionHTML} wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
+        p2LedgerCode = 'win_dice21_pvp_score'; p1LedgerCode = 'loss_dice21_pvp_score';
         gameOutcomeTextForLog = `P2 wins by score (${p2.score} vs ${p1.score})`;
     } else { // Push
         isConclusiveOutcome = false;
@@ -9057,16 +9118,16 @@ async function finalizeDice21PvPGame(gameData) {
         gameOutcomeTextForLog = `Push (Draw at ${p1.score})`;
     }
 
-    // ... The rest of the function (database transaction, notifications, final message sending) remains the same ...
-
-    let dbErrorTextForUserHTML = ""; let client = null;
+    let client = null;
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n
+            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
 
         const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
+        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
+
         const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
         const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
         const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
@@ -9085,8 +9146,8 @@ async function finalizeDice21PvPGame(gameData) {
                 await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
                 await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
             }
-            const p1Update = (p1.userId === playerA.userId) ? p1Upd : p2Upd;
-            const p2Update = (p2.userId === playerA.userId) ? p1Upd : p2Upd;
+            const p1Update = (p1.userId === playerA.userId) ? p1Upd : p2Upd;
+            const p2Update = (p2.userId === playerA.userId) ? p1Upd : p2Upd;
             if (p1Update.success && p1Update.newTotalWageredLamports !== undefined) {
                 const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1Update.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p1LevelNotifications);
@@ -9104,10 +9165,15 @@ async function finalizeDice21PvPGame(gameData) {
         await client.query('COMMIT');
     } catch (e) { 
         if (client) await client.query('ROLLBACK'); 
+        const currentMsg = finalMessageHTML;
         const dbErrorText = `\n\n⚠️ <i>Error settling wagers. Admin notified.</i>`;
-        resultDescriptionForMessage += dbErrorText; // Append error to the description
+        const finalMessageTextHTMLWithError = currentMsg + dbErrorText;
         console.error(`${logPrefix} CRITICAL DB Error: ${e.message}`);
         if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL D18 PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. MANUAL CHECK REQUIRED.`, { parse_mode: 'HTML' });
+        if (gameData.currentMessageId && bot) await bot.deleteMessage(String(chatId), Number(gameData.currentMessageId)).catch(()=>{});
+        const finalKeyboardError = createPostGameKeyboard(GAME_IDS.DICE_21_PVP, betAmount);
+        await safeSendMessage(String(chatId), finalMessageTextHTMLWithError, { parse_mode: 'HTML', reply_markup: finalKeyboardError });
+        return; 
     } finally { if (client) client.release(); }
     
     for (const notification of allNotificationsToSend) {
@@ -9118,12 +9184,12 @@ async function finalizeDice21PvPGame(gameData) {
         }
     }
 
-    const p1StatusIconDisplay = p1.status === 'bust' ? "💥BUST" : (p1.status === 'stood' ? `✅${p1.score}` : (p1.status === 'timeout_forfeit' ? '⏳Forfeit' : `${p1.score}`));
-    const p2StatusIconDisplay = p2.status === 'bust' ? "💥BUST" : (p2.status === 'stood' ? `✅${p2.score}` : (p2.status === 'timeout_forfeit' ? '⏳Forfeit' : `${p2.score}`));
+    const p1StatusIconDisplay = p1.status === 'bust' ? "💥BUST" : (p1.status === 'stood' ? `✅${p1.score}` : (p1.status === 'timeout_forfeit' ? '⏳Forfeit' : `${p1.score}`));
+    const p2StatusIconDisplay = p2.status === 'bust' ? "💥BUST" : (p2.status === 'stood' ? `✅${p2.score}` : (p2.status === 'timeout_forfeit' ? '⏳Forfeit' : `${p2.score}`));
 
     const finalMessageHTML = `${titleResultHTML}\n\n` +
-        `<i>${p1MentionHTML} vs ${p2MentionHTML} (Wager: <b>${betDisplayUSD_HTML_Resolve}</b> each)</i>\n\n` +
-        `<b>${p1MentionHTML}:</b> ${p1StatusIconDisplay} ${formatDiceRolls(p1.hand || [])}\n` +
+        `<i>${p1MentionHTML} vs ${p2MentionHTML} (Wager: <b>${singleBetDisplay}</b> each)</i>\n\n` +
+        `<b>${p1MentionHTML}:</b> ${p1StatusIconDisplay} ${formatDiceRolls(p1.hand || [])}\n` +
         `<b>${p2MentionHTML}:</b> ${p2StatusIconDisplay} ${formatDiceRolls(p2.hand || [])}\n\n` +
         `------------------------------------\n${resultDescriptionForMessage}\n\n${financialOutcomeTextPvP}`;
 
@@ -9418,13 +9484,13 @@ async function handleOverUnder7ChoiceTimeout(gameId) {
     }
 }
 
-// CORRECTED handleOverUnder7Choice (with Referral Fixes)
+// REPLACEMENT for handleOverUnder7Choice in Part 5c, Section 1
+
 async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageIdFromCallback, callbackQueryId, msgContext) {
     const userId = String(userObj.telegram_id);
     const chatId = String(msgContext.chatId || originalChatIdFromCallback);
     const LOG_PREFIX_OU7_CHOICE = `[OU7_Choice_V5_FullFix UID:${userId} GID:${gameId}]`;
-    let allNotificationsToSend = [];
-
+    
     let solPrice;
     try {
         solPrice = await getSolUsdPrice();
@@ -9519,10 +9585,10 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
 
     let win = false;
     let payoutMultiplier = 0;
+    let houseFee = 0n;
     let outcomeReasonLog = `loss_ou7_${choice}_sum${diceSum}`;
     let resultTextPartHTML = "";
     let payoutAmountLamportsFinal = 0n;
-    let isConclusiveOutcome = true;
 
     if (choice === 'seven' && diceSum === 7) {
         win = true; payoutMultiplier = OU7_PAYOUT_SEVEN;
@@ -9535,9 +9601,10 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     if (win) {
         outcomeReasonLog = `win_ou7_${choice}_sum${diceSum}_mult${payoutMultiplier}`;
         const winEmoji = choice === 'seven' ? "🎯 JACKPOT!" : "🎉 WINNER!";
-        const currentProfitLamports = betAmount * BigInt(Math.floor(payoutMultiplier));
-        payoutAmountLamportsFinal = betAmount + currentProfitLamports;
-        resultTextPartHTML = `${winEmoji} Your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b> was spot on! You've won <b>${escapeHTML(await formatBalanceForDisplay(currentProfitLamports, 'USD'))}</b> in profit!`;
+        const preFeePayout = betAmount + (betAmount * BigInt(Math.floor(payoutMultiplier)));
+        houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+        payoutAmountLamportsFinal = preFeePayout - houseFee;
+        resultTextPartHTML = `${winEmoji} Your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b> was spot on! Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamportsFinal, 'USD'))}</b> (after a 1% house fee).`;
     } else {
         payoutAmountLamportsFinal = 0n;
         resultTextPartHTML = `💔 So Close! The dice sum was <b>${diceSum}</b>, not matching your prediction of <b>${escapeHTML(choiceTextDisplay)} 7</b>. Better luck next time!`;
@@ -9547,25 +9614,45 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
     let finalMessageTextHTML = `${titleResultHTML}\n\nPlayer: ${playerRefHTML}\nBet: <b>${betDisplayUSD_HTML}</b> on <b>${escapeHTML(choiceTextDisplay)} 7</b>.\n\n`;
     finalMessageTextHTML += `The Helper Bot rolled: ${formatDiceRolls(diceRolls)} for a total of <b>${escapeHTML(String(diceSum))}</b>!\n\n${resultTextPartHTML}`;
     
+    await finalizeOverUnder7Game(gameDataAfterRolls, finalMessageTextHTML, payoutAmountLamportsFinal, outcomeReasonLog, houseFee);
+}
+
+// NEW function to be added to Part 5c, Section 1
+
+async function finalizeOverUnder7Game(gameData, resultMessageHTML, payoutAmountLamports, outcomeReasonLog, houseFee = 0n) {
+    const { gameId, chatId, userId, playerRef, betAmount, userObj, totalWageredForLevelCheck, rolls, diceSum } = gameData;
+    const LOG_PREFIX_OU7_FINALIZE = `[OU7_Finalize_V1 GID:${gameId} UID:${userId}]`;
+    const activeGameKey = GAME_IDS.OVER_UNDER_7;
+    let allNotificationsToSend = [];
+
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+    } catch (priceError) {
+        console.error(`${LOG_PREFIX_OU7_FINALIZE} CRITICAL: Could not get SOL price. Bonus checks will be skipped. Error: ${priceError.message}`);
+        solPrice = 0;
+    }
+
     let clientOutcome = null;
     let dbErrorText = "";
-    let gameOutcomeTextForTable = `Choice: ${choice}, Sum: ${diceSum}, Outcome: ${outcomeReasonLog}`;
+    const gameOutcomeTextForTable = `Choice: ${gameData.playerChoice}, Sum: ${diceSum}, Outcome: ${outcomeReasonLog}`;
+    const isConclusiveOutcome = outcomeReasonLog.startsWith('win_') || outcomeReasonLog.startsWith('loss_');
 
     try {
         clientOutcome = await pool.connect();
         await clientOutcome.query('BEGIN');
 
         const actualGameLogId = await logGameResultToGamesTable(
-            clientOutcome, GAME_IDS.OVER_UNDER_7, chatId, userId, [userId], betAmount, gameOutcomeTextForTable, 0n
+            clientOutcome, GAME_IDS.OVER_UNDER_7, chatId, userId, [userId], betAmount, gameOutcomeTextForTable, 0n, houseFee
         );
 
         const ledgerReasonForTransactionType = outcomeReasonLog.length > 50 ? outcomeReasonLog.substring(0, 47) + "..." : outcomeReasonLog;
         const fullNotesForLedger = `${outcomeReasonLog} (Game ID: ${gameId})`;
 
         const balanceUpdate = await updateUserBalanceAndLedger(
-            clientOutcome, userId, payoutAmountLamportsFinal,
+            clientOutcome, userId, payoutAmountLamports,
             ledgerReasonForTransactionType,
-            { game_log_id: actualGameLogId, dice_rolls_s7_luckysum: diceRolls.join(','), sum_s7_luckysum: diceSum.toString(), original_bet_amount: betAmount.toString() },
+            { game_log_id: actualGameLogId, dice_rolls_s7_luckysum: rolls.join(','), sum_s7_luckysum: diceSum.toString(), original_bet_amount: betAmount.toString() },
             fullNotesForLedger,
             solPrice
         );
@@ -9576,33 +9663,28 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         if (balanceUpdate.notifications) allNotificationsToSend.push(...balanceUpdate.notifications);
 
         if (isConclusiveOutcome && totalWageredForLevelCheck !== undefined) {
-            // --- START OF MODIFICATION ---
-
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientOutcome, userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-
-            // 2. MODIFIED: Correctly call level and milestone checks.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientOutcome, userId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+                }
+            }
+            
             const levelNotifications = await checkAndUpdateUserLevel(clientOutcome, userId, totalWageredForLevelCheck, solPrice, chatId);
             allNotificationsToSend.push(...levelNotifications);
             const milestoneResult = await processWagerMilestoneBonus(clientOutcome, userId, totalWageredForLevelCheck, solPrice);
-            if (!milestoneResult.success) {
-                console.warn(`${LOG_PREFIX_OU7_CHOICE} Failed to process milestone bonus: ${milestoneResult.error}`);
-            }
-            // --- END OF MODIFICATION ---
+            if (!milestoneResult.success) {
+                console.warn(`${LOG_PREFIX_OU7_FINALIZE} Failed to process milestone bonus: ${milestoneResult.error}`);
+            }
         }
 
         await clientOutcome.query('COMMIT');
     } catch (dbError) {
         if (clientOutcome) { 
-            try { await clientOutcome.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_OU7_CHOICE} Rollback error: ${rbErr.message}`);}
+            try { await clientOutcome.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_OU7_FINALIZE} Rollback error: ${rbErr.message}`);}
         }
         dbErrorText = `\n\n⚠️ Error settling wager: <code>${escapeHTML(dbError.message)}</code>. Admin notified.`;
-        console.error(`${LOG_PREFIX_OU7_CHOICE} DB error: ${dbError.message}`);
+        console.error(`${LOG_PREFIX_OU7_FINALIZE} DB error: ${dbError.message}`);
         if (typeof notifyAdmin === 'function') {
             notifyAdmin(`🚨 CRITICAL Over/Under 7 Payout/Ledger Failure 🚨\nGame ID: \`${escapeHTML(gameId)}\` User: ${escapeHTML(String(userId))}\nError: \`${escapeHTML(dbError.message)}\`. Manual check needed.`, {parse_mode: 'MarkdownV2'});
         }
@@ -9610,7 +9692,6 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         if (clientOutcome) clientOutcome.release();
     }
 
-    // Send notifications after the DB transaction is fully complete
     for (const notification of allNotificationsToSend) {
         if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
             await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
@@ -9619,16 +9700,13 @@ async function handleOverUnder7Choice(gameId, choice, userObj, originalMessageId
         }
     }
     
-    let finalMessageWithDbStatusHTML = finalMessageTextHTML + dbErrorText;
+    let finalMessageWithDbStatusHTML = resultMessageHTML + dbErrorText;
     const postGameKeyboardOU7 = createPostGameKeyboard(GAME_IDS.OVER_UNDER_7, betAmount);
-    
-    if (messageIdToDeleteBeforeFinalResult && bot) {
-        await bot.deleteMessage(String(chatId), Number(messageIdToDeleteBeforeFinalResult)).catch(e => {});
-    }
     await safeSendMessage(String(chatId), finalMessageWithDbStatusHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardOU7 });
 
     activeGames.delete(gameId);
-    await updateGroupGameDetails(String(chatId), { removeThisId: gameId }, GAME_IDS.OVER_UNDER_7, null);
+    await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null); 
+    console.log(`${LOG_PREFIX_OU7_FINALIZE} Game ${gameId} finalized and lock cleared for key ${activeGameKey}.`);
 }
 
 // --- End of Part 5c, Section 1 (NEW + DEBUG LOGS) ---
@@ -10365,7 +10443,7 @@ async function processDuelBotTurnPvB(gameData) {
     await finalizeDuelPvBGame(gameData);
 }
 
-// CORRECTED finalizeDuelPvBGame (with Referral Fixes)
+// MODIFIED finalizeDuelPvBGame (with House Fee and Referral Fixes)
 async function finalizeDuelPvBGame(gameData) {
     const { gameId, chatId, playerId, playerRefHTML, playerScore, botScore, betAmount, userObj, playerRolls, botRolls, status: finalStatus, chatType } = gameData;
     const logPrefix = `[Duel_PvB_Finalize_V7_FullFix GID:${gameId}]`;
@@ -10387,34 +10465,39 @@ async function finalizeDuelPvBGame(gameData) {
 
     let outcomeHeader = "", outcomeDetails = "", winningsText = "", titleEmoji = "⚔️";
     let payoutAmountLamports = 0n;
+    let houseFee = 0n;
     let ledgerOutcomeCode = "";
     let gameOutcomeTextForLog = "";
     const betDisplayUSD_HTML_Final = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
     let isConclusiveOutcome = false;
 
     if (finalStatus === 'game_over_player_forfeit') {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleEmoji = "⏳"; outcomeHeader = `🤦‍♂️ <b>Game Forfeited by ${playerRefHTML}!</b>`;
         outcomeDetails = `Your turn timed out. The Bot Dealer wins.`;
         ledgerOutcomeCode = 'loss_duel_pvb_timeout_forfeit'; 
         winningsText = `Your wager of <b>${betDisplayUSD_HTML_Final}</b> is lost.`;
         gameOutcomeTextForLog = `Player forfeit (Player: ${playerScore}, Bot: ${botScore})`;
     } else if (playerScore > botScore) {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleEmoji = "🏆"; outcomeHeader = `🎉 <b>VICTORY, ${playerRefHTML}!</b>`;
         outcomeDetails = `Your score of <b>${playerScore}</b> triumphs over Bot's <i>${botScore}</i>.`;
-        payoutAmountLamports = betAmount * 2n; ledgerOutcomeCode = 'win_duel_pvb';
-        winningsText = `You win <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b> profit! (Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b>)`;
+        const totalPot = betAmount * 2n;
+        houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+        payoutAmountLamports = totalPot - houseFee;
+        ledgerOutcomeCode = 'win_duel_pvb';
+        winningsText = `You win! Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b> (after a 1% house fee).`;
         gameOutcomeTextForLog = `Player wins (${playerScore} vs ${botScore})`;
     } else if (botScore > playerScore) {
-        isConclusiveOutcome = true;
+        isConclusiveOutcome = true;
         titleEmoji = "🤖"; outcomeHeader = `💔 <b>Bot Prevails, ${playerRefHTML}.</b>`;
         outcomeDetails = `Bot's score of <b>${botScore}</b> edges out your <i>${playerScore}</i>.`;
+        payoutAmountLamports = 0n;
         ledgerOutcomeCode = 'loss_duel_pvb';
         winningsText = `The Bot Dealer claims your wager of <b>${betDisplayUSD_HTML_Final}</b>.`;
         gameOutcomeTextForLog = `Bot wins (${botScore} vs ${playerScore})`;
     } else { // Push
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         titleEmoji = "⚖️"; outcomeHeader = `⚖️ <b>A DRAW!</b>`;
         outcomeDetails = `Both scored <b>${playerScore}</b>!`;
         payoutAmountLamports = betAmount; ledgerOutcomeCode = 'push_duel_pvb';
@@ -10427,7 +10510,7 @@ async function finalizeDuelPvBGame(gameData) {
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, GAME_IDS.DUEL_PVB, chatId, playerId, [playerId], betAmount, gameOutcomeTextForLog, 0n
+            client, GAME_IDS.DUEL_PVB, chatId, playerId, [playerId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
         const balanceUpdate = await updateUserBalanceAndLedger(
             client, playerId, payoutAmountLamports, ledgerOutcomeCode, { game_log_id: actualGameLogId, original_bet_amount: betAmount.toString() }, `PvB Duel game ${gameId} result`, solPrice
@@ -10436,30 +10519,30 @@ async function finalizeDuelPvBGame(gameData) {
         if(balanceUpdate.notifications) allNotificationsToSend.push(...balanceUpdate.notifications);
 
         if (isConclusiveOutcome) {
-            // --- START OF MODIFICATION ---
+            // --- START OF MODIFICATION ---
 
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, playerId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${playerId} from game ${gameId}.`);
-                }
-            }
-
-            // 2. MODIFIED: Correctly call level and milestone checks.
-            if (balanceUpdate.newTotalWageredLamports !== undefined) {
-                if (typeof checkAndUpdateUserLevel === 'function') {
-                    const levelNotifications = await checkAndUpdateUserLevel(client, playerId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                    allNotificationsToSend.push(...levelNotifications);
-                }
-                if (typeof processWagerMilestoneBonus === 'function') {
-                    const milestoneResult = await processWagerMilestoneBonus(client, playerId, balanceUpdate.newTotalWageredLamports, solPrice);
-                    if (!milestoneResult.success) {
-                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneResult.error}`);
-                    }
-                }
+            // 1. ADDED: Check for the initial bet bonus.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, playerId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${playerId} from game ${gameId}.`);
+                }
             }
-            // --- END OF MODIFICATION ---
+
+            // 2. MODIFIED: Correctly call level and milestone checks.
+            if (balanceUpdate.newTotalWageredLamports !== undefined) {
+                if (typeof checkAndUpdateUserLevel === 'function') {
+                    const levelNotifications = await checkAndUpdateUserLevel(client, playerId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
+                    allNotificationsToSend.push(...levelNotifications);
+                }
+                if (typeof processWagerMilestoneBonus === 'function') {
+                    const milestoneResult = await processWagerMilestoneBonus(client, playerId, balanceUpdate.newTotalWageredLamports, solPrice);
+                    if (!milestoneResult.success) {
+                        console.warn(`${logPrefix} Failed to process milestone bonus: ${milestoneResult.error}`);
+                    }
+                }
+            }
+            // --- END OF MODIFICATION ---
         }
         
         await client.query('COMMIT');
@@ -10657,10 +10740,11 @@ async function handleDuelPvPTurnTimeout(gameId, timedOutPlayerId) {
     await resolveDuelPvPGame(gameData);
 }
 
-// CORRECTED resolveDuelPvPGame (with ALL Fixes)
+// REPLACEMENT for resolveDuelPvPGame in Part 5c, Section 2
+
+// CORRECTED resolveDuelPvPGame (with ALL Fixes and House Fee)
 async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
-    // --- FIX APPLIED HERE: gameId is destructured immediately to be available in the catch block ---
-    const { gameId } = gameData; 
+    const { gameId } = gameData; 
     const logPrefix = `[Duel_PvP_Resolve_V8_FullFix GID:${gameId || 'UNKNOWN_GAME_ID'}]`;
     let allNotificationsToSend = [];
 
@@ -10672,7 +10756,7 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
         solPrice = 0;
     }
     
-    const { chatId, betAmount, initiator, opponent, chatType, status: finalStatus, _origin_key_for_limits } = gameData;
+    const { chatId, betAmount, initiator, opponent, chatType, status: finalStatus, _origin_key_for_limits } = gameData;
     if (gameData.currentTurnTimeoutId) { clearTimeout(gameData.currentTurnTimeoutId); gameData.currentTurnTimeoutId = null; }
     activeGames.delete(gameId);
     if (chatType && chatType !== 'private') {
@@ -10687,6 +10771,7 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
     const totalPotLamports = betAmount * 2n;
     let p1Payout = 0n; 
     let p2Payout = 0n;
+    let houseFee = 0n;
     let p1LedgerCode = 'loss_duel_pvp'; 
     let p2LedgerCode = 'loss_duel_pvp';
     let gameOutcomeTextForLog = "";
@@ -10694,36 +10779,44 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
     let isConclusiveOutcome = false;
 
     if (finalStatus === 'game_over_p1_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p1.userId)) {
-        isConclusiveOutcome = true;
-        titleEmoji = "⏳"; winner = p2; loser = p1; p2Payout = totalPotLamports;
+        isConclusiveOutcome = true;
+        titleEmoji = "⏳"; winner = p2; loser = p1;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p2Payout = totalPotLamports - houseFee;
         p2LedgerCode = 'win_duel_pvp_opponent_forfeit'; p1LedgerCode = 'loss_duel_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p1MentionHTML} Forfeited!</b>`; 
         outcomeDetails = `${p2MentionHTML} wins!`;
         gameOutcomeTextForLog = `P2 wins by P1 forfeit (timeout)`;
     } else if (finalStatus === 'game_over_p2_timeout_forfeit' || (playerWhoForfeitedId && playerWhoForfeitedId === p2.userId)) {
-        isConclusiveOutcome = true;
-        titleEmoji = "⏳"; winner = p1; loser = p2; p1Payout = totalPotLamports;
+        isConclusiveOutcome = true;
+        titleEmoji = "⏳"; winner = p1; loser = p2;
+        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+        p1Payout = totalPotLamports - houseFee;
         p1LedgerCode = 'win_duel_pvp_opponent_forfeit'; p2LedgerCode = 'loss_duel_pvp_self_forfeit';
         resultHeaderHTML = `⏳ <b>${p2MentionHTML} Forfeited!</b>`; 
         outcomeDetails = `${p1MentionHTML} wins!`;
         gameOutcomeTextForLog = `P1 wins by P2 forfeit (timeout)`;
     } else if (p1.status === 'rolls_complete' && p2.status === 'rolls_complete') { 
         if (p1.score > p2.score) {
-            isConclusiveOutcome = true;
-            titleEmoji = "🏆"; winner = p1; loser = p2; p1Payout = totalPotLamports;
+            isConclusiveOutcome = true;
+            titleEmoji = "🏆"; winner = p1; loser = p2;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p1Payout = totalPotLamports - houseFee;
             p1LedgerCode = 'win_duel_pvp_score';
             resultHeaderHTML = `🏆 <b>${p1MentionHTML} WINS!</b>`; 
             outcomeDetails = `<b>${p1.score}</b> vs <i>${p2.score}</i>.`;
             gameOutcomeTextForLog = `P1 wins by score (${p1.score} vs ${p2.score})`;
         } else if (p2.score > p1.score) {
-            isConclusiveOutcome = true;
-            titleEmoji = "🏆"; winner = p2; loser = p1; p2Payout = totalPotLamports;
+            isConclusiveOutcome = true;
+            titleEmoji = "🏆"; winner = p2; loser = p1;
+            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
+            p2Payout = totalPotLamports - houseFee;
             p2LedgerCode = 'win_duel_pvp_score';
             resultHeaderHTML = `🏆 <b>${p2MentionHTML} WINS!</b>`; 
             outcomeDetails = `<b>${p2.score}</b> vs <i>${p1.score}</i>.`;
             gameOutcomeTextForLog = `P2 wins by score (${p2.score} vs ${p1.score})`;
         } else { // Scores are equal
-            isConclusiveOutcome = false;
+            isConclusiveOutcome = false;
             titleEmoji = "⚖️"; isPush = true; 
             resultHeaderHTML = `⚖️ <b>DRAW!</b>`; 
             outcomeDetails = `Both scored <b>${p1.score}</b>!`;
@@ -10732,7 +10825,7 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
             gameOutcomeTextForLog = `Push (Draw at ${p1.score})`;
         }
     } else { 
-        isConclusiveOutcome = false;
+        isConclusiveOutcome = false;
         titleEmoji = "⚙️"; isPush = true; 
         resultHeaderHTML = `⚙️ <b>Duel Inconclusive</b>`; 
         outcomeDetails = `Game ended unexpectedly. Bets refunded. P1 Status: ${p1.status}, P2 Status: ${p2.status}, Game: ${gameData.status}`;
@@ -10743,7 +10836,8 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
     }
 
     if (winner) {
-        winningsFooterHTML = `🎉 <b>${escapeHTML(winner.displayName)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(totalPotLamports, 'USD'))}</b>!`;
+        const winnerPayout = winner.userId === p1.userId ? p1Payout : p2Payout;
+        winningsFooterHTML = `🎉 <b>${escapeHTML(winner.displayName)}</b> wins the pot of <b>${escapeHTML(await formatBalanceForDisplay(winnerPayout, 'USD'))}</b> (after a 1% house fee)!`;
     } else if (isPush) {
         winningsFooterHTML = `💰 Wagers of <b>${betDisplayUSD_HTML_Resolve}</b> each are returned.`;
     }
@@ -10753,39 +10847,39 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
     try {
         client = await pool.connect(); await client.query('BEGIN');
         const actualGameLogId = await logGameResultToGamesTable(
-            client, gameData._origin_key_for_limits || GAME_IDS.DUEL_PVP, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n
+            client, gameData._origin_key_for_limits || GAME_IDS.DUEL_PVP, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
         );
         
-        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
-        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
-        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
-        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
+        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
+        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
+        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
+        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
 
-        const p1Upd = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, {game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId, player_score: playerA.score, opponent_score: playerB.score, original_bet_amount: betAmount.toString() }, `Duel PvP vs ${playerB.displayName || playerB.userId}`, solPrice);
-        if(!p1Upd.success) throw new Error(`Player A (${playerA.userId}) update failed: ${p1Upd.error}`);
-        if(p1Upd.notifications) allNotificationsToSend.push(...p1Upd.notifications);
-        
-        const p2Upd = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, {game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId, player_score: playerB.score, opponent_score: playerA.score, original_bet_amount: betAmount.toString() }, `Duel PvP vs ${playerA.displayName || playerA.userId}`, solPrice);
-        if(!p2Upd.success) throw new Error(`Player B (${playerB.userId}) update failed: ${p2Upd.error}`);
-        if(p2Upd.notifications) allNotificationsToSend.push(...p2Upd.notifications);
+        const p1Upd = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, {game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId, player_score: playerA.score, opponent_score: playerB.score, original_bet_amount: betAmount.toString() }, `Duel PvP vs ${playerB.displayName || playerB.userId}`, solPrice);
+        if(!p1Upd.success) throw new Error(`Player A (${playerA.userId}) update failed: ${p1Upd.error}`);
+        if(p1Upd.notifications) allNotificationsToSend.push(...p1Upd.notifications);
+        
+        const p2Upd = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, {game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId, player_score: playerB.score, opponent_score: playerA.score, original_bet_amount: betAmount.toString() }, `Duel PvP vs ${playerA.displayName || playerA.userId}`, solPrice);
+        if(!p2Upd.success) throw new Error(`Player B (${playerB.userId}) update failed: ${p2Upd.error}`);
+        if(p2Upd.notifications) allNotificationsToSend.push(...p2Upd.notifications);
 
         if (isConclusiveOutcome) {
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
-                await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
-            }
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
+                await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
+            }
             if (p1Upd.success && p1Upd.newTotalWageredLamports !== undefined) {
                 const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p1LevelNotifications);
                 const p1MilestoneResult = await processWagerMilestoneBonus(client, p1.userId, p1Upd.newTotalWageredLamports, solPrice);
-                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
+                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
             }
             if (p2Upd.success && p2Upd.newTotalWageredLamports !== undefined) {
                 const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice, chatId);
                 allNotificationsToSend.push(...p2LevelNotifications);
                 const p2MilestoneResult = await processWagerMilestoneBonus(client, p2.userId, p2Upd.newTotalWageredLamports, solPrice);
-                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
+                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
             }
         }
         
@@ -10821,7 +10915,9 @@ async function resolveDuelPvPGame(gameData, playerWhoForfeitedId = null) {
 
 // --- Greed's Ladder Game Logic ---
 
-// CORRECTED handleStartLadderCommand (with Referral Fixes)
+// REPLACEMENT for handleStartLadderCommand in Part 5c, Section 3
+
+// CORRECTED handleStartLadderCommand (with House Fee and Referral Fixes)
 async function handleStartLadderCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
@@ -10942,7 +11038,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         const currentDataAfterRolls = activeGames.get(gameId);
         if(!currentDataAfterRolls){
             console.error(`${LOG_PREFIX_LADDER_START} GameData for ${gameId} gone after rolls. Bet was taken. Refunding in new TX.`); 
-            await client.query('ROLLBACK'); // Rollback initial transaction attempt
+            await client.query('ROLLBACK'); 
             let refundClientLostState = null;
             try {
                 refundClientLostState = await pool.connect(); await refundClientLostState.query('BEGIN');
@@ -10964,13 +11060,14 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
             await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.LADDER, betAmountLamports) });
             
             await updateUserBalanceAndLedger(client, userId, betAmountLamports, 'refund_ladder_helper_fail', {game_id_custom_field: gameId}, `Refund Ladder game ${gameId} helper error`, solPrice);
-            await client.query('COMMIT'); // Commit refund
+            await client.query('COMMIT'); 
             activeGames.delete(gameId);
             await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null); 
             return;
         }
 
         let payoutAmountLamportsFinal = 0n;
+        let houseFee = 0n;
         let outcomeReasonLog = "";
         let resultTextPartHTML = "";
         let gameOutcomeTextForTable = "";
@@ -10987,9 +11084,11 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
             for (const payoutTier of LADDER_PAYOUTS) {
                 if (currentDataAfterRolls.sum >= payoutTier.min && currentDataAfterRolls.sum <= payoutTier.max) {
                     const profitLamports = betAmountLamports * BigInt(payoutTier.multiplier);
-                    payoutAmountLamportsFinal = betAmountLamports + profitLamports; 
+                        const preFeePayout = betAmountLamports + profitLamports;
+                        houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+                    payoutAmountLamportsFinal = preFeePayout - houseFee;
                     outcomeReasonLog = `win_ladder_s${currentDataAfterRolls.sum}_m${payoutTier.multiplier}`;
-                    resultTextPartHTML = `${escapeHTML(payoutTier.label)} You won <b>${escapeHTML(await formatBalanceForDisplay(profitLamports, 'USD'))}</b> in profit!`;
+                    resultTextPartHTML = `${escapeHTML(payoutTier.label)} Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamportsFinal, 'USD'))}</b> (after a 1% house fee).`;
                     gameOutcomeTextForTable = `Win - Sum ${currentDataAfterRolls.sum} (Tier: ${payoutTier.label})`;
                     foundPayout = true;
                     break;
@@ -11005,7 +11104,7 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         }
         
         const actualGameLogId = await logGameResultToGamesTable(
-            client, GAME_IDS.LADDER, chatId, userId, [userId], betAmountLamports, gameOutcomeTextForTable, 0n
+            client, GAME_IDS.LADDER, chatId, userId, [userId], betAmountLamports, gameOutcomeTextForTable, 0n, houseFee
         );
         
         const finalBalanceUpdateResult = await updateUserBalanceAndLedger(
@@ -11022,25 +11121,19 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         if (finalBalanceUpdateResult.notifications) allNotificationsToSend.push(...finalBalanceUpdateResult.notifications);
 
         if (isConclusiveOutcome && totalWageredAfterBetPlacement !== undefined) {
-            // --- START OF MODIFICATION ---
-
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmountLamports, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-
-            // 2. MODIFIED: Correctly call level and milestone checks.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmountLamports, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+                }
+            }
+            
             const levelNotifications = await checkAndUpdateUserLevel(client, userId, totalWageredAfterBetPlacement, solPrice, chatId);
             allNotificationsToSend.push(...levelNotifications);
             const milestoneResult = await processWagerMilestoneBonus(client, userId, totalWageredAfterBetPlacement, solPrice);
-            if (!milestoneResult.success) {
-                console.warn(`${LOG_PREFIX_LADDER_START} Failed to process milestone bonus: ${milestoneResult.error}`);
-            }
-            
-            // --- END OF MODIFICATION ---
+            if (!milestoneResult.success) {
+                console.warn(`${LOG_PREFIX_LADDER_START} Failed to process milestone bonus: ${milestoneResult.error}`);
+            }
         }
         
         await client.query('COMMIT');
@@ -11063,7 +11156,6 @@ async function handleStartLadderCommand(msg, betAmountLamports) {
         if (client) client.release();
     }
 
-    // Send all collected notifications AFTER the transaction is closed
     for (const notification of allNotificationsToSend) {
         if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
             await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
@@ -11221,119 +11313,124 @@ async function handleStartSevenOutCommand(msg, betAmountLamports) {
     }
 }
 
+// REPLACEMENT for processSevenOutRoll in Part 5c, Section 3
+
 async function processSevenOutRoll(gameDataInput) { // gameDataInput is the reference from activeGames
-    const { gameId, userId, chatId, playerRef, betAmount } = gameDataInput; // Destructure from input
-    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V6_GranLimit GID:${gameId} UID:${userId}]`; // V6
+    const { gameId, userId, chatId, playerRef, betAmount } = gameDataInput; // Destructure from input
+    const LOG_PREFIX_S7_LUCKY_ROLL = `[S7_LuckySum_Roll_V6_GranLimit GID:${gameId} UID:${userId}]`; // V6
 
-    // Ensure gameData is still valid and in correct state from activeGames
-    let gameData = activeGames.get(gameId);
-    if (!gameData || gameData.status !== 'awaiting_single_roll') {
-        console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Invalid game state: ${gameData?.status} or game not found for ID ${gameId}. Aborting roll.`);
-        return;
-    }
-    gameData.status = 'processing_roll';
-    activeGames.set(gameId, gameData); // Update status immediately
+    // Ensure gameData is still valid and in correct state from activeGames
+    let gameData = activeGames.get(gameId);
+    if (!gameData || gameData.status !== 'awaiting_single_roll') {
+        console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Invalid game state: ${gameData?.status} or game not found for ID ${gameId}. Aborting roll.`);
+        return;
+    }
+    gameData.status = 'processing_roll';
+    activeGames.set(gameId, gameData); // Update status immediately
 
-    if (gameData.gameMessageIdToDelete && bot) {
-        await bot.deleteMessage(chatId, Number(gameData.gameMessageIdToDelete)).catch(e => {});
-        gameData.gameMessageIdToDelete = null; // Clear after attempting delete
-        activeGames.set(gameId, gameData); // Save cleared message ID
-    }
+    if (gameData.gameMessageIdToDelete && bot) {
+        await bot.deleteMessage(chatId, Number(gameData.gameMessageIdToDelete)).catch(e => {});
+        gameData.gameMessageIdToDelete = null; // Clear after attempting delete
+        activeGames.set(gameId, gameData); // Save cleared message ID
+    }
 
-    const rollingMessageHTML = `🎲 ${escapeHTML(playerRef)} rolling for Lucky Sum... The dice are tumbling! 🌪️`;
-    const tempRollingMsg = await safeSendMessage(chatId, rollingMessageHTML, { parse_mode: 'HTML' });
-    if (tempRollingMsg?.message_id && activeGames.has(gameId)) { // Store this temp message to delete it soon
-         activeGames.get(gameId).gameMessageIdToDelete = tempRollingMsg.message_id;
-    }
-    await sleep(1000); // Pause for effect
+    const rollingMessageHTML = `🎲 ${escapeHTML(playerRef)} rolling for Lucky Sum... The dice are tumbling! 🌪️`;
+    const tempRollingMsg = await safeSendMessage(chatId, rollingMessageHTML, { parse_mode: 'HTML' });
+    if (tempRollingMsg?.message_id && activeGames.has(gameId)) { // Store this temp message to delete it soon
+         activeGames.get(gameId).gameMessageIdToDelete = tempRollingMsg.message_id;
+    }
+    await sleep(1000); // Pause for effect
 
-    let currentRolls = [];
-    let currentSum = 0;
-    let animatedDiceMessageIds = []; // To store IDs of animated dice messages
+    let currentRolls = [];
+    let currentSum = 0;
+    let animatedDiceMessageIds = []; // To store IDs of animated dice messages
 
-    for (let i = 0; i < 2; i++) { // Assumes 2 dice for Lucky Sum
-        try {
-            const diceMsg = await bot.sendDice(String(chatId), { emoji: '🎲' });
-            currentRolls.push(diceMsg.dice.value);
-            currentSum += diceMsg.dice.value;
-            if (diceMsg.message_id) animatedDiceMessageIds.push(diceMsg.message_id);
-            await sleep(2200); // Let animation play
-        } catch (e) {
-            console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Failed to send animated dice, using internal roll. Error: ${e.message}`);
-            const internalRollVal = rollDie(); // rollDie() is from Part 3
-            currentRolls.push(internalRollVal); 
-            currentSum += internalRollVal;
-            const fallbackMsg = await safeSendMessage(String(chatId), `⚙️ ${escapeHTML(playerRef)} (Internal Roll ${i + 1}): <b>${internalRollVal}</b> 🎲`, { parse_mode: 'HTML' });
-            if (fallbackMsg?.message_id) animatedDiceMessageIds.push(fallbackMsg.message_id); // Store to delete
-            await sleep(500); // Shorter sleep for internal roll message
-        }
-    }
+    for (let i = 0; i < 2; i++) { // Assumes 2 dice for Lucky Sum
+        try {
+            const diceMsg = await bot.sendDice(String(chatId), { emoji: '🎲' });
+            currentRolls.push(diceMsg.dice.value);
+            currentSum += diceMsg.dice.value;
+            if (diceMsg.message_id) animatedDiceMessageIds.push(diceMsg.message_id);
+            await sleep(2200); // Let animation play
+        } catch (e) {
+            console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Failed to send animated dice, using internal roll. Error: ${e.message}`);
+            const internalRollVal = rollDie(); // rollDie() is from Part 3
+            currentRolls.push(internalRollVal); 
+            currentSum += internalRollVal;
+            const fallbackMsg = await safeSendMessage(String(chatId), `⚙️ ${escapeHTML(playerRef)} (Internal Roll ${i + 1}): <b>${internalRollVal}</b> 🎲`, { parse_mode: 'HTML' });
+            if (fallbackMsg?.message_id) animatedDiceMessageIds.push(fallbackMsg.message_id); // Store to delete
+            await sleep(500); // Shorter sleep for internal roll message
+        }
+    }
 
-    // Clean up messages: the "rolling..." message and the animated dice messages
-    if (tempRollingMsg?.message_id && bot) await bot.deleteMessage(chatId, tempRollingMsg.message_id).catch(() => {});
-    if (activeGames.has(gameId)) activeGames.get(gameId).gameMessageIdToDelete = null; // Clear stored ID
+    // Clean up messages: the "rolling..." message and the animated dice messages
+    if (tempRollingMsg?.message_id && bot) await bot.deleteMessage(chatId, tempRollingMsg.message_id).catch(() => {});
+    if (activeGames.has(gameId)) activeGames.get(gameId).gameMessageIdToDelete = null; // Clear stored ID
 
-    for (const id of animatedDiceMessageIds) {
-        if (bot) await bot.deleteMessage(String(chatId), id).catch(() => {});
-    }
-    
-    // Re-fetch gameData as it might have been updated by other async operations (though unlikely here)
-    gameData = activeGames.get(gameId);
-    if (!gameData) { // Game might have been cancelled or timed out during sleep/rolls
-        console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Game ${gameId} no longer active after dice rolls. Aborting finalization.`);
-        return;
-    }
+    for (const id of animatedDiceMessageIds) {
+        if (bot) await bot.deleteMessage(String(chatId), id).catch(() => {});
+    }
+    
+    // Re-fetch gameData as it might have been updated by other async operations
+    gameData = activeGames.get(gameId);
+    if (!gameData) { 
+        console.warn(`${LOG_PREFIX_S7_LUCKY_ROLL} Game ${gameId} no longer active after dice rolls. Aborting finalization.`);
+        return;
+    }
 
-    gameData.rolls = currentRolls;
-    gameData.currentSum = BigInt(currentSum); // Ensure it's BigInt
+    gameData.rolls = currentRolls;
+    gameData.currentSum = BigInt(currentSum); 
 
-    let win = false;
-    let payoutRule = LUCKY_SUM_PAYOUTS[currentSum]; // Check if the sum is a key in payouts
-    let profitMultiplier = 0;
-    let outcomeReasonLog = `loss_s7_luckysum_sum${currentSum}`;
-    let resultTitleHTML = "";
-    let resultDetailsHTML = "";
-    let financialOutcomeHTML = "";
-    let payoutAmountLamportsFinal = 0n;
+    let win = false;
+    let payoutRule = LUCKY_SUM_PAYOUTS[currentSum]; 
+    let profitMultiplier = 0;
+    let houseFee = 0n;
+    let outcomeReasonLog = `loss_s7_luckysum_sum${currentSum}`;
+    let resultTitleHTML = "";
+    let resultDetailsHTML = "";
+    let financialOutcomeHTML = "";
+    let payoutAmountLamportsFinal = 0n;
 
-    const betDisplayUSD_HTML_Result = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+    const betDisplayUSD_HTML_Result = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    if (payoutRule) { // Win condition based on LUCKY_SUM_PAYOUTS
-        win = true; 
-        profitMultiplier = payoutRule.multiplier;
-        outcomeReasonLog = `win_s7_luckysum_sum${currentSum}_mult${profitMultiplier}`;
-        resultTitleHTML = `🎲✨ <b>Lucky Sum - YOU WIN!</b> ✨🎲`;
-        resultDetailsHTML = `Your roll sum of <b>${currentSum}</b> hit: ${escapeHTML(payoutRule.label)}`;
-        const currentProfitLamports = betAmount * BigInt(profitMultiplier); 
-        payoutAmountLamportsFinal = betAmount + currentProfitLamports; 
-        financialOutcomeHTML = `You won <b>${escapeHTML(await formatBalanceForDisplay(currentProfitLamports, 'USD'))}</b> in profit!\n(Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamportsFinal, 'USD'))}</b>)`;
-    } else { // Loss condition (either specific losing numbers or no payout rule hit)
-        win = false;
-        payoutAmountLamportsFinal = 0n; 
-        resultTitleHTML = `🎲😥 <b>Lucky Sum - Not This Time!</b> 😥🎲`;
-        if (LUCKY_SUM_LOSING_NUMBERS.includes(currentSum)) {
-            resultDetailsHTML = `A sum of <b>${currentSum}</b> means the house takes this round.`;
-        } else {
-            resultDetailsHTML = `Your roll of <b>${currentSum}</b> didn't hit a winning number.`;
-        }
-        financialOutcomeHTML = `Your wager of <b>${betDisplayUSD_HTML_Result}</b> is lost. Better luck next time! 🍀`;
-    }
+    if (payoutRule) { 
+        win = true; 
+        profitMultiplier = payoutRule.multiplier;
+        outcomeReasonLog = `win_s7_luckysum_sum${currentSum}_mult${profitMultiplier}`;
+        resultTitleHTML = `🎲✨ <b>Lucky Sum - YOU WIN!</b> ✨🎲`;
+        resultDetailsHTML = `Your roll sum of <b>${currentSum}</b> hit: ${escapeHTML(payoutRule.label)}`;
+        const preFeePayout = betAmount + (betAmount * BigInt(profitMultiplier));
+        houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+        payoutAmountLamportsFinal = preFeePayout - houseFee; 
+        financialOutcomeHTML = `Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamportsFinal, 'USD'))}</b> (after a 1% house fee)!`;
+    } else { 
+        win = false;
+        payoutAmountLamportsFinal = 0n; 
+        resultTitleHTML = `🎲😥 <b>Lucky Sum - Not This Time!</b> 😥🎲`;
+        if (LUCKY_SUM_LOSING_NUMBERS.includes(currentSum)) {
+            resultDetailsHTML = `A sum of <b>${currentSum}</b> means the house takes this round.`;
+        } else {
+            resultDetailsHTML = `Your roll of <b>${currentSum}</b> didn't hit a winning number.`;
+        }
+        financialOutcomeHTML = `Your wager of <b>${betDisplayUSD_HTML_Result}</b> is lost. Better luck next time! 🍀`;
+    }
 
-    gameData.status = 'game_over';
-    activeGames.set(gameId, gameData); // Update final status
+    gameData.status = 'game_over';
+    activeGames.set(gameId, gameData); 
 
-    let messageToPlayerHTML = `${resultTitleHTML}\n<pre>==============================</pre>\n` +
-        `Player: <b>${escapeHTML(playerRef)}</b>\nWager: <b>${betDisplayUSD_HTML_Result}</b>\n` +
-        `<pre>------------------------------</pre>\n` +
-        `Dice Rolled: ${formatDiceRolls(currentRolls)} ➠ Sum: <b>${currentSum}</b>!\n` +
-        `<pre>==============================</pre>\n` +
-        `${resultDetailsHTML}\n${financialOutcomeHTML}`;
+    let messageToPlayerHTML = `${resultTitleHTML}\n<pre>==============================</pre>\n` +
+        `Player: <b>${escapeHTML(playerRef)}</b>\nWager: <b>${betDisplayUSD_HTML_Result}</b>\n` +
+        `<pre>------------------------------</pre>\n` +
+        `Dice Rolled: ${formatDiceRolls(currentRolls)} ➠ Sum: <b>${currentSum}</b>!\n` +
+        `<pre>==============================</pre>\n` +
+        `${resultDetailsHTML}\n${financialOutcomeHTML}`;
 
-    await finalizeSevenOutGame(gameData, messageToPlayerHTML, payoutAmountLamportsFinal, outcomeReasonLog);
+    await finalizeSevenOutGame(gameData, messageToPlayerHTML, payoutAmountLamportsFinal, outcomeReasonLog, houseFee);
 }
 
-// CORRECTED finalizeSevenOutGame (with Referral Fixes)
-async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLamports, outcomeReasonLog) {
+// RE-CONFIRMATION of the code for finalizeSevenOutGame in Part 5c, Section 3
+
+async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLamports, outcomeReasonLog, houseFee = 0n) {
     const { gameId, chatId, userId, playerRef, betAmount, userObj, totalWageredForLevelCheck, rolls, currentSum } = gameData;
     const LOG_PREFIX_S7_FINALIZE_LUCKY = `[S7_LuckySum_Finalize_V8_FullFix GID:${gameId} UID:${userId}]`;
     const activeGameKey = GAME_IDS.SEVEN_OUT;
@@ -11364,7 +11461,7 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
         await clientOutcome.query('BEGIN');
 
         const actualGameLogId = await logGameResultToGamesTable(
-            clientOutcome, GAME_IDS.SEVEN_OUT, chatId, userId, [userId], betAmount, gameOutcomeTextForTable, 0n
+            clientOutcome, GAME_IDS.SEVEN_OUT, chatId, userId, [userId], betAmount, gameOutcomeTextForTable, 0n, houseFee
         );
 
         const ledgerReasonForTransactionType = outcomeReasonLog.length > 50 ? outcomeReasonLog.substring(0, 47) + "..." : outcomeReasonLog;
@@ -11383,26 +11480,26 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
         }
         if (balanceUpdate.notifications) allNotificationsToSend.push(...balanceUpdate.notifications);
 
-        // --- START OF MODIFICATION ---
-        // This game is always a conclusive wager.
+        // --- START OF MODIFICATION ---
+        // This game is always a conclusive wager.
         if (totalWageredForLevelCheck !== undefined) {
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientOutcome, userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
+            // 1. ADDED: Check for the initial bet bonus.
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(clientOutcome, userId, betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+                }
+            }
 
-            // 2. MODIFIED: Correctly call level and milestone checks.
+            // 2. MODIFIED: Correctly call level and milestone checks.
             const levelNotifications = await checkAndUpdateUserLevel(clientOutcome, userId, totalWageredForLevelCheck, solPrice, chatId);
             allNotificationsToSend.push(...levelNotifications);
             const milestoneResult = await processWagerMilestoneBonus(clientOutcome, userId, totalWageredForLevelCheck, solPrice);
-            if (!milestoneResult.success) {
-                console.warn(`${LOG_PREFIX_S7_FINALIZE_LUCKY} Failed to process milestone bonus: ${milestoneResult.error}`);
-            }
+            if (!milestoneResult.success) {
+                console.warn(`${LOG_PREFIX_S7_FINALIZE_LUCKY} Failed to process milestone bonus: ${milestoneResult.error}`);
+            }
         }
-        // --- END OF MODIFICATION ---
+        // --- END OF MODIFICATION ---
 
         await clientOutcome.query('COMMIT');
     } catch (dbError) {
@@ -11445,249 +11542,251 @@ async function finalizeSevenOutGame(gameData, resultMessageHTML, payoutAmountLam
 
 // --- Slot Frenzy Game Logic ---
 
-// CORRECTED handleStartSlotCommand (v9 - with Failsafe for Lost Game State)
+// REPLACEMENT for handleStartSlotCommand in Part 5c, Section 4
+
+// CORRECTED handleStartSlotCommand (with House Fee and Failsafe for Lost Game State)
 async function handleStartSlotCommand(msg, betAmountLamports) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const LOG_PREFIX_SLOT_START = `[Slot_Start_V9_FailsafeFix UID:${userId} CH:${chatId}]`;
-    let allNotificationsToSend = [];
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const LOG_PREFIX_SLOT_START = `[Slot_Start_V9_FailsafeFix UID:${userId} CH:${chatId}]`;
+    let allNotificationsToSend = [];
 
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-    } catch (priceError) {
-        console.error(`${LOG_PREFIX_SLOT_START} CRITICAL: Could not get SOL price. Bonus checks will be skipped. Error: ${priceError.message}`);
-        solPrice = 0;
-    }
+    let solPrice;
+    try {
+        solPrice = await getSolUsdPrice();
+    } catch (priceError) {
+        console.error(`${LOG_PREFIX_SLOT_START} CRITICAL: Could not get SOL price. Bonus checks will be skipped. Error: ${priceError.message}`);
+        solPrice = 0;
+    }
 
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
-        const blockingGameType = activeUserGameCheck.details.type;
-        const cleanGameName = getCleanGameName(blockingGameType);
-        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
-        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
-        return;
-    }
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, null);
+    if (activeUserGameCheck.limitReached) {
+        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
+        const blockingGameType = activeUserGameCheck.details.type;
+        const cleanGameName = getCleanGameName(blockingGameType);
+        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
+        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
+        return;
+    }
 
-    if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
-        await safeSendMessage(chatId, "🎰 Oh dear! That bet amount for Slot Frenzy doesn't look quite right.<br>Please try again with a valid wager.", { parse_mode: 'HTML' });
-        return;
-    }
+    if (typeof betAmountLamports !== 'bigint' || betAmountLamports <= 0n) {
+        await safeSendMessage(chatId, "🎰 Oh dear! That bet amount for Slot Frenzy doesn't look quite right.<br>Please try again with a valid wager.", { parse_mode: 'HTML' });
+        return;
+    }
 
-    let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObj) {
-        await safeSendMessage(chatId, "😕 Hey spinner! We couldn't find your player profile for Slot Frenzy.<br>Please hit <code>/start</code> first.", { parse_mode: 'HTML' });
-        return;
-    }
+    let userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObj) {
+        await safeSendMessage(chatId, "😕 Hey spinner! We couldn't find your player profile for Slot Frenzy.<br>Please hit <code>/start</code> first.", { parse_mode: 'HTML' });
+        return;
+    }
 
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+    const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
 
-    if (BigInt(userObj.balance) < betAmountLamports) {
-        const needed = betAmountLamports - BigInt(userObj.balance);
-        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD'));
-        await safeSendMessage(chatId, `${playerRefHTML}, your casino wallet needs a bit more sparkle for a <b>${betDisplayUSD_HTML}</b> spin on Slot Frenzy! You're short by about <b>${neededDisplayHTML}</b>. Time to reload?`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
-        return;
-    }
+    if (BigInt(userObj.balance) < betAmountLamports) {
+        const needed = betAmountLamports - BigInt(userObj.balance);
+        const neededDisplayHTML = escapeHTML(await formatBalanceForDisplay(needed, 'USD'));
+        await safeSendMessage(chatId, `${playerRefHTML}, your casino wallet needs a bit more sparkle for a <b>${betDisplayUSD_HTML}</b> spin on Slot Frenzy! You're short by about <b>${neededDisplayHTML}</b>. Time to reload?`, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: "💰 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
+        });
+        return;
+    }
 
-    const gameSession = await getGroupSession(chatId, msg.chat.title);
-    const activeGameKey = GAME_IDS.SLOT_FRENZY;
-    const currentActiveSlotGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
+    const gameSession = await getGroupSession(chatId, msg.chat.title);
+    const activeGameKey = GAME_IDS.SLOT_FRENZY;
+    const currentActiveSlotGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
+    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
 
-    if (currentActiveSlotGames.length >= limitActive) {
-        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit of ${limitActive} concurrent Slot Frenzy game(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
-        return;
-    }
+    if (currentActiveSlotGames.length >= limitActive) {
+        await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit of ${limitActive} concurrent Slot Frenzy game(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+        return;
+    }
 
-    const gameId = generateGameId(GAME_IDS.SLOT_FRENZY);
-    let client = null;
-    let requestId;
-    let totalWageredAfterBetPlacement;
+    const gameId = generateGameId(GAME_IDS.SLOT_FRENZY);
+    let client = null;
+    let requestId;
+    let totalWageredAfterBetPlacement;
 
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const initialBalanceUpdateResult = await updateUserBalanceAndLedger(client, userId, BigInt(-betAmountLamports), 'bet_placed_slot', { game_id_custom_field: gameId }, `Bet for Slot Frenzy game ${gameId}`, solPrice);
-        if (!initialBalanceUpdateResult.success) throw new Error(initialBalanceUpdateResult.error || "Wager placement failed.");
-        totalWageredAfterBetPlacement = initialBalanceUpdateResult.newTotalWageredLamports;
-        if (initialBalanceUpdateResult.notifications) allNotificationsToSend.push(...initialBalanceUpdateResult.notifications);
-        userObj.balance = initialBalanceUpdateResult.newBalanceLamports;
-        const requestResult = await insertDiceRollRequest(client, gameId, chatId, userId, '🎰', 'Slot Frenzy Spin');
-        if (!requestResult.success || !requestResult.requestId) throw new Error(requestResult.error || "Failed to create slot spin request in DB.");
-        requestId = requestResult.requestId;
-        await client.query('COMMIT');
-    } catch (dbError) {
-        if (client) await client.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_SLOT_START} Database error during bet/request phase: ${dbError.message}`);
-        await safeSendMessage(chatId, "⚙️ A database disturbance prevented your Slot Frenzy game. Please try again.", { parse_mode: 'HTML' });
-        return;
-    } finally {
-        if (client) client.release();
-    }
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const initialBalanceUpdateResult = await updateUserBalanceAndLedger(client, userId, BigInt(-betAmountLamports), 'bet_placed_slot', { game_id_custom_field: gameId }, `Bet for Slot Frenzy game ${gameId}`, solPrice);
+        if (!initialBalanceUpdateResult.success) throw new Error(initialBalanceUpdateResult.error || "Wager placement failed.");
+        totalWageredAfterBetPlacement = initialBalanceUpdateResult.newTotalWageredLamports;
+        if (initialBalanceUpdateResult.notifications) allNotificationsToSend.push(...initialBalanceUpdateResult.notifications);
+        userObj.balance = initialBalanceUpdateResult.newBalanceLamports;
+        const requestResult = await insertDiceRollRequest(client, gameId, chatId, userId, '🎰', 'Slot Frenzy Spin');
+        if (!requestResult.success || !requestResult.requestId) throw new Error(requestResult.error || "Failed to create slot spin request in DB.");
+        requestId = requestResult.requestId;
+        await client.query('COMMIT');
+    } catch (dbError) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${LOG_PREFIX_SLOT_START} Database error during bet/request phase: ${dbError.message}`);
+        await safeSendMessage(chatId, "⚙️ A database disturbance prevented your Slot Frenzy game. Please try again.", { parse_mode: 'HTML' });
+        return;
+    } finally {
+        if (client) client.release();
+    }
 
-    const gameDataForInstance = {
-        type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef: playerRefHTML, userObj,
-        betAmount: betAmountLamports, gameMessageId: null,
-        totalWageredForLevelCheck: totalWageredAfterBetPlacement
-    };
-    activeGames.set(gameId, gameDataForInstance);
-    await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
+    const gameDataForInstance = {
+        type: GAME_IDS.SLOT_FRENZY, gameId, chatId, userId, playerRef: playerRefHTML, userObj,
+        betAmount: betAmountLamports, gameMessageId: null,
+        totalWageredForLevelCheck: totalWageredAfterBetPlacement
+    };
+    activeGames.set(gameId, gameDataForInstance);
+    await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
 
-    const titleSpinningHTML = `🎰 <b>Slot Frenzy - Reels in Motion!</b> 🎰`;
-    let initialMessageTextHTML = `${titleSpinningHTML}\n\n` + `Player: <b>${playerRefHTML}</b>\nBet: <b>${betDisplayUSD_HTML}</b>\n\n` + `Hold tight! The Helper Bot is revving up the Slot Machine! 💨\n`+ `✨ May fortune favor your spin! ✨`;
-    const sentSpinningMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
-    
-    if (sentSpinningMsg?.message_id) {
-        const gameDataRef = activeGames.get(gameId);
-        if(gameDataRef) gameDataRef.gameMessageId = sentSpinningMsg.message_id;
-    } else {
-        console.error(`${LOG_PREFIX_SLOT_START} Failed to send initial Slot game message after bet was taken. Refunding.`);
-        let refundClient;
-        try {
-            refundClient = await pool.connect(); await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_slot_ui_fail', {game_id_custom_field: gameId}, 'Refund Slot UI fail');
-            await refundClient.query('COMMIT');
-        } catch(e) { if(refundClient) await refundClient.query('ROLLBACK'); } finally { if(refundClient) refundClient.release(); }
-        activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
-        return;
-    }
+    const titleSpinningHTML = `🎰 <b>Slot Frenzy - Reels in Motion!</b> 🎰`;
+    let initialMessageTextHTML = `${titleSpinningHTML}\n\n` + `Player: <b>${playerRefHTML}</b>\nBet: <b>${betDisplayUSD_HTML}</b>\n\n` + `Hold tight! The Helper Bot is revving up the Slot Machine! 💨\n`+ `✨ May fortune favor your spin! ✨`;
+    const sentSpinningMsg = await safeSendMessage(chatId, initialMessageTextHTML, {parse_mode: 'HTML'});
+    
+    if (sentSpinningMsg?.message_id) {
+        const gameDataRef = activeGames.get(gameId);
+        if(gameDataRef) gameDataRef.gameMessageId = sentSpinningMsg.message_id;
+    } else {
+        console.error(`${LOG_PREFIX_SLOT_START} Failed to send initial Slot game message after bet was taken. Refunding.`);
+        let refundClient;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_slot_ui_fail', {game_id_custom_field: gameId}, 'Refund Slot UI fail');
+            await refundClient.query('COMMIT');
+        } catch(e) { if(refundClient) await refundClient.query('ROLLBACK'); } finally { if(refundClient) refundClient.release(); }
+        activeGames.delete(gameId);
+        await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
+        return;
+    }
 
-    let diceRollValue = null;
-    let helperBotError = null;
-    try {
-        let attempts = 0;
-        while(attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
-            await sleep(DICE_ROLL_POLLING_INTERVAL_MS);
-            if (isShuttingDown) { helperBotError = "Shutdown during slot poll."; break; }
-            const pollClient = await pool.connect();
-            try {
-                const statusResult = await getDiceRollRequestResult(pollClient, requestId);
-                if (statusResult.success && statusResult.status === 'completed') { diceRollValue = statusResult.roll_value; break; } 
-                else if (statusResult.success && statusResult.status === 'error') { helperBotError = statusResult.notes || "Helper Bot reported an error."; break; }
-            } finally { pollClient.release(); }
-            attempts++;
-        }
-        if (diceRollValue === null && !helperBotError) {
-            helperBotError = "Timeout waiting for Helper Bot slot spin result.";
-            const timeoutClient = await pool.connect();
-            try { await timeoutClient.query("UPDATE dice_roll_requests SET status='timeout', notes=$1 WHERE request_id=$2 AND status='pending'", [helperBotError.substring(0,250), requestId]); } finally { timeoutClient.release(); }
-        }
-        if (helperBotError) throw new Error(helperBotError);
-        if (typeof diceRollValue !== 'number') throw new Error ("Invalid slot roll value type from helper.");
-    } catch (e) { helperBotError = e.message; }
-    
-    // --- Stage 4: Finalize Game ---
-    const finalGameData = activeGames.get(gameId);
+    let diceRollValue = null;
+    let helperBotError = null;
+    try {
+        let attempts = 0;
+        while(attempts < DICE_ROLL_POLLING_MAX_ATTEMPTS) {
+            await sleep(DICE_ROLL_POLLING_INTERVAL_MS);
+            if (isShuttingDown) { helperBotError = "Shutdown during slot poll."; break; }
+            const pollClient = await pool.connect();
+            try {
+                const statusResult = await getDiceRollRequestResult(pollClient, requestId);
+                if (statusResult.success && statusResult.status === 'completed') { diceRollValue = statusResult.roll_value; break; } 
+                else if (statusResult.success && statusResult.status === 'error') { helperBotError = statusResult.notes || "Helper Bot reported an error."; break; }
+            } finally { pollClient.release(); }
+            attempts++;
+        }
+        if (diceRollValue === null && !helperBotError) {
+            helperBotError = "Timeout waiting for Helper Bot slot spin result.";
+            const timeoutClient = await pool.connect();
+            try { await timeoutClient.query("UPDATE dice_roll_requests SET status='timeout', notes=$1 WHERE request_id=$2 AND status='pending'", [helperBotError.substring(0,250), requestId]); } finally { timeoutClient.release(); }
+        }
+        if (helperBotError) throw new Error(helperBotError);
+        if (typeof diceRollValue !== 'number') throw new Error ("Invalid slot roll value type from helper.");
+    } catch (e) { helperBotError = e.message; }
+    
+    const finalGameData = activeGames.get(gameId);
 
-    // --- FIX IS HERE: This block now handles the silent failure case ---
-    if (!finalGameData) {
-        console.error(`${LOG_PREFIX_SLOT_START} CRITICAL: GameData for ${gameId} vanished before finalization. Bet was already taken. This could be a race condition or memory issue. Refunding user as a failsafe.`);
-        let refundClient;
-        try {
-            refundClient = await pool.connect();
-            await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_slot_state_lost', {game_id_custom_field: gameId}, 'Refund due to lost game state before finalization');
-            await refundClient.query('COMMIT');
-            await safeSendMessage(chatId, `⚙️ Apologies, there was an unexpected issue finalizing your spin. Your bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`, { parse_mode: 'HTML' });
-        } catch (e) {
-            if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${LOG_PREFIX_SLOT_START} CRITICAL REFUND FAILURE for lost state game ${gameId}: ${e.message}`);
-            if(typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL REFUND FAILURE for lost game state. GID: ${gameId}, UID: ${userId}`);
-        } finally {
-            if (refundClient) refundClient.release();
-        }
-        return;
-    }
-    // --- END OF FIX ---
+    if (!finalGameData) {
+        console.error(`${LOG_PREFIX_SLOT_START} CRITICAL: GameData for ${gameId} vanished before finalization. Bet was already taken. This could be a race condition or memory issue. Refunding user as a failsafe.`);
+        let refundClient;
+        try {
+            refundClient = await pool.connect();
+            await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_slot_state_lost', {game_id_custom_field: gameId}, 'Refund due to lost game state before finalization');
+            await refundClient.query('COMMIT');
+            await safeSendMessage(chatId, `⚙️ Apologies, there was an unexpected issue finalizing your spin. Your bet of <b>${betDisplayUSD_HTML}</b> has been refunded.`, { parse_mode: 'HTML' });
+        } catch (e) {
+            if (refundClient) await refundClient.query('ROLLBACK');
+            console.error(`${LOG_PREFIX_SLOT_START} CRITICAL REFUND FAILURE for lost state game ${gameId}: ${e.message}`);
+            if(typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL REFUND FAILURE for lost game state. GID: ${gameId}, UID: ${userId}`);
+        } finally {
+            if (refundClient) refundClient.release();
+        }
+        return;
+    }
 
-    if (finalGameData.gameMessageId && bot) {
-        await bot.deleteMessage(chatId, Number(finalGameData.gameMessageId)).catch(e => {});
-        finalGameData.gameMessageId = null;
-    }
+    if (finalGameData.gameMessageId && bot) {
+        await bot.deleteMessage(chatId, Number(finalGameData.gameMessageId)).catch(e => {});
+        finalGameData.gameMessageId = null;
+    }
 
-    if (helperBotError) {
-        const errorMsgToUserHTML = `💣 <b>Slot Spin Malfunction!</b> 💣\n\nOh no, ${playerRefHTML}! Slot Machine hiccup: <pre>${escapeHTML(String(helperBotError).substring(0,150))}</pre>\n\n✅ Bet <b>${betDisplayUSD_HTML}</b> refunded.`;
-        const errorKeyboard = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
-        await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
-        let refundClient;
-        try {
-            refundClient = await pool.connect(); await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_slot_helper_fail', {game_id_custom_field: gameId}, `Refund Slot game ${gameId} - Helper Bot error`, solPrice);
-            await client.query('COMMIT');
-        } catch(e){ if(refundClient) await refundClient.query('ROLLBACK'); } finally { if(refundClient) refundClient.release(); }
-        activeGames.delete(gameId);
-        await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
-        return;
-    }
+    if (helperBotError) {
+        const errorMsgToUserHTML = `💣 <b>Slot Spin Malfunction!</b> 💣\n\nOh no, ${playerRefHTML}! Slot Machine hiccup: <pre>${escapeHTML(String(helperBotError).substring(0,150))}</pre>\n\n✅ Bet <b>${betDisplayUSD_HTML}</b> refunded.`;
+        const errorKeyboard = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
+        await safeSendMessage(String(chatId), errorMsgToUserHTML, { parse_mode: 'HTML', reply_markup: errorKeyboard });
+        let refundClient;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, 'refund_slot_helper_fail', {game_id_custom_field: gameId}, `Refund Slot game ${gameId} - Helper Bot error`, solPrice);
+            await client.query('COMMIT');
+        } catch(e){ if(refundClient) await refundClient.query('ROLLBACK'); } finally { if(refundClient) refundClient.release(); }
+        activeGames.delete(gameId);
+        await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
+        return;
+    }
 
-    finalGameData.diceValue = diceRollValue;
-    const payoutInfo = SLOT_PAYOUTS[diceRollValue];
-    let payoutAmountLamportsFinal = 0n;
-    let profitAmountLamports = 0n;
-    let outcomeReasonLog = `loss_slot_val${diceRollValue}`;
-    let resultTextPartHTML = "";
-    let finalTitleHTML = "";
-    let gameOutcomeTextForTable = "";
-    let isConclusiveOutcome = true;
+    finalGameData.diceValue = diceRollValue;
+    const payoutInfo = SLOT_PAYOUTS[diceRollValue];
+    let payoutAmountLamportsFinal = 0n;
+    let profitAmountLamports = 0n;
+    let houseFee = 0n;
+    let outcomeReasonLog = `loss_slot_val${diceRollValue}`;
+    let resultTextPartHTML = "";
+    let finalTitleHTML = "";
+    let gameOutcomeTextForTable = "";
+    let isConclusiveOutcome = true;
 
-    if (payoutInfo) { // Win
-        profitAmountLamports = betAmountLamports * BigInt(payoutInfo.multiplier);
-        payoutAmountLamportsFinal = betAmountLamports + profitAmountLamports;
-        outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`;
-        finalTitleHTML = `🎉🎉 <b>${escapeHTML(payoutInfo.label)}</b> 🎉🎉`;
-        resultTextPartHTML = `✨ <b>AMAZING HIT!</b> ✨\n<b>${escapeHTML(payoutInfo.symbols)}</b>\n\n` + `Congratulations! You've won a dazzling <b>${escapeHTML(await formatBalanceForDisplay(profitAmountLamports, 'USD'))}</b> in profit!\n` + `(Total Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamportsFinal, 'USD'))}</b>)`;
-        gameOutcomeTextForTable = `Win - ${payoutInfo.label} (${payoutInfo.symbols})`;
-    } else { // Loss
-        payoutAmountLamportsFinal = 0n;
-        finalTitleHTML = `😕 <b>Slot Frenzy - No Win This Time</b> 😕`;
-        resultTextPartHTML = `Reel Result: <i>Not a winning combination.</i>\n\n` + `The machine keeps your wager of <b>${betDisplayUSD_HTML}</b>.\nBetter luck on the next spin! 🍀`;
-        gameOutcomeTextForTable = `Loss (Value: ${diceRollValue})`;
-    }
-    
-    let finalizationClient = null;
-    try {
-        finalizationClient = await pool.connect();
-        await finalizationClient.query('BEGIN');
-        const actualGameLogId = await logGameResultToGamesTable(finalizationClient, GAME_IDS.SLOT_FRENZY, chatId, userId, [userId], betAmountLamports, gameOutcomeTextForTable, 0n);
-        const finalBalanceUpdateResult = await updateUserBalanceAndLedger(finalizationClient, userId, payoutAmountLamportsFinal, outcomeReasonLog, { game_log_id: actualGameLogId, slot_dice_value: diceRollValue, original_bet_amount: betAmountLamports.toString() }, `Outcome of Slot Frenzy game ${gameId}. Slot value: ${diceRollValue}.`, solPrice);
-        if (!finalBalanceUpdateResult.success) throw new Error(finalBalanceUpdateResult.error || "DB Error on Slot Frenzy payout/loss ledgering.");
-        if (finalBalanceUpdateResult.notifications) allNotificationsToSend.push(...finalBalanceUpdateResult.notifications);
+    if (payoutInfo) { // Win
+        profitAmountLamports = betAmountLamports * BigInt(payoutInfo.multiplier);
+        const preFeePayout = betAmountLamports + profitAmountLamports;
+        houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+        payoutAmountLamportsFinal = preFeePayout - houseFee;
+        outcomeReasonLog = `win_slot_val${diceRollValue}_mult${payoutInfo.multiplier}`;
+        finalTitleHTML = `🎉🎉 <b>${escapeHTML(payoutInfo.label)}</b> 🎉🎉`;
+        resultTextPartHTML = `✨ <b>AMAZING HIT!</b> ✨\n<b>${escapeHTML(payoutInfo.symbols)}</b>\n\n` + `Congratulations! Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamportsFinal, 'USD'))}</b> (after a 1% house fee).`;
+        gameOutcomeTextForTable = `Win - ${payoutInfo.label} (${payoutInfo.symbols})`;
+    } else { // Loss
+        payoutAmountLamportsFinal = 0n;
+        finalTitleHTML = `😕 <b>Slot Frenzy - No Win This Time</b> 😕`;
+        resultTextPartHTML = `Reel Result: <i>Not a winning combination.</i>\n\n` + `The machine keeps your wager of <b>${betDisplayUSD_HTML}</b>.\nBetter luck on the next spin! 🍀`;
+        gameOutcomeTextForTable = `Loss (Value: ${diceRollValue})`;
+    }
+    
+    let finalizationClient = null;
+    try {
+        finalizationClient = await pool.connect();
+        await finalizationClient.query('BEGIN');
+        const actualGameLogId = await logGameResultToGamesTable(finalizationClient, GAME_IDS.SLOT_FRENZY, chatId, userId, [userId], betAmountLamports, gameOutcomeTextForTable, 0n, houseFee);
+        const finalBalanceUpdateResult = await updateUserBalanceAndLedger(finalizationClient, userId, payoutAmountLamportsFinal, outcomeReasonLog, { game_log_id: actualGameLogId, slot_dice_value: diceRollValue, original_bet_amount: betAmountLamports.toString() }, `Outcome of Slot Frenzy game ${gameId}. Slot value: ${diceRollValue}.`, solPrice);
+        if (!finalBalanceUpdateResult.success) throw new Error(finalBalanceUpdateResult.error || "DB Error on Slot Frenzy payout/loss ledgering.");
+        if (finalBalanceUpdateResult.notifications) allNotificationsToSend.push(...finalBalanceUpdateResult.notifications);
 
-        if (isConclusiveOutcome && totalWageredAfterBetPlacement !== undefined) {
-            const initialBonusResult = await processQualifyingBetAndInitialBonus(finalizationClient, userId, betAmountLamports, gameId);
-            if (initialBonusResult.jobQueued) console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-            const levelNotifications = await checkAndUpdateUserLevel(finalizationClient, userId, totalWageredAfterBetPlacement, solPrice, chatId);
-            allNotificationsToSend.push(...levelNotifications);
-            const milestoneResult = await processWagerMilestoneBonus(finalizationClient, userId, totalWageredAfterBetPlacement, solPrice);
-            if (!milestoneResult.success) console.warn(`${LOG_PREFIX_SLOT_START} Failed to process milestone bonus: ${milestoneResult.error}`);
-        }
-        
-        await finalizationClient.query('COMMIT');
-    } catch (error) {
-        if (finalizationClient) await finalizationClient.query('ROLLBACK');
-        console.error(`${LOG_PREFIX_SLOT_START} Error during finalization: ${error.message}`);
-        resultTextPartHTML += `\n\n⚠️ Error settling wager. Admin notified.`;
-    } finally {
-        if (finalizationClient) finalizationClient.release();
-    }
-    
-    for (const notification of allNotificationsToSend) {
-        safeSendMessage(notification.to, notification.text, notification.options);
-    }
-    
-    let finalMessageTextHTML = `${finalTitleHTML}\n\n` + `Player: <b>${playerRefHTML}</b>\nWager: <b>${betDisplayUSD_HTML}</b>\n\n` + `${resultTextPartHTML}`;
-    const postGameKeyboardSlot = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
-    await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
+        if (isConclusiveOutcome && totalWageredAfterBetPlacement !== undefined) {
+            const initialBonusResult = await processQualifyingBetAndInitialBonus(finalizationClient, userId, betAmountLamports, gameId);
+            if (initialBonusResult.jobQueued) console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+            const levelNotifications = await checkAndUpdateUserLevel(finalizationClient, userId, totalWageredAfterBetPlacement, solPrice, chatId);
+            allNotificationsToSend.push(...levelNotifications);
+            const milestoneResult = await processWagerMilestoneBonus(finalizationClient, userId, totalWageredAfterBetPlacement, solPrice);
+            if (!milestoneResult.success) console.warn(`${LOG_PREFIX_SLOT_START} Failed to process milestone bonus: ${milestoneResult.error}`);
+        }
+        
+        await finalizationClient.query('COMMIT');
+    } catch (error) {
+        if (finalizationClient) await finalizationClient.query('ROLLBACK');
+        console.error(`${LOG_PREFIX_SLOT_START} Error during finalization: ${error.message}`);
+        resultTextPartHTML += `\n\n⚠️ Error settling wager. Admin notified.`;
+    } finally {
+        if (finalizationClient) finalizationClient.release();
+    }
+    
+    for (const notification of allNotificationsToSend) {
+        safeSendMessage(notification.to, notification.text, notification.options);
+    }
+    
+    let finalMessageTextHTML = `${finalTitleHTML}\n\n` + `Player: <b>${playerRefHTML}</b>\nWager: <b>${betDisplayUSD_HTML}</b>\n\n` + `${resultTextPartHTML}`;
+    const postGameKeyboardSlot = createPostGameKeyboard(GAME_IDS.SLOT_FRENZY, betAmountLamports);
+    await safeSendMessage(String(chatId), finalMessageTextHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboardSlot });
 
-    activeGames.delete(gameId);
-    await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
-    console.log(`${LOG_PREFIX_SLOT_START} Slot Frenzy game ${gameId} finalized. Lock for ${activeGameKey} cleared.`);
+    activeGames.delete(gameId);
+    await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKey, null);
+    console.log(`${LOG_PREFIX_SLOT_START} Slot Frenzy game ${gameId} finalized. Lock for ${activeGameKey} cleared.`);
 }
 // --- End of Part 5c, Section 4 (Slot Frenzy Game Logic) ---
 // --- Start of Part 5d (Mines Game - GRANULAR ACTIVE GAME LIMITS - FULL CODE - CORRECTED) ---
@@ -11929,123 +12028,123 @@ function calculateMinesMultiplier(gameData, revealedGemsCount) {
 }
 
 async function formatAndGenerateMinesMessageComponents(gameData, isForFinalSummary = false) {
-    const logPrefix = `[FormatMinesMsgComponents_V2 GID:${gameData.gameId}]`; 
+    const logPrefix = `[FormatMinesMsgComponents_V2 GID:${gameData.gameId}]`; 
 
-    const {
-        betAmount, difficultyKey, difficultyLabel, rows, cols, numMines,
-        gemsFound, status, grid, gameId, playerRef,
-        initiatorMentionHTML, initiatorUserObj, userId,
-        currentMultiplier,
-        potentialPayout,
-        finalPayout, finalMultiplier
-    } = gameData;
+    const {
+        betAmount, difficultyKey, difficultyLabel, rows, cols, numMines,
+        gemsFound, status, grid, gameId, playerRef,
+        initiatorMentionHTML, initiatorUserObj, userId,
+        currentMultiplier,
+        potentialPayout,
+        finalPayout, finalMultiplier
+    } = gameData;
 
-    const actualPlayerRef = playerRef || initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObj || {telegram_id: userId, first_name: "Player"}));
+    const actualPlayerRef = playerRef || initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObj || {telegram_id: userId, first_name: "Player"}));
 
-    let titleTextStr = `Mines - ${escapeHTML(difficultyLabel || 'Custom Game')}`;
-    let titleEmoji = TILE_EMOJI_MINE;
+    let titleTextStr = `Mines - ${escapeHTML(difficultyLabel || 'Custom Game')}`;
+    let titleEmoji = TILE_EMOJI_MINE;
 
-    if (status === 'game_over_mine_hit') titleEmoji = TILE_EMOJI_EXPLOSION;
-    else if (status === 'game_over_cashed_out' || status === 'game_over_all_gems_found') titleEmoji = '🎉';
-    else if (status === 'game_over_timeout') titleEmoji = '⏱️';
-
-
-    const titleText = `${titleEmoji} <b>${escapeHTML(titleTextStr)}</b> ${titleEmoji}`;
-
-    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
-    let messageTextHTML = `${titleText}\n`;
-    messageTextHTML += `Player: ${actualPlayerRef}\n`;
-    messageTextHTML += `Wager: <b>${betDisplayHTML}</b> | Difficulty: <b>${escapeHTML(difficultyLabel || 'N/A')}</b> (${escapeHTML(String(numMines))} ${TILE_EMOJI_MINE})\n`;
-
-    const totalSafeTiles = (rows * cols) - numMines;
-    if (status === 'player_turn' || isForFinalSummary || status === 'game_over_timeout') {
-        messageTextHTML += `${TILE_EMOJI_GEM} Gems Found: <b>${escapeHTML(String(gemsFound))} / ${escapeHTML(String(totalSafeTiles))}</b>\n`;
-    }
-
-    let outcomeAndPayoutLine = "";
-    if (status === 'game_over_mine_hit') {
-        outcomeAndPayoutLine = `<b>Outcome:</b> You hit a mine! 😥 Bet of <b>${betDisplayHTML}</b> lost.`;
-    } else if (status === 'game_over_cashed_out') {
-        const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayout || 0n, 'USD'));
-        const displayMultiplierVal = finalMultiplier || currentMultiplier || 0;
-        const displayMultiplier = escapeHTML(displayMultiplierVal.toFixed(2));
-        outcomeAndPayoutLine = `<b>Outcome:</b> Cashed out with <b>${escapeHTML(String(gemsFound))}</b> ${TILE_EMOJI_GEM}!\nFinal Payout: <b>${finalPayoutDisplay}</b> (x${displayMultiplier})`;
-    } else if (status === 'game_over_all_gems_found') {
-        const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayout || 0n, 'USD'));
-        const displayMultiplierVal = finalMultiplier || currentMultiplier || 0;
-        const displayMultiplier = escapeHTML(displayMultiplierVal.toFixed(2));
-        outcomeAndPayoutLine = `<b>Outcome:</b> Found all <b>${escapeHTML(String(gemsFound))}</b> ${TILE_EMOJI_GEM}!\nMax Payout: <b>${finalPayoutDisplay}</b> (x${displayMultiplier})`;
-    } else if (status === 'game_over_timeout') {
-        outcomeAndPayoutLine = `<b>Outcome:</b> Game timed out! ⏱️ Your bet of <b>${betDisplayHTML}</b> has been forfeited.`;
-    }
+    if (status === 'game_over_mine_hit') titleEmoji = TILE_EMOJI_EXPLOSION;
+    else if (status === 'game_over_cashed_out' || status === 'game_over_all_gems_found') titleEmoji = '🎉';
+    else if (status === 'game_over_timeout') titleEmoji = '⏱️';
 
 
-    if (status === 'player_turn' && !isForFinalSummary) {
-        if (gemsFound > 0) {
-            const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound);
-            const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
-            const currentPayoutUSD = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'));
-            messageTextHTML += `Current Multiplier: <b>x${escapeHTML(currentCalcMultiplier.toFixed(2))}</b>\n`;
-            messageTextHTML += `Cash Out Value: <b>${currentPayoutUSD}</b>\n`;
-        } else {
-            messageTextHTML += `Current Payout: Find gems to increase! ✨\n`;
-        }
-        if (gemsFound < totalSafeTiles) {
-             const nextGemCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound + 1);
-             const nextCalcPayout = BigInt(Math.floor(Number(betAmount) * nextGemCalcMultiplier));
-             const nextPayoutUSD = escapeHTML(await formatBalanceForDisplay(nextCalcPayout, 'USD'));
-             messageTextHTML += `Next ${TILE_EMOJI_GEM} Prize: <b>x${escapeHTML(nextGemCalcMultiplier.toFixed(2))}</b> (${nextPayoutUSD})\n`;
-        }
-    } else if ((isForFinalSummary || status === 'game_over_timeout') && outcomeAndPayoutLine) {
-        messageTextHTML += `\n${outcomeAndPayoutLine}\n`;
-    }
+    const titleText = `${titleEmoji} <b>${escapeHTML(titleTextStr)}</b> ${titleEmoji}`;
 
-    messageTextHTML += "\n";
+    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+    let messageTextHTML = `${titleText}\n`;
+    messageTextHTML += `Player: ${actualPlayerRef}\n`;
+    messageTextHTML += `Wager: <b>${betDisplayHTML}</b> | Difficulty: <b>${escapeHTML(difficultyLabel || 'N/A')}</b> (${escapeHTML(String(numMines))} ${TILE_EMOJI_MINE})\n`;
 
-    if (status === 'player_turn' && !isForFinalSummary) {
-        messageTextHTML += `👇 Click a tile to reveal it. Good luck! (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
-    }
+    const totalSafeTiles = (rows * cols) - numMines;
+    if (status === 'player_turn' || isForFinalSummary || status === 'game_over_timeout') {
+        messageTextHTML += `${TILE_EMOJI_GEM} Gems Found: <b>${escapeHTML(String(gemsFound))} / ${escapeHTML(String(totalSafeTiles))}</b>\n`;
+    }
 
-    const keyboardRows = [];
-    for (let r_idx = 0; r_idx < rows; r_idx++) {
-        const rowButtons = [];
-        for (let c_idx = 0; c_idx < cols; c_idx++) {
-            const cell = grid[r_idx][c_idx];
-            let buttonText = TILE_EMOJI_HIDDEN;
-            const cellIsRevealed = cell.isRevealed;
+    let outcomeAndPayoutLine = "";
+    if (status === 'game_over_mine_hit') {
+        outcomeAndPayoutLine = `<b>Outcome:</b> You hit a mine! 😥 Bet of <b>${betDisplayHTML}</b> lost.`;
+    } else if (status === 'game_over_cashed_out') {
+        const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayout || 0n, 'USD'));
+        const displayMultiplierVal = finalMultiplier || currentMultiplier || 0;
+        const displayMultiplier = escapeHTML(displayMultiplierVal.toFixed(2));
+        outcomeAndPayoutLine = `<b>Outcome:</b> Cashed out with <b>${escapeHTML(String(gemsFound))}</b> ${TILE_EMOJI_GEM}!\nFinal Payout: <b>${finalPayoutDisplay}</b> (x${displayMultiplier}, after a 1% house fee)`;
+    } else if (status === 'game_over_all_gems_found') {
+        const finalPayoutDisplay = escapeHTML(await formatBalanceForDisplay(finalPayout || 0n, 'USD'));
+        const displayMultiplierVal = finalMultiplier || currentMultiplier || 0;
+        const displayMultiplier = escapeHTML(displayMultiplierVal.toFixed(2));
+        outcomeAndPayoutLine = `<b>Outcome:</b> Found all <b>${escapeHTML(String(gemsFound))}</b> ${TILE_EMOJI_GEM}!\nMax Payout: <b>${finalPayoutDisplay}</b> (x${displayMultiplier}, after a 1% house fee)`;
+    } else if (status === 'game_over_timeout') {
+        outcomeAndPayoutLine = `<b>Outcome:</b> Game timed out! ⏱️ Your bet of <b>${betDisplayHTML}</b> has been forfeited.`;
+    }
 
-            if (status === 'player_turn' && !isForFinalSummary) {
-                buttonText = cellIsRevealed ? (cell.isMine ? TILE_EMOJI_EXPLOSION : TILE_EMOJI_GEM) : TILE_EMOJI_HIDDEN;
-            } else { 
-                if (cellIsRevealed && cell.isMine) { buttonText = TILE_EMOJI_EXPLOSION; }
-                else if (cellIsRevealed && !cell.isMine) { buttonText = TILE_EMOJI_GEM; }
-                else { buttonText = cell.isMine ? TILE_EMOJI_MINE : TILE_EMOJI_GEM; } 
-            }
-            rowButtons.push({
-                text: buttonText,
-                callback_data: (status === 'player_turn' && !isForFinalSummary && !cellIsRevealed) ? `mines_tile:${gameId}:${r_idx}:${c_idx}` : `mines_noop:${gameId}:${r_idx}:${c_idx}`
-            });
-        }
-        keyboardRows.push(rowButtons);
-    }
 
-    if (status === 'player_turn' && !isForFinalSummary) {
-        if (gemsFound > 0) {
-            const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound);
-            const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
-            const cashOutButtonAmountDisplay = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'));
-            keyboardRows.push([{ text: `💰 Cash Out (${cashOutButtonAmountDisplay})`, callback_data: `mines_cashout:${gameId}` }]);
-        }
-    }
+    if (status === 'player_turn' && !isForFinalSummary) {
+        if (gemsFound > 0) {
+            const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound);
+            const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
+            const currentPayoutUSD = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'));
+            messageTextHTML += `Current Multiplier: <b>x${escapeHTML(currentCalcMultiplier.toFixed(2))}</b>\n`;
+            messageTextHTML += `Cash Out Value: <b>${currentPayoutUSD}</b>\n`;
+        } else {
+            messageTextHTML += `Current Payout: Find gems to increase! ✨\n`;
+        }
+        if (gemsFound < totalSafeTiles) {
+             const nextGemCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound + 1);
+             const nextCalcPayout = BigInt(Math.floor(Number(betAmount) * nextGemCalcMultiplier));
+             const nextPayoutUSD = escapeHTML(await formatBalanceForDisplay(nextCalcPayout, 'USD'));
+             messageTextHTML += `Next ${TILE_EMOJI_GEM} Prize: <b>x${escapeHTML(nextGemCalcMultiplier.toFixed(2))}</b> (${nextPayoutUSD})\n`;
+        }
+    } else if ((isForFinalSummary || status === 'game_over_timeout') && outcomeAndPayoutLine) {
+        messageTextHTML += `\n${outcomeAndPayoutLine}\n`;
+    }
 
-    if (status === 'player_turn' && !isForFinalSummary && keyboardRows.length === rows) { 
-         if (!keyboardRows.find(row => row.find(btn => btn.text === "📖 Rules"))) {
-             keyboardRows.push([{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX_CONST}${GAME_IDS.MINES}`}]);
-         }
-    } else if (isForFinalSummary || status === 'game_over_timeout') {
-        // For final summary or timeout, rules button might be added by createPostGameKeyboard if desired, not here.
-    }
-    return { messageTextHTML, keyboard: { inline_keyboard: keyboardRows } };
+    messageTextHTML += "\n";
+
+    if (status === 'player_turn' && !isForFinalSummary) {
+        messageTextHTML += `👇 Click a tile to reveal it. Good luck! (Turn timeout: ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000}s)`;
+    }
+
+    const keyboardRows = [];
+    for (let r_idx = 0; r_idx < rows; r_idx++) {
+        const rowButtons = [];
+        for (let c_idx = 0; c_idx < cols; c_idx++) {
+            const cell = grid[r_idx][c_idx];
+            let buttonText = TILE_EMOJI_HIDDEN;
+            const cellIsRevealed = cell.isRevealed;
+
+            if (status === 'player_turn' && !isForFinalSummary) {
+                buttonText = cellIsRevealed ? (cell.isMine ? TILE_EMOJI_EXPLOSION : TILE_EMOJI_GEM) : TILE_EMOJI_HIDDEN;
+            } else { 
+                if (cellIsRevealed && cell.isMine) { buttonText = TILE_EMOJI_EXPLOSION; }
+                else if (cellIsRevealed && !cell.isMine) { buttonText = TILE_EMOJI_GEM; }
+                else { buttonText = cell.isMine ? TILE_EMOJI_MINE : TILE_EMOJI_GEM; } 
+            }
+            rowButtons.push({
+                text: buttonText,
+                callback_data: (status === 'player_turn' && !isForFinalSummary && !cellIsRevealed) ? `mines_tile:${gameId}:${r_idx}:${c_idx}` : `mines_noop:${gameId}:${r_idx}:${c_idx}`
+            });
+        }
+        keyboardRows.push(rowButtons);
+    }
+
+    if (status === 'player_turn' && !isForFinalSummary) {
+        if (gemsFound > 0) {
+            const currentCalcMultiplier = calculateMinesMultiplier(gameData, gemsFound);
+            const currentCalcPotentialPayout = BigInt(Math.floor(Number(betAmount) * currentCalcMultiplier));
+            const cashOutButtonAmountDisplay = escapeHTML(await formatBalanceForDisplay(currentCalcPotentialPayout, 'USD'));
+            keyboardRows.push([{ text: `💰 Cash Out (${cashOutButtonAmountDisplay})`, callback_data: `mines_cashout:${gameId}` }]);
+        }
+    }
+
+    if (status === 'player_turn' && !isForFinalSummary && keyboardRows.length === rows) { 
+         if (!keyboardRows.find(row => row.find(btn => btn.text === "📖 Rules"))) {
+             keyboardRows.push([{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX_CONST}${GAME_IDS.MINES}`}]);
+         }
+    } else if (isForFinalSummary || status === 'game_over_timeout') {
+        // For final summary or timeout, rules button might be added by createPostGameKeyboard if desired, not here.
+    }
+    return { messageTextHTML, keyboard: { inline_keyboard: keyboardRows } };
 }
 
 async function updateMinesGameMessage(gameData, deleteOldMessage = true, isFinalSummary = false) {
@@ -12285,18 +12384,19 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
         gameData.mineLocations.forEach(([mr_loc, mc_loc]) => { if (gameData.grid[mr_loc]?.[mc_loc]) gameData.grid[mr_loc][mc_loc].isRevealed = true; });
         try {
             client = await pool.connect(); await client.query('BEGIN');
-            const lossUpdateResult = await updateUserBalanceAndLedger(client, userId, 0n, 'loss_mines_hit', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, gems_found: gameData.gemsFound, original_bet_amount: gameData.betAmount.toString() }, `Mines: Hit mine. Bet lost.`, solPrice);
+            const actualGameLogId = await logGameResultToGamesTable(client, GAME_IDS.MINES, originalChatId, userId, [userId], gameData.betAmount, `Loss - Mine Hit`, 0n, 0n);
+            const lossUpdateResult = await updateUserBalanceAndLedger(client, userId, 0n, 'loss_mines_hit', { game_log_id: actualGameLogId, difficulty: gameData.difficultyKey, gems_found: gameData.gemsFound, original_bet_amount: gameData.betAmount.toString() }, `Mines: Hit mine. Bet lost.`, solPrice);
             if (lossUpdateResult.success) {
                 balanceUpdateSucceeded = true;
                 if(lossUpdateResult.notifications) allNotificationsToSend.push(...lossUpdateResult.notifications);
                 
                 if (gameData.totalWageredForLevelCheck !== undefined) {
-                    const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
-                    allNotificationsToSend.push(...levelNotifications);
-                    const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
-                    if (!milestoneResult.success) {
-                        console.warn(`${logPrefix} Failed to process milestone bonus on mine hit: ${milestoneResult.error}`);
-                    }
+                    const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
+                    allNotificationsToSend.push(...levelNotifications);
+                    const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
+                    if (!milestoneResult.success) {
+                        console.warn(`${logPrefix} Failed to process milestone bonus on mine hit: ${milestoneResult.error}`);
+                    }
                 }
                 await client.query('COMMIT');
             } else {
@@ -12317,11 +12417,15 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
         const totalNonMineCells = (gameData.rows * gameData.cols) - gameData.numMines;
         if (gameData.gemsFound >= totalNonMineCells) {
             gameData.status = 'game_over_all_gems_found';
-            gameData.finalPayout = gameData.potentialPayout; gameData.finalMultiplier = gameData.currentMultiplier;
+            const preFeePayout = gameData.potentialPayout;
+            const houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+            gameData.finalPayout = preFeePayout - houseFee;
+            gameData.finalMultiplier = gameData.currentMultiplier;
             gameOver = true;
             try {
                 client = await pool.connect(); await client.query('BEGIN');
-                const winUpdateResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_all_gems', { game_id_custom_field: gameId, difficulty: gameData.difficultyKey, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines max win.`, solPrice);
+                const actualGameLogId = await logGameResultToGamesTable(client, GAME_IDS.MINES, originalChatId, userId, [userId], gameData.betAmount, `Win - All gems found`, 0n, houseFee);
+                const winUpdateResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_all_gems', { game_log_id: actualGameLogId, difficulty: gameData.difficultyKey, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines max win.`, solPrice);
                 if (winUpdateResult.success) {
                     balanceUpdateSucceeded = true;
                     if(winUpdateResult.notifications) allNotificationsToSend.push(...winUpdateResult.notifications);
@@ -12329,10 +12433,10 @@ async function handleMinesTileClickCallback(gameId, userWhoClicked, r_str, c_str
                     if (gameData.totalWageredForLevelCheck !== undefined) {
                         const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
                         allNotificationsToSend.push(...levelNotifications);
-                        const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
-                        if (!milestoneResult.success) {
-                            console.warn(`${logPrefix} Failed to process milestone bonus on all-gems-found win: ${milestoneResult.error}`);
-                        }
+                        const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
+                        if (!milestoneResult.success) {
+                            console.warn(`${logPrefix} Failed to process milestone bonus on all-gems-found win: ${milestoneResult.error}`);
+                        }
                     }
                     await client.query('COMMIT');
                 } else {
@@ -12396,7 +12500,9 @@ async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, o
 
     gameData.status = 'game_over_cashed_out';
     gameData.currentMultiplier = calculateMinesMultiplier(gameData, gameData.gemsFound);
-    gameData.finalPayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
+    const preFeePayout = BigInt(Math.floor(Number(gameData.betAmount) * gameData.currentMultiplier));
+    const houseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+    gameData.finalPayout = preFeePayout - houseFee;
     gameData.finalMultiplier = gameData.currentMultiplier;
     gameData.lastInteractionTime = Date.now();
     for (let r = 0; r < gameData.rows; r++) {
@@ -12420,7 +12526,8 @@ async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, o
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-        const cashoutResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_cashout', { game_id_custom_field: gameId, difficulty_custom: gameData.difficultyKey, gems_custom: gameData.gemsFound, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines cash out.`, solPrice);
+        const actualGameLogId = await logGameResultToGamesTable(client, GAME_IDS.MINES, originalChatId, userId, [userId], gameData.betAmount, `Win - Cashed out`, 0n, houseFee);
+        const cashoutResult = await updateUserBalanceAndLedger(client, userId, gameData.finalPayout, 'win_mines_cashout', { game_log_id: actualGameLogId, difficulty: gameData.difficultyKey, gems_found: gameData.gemsFound, payout_multiplier_custom: gameData.finalMultiplier.toFixed(4), original_bet_amount: gameData.betAmount.toString() }, `Mines cash out.`, solPrice);
         if (!cashoutResult.success) {
             throw new Error(cashoutResult.error || "Failed to update balance on cash out.");
         }
@@ -12428,30 +12535,23 @@ async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, o
         if (cashoutResult.notifications) allNotificationsToSend.push(...cashoutResult.notifications);
 
         if (gameData.totalWageredForLevelCheck !== undefined) {
-            // --- START OF MODIFICATION ---
+            if (typeof processQualifyingBetAndInitialBonus === 'function') {
+                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, gameData.betAmount, gameId);
+                if (initialBonusResult.jobQueued) {
+                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
+                }
+            }
 
-            // 1. ADDED: Check for the initial bet bonus.
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, gameData.betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-
-            // 2. MODIFIED: Correctly call level and milestone checks.
             const levelNotifications = await checkAndUpdateUserLevel(client, userId, gameData.totalWageredForLevelCheck, solPrice, originalChatId);
             allNotificationsToSend.push(...levelNotifications);
             const milestoneResult = await processWagerMilestoneBonus(client, userId, gameData.totalWageredForLevelCheck, solPrice);
-            if (!milestoneResult.success) {
-                console.warn(`${logPrefix} Failed to process milestone bonus on cashout: ${milestoneResult.error}`);
-            }
-
-            // --- END OF MODIFICATION ---
+            if (!milestoneResult.success) {
+                console.warn(`${logPrefix} Failed to process milestone bonus on cashout: ${milestoneResult.error}`);
+            }
         }
 
         await client.query('COMMIT');
     } catch (dbError) {
-        // **FIX APPLIED HERE**: The client.release() call has been removed from the catch block.
         if (client && !balanceUpdateSucceeded) await client.query('ROLLBACK').catch(() => {});
         console.error(`${logPrefix} DB Error processing Mines cash out: ${dbError.message}`);
         await safeSendMessage(userId, "⚙️ Error processing cash out (DB). Contact support.", { parse_mode: 'HTML' });
@@ -12464,7 +12564,6 @@ async function handleMinesCashOutCallback(gameId, userObject, callbackQueryId, o
         await updateGroupGameDetails(originalChatId, { removeThisId: gameId }, GAME_IDS.MINES, null);
         return;
     } finally {
-        // **FIX APPLIED HERE**: This is now the ONLY place client.release() is called.
         if (client) client.release();
     }
 
@@ -16684,39 +16783,40 @@ async function unlinkUserWalletDB(userId, dbClient) {
     }
 }
 
-async function logGameResultToGamesTable(dbClient, gameType, chatId, initiatorId, participantsIds, betAmountLamports, outcomeText, jackpotContributionLamports = null) {
-    const LOG_PREFIX_LOG_GAME = `[LogGameToGamesTable Type:${gameType}]`;
-    try {
-        const query = `
-            INSERT INTO games (game_type, chat_id, initiator_telegram_id, participants_ids, bet_amount_lamports, outcome, jackpot_contribution_lamports, game_timestamp)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-            RETURNING game_log_id;
-        `;
-        // Ensure participantsIds is an array of strings or null for the DB
-        const participantsDbArray = participantsIds ? participantsIds.map(id => String(id)) : null;
+async function logGameResultToGamesTable(dbClient, gameType, chatId, initiatorId, participantsIds, betAmountLamports, outcomeText, jackpotContributionLamports = null, houseFeeLamports = null) {
+    const LOG_PREFIX_LOG_GAME = `[LogGameToGamesTable Type:${gameType}]`;
+    try {
+        const query = `
+            INSERT INTO games (game_type, chat_id, initiator_telegram_id, participants_ids, bet_amount_lamports, outcome, jackpot_contribution_lamports, house_fee_lamports, game_timestamp)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            RETURNING game_log_id;
+        `;
+        // Ensure participantsIds is an array of strings or null for the DB
+        const participantsDbArray = participantsIds ? participantsIds.map(id => String(id)) : null;
 
-        const params = [
-            String(gameType),
-            String(chatId),
-            String(initiatorId),
-            participantsDbArray,
-            betAmountLamports.toString(),
-            String(outcomeText).substring(0, 255), // Ensure outcomeText is not too long
-            jackpotContributionLamports ? jackpotContributionLamports.toString() : null
-        ];
-        const res = await dbClient.query(query, params);
-        if (res.rows.length > 0 && res.rows[0].game_log_id) {
-            console.log(`${LOG_PREFIX_LOG_GAME} Game logged with game_log_id: ${res.rows[0].game_log_id}`);
-            return Number(res.rows[0].game_log_id);
-        }
-        console.error(`${LOG_PREFIX_LOG_GAME} Failed to insert game log or retrieve game_log_id.`);
-        return null;
-    } catch (error) {
-        console.error(`${LOG_PREFIX_LOG_GAME} Error logging game to games table: ${error.message}`, error.stack);
-        // Do not throw here if called within a larger transaction that might want to proceed with partial success or specific error handling.
-        // The caller should check for null and decide how to proceed.
-        return null;
-    }
+        const params = [
+            String(gameType),
+            String(chatId),
+            String(initiatorId),
+            participantsDbArray,
+            betAmountLamports.toString(),
+            String(outcomeText).substring(0, 255), // Ensure outcomeText is not too long
+            jackpotContributionLamports ? jackpotContributionLamports.toString() : null,
+            houseFeeLamports ? houseFeeLamports.toString() : null
+        ];
+        const res = await dbClient.query(query, params);
+        if (res.rows.length > 0 && res.rows[0].game_log_id) {
+            console.log(`${LOG_PREFIX_LOG_GAME} Game logged with game_log_id: ${res.rows[0].game_log_id}`);
+            return Number(res.rows[0].game_log_id);
+        }
+        console.error(`${LOG_PREFIX_LOG_GAME} Failed to insert game log or retrieve game_log_id.`);
+        return null;
+    } catch (error) {
+        console.error(`${LOG_PREFIX_LOG_GAME} Error logging game to games table: ${error.message}`, error.stack);
+        // Do not throw here if called within a larger transaction that might want to proceed with partial success or specific error handling.
+        // The caller should check for null and decide how to proceed.
+        return null;
+    }
 }
 
 // --- End of Part P2 ---
