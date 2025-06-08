@@ -13590,10 +13590,14 @@ async function handleBonusCommand(msg) {
             client = await pool.connect();
             
             const currentUserDetailsQueryGroup = `
-                SELECT u.total_wagered_lamports, ul.order_index AS current_level_order_index, ul.level_name as current_level_name
-                FROM users u
-                LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
-                WHERE u.telegram_id = $1`;
+                SELECT
+                    u.total_wagered_lamports,
+                    ul.order_index AS current_level_order_index,
+                    ul.level_name AS current_level_name
+                FROM users u
+                LEFT JOIN user_levels ul ON u.current_level_id = ul.level_id
+                WHERE u.telegram_id = $1
+            `;
             const currentUserDetailsResGroup = await client.query(currentUserDetailsQueryGroup, [userId]);
             if (currentUserDetailsResGroup.rowCount === 0) throw new Error("User not found for group bonus info.");
             
@@ -13605,14 +13609,20 @@ async function handleBonusCommand(msg) {
                                        `🏆 Current Tier: <b>${escapeHTML(currentLevelNameGroup)}</b>\n\n`;
             
             const claimableBonusQueryGroup = `
-                SELECT ul.level_id, ul.bonus_amount_usd, ul.level_name
-                FROM user_levels ul
-                WHERE ul.order_index <= $1 
-                AND ul.bonus_amount_usd > 0
-                AND NOT EXISTS (
-                    SELECT 1 FROM user_claimed_level_bonuses uclb
-                    WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
-                ) ORDER BY ul.order_index ASC;`;
+                SELECT
+                    ul.level_id,
+                    ul.bonus_amount_usd,
+                    ul.level_name
+                FROM user_levels ul
+                WHERE 
+                    ul.order_index <= $1 AND
+                    ul.bonus_amount_usd > 0 AND
+                    NOT EXISTS (
+                        SELECT 1 FROM user_claimed_level_bonuses uclb
+                        WHERE uclb.user_telegram_id = $2 AND uclb.level_id = ul.level_id
+                    )
+                ORDER BY ul.order_index ASC
+            `;
             const claimableBonusesResGroup = await client.query(claimableBonusQueryGroup, [currentLevelOrderIndexGroup, userId]);
             
             const keyboardRows = [];
@@ -13642,7 +13652,6 @@ async function handleBonusCommand(msg) {
     }
 
     // --- Private Chat (DM) Logic ---
-    // This part remains unchanged but is included for completeness
     let workingMessageId = msg.message_id; 
     const isEditingExistingDashboard = msg.message_id && msg.isCallbackEditing === true;
 
