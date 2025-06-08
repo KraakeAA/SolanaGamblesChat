@@ -2737,64 +2737,64 @@ const JOB_PROCESSOR_INTERVAL_MS = 10000; // Run every 10 seconds
 const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
 
 // REPLACEMENT for processBackgroundJobs in Part 3
-
 async function processBackgroundJobs() {
-    if (isShuttingDown) return;
-    if (isJobProcessorRunning) return;
+    if (isShuttingDown) return;
+    if (isJobProcessorRunning) return;
 
-    isJobProcessorRunning = true;
-    const LOG_PREFIX = '[JobProcessor_V3_Final]';
+    isJobProcessorRunning = true;
+    const LOG_PREFIX = '[JobProcessor_V4_RefFix]'; // V4 with Referral Fix
 
-    let jobsToProcess = [];
-    let mainClient = null;
+    let jobsToProcess = [];
+    let mainClient = null;
 
-    try {
-        mainClient = await pool.connect();
-        const jobsResult = await mainClient.query(
-            `SELECT job_id FROM background_jobs WHERE status = 'pending' AND process_after <= NOW() ORDER BY created_at ASC LIMIT 5 FOR UPDATE SKIP LOCKED`
-        );
-        if (jobsResult.rows.length > 0) {
-            jobsToProcess = jobsResult.rows.map(r => r.job_id);
-            await mainClient.query(`UPDATE background_jobs SET status = 'running', attempts = attempts + 1, last_attempt_at = NOW() WHERE job_id = ANY($1::int[])`, [jobsToProcess]);
-        }
-    } catch (e) {
-        console.error(`${LOG_PREFIX} Error fetching jobs:`, e);
-    } finally {
-        if (mainClient) mainClient.release();
-    }
+    try {
+        mainClient = await pool.connect();
+        const jobsResult = await mainClient.query(
+            `SELECT job_id FROM background_jobs WHERE status = 'pending' AND process_after <= NOW() ORDER BY created_at ASC LIMIT 5 FOR UPDATE SKIP LOCKED`
+        );
+        if (jobsResult.rows.length > 0) {
+            jobsToProcess = jobsResult.rows.map(r => r.job_id);
+            await mainClient.query(`UPDATE background_jobs SET status = 'running', attempts = attempts + 1, last_attempt_at = NOW() WHERE job_id = ANY($1::int[])`, [jobsToProcess]);
+        }
+    } catch (e) {
+        console.error(`${LOG_PREFIX} Error fetching jobs:`, e);
+    } finally {
+        if (mainClient) mainClient.release();
+    }
 
-    if (jobsToProcess.length === 0) {
-        isJobProcessorRunning = false;
-        return;
-    }
+    if (jobsToProcess.length === 0) {
+        isJobProcessorRunning = false;
+        return;
+    }
 
-    console.log(`${LOG_PREFIX} Picked up ${jobsToProcess.length} jobs to process.`);
+    console.log(`${LOG_PREFIX} Picked up ${jobsToProcess.length} jobs to process.`);
 
-    for (const jobId of jobsToProcess) {
-        if (isShuttingDown) break;
+    for (const jobId of jobsToProcess) {
+        if (isShuttingDown) break;
 
-        let jobClient = null;
-        let job = null;
+        let jobClient = null;
+        let job = null;
         let notificationPayload = null;
 
-        try {
-            jobClient = await pool.connect();
-            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1 FOR UPDATE', [jobId], jobClient);
+        try {
+            jobClient = await pool.connect();
+            const jobDataRes = await queryDatabase('SELECT * FROM background_jobs WHERE job_id = $1 FOR UPDATE', [jobId], jobClient);
             
-            if (jobDataRes.rows.length === 0) {
+            if (jobDataRes.rows.length === 0) {
                 console.warn(`${LOG_PREFIX} Job ${jobId} was locked but gone before processing. Another instance may have handled it. Skipping.`);
-                continue;
+                continue;
             }
-            job = jobDataRes.rows[0];
+            job = jobDataRes.rows[0];
 
-            await jobClient.query('BEGIN');
+            await jobClient.query('BEGIN');
 
-            // --- NEW CASE TO HANDLE WAGER CHECKING ---
             if (job.job_type === 'check_referral_wager') {
                 const { referredUserTelegramId, newTotalWageredLamports, solPrice } = job.payload;
-                const LOG_PREFIX_WAGER_CHECK = `[ProcessWagerRebate_V1 UID:${referredUserTelegramId}]`;
-                
-                const WAGER_INTERVAL_USD = 50.00;
+                const LOG_PREFIX_WAGER_CHECK = `[ProcessWagerRebate_V2_Iterative UID:${referredUserTelegramId}]`;
+
+                if (!solPrice || solPrice <= 0) {
+                    throw new Error("Invalid or missing solPrice in 'check_referral_wager' job payload. Cannot calculate bonuses.");
+                }
                 
                 const referralLinkDetailsRes = await jobClient.query(`SELECT referral_id, referrer_telegram_id, last_milestone_bonus_check_wager_lamports FROM referrals r WHERE r.referred_telegram_id = $1 FOR UPDATE`, [referredUserTelegramId]);
                 
@@ -2802,54 +2802,76 @@ async function processBackgroundJobs() {
                     const referralLink = referralLinkDetailsRes.rows[0];
                     const referrerId = String(referralLink.referrer_telegram_id);
                     const lastPaidOutWagerLamports = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
+                    const newTotalWageredLamportsNum = BigInt(newTotalWageredLamports);
 
-                    const lastPaidOutWagerUSD = Number(lastPaidOutWagerLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
-                    const newTotalWageredUSD = Number(BigInt(newTotalWageredLamports)) / Number(LAMPORTS_PER_SOL) * solPrice;
-
-                    const chunksAlreadyPaid = Math.floor(lastPaidOutWagerUSD / WAGER_INTERVAL_USD);
-                    const chunksNowDue = Math.floor(newTotalWageredUSD / WAGER_INTERVAL_USD);
-                    const newChunksToPay = chunksNowDue - chunksAlreadyPaid;
-
-                    if (newChunksToPay > 0) {
-                        const bonusPerChunkUSD = WAGER_INTERVAL_USD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST;
-                        const totalBonusUSD = newChunksToPay * bonusPerChunkUSD;
-                        const totalBonusLamports = convertUSDToLamports(totalBonusUSD, solPrice);
-
-                        if (totalBonusLamports > 0n) {
-                            const creditJobPayload = {
-                                targetUserId: referrerId,
-                                amountLamports: totalBonusLamports.toString(),
-                                transactionType: 'referral_wager_rebate',
-                                referralId: referralLink.referral_id,
-                                notes: `Referral Wager Rebate for ${newChunksToPay} x $${WAGER_INTERVAL_USD.toFixed(2)} block(s) from user ${referredUserTelegramId}.`
-                            };
-                            await jobClient.query(`INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`, [creditJobPayload]);
-                            console.log(`${LOG_PREFIX_WAGER_CHECK} Queued 'credit_user_balance' job for ${newChunksToPay} rebate chunk(s) for referrer ${referrerId}.`);
-                        }
-
-                        const newWagerLevelPaidOutUSD = chunksNowDue * WAGER_INTERVAL_USD;
-                        const newWagerLevelPaidOutLamports = convertUSDToLamports(newWagerLevelPaidOutUSD, solPrice);
-                        await jobClient.query(`UPDATE referrals SET last_milestone_bonus_check_wager_lamports = $1 WHERE referral_id = $2;`, [newWagerLevelPaidOutLamports.toString(), referralLink.referral_id]);
+                    // --- START OF NEW, ROBUST LOGIC ---
+                    // Convert interval to lamports once to avoid repeated USD conversions
+                    const wagerIntervalLamports = convertUSDToLamports(REFERRAL_WAGER_REBATE_INTERVAL_USD, solPrice);
+                    if (wagerIntervalLamports <= 0n) {
+                         console.error(`${LOG_PREFIX_WAGER_CHECK} Wager interval calculates to 0 lamports. Aborting bonus check.`);
+                         // Exit gracefully without throwing, as this is a config/price issue
+                         await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
+                         await jobClient.query('COMMIT');
+                         continue; // Move to the next job
                     }
+
+                    // Pre-calculate the bonus amount per chunk in lamports
+                    const bonusPerChunkUSD = REFERRAL_WAGER_REBATE_INTERVAL_USD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST;
+                    const bonusPerChunkLamports = convertUSDToLamports(bonusPerChunkUSD, solPrice);
+
+                    // Determine the next milestone to check against
+                    let nextMilestoneLamports = ( (lastPaidOutWagerLamports / wagerIntervalLamports) + 1n ) * wagerIntervalLamports;
+                    
+                    let totalBonusToPayLamports = 0n;
+                    let chunksToPay = 0;
+
+                    // Iterate through each unpaid milestone the user has crossed
+                    while (newTotalWageredLamportsNum >= nextMilestoneLamports) {
+                        totalBonusToPayLamports += bonusPerChunkLamports;
+                        chunksToPay++;
+                        // Move to the next milestone
+                        nextMilestoneLamports += wagerIntervalLamports;
+                    }
+
+                    if (chunksToPay > 0) {
+                        console.log(`${LOG_PREFIX_WAGER_CHECK} Found ${chunksToPay} new milestone(s) to pay for a total bonus of ${totalBonusToPayLamports} lamports.`);
+                        
+                        // Queue a SINGLE credit job for the total calculated bonus
+                        const creditJobPayload = {
+                            targetUserId: referrerId,
+                            amountLamports: totalBonusToPayLamports.toString(),
+                            transactionType: 'referral_wager_rebate',
+                            referralId: referralLink.referral_id,
+                            notes: `Referral Wager Rebate for ${chunksToPay} x $${REFERRAL_WAGER_REBATE_INTERVAL_USD.toFixed(2)} block(s) from user ${referredUserTelegramId}.`
+                        };
+                        await jobClient.query(`INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`, [creditJobPayload]);
+                        console.log(`${LOG_PREFIX_WAGER_CHECK} Queued 'credit_user_balance' job for ${chunksToPay} rebate chunk(s) for referrer ${referrerId}.`);
+
+                        // Update the last paid milestone to the level of the last milestone we just paid for.
+                        const newLastMilestonePaidLamports = nextMilestoneLamports - wagerIntervalLamports;
+                        await jobClient.query(`UPDATE referrals SET last_milestone_bonus_check_wager_lamports = $1 WHERE referral_id = $2;`, [newLastMilestonePaidLamports.toString(), referralLink.referral_id]);
+                        console.log(`${LOG_PREFIX_WAGER_CHECK} Updated last_milestone_bonus_check_wager_lamports to ${newLastMilestonePaidLamports}.`);
+                    }
+                    // --- END OF NEW, ROBUST LOGIC ---
                 }
             } else if (job.job_type === 'credit_user_balance') {
-                const { targetUserId, amountLamports, transactionType, notes, referralId, milestoneKey } = job.payload;
+                const { targetUserId, amountLamports, transactionType, notes, referralId } = job.payload;
 
-                if (!targetUserId || !amountLamports || !transactionType) {
-                    throw new Error(`Invalid payload for job ${jobId}: Missing required fields.`);
-                }
-                
-                let uniqueActionId;
-                if (transactionType === 'referral_commission_credit' && notes.includes('Initial Bet Bonus')) {
-                    const parsedReferralId = notes.match(/Referral ID: (\d+)/)[1];
-                    uniqueActionId = `credit-initial-bonus-${parsedReferralId}`;
+                if (!targetUserId || !amountLamports || !transactionType) {
+                    throw new Error(`Invalid payload for job ${jobId}: Missing required fields.`);
+                }
+                
+                let uniqueActionId;
+                if (transactionType === 'referral_commission_credit' && notes && notes.includes('Initial Bet Bonus')) {
+                    const parsedReferralId = notes.match(/Referral ID: (\d+)/)[1];
+                    uniqueActionId = `credit-initial-bonus-${parsedReferralId}`;
                 } else if (transactionType === 'referral_wager_rebate' && referralId && notes) {
                     const notesIdentifier = createHash('sha256').update(notes).digest('hex').substring(0, 16);
                     uniqueActionId = `credit-rebate-${referralId}-${notesIdentifier}`;
-                } else {
-                    uniqueActionId = `credit-${transactionType}-${targetUserId}-${Date.now()}`; 
-                    console.warn(`${LOG_PREFIX} Job ${jobId} of type ${transactionType} does not have a deterministic unique ID. Idempotency not guaranteed.`);
-                }
+                } else {
+                    uniqueActionId = `credit-${transactionType}-${targetUserId}-${Date.now()}`; 
+                    console.warn(`${LOG_PREFIX} Job ${jobId} of type ${transactionType} does not have a deterministic unique ID. Idempotency not guaranteed.`);
+                }
 
                 const idempotencyCheckRes = await jobClient.query('SELECT 1 FROM processed_job_actions WHERE action_id = $1', [uniqueActionId]);
 
@@ -2864,25 +2886,25 @@ async function processBackgroundJobs() {
                     await jobClient.query('INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)', [uniqueActionId, jobId]);
                     notificationPayload = { targetUserId, amountLamports, transactionType, notes };
                 }
-            }
-            
-            await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-            await jobClient.query('COMMIT');
-            console.log(`${LOG_PREFIX} ✅ Successfully finalized transaction for job ${jobId}.`);
+            }
+            
+            await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
+            await jobClient.query('COMMIT');
+            console.log(`${LOG_PREFIX} ✅ Successfully finalized transaction for job ${jobId}.`);
 
             if (notificationPayload) {
                 // ... (notification sending logic as before) ...
             }
 
-        } catch (err) {
-            if (jobClient) await jobClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX} Rollback failed for job ${jobId}`, rbErr));
-            console.error(`${LOG_PREFIX} ❌ Error processing job ${jobId} on attempt ${job?.attempts || 'N/A'}:`, err);
+        } catch (err) {
+            if (jobClient) await jobClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX} Rollback failed for job ${jobId}`, rbErr));
+            console.error(`${LOG_PREFIX} ❌ Error processing job ${jobId} on attempt ${job?.attempts || 'N/A'}:`, err);
 
-            if (job && job.attempts >= MAX_JOB_ATTEMPTS) {
-                console.error(`${LOG_PREFIX} Job ${jobId} reached max retries. Moving to failed_jobs.`);
-                const moveClient = await pool.connect();
-                try {
-                    await moveClient.query('BEGIN');
+            if (job && job.attempts >= MAX_JOB_ATTEMPTS) {
+                console.error(`${LOG_PREFIX} Job ${jobId} reached max retries. Moving to failed_jobs.`);
+                const moveClient = await pool.connect();
+                try {
+                    await moveClient.query('BEGIN');
                     const failedJobsInsertQuery = `
                         INSERT INTO failed_jobs (
                             job_id, job_type, payload, status, attempts, 
@@ -2894,35 +2916,35 @@ async function processBackgroundJobs() {
                         FROM background_jobs 
                         WHERE job_id = $1
                     `;
-                    await moveClient.query(failedJobsInsertQuery, [jobId, err.message]);
-                    await moveClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-                    await moveClient.query('COMMIT');
-                    if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``, {parse_mode: 'MarkdownV2'});
-                    }
-                } catch (moveError) {
-                    if (moveClient) await moveClient.query('ROLLBACK');
-                    console.error(`${LOG_PREFIX} CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE!`, moveError);
-                    if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE! It will be retried indefinitely.`, {parse_mode: 'MarkdownV2'});
-                } finally {
-                    if (moveClient) moveClient.release();
-                }
-            } else if (job) {
-                const delaySeconds = Math.pow(2, job.attempts) * 5;
-                const processAfter = new Date(Date.now() + delaySeconds * 1000);
-                console.log(`${LOG_PREFIX} Scheduling job ${jobId} for retry after ${delaySeconds} seconds.`);
-                await queryDatabase(
-                    `UPDATE background_jobs SET status = 'pending', error_message = $1, process_after = $2 WHERE job_id = $3`,
-                    [err.message, processAfter, jobId]
-                );
-            }
+                    await moveClient.query(failedJobsInsertQuery, [jobId, err.message]);
+                    await moveClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
+                    await moveClient.query('COMMIT');
+                    if (typeof notifyAdmin === 'function') {
+                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``, {parse_mode: 'MarkdownV2'});
+                    }
+                } catch (moveError) {
+                    if (moveClient) await moveClient.query('ROLLBACK');
+                    console.error(`${LOG_PREFIX} CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE!`, moveError);
+                    if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE! It will be retried indefinitely.`, {parse_mode: 'MarkdownV2'});
+                } finally {
+                    if (moveClient) moveClient.release();
+                }
+            } else if (job) {
+                const delaySeconds = Math.pow(2, job.attempts) * 5;
+                const processAfter = new Date(Date.now() + delaySeconds * 1000);
+                console.log(`${LOG_PREFIX} Scheduling job ${jobId} for retry after ${delaySeconds} seconds.`);
+                await queryDatabase(
+                    `UPDATE background_jobs SET status = 'pending', error_message = $1, process_after = $2 WHERE job_id = $3`,
+                    [err.message, processAfter, jobId]
+                );
+            }
 
-        } finally {
-            if (jobClient) jobClient.release();
-        }
-    }
+        } finally {
+            if (jobClient) jobClient.release();
+        }
+    }
 
-    isJobProcessorRunning = false;
+    isJobProcessorRunning = false;
 }
 
 // In your main bot startup logic, after the database is initialized and `bot` is defined,
