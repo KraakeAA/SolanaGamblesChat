@@ -2899,35 +2899,34 @@ async function processBackgroundJobs() {
                 if (!targetUserId || !amountLamports || !transactionType) {
                     throw new Error(`Invalid payload for job ${jobId}: Missing required fields.`);
                 }
-                
-                // --- IDEMPOTENCY CHECK ---
-                let uniqueActionId;
-                if (transactionType === 'referral_commission_credit' && notes.includes('Initial Bet Bonus')) {
-                    const parsedReferralId = notes.match(/Referral ID: (\d+)/)[1];
-                    uniqueActionId = `credit-initial-bonus-${parsedReferralId}`;
-                } else if (transactionType === 'referral_milestone_bonus' && referralId && milestoneKey) {
-                    uniqueActionId = `credit-milestone-${referralId}-${milestoneKey}`;
-                } else {
-                    // Fallback for other credit types - may not be idempotent without a unique key in payload
-                    uniqueActionId = `credit-${transactionType}-${targetUserId}-${Date.now()}`; // Non-deterministic, less safe
-                    console.warn(`${LOG_PREFIX} Job ${jobId} of type ${transactionType} does not have a deterministic unique ID. Idempotency not guaranteed.`);
-                }
+                
+                // --- IDEMPOTENCY CHECK ---
+                let uniqueActionId;
+                if (transactionType === 'referral_commission_credit' && notes.includes('Initial Bet Bonus')) {
+                    const parsedReferralId = notes.match(/Referral ID: (\d+)/)[1];
+                    uniqueActionId = `credit-initial-bonus-${parsedReferralId}`;
+                } else if (transactionType === 'referral_milestone_bonus' && referralId && milestoneKey) {
+                    uniqueActionId = `credit-milestone-${referralId}-${milestoneKey}`;
+                } else {
+                    uniqueActionId = `credit-${transactionType}-${targetUserId}-${Date.now()}`; 
+                    console.warn(`${LOG_PREFIX} Job ${jobId} of type ${transactionType} does not have a deterministic unique ID. Idempotency not guaranteed.`);
+                }
 
-                try {
-                    await jobClient.query(
-                        'INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)',
-                        [uniqueActionId, jobId]
-                    );
-                } catch (e) {
-                    if (e.code === '23505') { // Unique violation
-                        console.warn(`${LOG_PREFIX} Action ${uniqueActionId} for job ${jobId} has already been processed. Skipping duplicate execution and deleting job.`);
-                        await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-                        await jobClient.query('COMMIT');
-                        continue; // Move to the next job
-                    }
-                    throw e; // Re-throw other errors
-                }
-                // --- END OF IDEMPOTENCY CHECK ---
+                try {
+                    await jobClient.query(
+                        'INSERT INTO processed_job_actions (action_id, job_id) VALUES ($1, $2)',
+                        [uniqueActionId, jobId]
+                    );
+                } catch (e) {
+                    if (e.code === '23505') { // Unique violation
+                        console.warn(`${LOG_PREFIX} Action ${uniqueActionId} for job ${jobId} has already been processed. Skipping duplicate execution and deleting job.`);
+                        await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
+                        await jobClient.query('COMMIT');
+                        continue; // Move to the next job
+                    }
+                    throw e; // Re-throw other errors
+                }
+                // --- END OF IDEMPOTENCY CHECK ---
 
                 const creditResult = await updateUserBalanceAndLedger(
                     jobClient,
@@ -2942,16 +2941,22 @@ async function processBackgroundJobs() {
                     throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
                 }
                 
+                        // --- FIX IS HERE: The message is restructured to be simpler for MarkdownV2 ---
                 const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
                 const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
 
+                        const successMessage = `🎉 *Bonus Received\\!* 🎉\n\n` +
+                            `A bonus has been credited to your casino balance\\.\n\n` +
+                            `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
+                            `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+
                 await safeSendMessage(targetUserId,
-                    `🎉 Cha-ching! A bonus of approx. *${escapeMarkdownV2(bonusAmountUSDDisplay)}* (${escapeMarkdownV2(bonusAmountSOLDisplay)}) has been added to your casino balance!`,
+                    successMessage,
                     { parse_mode: 'MarkdownV2' }
                 );
             }
             
-                // On success, delete the job instead of marking it 'completed'
+                // On success, delete the job instead of marking it 'completed'
             await jobClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
             await jobClient.query('COMMIT');
             console.log(`${LOG_PREFIX} ✅ Successfully processed and deleted job ${jobId}.`);
@@ -2960,39 +2965,39 @@ async function processBackgroundJobs() {
             if (jobClient) await jobClient.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX} Rollback failed for job ${jobId}`, rbErr));
             console.error(`${LOG_PREFIX} ❌ Error processing job ${jobId} on attempt ${job?.attempts || 'N/A'}:`, err);
 
-            // --- DEAD-LETTER QUEUE & RETRY LOGIC ---
-            if (job && job.attempts >= MAX_JOB_ATTEMPTS) {
-                console.error(`${LOG_PREFIX} Job ${jobId} reached max retries. Moving to failed_jobs.`);
-                const moveClient = await pool.connect();
-                try {
-                    await moveClient.query('BEGIN');
-                    await moveClient.query(
-                        `INSERT INTO failed_jobs (job_id, job_type, payload, status, attempts, last_attempt_at, final_error_message, created_at)
-                         SELECT job_id, job_type, payload, status, attempts, last_attempt_at, $2, created_at FROM background_jobs WHERE job_id = $1`,
-                         [jobId, err.message]
-                    );
-                    await moveClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
-                    await moveClient.query('COMMIT');
-                    if (typeof notifyAdmin === 'function') {
-                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``);
-                    }
-                } catch (moveError) {
-                    await moveClient.query('ROLLBACK');
-                    console.error(`${LOG_PREFIX} CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE!`, moveError);
-                    if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE! It will be retried indefinitely.`);
-                } finally {
-                    moveClient.release();
-                }
-            } else if (job) {
-                // Not max retries yet, schedule for another attempt with exponential backoff
-                const delaySeconds = Math.pow(2, job.attempts) * 5; // e.g., 10s, 20s, 40s
-                const processAfter = new Date(Date.now() + delaySeconds * 1000);
-                console.log(`${LOG_PREFIX} Scheduling job ${jobId} for retry after ${delaySeconds} seconds.`);
-                await queryDatabase(
-                    `UPDATE background_jobs SET status = 'pending', error_message = $1, process_after = $2 WHERE job_id = $3`,
-                    [err.message, processAfter, jobId]
-                );
-            }
+            // --- DEAD-LETTER QUEUE & RETRY LOGIC ---
+            if (job && job.attempts >= MAX_JOB_ATTEMPTS) {
+                console.error(`${LOG_PREFIX} Job ${jobId} reached max retries. Moving to failed_jobs.`);
+                const moveClient = await pool.connect();
+                try {
+                    await moveClient.query('BEGIN');
+                    await moveClient.query(
+                        `INSERT INTO failed_jobs (job_id, job_type, payload, status, attempts, last_attempt_at, final_error_message, created_at)
+                         SELECT job_id, job_type, payload, status, attempts, last_attempt_at, $2, created_at FROM background_jobs WHERE job_id = $1`,
+                         [jobId, err.message]
+                    );
+                    await moveClient.query('DELETE FROM background_jobs WHERE job_id = $1', [jobId]);
+                    await moveClient.query('COMMIT');
+                    if (typeof notifyAdmin === 'function') {
+                        notifyAdmin(`☠️ *Job Failed Permanently* ☠️\nJob \`${jobId}\` (${job.job_type}) moved to dead-letter queue after ${job.attempts} attempts.\nFinal Error: \`${escapeMarkdownV2(err.message)}\``);
+                    }
+                } catch (moveError) {
+                    await moveClient.query('ROLLBACK');
+                    console.error(`${LOG_PREFIX} CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE!`, moveError);
+                    if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL: FAILED TO MOVE JOB ${jobId} TO failed_jobs TABLE! It will be retried indefinitely.`);
+                } finally {
+                    moveClient.release();
+                }
+            } else if (job) {
+                // Not max retries yet, schedule for another attempt with exponential backoff
+                const delaySeconds = Math.pow(2, job.attempts) * 5; // e.g., 10s, 20s, 40s
+                const processAfter = new Date(Date.now() + delaySeconds * 1000);
+                console.log(`${LOG_PREFIX} Scheduling job ${jobId} for retry after ${delaySeconds} seconds.`);
+                await queryDatabase(
+                    `UPDATE background_jobs SET status = 'pending', error_message = $1, process_after = $2 WHERE job_id = $3`,
+                    [err.message, processAfter, jobId]
+                );
+            }
 
         } finally {
             if (jobClient) jobClient.release();
