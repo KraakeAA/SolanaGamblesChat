@@ -12768,7 +12768,7 @@ async function pollCompletedInteractiveGames() {
     if (pollCompletedInteractiveGames.isRunning) return;
     pollCompletedInteractiveGames.isRunning = true;
 
-    const logPrefix = '[InteractiveGamePoller_V3]'; // V3 with ChatID fix
+    const logPrefix = '[InteractiveGamePoller_V4]'; // V4 with Lock Fix
     let client = null;
 
     try {
@@ -12819,9 +12819,8 @@ async function pollCompletedInteractiveGames() {
                 }
 
                 await finalizationClient.query('COMMIT');
-                console.log(`${sessionLogPrefix} Successfully finalized.`);
+                console.log(`${sessionLogPrefix} Successfully finalized payout and ledger.`);
 
-                // Prepare notification message
                 const payoutDisplay = await formatBalanceForDisplay(payoutAmount, 'USD');
                 const cleanGameName = escapeHTML(getCleanGameName(session.game_type));
 
@@ -12834,9 +12833,17 @@ async function pollCompletedInteractiveGames() {
                 }
 
                 if (notificationMessageHTML) {
-                    // *** THIS IS THE FIX: Changed session.user_id to session.chat_id ***
                     await safeSendMessage(session.chat_id, notificationMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
                 }
+
+                // *** THIS IS THE FIX: Clean up the game locks after processing is complete ***
+                // You may need to add new GAME_IDS constants (e.g., BOWLING) for this to find the correct key
+                const gameKeyForGroupLock = GAME_IDS[session.game_type.toUpperCase().replace('_PINPOINT','').replace('_SHOOTOUT','')] || session.game_type;
+                activeGames.delete(session.main_bot_game_id);
+                await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, gameKeyForGroupLock, null);
+                console.log(`${sessionLogPrefix} Game lock cleared from activeGames and group session for key: ${gameKeyForGroupLock}.`);
+                // *** END OF FIX ***
+
 
             } catch (e) {
                 if (finalizationClient) await finalizationClient.query('ROLLBACK');
