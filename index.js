@@ -13631,7 +13631,7 @@ async function handleBonusCommand(msg) {
                 claimableBonusesResGroup.rows.forEach(bonus => {
                     const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
                     groupBonusMessageHTML += ` ▫️ ${escapeHTML(bonus.level_name)}: <b>$${bonusAmountToClaimUSD}</b>\n`;
-                    keyboardRows.push([{text: `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus`, callback_data: `claim_level_bonus:${bonus.level_id}`}]);
+                    keyboardRows.push([{text: `🎁 Claim ~$${bonusAmountToClaimUSD} Bonus`, callback_data: `claim_level_bonus:${userId}:${bonus.level_id}`}]);
                 });
             } else {
                 groupBonusMessageHTML += `💡 No new bonuses are ready to claim right now. Keep playing to level up!`;
@@ -13745,7 +13745,7 @@ async function handleBonusCommand(msg) {
             claimableBonusesResDm.rows.forEach(bonus => {
                 const bonusAmountToClaimUSD = parseFloat(bonus.bonus_amount_usd).toFixed(2);
                 messageTextHTML += `  ▫️ <b>${escapeHTML(bonus.level_name)}</b> - Bonus: approx. <b>$${bonusAmountToClaimUSD} USD</b>\n`;
-                keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} (${escapeHTML(bonus.level_name)})`, callback_data: `claim_level_bonus:${bonus.level_id}` }]);
+                keyboardRows.push([{ text: `💰 Claim $${bonusAmountToClaimUSD} (${escapeHTML(bonus.level_name)})`, callback_data: `claim_level_bonus:${userId}:${bonus.level_id}` }]);
             });
             messageTextHTML += "\n";
         } else {
@@ -14865,13 +14865,14 @@ bot.on('callback_query', async (callbackQuery) => {
                  }
                  break;
             case 'claim_level_bonus':
-                 const levelIdToClaimBonusStr = params[0];
-                 if (typeof handleClaimLevelBonusCallback === 'function') {
-                     await handleClaimLevelBonusCallback(callbackQueryId, userObjectForCallback, levelIdToClaimBonusStr, originalMessageId, originalChatId);
-                 } else {
-                     await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Level bonus claim feature unavailable.", show_alert: true });
-                 }
-                 break;
+                 const originalUserIdForBonus = params[0];
+                const levelIdToClaimStr = params[1];
+                 if (typeof handleClaimLevelBonusCallback === 'function') {
+                     await handleClaimLevelBonusCallback(callbackQueryId, userObjectForCallback, originalUserIdForBonus, levelIdToClaimStr);
+                 } else {
+                     await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Level bonus claim feature unavailable.", show_alert: true });
+                 }
+                 break;
             default:
                 console.warn(`${LOG_PREFIX_CBQ} Unknown callback action: "${action}"`);
                 await bot.answerCallbackQuery(callbackQueryId, {text: "Unknown action.", show_alert: false}).catch(()=>{});
@@ -14975,70 +14976,68 @@ async function handleClaimMilestoneBonusCallback(callbackQueryId, userWhoClicked
  * @param {string} originalMessageId - The ID of the /bonus message that had the button.
  * @param {string} originalChatId - The chat ID where the /bonus message is (should be user's DM).
  */
-async function handleClaimLevelBonusCallback(callbackQueryId, userWhoClicked, levelIdToClaimStr, originalMessageId, originalChatId) {
-    const userId = String(userWhoClicked.id || userWhoClicked.telegram_id);
-    const levelIdToClaim = parseInt(levelIdToClaimStr, 10);
-    const LOG_PREFIX_CLAIM_LVL_CB = `[ClaimLevelBonusCB UID:${userId} LevelID:${levelIdToClaim}]`;
+// REPLACEMENT for handleClaimLevelBonusCallback in Part 5a, Section 1
 
-    if (isNaN(levelIdToClaim)) {
-        console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Invalid levelIdToClaim: ${levelIdToClaimStr}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid bonus level ID.", show_alert: true }).catch(() => {});
+async function handleClaimLevelBonusCallback(callbackQueryId, userWhoClicked, originalUserId, levelIdToClaimStr) {
+    const clickerId = String(userWhoClicked.id || userWhoClicked.telegram_id);
+    const intendedUserId = String(originalUserId);
+    const levelIdToClaim = parseInt(levelIdToClaimStr, 10);
+    const LOG_PREFIX_CLAIM_LVL_CB = `[ClaimLevelBonusCB Clicker:${clickerId} Intended:${intendedUserId} LvlID:${levelIdToClaim}]`;
+
+    // --- SECURITY CHECK ---
+    if (clickerId !== intendedUserId) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This bonus claim button is not for you.", show_alert: true }).catch(() => {});
         return;
     }
 
-    let client = null;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
+    if (isNaN(levelIdToClaim)) {
+        console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Invalid levelIdToClaim: ${levelIdToClaimStr}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Invalid bonus level ID.", show_alert: true }).catch(() => {});
+        return;
+    }
 
-        const claimResult = await handleClaimLevelBonus(userId, levelIdToClaim, client); // Assumes handleClaimLevelBonus is defined
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-        if (claimResult.success) {
-            await client.query('COMMIT');
-            console.log(`${LOG_PREFIX_CLAIM_LVL_CB} Successfully claimed bonus. Message: ${claimResult.messageForUser}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.messageForUser || "Bonus claimed successfully!", show_alert: false }).catch(() => {});
+        const claimResult = await handleClaimLevelBonus(clickerId, levelIdToClaim, client);
 
+        if (claimResult.success) {
+            await client.query('COMMIT');
+            console.log(`${LOG_PREFIX_CLAIM_LVL_CB} Successfully claimed bonus. Message: ${claimResult.messageForUser}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.messageForUser || "Bonus claimed successfully!", show_alert: false }).catch(() => {});
+
+            // Refresh the bonus dashboard in the group where it was actioned
             const mockMsgForDashboardRefresh = {
                 from: userWhoClicked,
-                chat: { id: originalChatId, type: 'private' }, 
-                message_id: originalMessageId, 
-                isCallbackEditing: true // Ensure this flag is passed for handleBonusCommand
+                chat: { id: callbackQuery.message.chat.id, type: callbackQuery.message.chat.type },
+                message_id: callbackQuery.message.message_id,
+                isCallbackEditing: true
             };
             if (typeof handleBonusCommand === 'function') {
                 await handleBonusCommand(mockMsgForDashboardRefresh);
-            } else {
-                console.error(`${LOG_PREFIX_CLAIM_LVL_CB} CRITICAL: handleBonusCommand is not defined. Cannot refresh /bonus dashboard.`);
-                await safeSendMessage(originalChatId, claimResult.messageForUser || "Bonus claimed successfully!", { parse_mode: 'MarkdownV2' });
             }
-        } else {
-            await client.query('ROLLBACK');
-            console.warn(`${LOG_PREFIX_CLAIM_LVL_CB} Failed to claim bonus: ${claimResult.error}`);
-            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.error || "Could not claim bonus. It might be already claimed or you might not be eligible.", show_alert: true }).catch(() => {});
-            
-            const mockMsgForDashboardRefreshOnError = {
-                from: userWhoClicked,
-                chat: { id: originalChatId, type: 'private' },
-                message_id: originalMessageId,
-                isCallbackEditing: true // Also refresh on error
-            };
-            if (typeof handleBonusCommand === 'function') {
-                await handleBonusCommand(mockMsgForDashboardRefreshOnError);
-            }
-        }
-    } catch (error) {
-        if (client) {
-            try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Rollback error: ${rbErr.message}`); }
-        }
-        console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Critical error during level bonus claim processing: ${error.message}`, error.stack);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Server error while claiming bonus. Please try again later or contact support.", show_alert: true }).catch(() => {});
-        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
-            notifyAdmin(`🚨 CRITICAL Error Claiming Level Bonus\nUID: ${userId}, LevelID Attempted: ${levelIdToClaim}\nError: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
-        }
-    } finally {
-        if (client) {
-            client.release();
-        }
-    }
+
+        } else {
+            await client.query('ROLLBACK');
+            console.warn(`${LOG_PREFIX_CLAIM_LVL_CB} Failed to claim bonus: ${claimResult.error}`);
+            await bot.answerCallbackQuery(callbackQueryId, { text: claimResult.error || "Could not claim bonus.", show_alert: true }).catch(() => {});
+        }
+    } catch (error) {
+        if (client) {
+            try { await client.query('ROLLBACK'); } catch (rbErr) { console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Rollback error: ${rbErr.message}`); }
+        }
+        console.error(`${LOG_PREFIX_CLAIM_LVL_CB} Critical error during level bonus claim processing: ${error.message}`, error.stack);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Server error while claiming bonus. Please try again later.", show_alert: true }).catch(() => {});
+        if (typeof notifyAdmin === 'function' && typeof escapeMarkdownV2 === 'function') {
+            notifyAdmin(`🚨 CRITICAL Error Claiming Level Bonus\nUID: ${clickerId}, LevelID Attempted: ${levelIdToClaim}\nError: ${escapeMarkdownV2(error.message)}`, { parse_mode: 'MarkdownV2' });
+        }
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
 }
 
 
