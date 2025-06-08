@@ -326,7 +326,7 @@ const REFERRAL_INITIAL_BET_TIERS_CONFIG = [
 
 const REFERRAL_WAGER_MILESTONES_USD_CONFIG = [10, 25, 50, 100, 250, 500, 1000];
 
-const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.005; // 0.5%
+const REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST = 0.05; // 5%
 // --- End of NEW Referral System Configurations ---
 // --- NEW Level Up Bonus System Configurations ---
 const LEVEL_CONFIG = [
@@ -1530,105 +1530,94 @@ $$ LANGUAGE plpgsql;`);
 // Core User Management Functions
 //---------------------------------------------------------------------------
 
+// REPLACEMENT for getOrCreateUser in Part 2
+
 // FINAL CORRECTED getOrCreateUser with Referral Linking Fix
 async function getOrCreateUser(telegramId, username = '', firstName = '', lastName = '', referrerIdInput = null) {
-    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
-        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
-        return null;
-    }
+    if (typeof telegramId === 'undefined' || telegramId === null || String(telegramId).trim() === "" || String(telegramId).toLowerCase() === "undefined") {
+        console.error(`[GetCreateUser CRITICAL] Invalid telegramId: '${telegramId}'. Aborting.`);
+        return null;
+    }
 
-    const stringTelegramId = String(telegramId).trim();
-    const LOG_PREFIX_GOCU = `[GetCreateUser_V7_FinalRefFix TG:${stringTelegramId}]`;
+    const stringTelegramId = String(telegramId).trim();
+    const LOG_PREFIX_GOCU = `[GetCreateUser_V7_FinalRefFix TG:${stringTelegramId}]`;
 
-    const sanitizeString = (str) => {
-        if (typeof str !== 'string') return null;
-        return str.replace(/[^\w\s.,!?\-#@_]/g, '').trim().substring(0, 255);
-    };
+    const sanitizeString = (str) => {
+        if (typeof str !== 'string') return null;
+        return str.replace(/[^\w\s.,!?\-#@_]/g, '').trim().substring(0, 255);
+    };
 
-    const sUsername = username ? sanitizeString(username) : null;
-    const sFirstName = firstName ? sanitizeString(firstName) : null;
-    const sLastName = lastName ? sanitizeString(lastName) : null;
+    const sUsername = username ? sanitizeString(username) : null;
+    const sFirstName = firstName ? sanitizeString(firstName) : null;
+    const sLastName = lastName ? sanitizeString(lastName) : null;
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-        let referrerId = null;
-        if (referrerIdInput) {
-            try { referrerId = BigInt(referrerIdInput); } catch (e) { referrerId = null; }
-        }
+        let referrerId = null;
+        if (referrerIdInput) {
+            try { referrerId = BigInt(referrerIdInput); } catch (e) { referrerId = null; }
+        }
 
-        let userResult = await client.query('SELECT * FROM users WHERE telegram_id = $1 FOR UPDATE', [stringTelegramId]);
-        let user;
+        let userResult = await client.query('SELECT * FROM users WHERE telegram_id = $1 FOR UPDATE', [stringTelegramId]);
+        let user;
 
-        if (userResult.rows.length > 0) {
-            // --- USER EXISTS ---
-            user = userResult.rows[0];
+        if (userResult.rows.length > 0) {
+            // --- USER EXISTS ---
+            user = userResult.rows[0];
 
-            // *** THIS IS THE CRITICAL FIX ***
-            // If user exists but has no referrer, AND a referrerId was passed in this call...
-            if (!user.referrer_telegram_id && referrerId) {
-                console.log(`${LOG_PREFIX_GOCU} Existing user detected. Assigning referrer: ${referrerId}`);
-                // 1. Update the user record with the referrer ID
-                await client.query('UPDATE users SET referrer_telegram_id = $1 WHERE telegram_id = $2', [referrerId.toString(), stringTelegramId]);
-                // 2. Create the permanent link in the referrals table
-                await client.query(
-                    `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status) VALUES ($1, $2, 'pending_qual_bet') ON CONFLICT (referred_telegram_id) DO NOTHING;`,
-                    [referrerId.toString(), stringTelegramId]
-                );
-                console.log(`${LOG_PREFIX_GOCU} SUCCESS: Referral link created in DB for existing user.`);
-            }
-            // *** END OF CRITICAL FIX ***
+            // *** FLAW REMOVED: The block that assigned a referrer to an existing user has been deleted. ***
 
-            // Standard update logic for username/name changes
-            const detailsChanged = (sUsername && user.username !== sUsername) || (sFirstName && user.first_name !== sFirstName) || (sLastName && user.last_name !== sLastName);
-            if (detailsChanged) {
-                await client.query(
-                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
-                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
-                );
-            } else {
-                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
-            }
-            
-        } else {
-            // --- NEW USER ---
-            console.log(`${LOG_PREFIX_GOCU} New user detected. Referrer ID to process: ${referrerId}`);
-            const newReferralCode = generateReferralCode();
-            const insertQuery = `INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at, referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at, current_level_id) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL) RETURNING *;`;
-            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId ? referrerId.toString() : null];
-            const insertResult = await client.query(insertQuery, values);
-            user = insertResult.rows[0];
+            // Standard update logic for username/name changes
+            const detailsChanged = (sUsername && user.username !== sUsername) || (sFirstName && user.first_name !== sFirstName) || (sLastName && user.last_name !== sLastName);
+            if (detailsChanged) {
+                await client.query(
+                    'UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP, username = $2, first_name = $3, last_name = $4, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1',
+                    [stringTelegramId, sUsername || user.username, sFirstName || user.first_name, sLastName || user.last_name]
+                );
+            } else {
+                await client.query('UPDATE users SET last_active_timestamp = CURRENT_TIMESTAMP WHERE telegram_id = $1', [stringTelegramId]);
+            }
+            
+        } else {
+            // --- NEW USER ---
+            console.log(`${LOG_PREFIX_GOCU} New user detected. Referrer ID to process: ${referrerId}`);
+            const newReferralCode = generateReferralCode();
+            const insertQuery = `INSERT INTO users (telegram_id, username, first_name, last_name, balance, referral_code, referrer_telegram_id, last_active_timestamp, created_at, updated_at, referral_count, total_referral_earnings_paid_lamports, first_bet_placed_at, current_level_id) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, NULL, NULL) RETURNING *;`;
+            const values = [stringTelegramId, sUsername, sFirstName, sLastName, DEFAULT_STARTING_BALANCE_LAMPORTS.toString(), newReferralCode, referrerId ? referrerId.toString() : null];
+            const insertResult = await client.query(insertQuery, values);
+            user = insertResult.rows[0];
 
-            if (referrerId) {
-                console.log(`${LOG_PREFIX_GOCU} New user created with referrer. Inserting into 'referrals' table.`);
-                await client.query(
-                    `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status) VALUES ($1, $2, 'pending_qual_bet') ON CONFLICT (referred_telegram_id) DO NOTHING;`,
-                    [referrerId.toString(), stringTelegramId]
-                );
-            }
-        }
-        
-        await client.query('COMMIT');
-        
-        // Return a fresh, complete user object
-        const finalUserResult = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
-        const finalUser = finalUserResult.rows[0];
-        // Re-parse all BigInt fields before returning
-        Object.keys(finalUser).forEach(key => {
-            if (key.includes('lamports') || key === 'balance') {
-                finalUser[key] = BigInt(finalUser[key] || '0');
-            }
-        });
-        return finalUser;
+            if (referrerId) {
+                console.log(`${LOG_PREFIX_GOCU} New user created with referrer. Inserting into 'referrals' table.`);
+                await client.query(
+                    `INSERT INTO referrals (referrer_telegram_id, referred_telegram_id, status) VALUES ($1, $2, 'pending_qual_bet') ON CONFLICT (referred_telegram_id) DO NOTHING;`,
+                    [referrerId.toString(), stringTelegramId]
+                );
+            }
+        }
+        
+        await client.query('COMMIT');
+        
+        // Return a fresh, complete user object
+        const finalUserResult = await client.query('SELECT * FROM users WHERE telegram_id = $1', [stringTelegramId]);
+        const finalUser = finalUserResult.rows[0];
+        // Re-parse all BigInt fields before returning
+        Object.keys(finalUser).forEach(key => {
+            if (key.includes('lamports') || key === 'balance') {
+                finalUser[key] = BigInt(finalUser[key] || '0');
+            }
+        });
+        return finalUser;
 
-    } catch (error) {
-        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
-        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser: ${error.message} (SQL State: ${error.code})`, error.stack);
-        return null;
-    } finally {
-        client.release();
-    }
+    } catch (error) {
+        await client.query('ROLLBACK').catch(rbErr => console.error(`${LOG_PREFIX_GOCU} Rollback error: ${rbErr.message}`));
+        console.error(`${LOG_PREFIX_GOCU} Error in getOrCreateUser: ${error.message} (SQL State: ${error.code})`, error.stack);
+        return null;
+    } finally {
+        client.release();
+    }
 }
 
 async function updateUserActivity(telegramId) {
@@ -2710,17 +2699,17 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, jobsQueued: number, error?: string}>}
  */
-// REPLACEMENT for processWagerMilestoneBonus in Part 3
 
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred, solPrice) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V8_AsyncJob UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PWM = `[ProcessWagerRebate_V1 UID:${stringReferredUserId}]`;
     let jobsQueued = 0;
 
+    const WAGER_INTERVAL_USD = 50.00; // The $50 block interval
+
     try {
-        // Lock the referral row to prevent concurrent milestone processing for the same user
         const referralLinkDetailsRes = await dbClient.query(
-            `SELECT referral_id, referrer_telegram_id, referred_user_wager_milestones_achieved FROM referrals r WHERE r.referred_telegram_id = $1 FOR UPDATE`,
+            `SELECT referral_id, referrer_telegram_id, last_milestone_bonus_check_wager_lamports FROM referrals r WHERE r.referred_telegram_id = $1 FOR UPDATE`,
             [stringReferredUserId]
         );
 
@@ -2730,60 +2719,56 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
 
         const referralLink = referralLinkDetailsRes.rows[0];
         const referrerId = String(referralLink.referrer_telegram_id);
-        let achievedMilestonesData = referralLink.referred_user_wager_milestones_achieved || {};
+        const lastPaidOutWagerLamports = BigInt(referralLink.last_milestone_bonus_check_wager_lamports || '0');
         
         if (!solPrice || solPrice <= 0) {
-             console.warn(`${LOG_PREFIX_PWM} Invalid SOL price provided (${solPrice}). Skipping milestone check.`);
-             return { success: true, jobsQueued: 0 };
+            console.warn(`${LOG_PREFIX_PWM} Invalid SOL price provided (${solPrice}). Skipping wager rebate check.`);
+            return { success: true, jobsQueued: 0 };
         }
 
-        const totalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
-        let milestonesUpdated = false;
+        const lastPaidOutWagerUSD = Number(lastPaidOutWagerLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+        const newTotalWageredUSD = Number(newTotalWageredLamportsByReferred) / Number(LAMPORTS_PER_SOL) * solPrice;
 
-        for (const milestoneUSD of REFERRAL_WAGER_MILESTONES_USD_CONFIG) {
-            const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
-            
-            if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
-                // --- THIS IS THE CORRECTED CALCULATION ---
-                const bonusInUSD = milestoneUSD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST;
-                const milestoneBonusAmountLamports = convertUSDToLamports(bonusInUSD, solPrice);
-                // --- END OF CORRECTION ---
+        const chunksAlreadyPaid = Math.floor(lastPaidOutWagerUSD / WAGER_INTERVAL_USD);
+        const chunksNowDue = Math.floor(newTotalWageredUSD / WAGER_INTERVAL_USD);
+        
+        const newChunksToPay = chunksNowDue - chunksAlreadyPaid;
 
-                if (milestoneBonusAmountLamports > 0n) {
-                    const jobPayload = {
-                        targetUserId: referrerId,
-                        amountLamports: milestoneBonusAmountLamports.toString(),
-                        transactionType: 'referral_milestone_bonus',
-                            referralId: referralLink.referral_id, 
-                            milestoneKey: milestoneKey, 
-                        notes: `Wager Milestone Bonus ($${milestoneUSD}) from referred user ${stringReferredUserId}.`
-                    };
+        if (newChunksToPay > 0) {
+            const bonusPerChunkUSD = WAGER_INTERVAL_USD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST; // $50 * 5% = $2.50
+            const totalBonusUSD = newChunksToPay * bonusPerChunkUSD;
+            const totalBonusLamports = convertUSDToLamports(totalBonusUSD, solPrice);
 
-                    await dbClient.query(
-                        `INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`,
-                        [jobPayload]
-                    );
-                    jobsQueued++;
-                    console.log(`${LOG_PREFIX_PWM} Queued $${milestoneUSD} milestone bonus job for referrer ${referrerId}.`);
-                }
+            if (totalBonusLamports > 0n) {
+                const jobPayload = {
+                    targetUserId: referrerId,
+                    amountLamports: totalBonusLamports.toString(),
+                    transactionType: 'referral_wager_rebate', 
+                    referralId: referralLink.referral_id,
+                    notes: `Referral Wager Rebate for ${newChunksToPay} x $${WAGER_INTERVAL_USD.toFixed(2)} block(s) from user ${stringReferredUserId}.`
+                };
 
-                achievedMilestonesData[milestoneKey] = new Date().toISOString();
-                milestonesUpdated = true;
+                await dbClient.query(
+                    `INSERT INTO background_jobs (job_type, payload) VALUES ('credit_user_balance', $1)`,
+                    [jobPayload]
+                );
+                jobsQueued++;
+                console.log(`${LOG_PREFIX_PWM} Queued ${newChunksToPay} wager rebate chunk(s) for referrer ${referrerId}.`);
             }
-        }
 
-        if (milestonesUpdated) {
+            const newWagerLevelPaidOutUSD = chunksNowDue * WAGER_INTERVAL_USD;
+            const newWagerLevelPaidOutLamports = convertUSDToLamports(newWagerLevelPaidOutUSD, solPrice);
+
             await dbClient.query(
-                `UPDATE referrals SET referred_user_wager_milestones_achieved = $1, last_milestone_bonus_check_wager_lamports = $2 WHERE referral_id = $3;`,
-                [achievedMilestonesData, newTotalWageredLamportsByReferred.toString(), referralLink.referral_id]
+                `UPDATE referrals SET last_milestone_bonus_check_wager_lamports = $1 WHERE referral_id = $2;`,
+                [newWagerLevelPaidOutLamports.toString(), referralLink.referral_id]
             );
         }
         
         return { success: true, jobsQueued };
 
     } catch (error) {
-        console.error(`${LOG_PREFIX_PWM} Error processing wager milestone bonuses: ${error.message}`, error.stack);
-        // Do not throw; allow the main transaction to continue.
+        console.error(`${LOG_PREFIX_PWM} Error processing wager rebate bonuses: ${error.message}`, error.stack);
         return { success: false, jobsQueued: 0, error: error.message };
     }
 }
@@ -2849,6 +2834,8 @@ async function handleClaimMilestoneBonus(userIdClicking, commissionReferralId, d
 let isJobProcessorRunning = false; // Prevents the processor from running concurrently
 const JOB_PROCESSOR_INTERVAL_MS = 10000; // Run every 10 seconds
 const MAX_JOB_ATTEMPTS = 3; // Max number of times a job will be attempted
+
+// REPLACEMENT for processBackgroundJobs in Part 3
 
 async function processBackgroundJobs() {
     if (isShuttingDown) return;
@@ -2944,17 +2931,50 @@ async function processBackgroundJobs() {
                     throw new Error(creditResult.error || 'Failed to apply credit within updateUserBalanceAndLedger.');
                 }
                 
-                        // --- FIX IS HERE: The message is restructured to be simpler for MarkdownV2 ---
-                const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
+                        const bonusAmountUSDDisplay = await formatBalanceForDisplay(amountLamports, 'USD');
                 const bonusAmountSOLDisplay = formatCurrency(amountLamports, 'SOL');
+                        let notificationMessage = '';
 
-                        const successMessage = `🎉 *Bonus Received\\!* 🎉\n\n` +
-                            `A bonus has been credited to your casino balance\\.\n\n` +
-                            `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
-                            `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+                        if (transactionType === 'referral_commission_credit' && notes) {
+                            const referredUserIdMatch = notes.match(/from user (\d+)/);
+                            let referredUserDisplay = "your referred friend";
+                            if (referredUserIdMatch && referredUserIdMatch[1]) {
+                                const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
+                                if (referredUser) {
+                                    referredUserDisplay = getPlayerDisplayReference(referredUser); // This is already MDV2 safe
+                                }
+                            }
+                            notificationMessage = `🎉 *Initial Bet Bonus\\!* 🎉\n\n` +
+                                                `Your referred friend, ${referredUserDisplay}, just made their first qualifying bet\\! As a reward, we've added a bonus to your balance\\.\n\n` +
+                                                `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
+                                                `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+
+                        } else if (transactionType === 'referral_milestone_bonus' && notes) {
+                            const referredUserIdMatch = notes.match(/from referred user (\d+)/);
+                            const milestoneMatch = notes.match(/\(\$(\d+(\.\d+)?)\)/); // Handle decimals in milestone
+                            let referredUserDisplay = "Your referred friend";
+                            if (referredUserIdMatch && referredUserIdMatch[1]) {
+                                const referredUser = await getOrCreateUser(referredUserIdMatch[1]);
+                                if (referredUser) {
+                                    referredUserDisplay = getPlayerDisplayReference(referredUser);
+                                }
+                            }
+                            const milestoneDisplay = milestoneMatch ? `$${milestoneMatch[1]}` : "a new";
+
+                            notificationMessage = `🏆 *Referral Milestone Bonus\\!* 🏆\n\n` +
+                                                `Congratulations\\! ${referredUserDisplay} has reached the *${escapeMarkdownV2(milestoneDisplay)}* wager milestone\\! For their dedication, you've been awarded a bonus\\.\n\n` +
+                                                `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
+                                                `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+                        } else {
+                            // Fallback for other credit types
+                            notificationMessage = `🎉 *Bonus Received\\!* 🎉\n\n` +
+                                                `A bonus has been credited to your casino balance\\.\n\n` +
+                                                `*Amount:* ~${escapeMarkdownV2(bonusAmountUSDDisplay)}\n` +
+                                                `*Equivalent:* ${escapeMarkdownV2(bonusAmountSOLDisplay)}`;
+                        }
 
                 await safeSendMessage(targetUserId,
-                    successMessage,
+                    notificationMessage,
                     { parse_mode: 'MarkdownV2' }
                 );
             }
