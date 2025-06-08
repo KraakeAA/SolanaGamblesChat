@@ -2710,6 +2710,8 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
  * @param {bigint} newTotalWageredLamportsByReferred - The new total wagered amount by the referred user.
  * @returns {Promise<{success: boolean, jobsQueued: number, error?: string}>}
  */
+// REPLACEMENT for processWagerMilestoneBonus in Part 3
+
 async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newTotalWageredLamportsByReferred, solPrice) {
     const stringReferredUserId = String(referredUserTelegramId);
     const LOG_PREFIX_PWM = `[ProcessWagerMilestone_V8_AsyncJob UID:${stringReferredUserId}]`;
@@ -2742,17 +2744,18 @@ async function processWagerMilestoneBonus(dbClient, referredUserTelegramId, newT
             const milestoneKey = `${milestoneUSD}_USD_WAGERED`;
             
             if (totalWageredUSD >= milestoneUSD && !achievedMilestonesData[milestoneKey]) {
-                const milestoneBonusAmountLamports = BigInt(Math.floor(milestoneUSD * solPrice * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST));
+                // --- THIS IS THE CORRECTED CALCULATION ---
+                const bonusInUSD = milestoneUSD * REFERRAL_WAGER_MILESTONE_BONUS_PERCENTAGE_CONST;
+                const milestoneBonusAmountLamports = convertUSDToLamports(bonusInUSD, solPrice);
+                // --- END OF CORRECTION ---
 
                 if (milestoneBonusAmountLamports > 0n) {
-                    // --- THIS IS THE KEY CHANGE ---
-                    // Queue a job instead of paying directly, now with more detailed payload.
                     const jobPayload = {
                         targetUserId: referrerId,
                         amountLamports: milestoneBonusAmountLamports.toString(),
                         transactionType: 'referral_milestone_bonus',
-                            referralId: referralLink.referral_id, // Add unique referral ID
-                            milestoneKey: milestoneKey, // Add unique milestone key
+                            referralId: referralLink.referral_id, 
+                            milestoneKey: milestoneKey, 
                         notes: `Wager Milestone Bonus ($${milestoneUSD}) from referred user ${stringReferredUserId}.`
                     };
 
