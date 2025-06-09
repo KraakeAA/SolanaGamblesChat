@@ -249,24 +249,25 @@ const GAME_IDS = {
     SLOT_FRENZY: 'slotfrenzy',
     MINES: 'mines',
     MINES_OFFER: 'mines_offer',
+    // Original Interactive Games
     BOWLING: 'bowling',
     DARTS: 'darts',
     BASKETBALL: 'basketball',
 
-    DIRECT_PVP_CHALLENGE: 'direct_pvp_challenge',
-    BOWLING_DUEL: 'bowling_duel',
-    BOWLING_DUEL_PVB: 'bowling_duel_pvb',
+    // --- NEW PvP DUEL GAMES ---
+    BOWLING_DUEL: 'bowling_duel', // The PvB version of the new mechanic
     BOWLING_DUEL_PVP: 'bowling_duel_pvp',
     BOWLING_DUEL_DIRECT_CHALLENGE_OFFER: 'bowling_duel_direct_challenge_offer',
 
-    DARTS_DUEL: 'darts_duel',
     DARTS_DUEL_PVP: 'darts_duel_pvp',
     DARTS_DUEL_DIRECT_CHALLENGE_OFFER: 'darts_duel_direct_challenge_offer',
 
-    BASKETBALL_CLASH: 'basketball_clash',
     BASKETBALL_CLASH_PVP: 'basketball_clash_pvp',
     BASKETBALL_CLASH_DIRECT_CHALLENGE_OFFER: 'basketball_clash_direct_challenge_offer',
+    
+    DIRECT_PVP_CHALLENGE: 'direct_pvp_challenge',
 };
+    
 
 // Game Specific Constants
 const DICE_21_TARGET_SCORE = parseInt(process.env.DICE_21_TARGET_SCORE, 10);
@@ -15563,29 +15564,20 @@ async function handleClaimLevelBonusCallback(callbackQuery, userWhoClicked, orig
 
 // --- Centralized Handler for Direct Challenge Responses (Accept/Decline/Cancel) ---
 // --- START OF FULL REPLACEMENT for handleDirectChallengeResponse function ---
-// REPLACE your existing handleDirectChallengeResponse function with this:
+// REPLACE your existing handleDirectChallengeResponse function with this complete and final version.
 async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj, originalMessageIdInGroupStr, originalChatIdFromGroupStr, originalChatTypeFromGroup, callbackQueryId) {
     const clickerId = String(clickerUserObj.id || clickerUserObj.telegram_id);
     const originalMessageIdInGroup = Number(originalMessageIdInGroupStr);
     const originalChatIdFromGroup = String(originalChatIdFromGroupStr);
-    const logPrefix = `[DirectChalResp_V9_Full GID:${offerId} Clicker:${clickerId} Act:${actionName}]`;
-
-    console.log(`${logPrefix} Processing direct challenge response. Action: ${actionName}, OfferID: ${offerId}`);
+    const logPrefix = `[DirectChalResp_V_FINAL GID:${offerId} Clicker:${clickerId} Act:${actionName}]`;
 
     const offerData = activeGames.get(offerId);
 
-    if (!offerData) {
-        console.warn(`${logPrefix} Offer ID ${offerId} not found in activeGames. It may have already been processed or expired.`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge has expired or is no longer valid.", show_alert: true }).catch(() => {});
+    if (!offerData || offerData.type !== GAME_IDS.DIRECT_PVP_CHALLENGE || offerData.status !== 'pending_direct_challenge_response') {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge is no longer valid.", show_alert: true }).catch(() => {});
         if (originalMessageIdInGroup && bot) {
             bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: originalMessageIdInGroup }).catch(() => {});
         }
-        return;
-    }
-
-    if (offerData.type !== GAME_IDS.DIRECT_PVP_CHALLENGE || offerData.status !== 'pending_direct_challenge_response') {
-        console.warn(`${logPrefix} Offer ${offerId} is not a pending direct PvP challenge. Status: ${offerData.status}, Type: ${offerData.type}`);
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge is not in a valid state to respond to.", show_alert: true }).catch(() => {});
         return;
     }
 
@@ -15624,7 +15616,6 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             gameDisplayNameForMessages = "Duel";
             specificPvPGameStarterFunction = startDuelPvPGameSequence;
             break;
-        // --- NEW CASES FOR NEW GAMES ---
         case GAME_IDS.BOWLING_DUEL_PVP:
             pendingDirectChallengeOfferKeyUsed = GAME_IDS.BOWLING_DUEL_DIRECT_CHALLENGE_OFFER;
             gameDisplayNameForMessages = "Bowling Duel";
@@ -15647,215 +15638,147 @@ async function handleDirectChallengeResponse(actionName, offerId, clickerUserObj
             return;
     }
 
-    if (offerData._offerKeyUsedForGroupLock && offerData._offerKeyUsedForGroupLock !== pendingDirectChallengeOfferKeyUsed) {
-        console.warn(`${logPrefix} Discrepancy detected! Derived group lock key '${pendingDirectChallengeOfferKeyUsed}' differs from stored key '${offerData._offerKeyUsedForGroupLock}'. Using derived key for removal.`);
-    } else if (!offerData._offerKeyUsedForGroupLock) {
-        console.warn(`${logPrefix} _offerKeyUsedForGroupLock was missing in offerData. Derived key for removal: ${pendingDirectChallengeOfferKeyUsed}.`);
-    }
-
-    const activeGameKeyForNewLimitCheck = offerData.gameToStart;
-
     const initiatorUserObjFull = offerData.initiatorUserObj;
     const targetUserObjFull = offerData.targetUserObj;
     const initiatorMentionHTML = offerData.initiatorMentionHTML || escapeHTML(getPlayerDisplayReference(initiatorUserObjFull));
     const targetMentionHTML = offerData.targetUserMentionHTML || escapeHTML(getPlayerDisplayReference(targetUserObjFull));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
+    const betDisplayUSD_HTML = await formatBalanceForDisplay(offerData.betAmount, 'USD');
 
     if (!initiatorUserObjFull || !targetUserObjFull || !targetUserObjFull.telegram_id) {
         console.error(`${logPrefix} Critical: Missing initiator or target user object details in offerData for ${offerId}.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Player details missing for challenge.", show_alert: true });
         activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
         if (bot && offerData.offerMessageIdInGroup) {
             bot.editMessageText("Error processing challenge: Player details missing. Offer cancelled.", { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(() => {});
         }
         return;
     }
 
-    const actionType = actionName.split(':')[0];
+    // --- ACCEPT LOGIC ---
+    if (actionName.endsWith('_accept')) {
+        if (clickerId !== String(offerData.targetUserId)) {
+            await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true });
+            return;
+        }
 
-    switch (actionType) {
-        // --- UPDATED ACCEPT CASES ---
-        case 'cf_direct_accept':
-        case 'rps_direct_accept':
-        case 'de_direct_accept':
-        case 'd21_direct_accept':
-        case 'duel_direct_accept':
-        case 'bowlingduel_direct_accept':
-        case 'dartsduel_direct_accept':
-        case 'hoopsclash_direct_accept':
-            if (clickerId !== String(offerData.targetUserId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true });
-                return;
-            }
+        const activeUserGameCheckForAccept = await checkUserActiveGameLimit(clickerId, false, offerId);
+        if (activeUserGameCheckForAccept.limitReached) {
+            const userDisplayName = escapeHTML(getPlayerDisplayReference(clickerUserObj));
+            const cleanGameName = getCleanGameName(activeUserGameCheckForAccept.details.type);
+            await bot.answerCallbackQuery(callbackQueryId, { text: `✨ ${userDisplayName}, you're already in a game of ${escapeHTML(cleanGameName)}. Finish it first!`, show_alert: true });
+            return;
+        }
 
-            const activeUserGameCheckForAccept = await checkUserActiveGameLimit(clickerId, false, offerId);
-            if (activeUserGameCheckForAccept.limitReached) {
-                const userDisplayName = escapeHTML(getPlayerDisplayReference(clickerUserObj));
-                const cleanGameName = getCleanGameName(activeUserGameCheckForAccept.details.type);
-                let alertMessage = `✨ ${userDisplayName}, you're already in a game of ${escapeHTML(cleanGameName)}. Finish it first!`;
-                await bot.answerCallbackQuery(callbackQueryId, { text: alertMessage.substring(0, 200), show_alert: true });
-                return;
-            }
-            
-            const gameSession = await getGroupSession(originalChatIdFromGroup);
-            const currentActiveGamesOfThisType = gameSession.activeGamesByTypeInGroup.get(activeGameKeyForNewLimitCheck) || [];
-            const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyForNewLimitCheck] || 1;
+        const gameSession = await getGroupSession(originalChatIdFromGroup);
+        const activeGameKeyForNewLimitCheck = offerData.gameToStart;
+        const currentActiveGamesOfThisType = gameSession.activeGamesByTypeInGroup.get(activeGameKeyForNewLimitCheck) || [];
+        const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyForNewLimitCheck] || 1;
 
-            if (currentActiveGamesOfThisType.length >= limitActive) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: `Cannot accept now. Max ${limitActive} active ${gameDisplayNameForMessages} (from Direct Challenge) game(s) allowed in this group. Please wait.`, show_alert: true });
-                return;
-            }
-            await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting ${gameDisplayNameForMessages} challenge... Verifying...` });
+        if (currentActiveGamesOfThisType.length >= limitActive) {
+            await bot.answerCallbackQuery(callbackQueryId, { text: `Cannot accept now. Max ${limitActive} active ${gameDisplayNameForMessages} games allowed here. Please wait.`, show_alert: true });
+            return;
+        }
 
-            const freshInitiator = await getOrCreateUser(offerData.initiatorId);
-            const freshTarget = await getOrCreateUser(offerData.targetUserId);
+        await bot.answerCallbackQuery(callbackQueryId, { text: `Accepting ${gameDisplayNameForMessages} challenge... Verifying...` });
 
-            if (!freshInitiator || !freshTarget) {
-                console.error(`${logPrefix} Failed to fetch fresh user details for challenge ${offerId}.`);
-                await safeSendMessage(originalChatIdFromGroup, `⚙️ Error fetching player details for the challenge. Please try again.`, { parse_mode: 'HTML' });
-                return; 
-            }
-            if (BigInt(freshTarget.balance) < offerData.betAmount) {
-                await safeSendMessage(originalChatIdFromGroup, `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}. Challenge cancelled. Initiator's bet refunded.`, { parse_mode: 'HTML' });
-                if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
-                let refundClientNoFunds = null;
-                try {
-                    refundClientNoFunds = await pool.connect(); await refundClientNoFunds.query('BEGIN');
-                    await updateUserBalanceAndLedger(refundClientNoFunds, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_target_low_funds', {custom_offer_id: offerId}, `Direct challenge ${offerId} cancelled, target low funds.`);
-                    await refundClientNoFunds.query('COMMIT');
-                } catch (e) { if(refundClientNoFunds) await refundClientNoFunds.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL (target low funds) for ${offerId}: ${e.message}`);}
-                finally { if(refundClientNoFunds) refundClientNoFunds.release(); }
-                return;
-            }
-             if (BigInt(freshInitiator.balance) < 0n && (BigInt(freshInitiator.balance) + offerData.betAmount < 0n) ) {
-                await safeSendMessage(originalChatIdFromGroup, `⚠️ Challenge from ${initiatorMentionHTML} to ${targetMentionHTML} for ${gameDisplayNameForMessages} (<b>${betDisplayUSD_HTML}</b>) is void. ${initiatorMentionHTML}'s account cannot cover their prior commitment. Original bet (if successfully placed) is being refunded.`, { parse_mode: 'HTML' });
-                if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
-                return;
-            }
-
-            let clientAccept = null;
-            let newPvPGameId; 
-            try {
-                clientAccept = await pool.connect(); await clientAccept.query('BEGIN');
-                const targetBetRes = await updateUserBalanceAndLedger(clientAccept, offerData.targetUserId, BigInt(-offerData.betAmount), `bet_placed_${offerData.gameToStart.toLowerCase()}_direct_join`, { game_id_custom_field: offerId , opponent_id_custom_field: offerData.initiatorId }, `Direct PvP bet vs ${initiatorMentionHTML} for ${offerData.gameToStart}`);
-                if (!targetBetRes.success) throw new Error(targetBetRes.error || "Failed to deduct target's bet.");
-                freshTarget.balance = targetBetRes.newBalanceLamports;
-                await clientAccept.query('COMMIT');
-
-                activeGames.delete(offerId);
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
-                console.log(`${logPrefix} Removed offer ${offerId} from group lock (key: ${pendingDirectChallengeOfferKeyUsed}) as it was accepted.`);
-
-                const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\nA <b>${gameDisplayNameForMessages}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
-                if (bot && offerData.offerMessageIdInGroup) {
-                    await bot.editMessageText(acceptedMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
-                        console.warn(`${logPrefix} Could not edit offer message ${offerData.offerMessageIdInGroup} after acceptance: ${e.message}`);
-                        safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' }); 
-                    });
-                } else { await safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' }); }
-
-                if (typeof specificPvPGameStarterFunction !== 'function') {
-                    throw new Error(`PvP starter function for ${offerData.gameToStart} is not defined.`);
-                }
-
-                newPvPGameId = generateGameId(offerData.gameToStart); 
-
-                // Handle functions with different signatures
-                if (offerData.gameToStart === GAME_IDS.DICE_21_PVP || offerData.gameToStart === GAME_IDS.DUEL_PVP || offerData.gameToStart === GAME_IDS.BOWLING_DUEL_PVP || offerData.gameToStart === GAME_IDS.DARTS_DUEL_PVP || offerData.gameToStart === GAME_IDS.BASKETBALL_CLASH_PVP) {
-                    await specificPvPGameStarterFunction(newPvPGameId, freshInitiator, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
-                } else {
-                    await specificPvPGameStarterFunction(freshInitiator, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
-                }
-
-            } catch (e) {
-                if (clientAccept) await clientAccept.query('ROLLBACK').catch(()=>{});
-                console.error(`${logPrefix} Error accepting direct challenge or starting PvP game: ${e.message}`);
-                await safeSendMessage(originalChatIdFromGroup, `⚙️ Error processing challenge acceptance: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
-                activeGames.delete(offerId); 
-                await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
-                let refundClientCatch = null;
-                try {
-                    refundClientCatch = await pool.connect(); await refundClientCatch.query('BEGIN');
-                    await updateUserBalanceAndLedger(refundClientCatch, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_accept_sys_error', {custom_offer_id: offerId}, `Direct challenge ${offerId} accept phase system error.`);
-                    await refundClientCatch.query('COMMIT');
-                } catch (refErr) { if(refundClientCatch) await refundClientCatch.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL (sys error) for ${offerId}: ${refErr.message}`);}
-                finally { if(refundClientCatch) refundClientCatch.release(); }
-            } finally {
-                if (clientAccept) clientAccept.release();
-            }
-            break;
-            
-        // --- UPDATED DECLINE CASES ---
-        case 'cf_direct_decline':
-        case 'rps_direct_decline':
-        case 'de_direct_decline':
-        case 'd21_direct_decline':
-        case 'duel_direct_decline':
-        case 'bowlingduel_direct_decline':
-        case 'dartsduel_direct_decline':
-        case 'hoopsclash_direct_decline':
-            if (clickerId !== String(offerData.targetUserId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not addressed to you.", show_alert: true }); return;
-            }
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." });
+        const freshTarget = await getOrCreateUser(offerData.targetUserId);
+        if (BigInt(freshTarget.balance) < offerData.betAmount) {
+            await safeSendMessage(originalChatIdFromGroup, `⚠️ ${targetMentionHTML}, your balance is too low (needs <b>${betDisplayUSD_HTML}</b>) to accept. Challenge cancelled & bet refunded.`, { parse_mode: 'HTML' });
+            if (bot && offerData.offerMessageIdInGroup) bot.editMessageReplyMarkup({}, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup) }).catch(() => {});
             activeGames.delete(offerId);
             await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
-            console.log(`${logPrefix} Removed offer ${offerId} from group lock (key: ${pendingDirectChallengeOfferKeyUsed}) as it was declined.`);
-            let refundClientDec = null;
+            let refundClient = null;
             try {
-                refundClientDec = await pool.connect(); await refundClientDec.query('BEGIN');
-                await updateUserBalanceAndLedger(refundClientDec, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_declined', {custom_offer_id: offerId}, `Direct challenge ${offerId} declined by target.`);
-                await refundClientDec.query('COMMIT');
-            } catch (e) { if(refundClientDec) await refundClientDec.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL on decline for ${offerId}: ${e.message}`);}
-            finally { if(refundClientDec) refundClientDec.release(); }
-            const declineMsgHTML = `🚫 ${targetMentionHTML} has declined the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML} for <b>${betDisplayUSD_HTML}</b>. Initiator's bet refunded.`;
-            if (bot && offerData.offerMessageIdInGroup) {
-                await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
-                    console.warn(`${logPrefix} Could not edit offer message ${offerData.offerMessageIdInGroup} after decline: ${e.message}`);
-                    safeSendMessage(originalChatIdFromGroup, declineMsgHTML, { parse_mode: 'HTML' }); 
-                });
-            } else { await safeSendMessage(originalChatIdFromGroup, declineMsgHTML, { parse_mode: 'HTML' }); }
-            break;
+                refundClient = await pool.connect(); await refundClient.query('BEGIN');
+                await updateUserBalanceAndLedger(refundClient, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_target_low_funds', {custom_offer_id: offerId});
+                await refundClient.query('COMMIT');
+            } catch (e) { if(refundClient) await refundClient.query('ROLLBACK'); } finally { if(refundClient) refundClient.release(); }
+            return;
+        }
 
-        // --- UPDATED CANCEL CASES ---
-        case 'cf_direct_cancel':
-        case 'rps_direct_cancel':
-        case 'de_direct_cancel':
-        case 'd21_direct_cancel':
-        case 'duel_direct_cancel':
-        case 'bowlingduel_direct_cancel':
-        case 'dartsduel_direct_cancel':
-        case 'hoopsclash_direct_cancel':
-            if (clickerId !== String(offerData.initiatorId)) {
-                await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can cancel this challenge.", show_alert: true }); return;
-            }
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." });
+        let clientAccept = null;
+        try {
+            clientAccept = await pool.connect(); await clientAccept.query('BEGIN');
+            const targetBetRes = await updateUserBalanceAndLedger(clientAccept, offerData.targetUserId, BigInt(-offerData.betAmount), `bet_placed_${offerData.gameToStart.toLowerCase()}_direct_join`, { game_id_custom_field: offerId, opponent_id_custom_field: offerData.initiatorId });
+            if (!targetBetRes.success) throw new Error(targetBetRes.error || "Failed to deduct target's bet.");
+            freshTarget.balance = targetBetRes.newBalanceLamports;
+            await clientAccept.query('COMMIT');
+
             activeGames.delete(offerId);
             await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
-            console.log(`${logPrefix} Removed offer ${offerId} from group lock (key: ${pendingDirectChallengeOfferKeyUsed}) as it was cancelled by initiator.`);
-            let refundClientCan = null;
+
+            const acceptedMsgHTML = `✅ Challenge Accepted by ${targetMentionHTML}!\nA <b>${gameDisplayNameForMessages}</b> duel between ${initiatorMentionHTML} and ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b> is starting...`;
+            await bot.editMessageText(acceptedMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
+                safeSendMessage(originalChatIdFromGroup, acceptedMsgHTML, { parse_mode: 'HTML' });
+            });
+
+            if (typeof specificPvPGameStarterFunction !== 'function') {
+                throw new Error(`PvP starter function for ${offerData.gameToStart} is not defined.`);
+            }
+
+            const pvpGameId = generateGameId(offerData.gameToStart);
+            await specificPvPGameStarterFunction(pvpGameId, initiatorUserObjFull, freshTarget, offerData.betAmount, originalChatIdFromGroup, originalChatTypeFromGroup, null, 'direct_challenge');
+
+        } catch (e) {
+            if (clientAccept) await clientAccept.query('ROLLBACK');
+            console.error(`${logPrefix} Error accepting challenge: ${e.message}`);
+            await safeSendMessage(originalChatIdFromGroup, `⚙️ Error processing acceptance: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+            activeGames.delete(offerId);
+            await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
+            let refundClient = null;
             try {
-                refundClientCan = await pool.connect(); await refundClientCan.query('BEGIN');
-                await updateUserBalanceAndLedger(refundClientCan, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_cancelled', {custom_offer_id: offerId}, `Direct challenge ${offerId} cancelled by initiator.`);
-                await refundClientCan.query('COMMIT');
-            } catch (e) { if(refundClientCan) await refundClientCan.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL on cancel for ${offerId}: ${e.message}`); }
-            finally { if(refundClientCan) refundClientCan.release(); }
-            const cancelMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${gameDisplayNameForMessages} challenge to ${targetMentionHTML} for <b>${betDisplayUSD_HTML}</b>. Bet refunded.`;
-            if (bot && offerData.offerMessageIdInGroup) {
-                await bot.editMessageText(cancelMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(e => {
-                    console.warn(`${logPrefix} Could not edit offer message ${offerData.offerMessageIdInGroup} after cancellation: ${e.message}`);
-                    safeSendMessage(originalChatIdFromGroup, cancelMsgHTML, { parse_mode: 'HTML' }); 
-                });
-            } else { await safeSendMessage(originalChatIdFromGroup, cancelMsgHTML, { parse_mode: 'HTML' }); }
-            break;
-            
-        default:
-            await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false });
+                refundClient = await pool.connect(); await refundClient.query('BEGIN');
+                await updateUserBalanceAndLedger(refundClient, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_accept_sys_error', {custom_offer_id: offerId});
+                await refundClient.query('COMMIT');
+            } catch (refErr) { if(refundClient) await refundClient.query('ROLLBACK'); } finally { if(refundClient) refundClient.release(); }
+        } finally {
+            if (clientAccept) clientAccept.release();
+        }
+
+    // --- DECLINE LOGIC ---
+    } else if (actionName.endsWith('_decline')) {
+        if (clickerId !== String(offerData.targetUserId)) {
+            await bot.answerCallbackQuery(callbackQueryId, { text: "This challenge was not for you.", show_alert: true });
+            return;
+        }
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge declined." });
+        activeGames.delete(offerId);
+        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
+        
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_declined', {custom_offer_id: offerId});
+            await refundClient.query('COMMIT');
+        } catch (e) { if(refundClient) await refundClient.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL on decline: ${e.message}`);}
+        finally { if(refundClient) refundClient.release(); }
+        
+        const declineMsgHTML = `🚫 ${targetMentionHTML} has declined the ${gameDisplayNameForMessages} challenge from ${initiatorMentionHTML}. Bet refunded.`;
+        await bot.editMessageText(declineMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{});
+
+    // --- CANCEL LOGIC ---
+    } else if (actionName.endsWith('_cancel')) {
+        if (clickerId !== String(offerData.initiatorId)) {
+            await bot.answerCallbackQuery(callbackQueryId, { text: "Only the initiator can cancel.", show_alert: true });
+            return;
+        }
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Challenge withdrawn." });
+        activeGames.delete(offerId);
+        await updateGroupGameDetails(originalChatIdFromGroup, { removeThisId: offerId }, pendingDirectChallengeOfferKeyUsed, null);
+        
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect(); await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, offerData.initiatorId, offerData.betAmount, 'refund_direct_challenge_cancelled', {custom_offer_id: offerId});
+            await refundClient.query('COMMIT');
+        } catch (e) { if(refundClient) await refundClient.query('ROLLBACK'); console.error(`${logPrefix} REFUND FAIL on cancel: ${e.message}`);}
+        finally { if(refundClient) refundClient.release(); }
+
+        const cancelMsgHTML = `🚫 ${initiatorMentionHTML} has withdrawn their ${gameDisplayNameForMessages} challenge. Bet refunded.`;
+        await bot.editMessageText(cancelMsgHTML, { chat_id: originalChatIdFromGroup, message_id: Number(offerData.offerMessageIdInGroup), parse_mode: 'HTML', reply_markup: {} }).catch(()=>{});
+
+    } else {
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Unknown challenge action.", show_alert: false });
     }
 }
 // --- End of Part 5a, Section 1 (CORRECTED - BOT_NAME & Play Again fixed - GRANULAR ACTIVE GAME LIMITS) ---
