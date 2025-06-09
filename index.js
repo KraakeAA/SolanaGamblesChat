@@ -13044,69 +13044,69 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
 // ===================================================================
 
 async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLamports, chatId) {
-    const userId = String(userObj.telegram_id);
-    const logPrefix = `[StartInteractivePvB GID:${gameId} Type:${gameType}]`;
-    let client = null;
+    const userId = String(userObj.telegram_id);
+    const logPrefix = `[StartInteractivePvB GID:${gameId} Type:${gameType}]`;
+    let client = null;
 
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-        const betResult = await updateUserBalanceAndLedger(client, userId, 0n, `info_start_${gameType}_pvb`);
-        if (!betResult.success) throw new Error("Failed to fetch user's latest wager data.");
+        const betResult = await updateUserBalanceAndLedger(client, userId, 0n, `info_start_${gameType}_pvb`);
+        if (!betResult.success) throw new Error("Failed to fetch user's latest wager data.");
 
-        const initialGameState = {
-            gameMode: 'pvb',
-            initiatorId: userId,
-            initiatorName: getRawPlayerDisplayReference(userObj),
-            totalWageredForLevelCheck: betResult.newTotalWageredLamports.toString()
-        };
+        const initialGameState = {
+            gameMode: 'pvb',
+            initiatorId: userId,
+            initiatorName: getRawPlayerDisplayReference(userObj),
+            totalWageredForLevelCheck: betResult.newTotalWageredLamports.toString()
+        };
 
-        await client.query(
-            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
-            [gameId, gameType, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
-        );
-        await client.query('COMMIT');
+        await client.query(
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
+            [gameId, gameType, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
+        );
+        await client.query('COMMIT');
 
-        // --- FINAL FIX IS HERE: Added the missing 'gameId' property to the placeholder ---
-        activeGames.set(gameId, {
-            gameId: gameId,
-            type: gameType,
-            userId: userId,
-            chatId: chatId,
-            status: 'delegated'
-        });
-        await updateGroupGameDetails(chatId, gameId, gameType, betAmountLamports);
+        // --- FINAL FIX IS HERE: Added the missing 'gameId' property to the placeholder ---
+        activeGames.set(gameId, {
+            gameId: gameId,
+            type: gameType,
+            userId: userId,
+            chatId: chatId,
+            status: 'delegated'
+        });
+        await updateGroupGameDetails(chatId, gameId, gameType, betAmountLamports);
 
-        const gameName = getCleanGameName(gameType);
-        const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-        const startMessage = `🤖 <b>${escapeHTML(gameName)} vs. Bot</b> for <b>${betDisplayUSD_HTML}</b>!\n\n` +
-                             `The Game Bot is now conducting the match for ${playerRefHTML}. Good luck!`;
-        await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
+        const gameName = getCleanGameName(gameType);
+        const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+        const startMessage = `🤖 <b>${escapeHTML(gameName)} vs. Bot</b> for <b>${betDisplayUSD_HTML}</b>!\n\n` +
+                             `The Game Bot is now conducting the match for ${playerRefHTML}. Good luck!`;
+        await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
 
-        return true;
-    } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error(`${logPrefix} Error: ${e.message}`);
-        let refundClient = null;
-        try {
-            refundClient = await pool.connect();
-            await refundClient.query('BEGIN');
-            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, `refund_${gameType}_pvb_fail`, { original_game_id_text: gameId });
-            await refundClient.query('COMMIT');
-            await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}. Your bet has been refunded.`, { parse_mode: 'HTML' });
-        } catch (refundErr) {
-            if (refundClient) await refundClient.query('ROLLBACK');
-            console.error(`${logPrefix} CRITICAL: Failed to refund user ${userId} after game start failure. Amount: ${betAmountLamports}. Error: ${refundErr.message}`);
-            if(typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL REFUND FAILED for Interactive PvB game ${gameId}. User: ${userId}`);
-        } finally {
-            if (refundClient) refundClient.release();
-        }
-        return false;
-    } finally {
-        if (client) client.release();
-    }
+        return true;
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} Error: ${e.message}`);
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect();
+            await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, `refund_${gameType}_pvb_fail`, { original_game_id_text: gameId });
+            await refundClient.query('COMMIT');
+            await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}. Your bet has been refunded.`, { parse_mode: 'HTML' });
+        } catch (refundErr) {
+            if (refundClient) await refundClient.query('ROLLBACK');
+            console.error(`${logPrefix} CRITICAL: Failed to refund user ${userId} after game start failure. Amount: ${betAmountLamports}. Error: ${refundErr.message}`);
+            if(typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL REFUND FAILED for Interactive PvB game ${gameId}. User: ${userId}`);
+        } finally {
+            if (refundClient) refundClient.release();
+        }
+        return false;
+    } finally {
+        if (client) client.release();
+    }
 }
 
 async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
