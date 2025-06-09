@@ -12819,12 +12819,11 @@ function startJackpotSessionPolling() {
 }
 
 // --- Start of REPLACEMENT for finalizeInteractiveGame (in Part 5e) ---
-
 // --- Start of REPLACEMENT for finalizeInteractiveGame in index.js ---
-// VERSION: FINAL - Correctly reads p1Score/p2Score for PvB final messages.
+// VERSION: FINAL - Adds custom text for a bust/gutter roll loss.
 
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V3_ScoreFix SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V4_BustMsg SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
     let allNotificationsToSend = [];
@@ -12834,9 +12833,7 @@ async function finalizeInteractiveGame(sessionId) {
         await finalizationClient.query('BEGIN');
 
         const sessionRes = await finalizationClient.query("SELECT * FROM interactive_game_sessions WHERE session_id = $1 AND status NOT LIKE 'archived_%' FOR UPDATE", [sessionId]);
-        if (sessionRes.rowCount === 0) {
-            await finalizationClient.query('ROLLBACK'); return;
-        }
+        if (sessionRes.rowCount === 0) { await finalizationClient.query('ROLLBACK'); return; }
         session = sessionRes.rows[0];
         
         await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
@@ -12901,19 +12898,24 @@ async function finalizeInteractiveGame(sessionId) {
         const gameName = getCleanGameName(session.game_type);
         const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
         let resultMessageHTML = ``;
+        const playerObject = await getOrCreateUser(session.user_id);
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(playerObject));
 
-        if (isPvP) {
+        // --- THIS IS THE NEW LOGIC FOR CUSTOM MESSAGES ---
+        if (session.status === 'completed_loss' && gameState.lastRollValue === 1) {
+            resultMessageHTML = `💥 <b>Gutter Ball! Game Over!</b> 💥\n\n` +
+                                `${playerRefHTML}, your final roll was a <b>1</b>, which is a bust.\n\n` +
+                                `Your wager of <b>${betDisplay}</b> has been lost. Better luck next time!`;
+        } else if (isPvP) {
+            // PvP Result Logic
             const p1Ref = escapeHTML(gameState.initiatorName || "Player 1");
             const p2Ref = escapeHTML(gameState.opponentName || "Player 2");
             const p1Score = gameState.p1Score || 0;
             const p2Score = gameState.p2Score || 0;
             
             resultMessageHTML = `⚔️ <b>${gameName} Result</b> ⚔️\n\n` +
-                                `<b>${p1Ref}</b> vs <b>${p2Ref}</b>\n` +
-                                `Wager: <b>${betDisplay}</b> each\n\n` +
-                                `<b>Final Score:</b>\n` +
-                                `${p1Ref}: <b>${p1Score}</b>\n` +
-                                `${p2Ref}: <b>${p2Score}</b>\n\n`;
+                                `<b>${p1Ref}</b> vs <b>${p2Ref}</b> | Wager: <b>${betDisplay}</b> each\n\n` +
+                                `<b>Final Score:</b> ${p1Ref}: <b>${p1Score}</b> | ${p2Ref}: <b>${p2Score}</b>\n\n`;
 
             if (winnerId === p1_id) {
                 resultMessageHTML += `🎉 Congratulations, <b>${p1Ref}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
@@ -12922,18 +12924,13 @@ async function finalizeInteractiveGame(sessionId) {
             } else {
                 resultMessageHTML += `⚖️ It's a draw! All bets have been returned.`;
             }
-        } else { // PvB
-            const playerObject = await getOrCreateUser(session.user_id);
-            const playerRefHTML = escapeHTML(getPlayerDisplayReference(playerObject));
-            
-            // --- THE FIX IS HERE ---
-            const finalPlayerScore = gameState.p1Score || 0; // Use p1Score for the player
-            const finalBotScore = gameState.p2Score || 0;    // Use p2Score for the bot
+        } else { // PvB Result Logic
+            const finalPlayerScore = gameState.p1Score || 0;
+            const finalBotScore = gameState.p2Score || 0;
             
             resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`+
                                 `Your final score: <b>${finalPlayerScore}</b>\n` +
                                 `Bot's final score: <b>${finalBotScore}</b>\n\n`;
-            // --- END OF FIX ---
 
             if (winnerId) {
                 resultMessageHTML += `🎉 Congratulations, <b>${playerRefHTML}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
@@ -12962,7 +12959,6 @@ async function finalizeInteractiveGame(sessionId) {
     }
 }
 // --- End of REPLACEMENT for finalizeInteractiveGame ---
-
 /**
  * Connects a dedicated client to the database to listen for game completion notifications.
  */
@@ -15232,9 +15228,11 @@ bot.on('message', async (msg) => {
             }
         }
         if (gameFound) {
-            console.log('[DEBUG] Game action found for emoji. Deleting emoji message and returning.');
-            bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-            return;
+    // Wait 4 seconds to allow the dice animation to complete before deleting the message
+    setTimeout(() => {
+        bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    }, 4000);
+    return;
         } else {
             console.log('[DEBUG] No active game found for this user/chat that requires this emoji.');
         }
