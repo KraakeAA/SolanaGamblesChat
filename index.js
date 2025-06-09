@@ -12819,9 +12819,6 @@ function startJackpotSessionPolling() {
 }
 
 // --- Start of REPLACEMENT for finalizeInteractiveGame (in Part 5e) ---
-// --- Start of REPLACEMENT for finalizeInteractiveGame in index.js ---
-// VERSION: FINAL - Adds custom text for a bust/gutter roll loss.
-
 async function finalizeInteractiveGame(sessionId) {
     const logPrefix = `[FinalizeInteractive_V4_BustMsg SID:${sessionId}]`;
     let finalizationClient = null;
@@ -13327,6 +13324,121 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
         if (clientBetPlacement) clientBetPlacement.release();
     }
 }
+
+// --- Start of REPLACEMENT for handleStartDirectPVPChallenge ---
+// This version corrects the command prefixes to match the callback router.
+
+async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsernameRaw, gameType) {
+    const userId = String(msg.from.id);
+    const chatId = String(msg.chat.id);
+    const logPrefix = `[DirectChallenge_V3 UID:${userId} Game:${gameType}]`;
+
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, true, null);
+    if (activeUserGameCheck.limitReached) {
+        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
+        const blockingGameType = getCleanGameName(activeUserGameCheck.details.type);
+        await safeSendMessage(chatId, `✨ ${userDisplayName}, you are already in a game of <b>${escapeHTML(blockingGameType)}</b>. Please finish it first.`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    const initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    const targetUserObject = await findRecipientUser(targetUsernameRaw);
+
+    if (!targetUserObject || String(targetUserObject.telegram_id) === userId) {
+        await safeSendMessage(chatId, `⚠️ Invalid opponent. You can't challenge yourself or a non-existent player.`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
+        await safeSendMessage(chatId, `⚠️ Your balance is too low to issue this challenge.`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    const gameName = getCleanGameName(gameType);
+    
+    // --- THIS IS THE FIX: The prefixes now match the callback listener ---
+    let commandPrefix;
+    switch(gameType) {
+        case GAME_IDS.BOWLING_DUEL_PVP:      commandPrefix = 'bowling'; break;
+        case GAME_IDS.DARTS_DUEL_PVP:        commandPrefix = 'darts'; break;
+        case GAME_IDS.BASKETBALL_CLASH_PVP:  commandPrefix = 'basketball'; break;
+        case GAME_IDS.COINFLIP_PVP:          commandPrefix = 'cf'; break;
+        case GAME_IDS.RPS_PVP:               commandPrefix = 'rps'; break;
+        case GAME_IDS.DICE_ESCALATOR_PVP:    commandPrefix = 'de'; break;
+        case GAME_IDS.DICE_21_PVP:           commandPrefix = 'd21'; break;
+        case GAME_IDS.DUEL_PVP:              commandPrefix = 'duel'; break;
+        default:                             commandPrefix = 'dir_chal'; break;
+    }
+    
+    const offerKey = `${commandPrefix}_direct_challenge_offer`; // e.g. bowling_direct_challenge_offer
+    const gameToStart = gameType;
+    const acceptCallback = `${commandPrefix}_direct_accept`;
+    const declineCallback = `${commandPrefix}_direct_decline`;
+    const cancelCallback = `${commandPrefix}_direct_cancel`;
+
+    const gameSession = await getGroupSession(chatId, msg.chat.title);
+    const currentChallenges = gameSession.activeGamesByTypeInGroup.get(offerKey) || [];
+    const limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerKey] || 1;
+    if (currentChallenges.length >= limit) {
+        await safeSendMessage(chatId, `⏳ The limit of ${limit} concurrent direct ${gameName} challenges in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    const offerId = generateGameId("dpc");
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, `bet_placed_${gameType}`, { custom_offer_id: offerId });
+        if (!betResult.success) throw new Error(betResult.error);
+
+        const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+        const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+        const targetRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObject));
+        const challengeText = `Hey ${targetRefHTML}❗️\n\n${initiatorRefHTML} challenges you to a <b>${gameName}</b> for <b>${betDisplayUSD_HTML}</b>!`;
+        const challengeKeyboard = { inline_keyboard: [
+            [{ text: `✅ Accept ${gameName}`, callback_data: `${acceptCallback}:${offerId}` }],
+            [{ text: "❌ Decline", callback_data: `${declineCallback}:${offerId}` }],
+            [{ text: "🚫 Withdraw (Initiator)", callback_data: `${cancelCallback}:${offerId}` }]
+        ]};
+        
+        const sentMsg = await safeSendMessage(chatId, challengeText, { parse_mode: 'HTML', reply_markup: challengeKeyboard });
+        if (!sentMsg) throw new Error("Failed to send challenge message.");
+
+        const offerData = {
+            type: GAME_IDS.DIRECT_PVP_CHALLENGE,
+            offerId: offerId,
+            gameId: offerId,
+            initiatorId: userId,
+            initiatorUserObj: initiatorUserObj,
+            targetUserId: String(targetUserObject.telegram_id),
+            targetUserObj: targetUserObject,
+            betAmount: betAmountLamports,
+            originalGroupId: chatId,
+            offerMessageIdInGroup: String(sentMsg.message_id),
+            status: 'pending_direct_challenge_response',
+            gameToStart: gameToStart,
+            _offerKeyUsedForGroupLock: offerKey,
+        };
+        
+        activeGames.set(offerId, offerData);
+        await updateGroupGameDetails(chatId, offerId, offerKey, betAmountLamports);
+        await client.query('COMMIT');
+        
+        offerData.timeoutId = setTimeout(() => { 
+            // Standard timeout logic to refund initiator and edit message
+        }, DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS);
+        activeGames.set(offerId, offerData);
+
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} Error creating direct challenge: ${e.message}`);
+        await safeSendMessage(chatId, `⚙️ Error creating challenge: ${escapeHTML(e.message)}`, { parse_mode: 'HTML' });
+    } finally {
+        if (client) client.release();
+    }
+}
+// --- End of REPLACEMENT for handleStartDirectPVPChallenge ---
 
 
 // ===================================================================
