@@ -13005,15 +13005,145 @@ async function setupNotificationListener() {
 }
 
 // --- End of 5e Background Task Initializers ---
-// --- Start of Part 5f (COMPLETE & UNIFIED v3) - Interactive Games (Bowling, Darts, Basketball) ---
-// This new section unifies PvB and PvP logic for all interactive helper-bot games
-// under single commands and a complete offer/challenge system.
-// The Main Bot's role is ONLY to manage game setup and finalization.
+// --- Start of Part 5f (COMPLETE & UNIFIED v4 - FINAL FIX) - Interactive Games (Bowling, Darts, Basketball) ---
+// This version corrects the user ID bug (using .telegram_id instead of .id) and ensures all flows are robust.
 //----------------------------------------------------------------------------------------------------
 
 // ===================================================================
-// SECTION 1: UNIFIED COMMAND HANDLERS
-// These are the top-level functions called by the main command router.
+// SECTION 1: GENERIC GAME STARTERS (DATABASE HANDOFF)
+// ===================================================================
+
+/**
+ * Creates a PvB interactive game session in the database for the helper bot.
+ */
+async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLamports, chatId) {
+    const userId = String(userObj.telegram_id);
+    const logPrefix = `[StartInteractivePvB GID:${gameId} Type:${gameType}]`;
+    let client = null;
+
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const betResult = await updateUserBalanceAndLedger(client, userId, 0n, `info_start_${gameType}_pvb`);
+        if (!betResult.success) throw new Error("Failed to fetch user's latest wager data.");
+
+        const initialGameState = {
+            gameMode: 'pvb',
+            initiatorId: userId, // Add initiatorId for consistency
+            initiatorName: getRawPlayerDisplayReference(userObj),
+            totalWageredForLevelCheck: betResult.newTotalWageredLamports.toString()
+        };
+
+        await client.query(
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
+            [gameId, gameType, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
+        );
+        await client.query('COMMIT');
+
+        activeGames.set(gameId, { type: gameType, userId: userId, status: 'delegated' });
+        await updateGroupGameDetails(chatId, gameId, gameType, betAmountLamports);
+
+        const gameName = getCleanGameName(gameType);
+        const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+        const startMessage = `🤖 <b>${escapeHTML(gameName)} vs. Bot</b> for <b>${betDisplayUSD_HTML}</b>!\n\n` +
+                             `The Game Bot is now conducting the match for ${playerRefHTML}. Good luck!`;
+        await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
+
+        return true;
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} Error: ${e.message}`);
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect();
+            await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, userId, betAmountLamports, `refund_${gameType}_pvb_fail`, { original_game_id_text: gameId });
+            await refundClient.query('COMMIT');
+            await safeSendMessage(chatId, `⚙️ Error starting game: ${escapeHTML(e.message)}. Your bet has been refunded.`, { parse_mode: 'HTML' });
+        } catch (refundErr) {
+            if (refundClient) await refundClient.query('ROLLBACK');
+            console.error(`${logPrefix} CRITICAL: Failed to refund user ${userId} after game start failure. Amount: ${betAmountLamports}. Error: ${refundErr.message}`);
+            if(typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL REFUND FAILED for Interactive PvB game ${gameId}. User: ${userId}`);
+        } finally {
+            if (refundClient) refundClient.release();
+        }
+        return false;
+    } finally {
+        if (client) client.release();
+    }
+}
+
+/**
+ * Creates a PvP interactive game session in the database for the helper bot.
+ */
+async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
+    const LOG_PREFIX_START_INTERACTIVE_PVP = `[StartInteractivePvP GID:${gameId} Type:${gameType}]`;
+    let client = null;
+
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const betResult1 = await updateUserBalanceAndLedger(client, initiator.telegram_id, 0n, 'info_pvp_match_start');
+        const betResult2 = await updateUserBalanceAndLedger(client, opponent.telegram_id, 0n, 'info_pvp_match_start');
+
+        const initialGameState = {
+            gameMode: 'pvp',
+            initiatorId: String(initiator.telegram_id),
+            opponentId: String(opponent.telegram_id),
+            initiatorName: getRawPlayerDisplayReference(initiator),
+            opponentName: getRawPlayerDisplayReference(opponent),
+            initiatorTotalWagered: betResult1.newTotalWageredLamports.toString(),
+            opponentTotalWagered: betResult2.newTotalWageredLamports.toString()
+        };
+
+        await client.query(
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
+            [gameId, gameType, String(initiator.telegram_id), chatId, betAmount.toString(), JSON.stringify(initialGameState)]
+        );
+       
+        await client.query('COMMIT');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${LOG_PREFIX_START_INTERACTIVE_PVP} Error starting game: ${e.message}`);
+        await safeSendMessage(chatId, `⚙️ A critical database error occurred while starting the PvP game. The match has been cancelled and bets will be refunded.`, { parse_mode: 'HTML' });
+        let refundClient = null;
+        try {
+            refundClient = await pool.connect();
+            await refundClient.query('BEGIN');
+            await updateUserBalanceAndLedger(refundClient, initiator.telegram_id, betAmount, `refund_${gameType}_pvp_fail`);
+            await updateUserBalanceAndLedger(refundClient, opponent.telegram_id, betAmount, `refund_${gameType}_pvp_fail`);
+            await refundClient.query('COMMIT');
+        } catch(refundErr) { if(refundClient) await refundClient.query('ROLLBACK'); console.error(`${LOG_PREFIX_START_INTERACTIVE_PVP} CRITICAL REFUND FAILED FOR BOTH PLAYERS in game ${gameId}.`); } finally { if(refundClient) refundClient.release(); }
+        return;
+    } finally {
+        if (client) client.release();
+    }
+
+    activeGames.set(gameId, {
+        type: gameType,
+        p1: { userId: String(initiator.telegram_id) },
+        p2: { userId: String(opponent.telegram_id) },
+        status: 'delegated'
+    });
+    await updateGroupGameDetails(chatId, gameId, gameType, betAmount);
+
+    const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(initiator));
+    const opponentRefHTML = escapeHTML(getPlayerDisplayReference(opponent));
+    const gameName = getCleanGameName(gameType);
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+
+    const startMessage = `🔥 <b>${escapeHTML(gameName)} Duel!</b> 🔥\n` +
+                         `${initiatorRefHTML} vs. ${opponentRefHTML} for <b>${betDisplayUSD_HTML}</b>!\n\n` +
+                         `The Game Bot is now conducting the match. Good luck to both players!`;
+    await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
+}
+
+
+// ===================================================================
+// SECTION 2: UNIFIED COMMAND HANDLERS
 // ===================================================================
 
 async function handleStartBowlingCommand(msg, betAmountLamports, targetUsernameRaw = null) {
@@ -13030,13 +13160,9 @@ async function handleStartBasketballCommand(msg, betAmountLamports, targetUserna
 
 
 // ===================================================================
-// SECTION 2: GENERIC OFFER & CHALLENGE LOGIC
+// SECTION 3: GENERIC OFFER & CHALLENGE LOGIC
 // ===================================================================
 
-/**
- * A single, generic function to handle the start of any interactive game.
- * It detects if it's a direct challenge or a public offer and acts accordingly.
- */
 async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, gameType) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
@@ -13049,7 +13175,6 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
         return;
     }
     
-    // 1. Check user game limits and balance
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, (targetUsernameRaw != null), null);
     if (activeUserGameCheck.limitReached) {
         const blockingGameName = getCleanGameName(activeUserGameCheck.details.type);
@@ -13065,24 +13190,20 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
         return;
     }
 
-    // 2. Handle Direct Challenge Logic
     if (targetUsernameRaw) {
         await handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsernameRaw, gameType);
         return;
     }
 
-    // 3. Handle Unified Offer Logic
     const offerKey = `${gameType}_unified_offer`;
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     
-    // Using a default limit of 1. Add specific `LIMIT_UNIFIED_OFFER_BOWLING` etc. to ENV if needed.
     const currentOffers = gameSession.activeGamesByTypeInGroup.get(offerKey) || [];
     if (currentOffers.length >= 1) {
         await safeSendMessage(chatId, `⏳ There is already an active <b>${escapeHTML(gameName)}</b> offer in this group. Please wait.`, { parse_mode: 'HTML' });
         return;
     }
 
-    // 4. Create and send the offer
     const offerId = generateGameId("interactive_offer");
     let clientBetPlacement = null;
     try {
@@ -13121,7 +13242,7 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
             status: 'pending_offer',
             creationTime: Date.now(),
             offerMessageId: String(sentMessage.message_id),
-            gameToStartOnAccept: gameType, // This is key!
+            gameToStartOnAccept: gameType,
             timeoutId: null
         };
         activeGames.set(offerId, offerData);
@@ -13166,15 +13287,14 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
 
 
 // ===================================================================
-// SECTION 3: GENERIC CALLBACK HANDLERS
-// These are called by the main callback router.
+// SECTION 4: GENERIC CALLBACK HANDLERS
 // ===================================================================
 
 /**
  * Generic callback handler for accepting the BOT version of an interactive game offer.
  */
 async function handleInteractiveAcceptBotCallback(offerId, clickerUserObj, callbackQueryId, gameType) {
-    const clickerId = String(clickerUserObj.id);
+    const clickerId = String(clickerUserObj.telegram_id); // CORRECTED: Use .telegram_id
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
@@ -13212,11 +13332,11 @@ async function handleInteractiveAcceptBotCallback(offerId, clickerUserObj, callb
  * Generic callback handler for accepting the PVP version of an interactive game offer.
  */
 async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callbackQueryId, gameType) {
-    const clickerId = String(clickerUserObj.id);
+    const clickerId = String(clickerUserObj.telegram_id); // CORRECTED: Use .telegram_id
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
-    const logPrefix = `[InteractiveAcceptPvP_V2 GID:${offerId}]`;
+    const logPrefix = `[InteractiveAcceptPvP_V3 GID:${offerId}]`;
 
     if (!offerData || offerData.type !== offerKey || offerData.status !== 'pending_offer') {
         await bot.answerCallbackQuery(callbackQueryId, { text: `This ${gameName} offer is no longer valid.`, show_alert: true });
@@ -13227,7 +13347,7 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
         return;
     }
     
-    const activePvPGameKey = gameType;
+    const activePvPGameKey = gameType; 
     const gameSession = await getGroupSession(offerData.chatId);
     const gameLimit = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activePvPGameKey] || 1;
     if ((gameSession.activeGamesByTypeInGroup.get(activePvPGameKey) || []).length >= gameLimit) {
@@ -13236,8 +13356,8 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
     }
     
     const opponentUserObj = await getOrCreateUser(clickerId, clickerUserObj.username, clickerUserObj.first_name, clickerUserObj.last_name);
-
-    // --- FIX IS HERE: Check if the user object was successfully retrieved ---
+    
+    // --- FIX IS HERE: Added null check for the user object ---
     if (!opponentUserObj) {
         console.error(`${logPrefix} CRITICAL: Failed to get/create user profile for clicker ID ${clickerId}.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Could not retrieve your player profile. Please try /start and attempt to join again.", show_alert: true });
@@ -13258,7 +13378,6 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
     activeGames.delete(offerId);
     await updateGroupGameDetails(offerData.chatId, { removeThisId: offerId }, offerKey, null);
     
-    // Deduct opponent's bet
     let clientBet = null;
     try {
         clientBet = await pool.connect();
@@ -13271,7 +13390,6 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
         if(clientBet) await clientBet.query('ROLLBACK');
         console.error(`[InteractiveAcceptPvP] Error taking opponent bet: ${e.message}`);
         await safeSendMessage(offerData.chatId, "An error occurred taking the bet. The challenge has been cancelled.");
-        // Refund initiator since opponent's bet failed.
         let refundClient = null;
         try {
             refundClient = await pool.connect(); await refundClient.query('BEGIN');
@@ -13290,7 +13408,7 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
  * Generic callback handler for cancelling an interactive game offer.
  */
 async function handleInteractiveCancelCallback(offerId, clickerUserObj, callbackQueryId, gameType) {
-    const clickerId = String(clickerUserObj.id);
+    const clickerId = String(clickerUserObj.telegram_id); // CORRECTED: Use .telegram_id
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
@@ -13331,8 +13449,9 @@ async function handleInteractiveCancelCallback(offerId, clickerUserObj, callback
     }
 }
 
+
 // ===================================================================
-// SECTION 4: PVP GAME SEQUENCE "BRIDGE" FUNCTIONS
+// SECTION 5: PVP GAME SEQUENCE "BRIDGE" FUNCTIONS
 // These functions act as a bridge from the direct challenge handler
 // to the generic interactive PvP game starter.
 // ===================================================================
@@ -13352,7 +13471,7 @@ async function startBasketballPvPGameSequence(offerData, initiatorUserObj, oppon
     await startInteractivePvPGame(pvpGameId, initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.originalGroupId, GAME_IDS.BASKETBALL_CLASH_PVP);
 }
 
-// --- End of Part 5f (COMPLETE & UNIFIED v3) ---
+// --- End of Part 5f (COMPLETE & UNIFIED v4 - FINAL FIX) ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
 // index.js - Part 5a, Section 2: General Casino Bot Command Implementations
 //----------------------------------------------------------------------------------
