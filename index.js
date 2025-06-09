@@ -13253,13 +13253,12 @@ async function handleStartHoopsClashCommand(msg, betAmountLamports, targetUserna
 }
 
 // Add this generic direct challenge handler to index.js
+// REPLACE the generic direct challenge handler you added previously with this corrected version.
 async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsernameRaw, gameType) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
-    const logPrefix = `[DirectChallenge UID:${userId} Game:${gameType}]`;
+    const logPrefix = `[DirectChallenge_V2 UID:${userId} Game:${gameType}]`;
 
-    // This combines all the validation and offer creation logic
-    // from your more complex games into one reusable function.
     const activeUserGameCheck = await checkUserActiveGameLimit(userId, true, null);
     if (activeUserGameCheck.limitReached) {
         const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
@@ -13282,13 +13281,29 @@ async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsern
     }
 
     const gameName = getCleanGameName(gameType);
-    const offerKey = `${gameType}_direct_challenge_offer`.toLowerCase(); // e.g., bowling_duel_pvp_direct_challenge_offer
-    const gameToStart = gameType; // e.g., bowling_duel_pvp
-    const acceptCallback = `${gameType.split('_')[0]}_direct_accept`;
-    const declineCallback = `${gameType.split('_')[0]}_direct_decline`;
-    const cancelCallback = `${gameType.split('_')[0]}_direct_cancel`;
     
-    // Check group lock for this specific challenge type
+    // --- FIX IS HERE: Correctly generate the command prefix for the callback ---
+    let commandPrefix;
+    switch(gameType) {
+        case GAME_IDS.BOWLING_DUEL_PVP:    commandPrefix = 'bowlingduel'; break;
+        case GAME_IDS.DARTS_DUEL_PVP:      commandPrefix = 'dartsduel'; break;
+        case GAME_IDS.BASKETBALL_CLASH_PVP: commandPrefix = 'hoopsclash'; break;
+        // Keep fallbacks for your original games
+        case GAME_IDS.COINFLIP_PVP:         commandPrefix = 'cf'; break;
+        case GAME_IDS.RPS_PVP:              commandPrefix = 'rps'; break;
+        case GAME_IDS.DICE_ESCALATOR_PVP:   commandPrefix = 'de'; break;
+        case GAME_IDS.DICE_21_PVP:          commandPrefix = 'd21'; break;
+        case GAME_IDS.DUEL_PVP:             commandPrefix = 'duel'; break;
+        default:                            commandPrefix = 'dir_chal'; break; // Generic fallback
+    }
+    
+    const offerKey = `${commandPrefix}_direct_challenge_offer`; // e.g., bowlingduel_direct_challenge_offer
+    const gameToStart = gameType;
+    const acceptCallback = `${commandPrefix}_direct_accept`;
+    const declineCallback = `${commandPrefix}_direct_decline`;
+    const cancelCallback = `${commandPrefix}_direct_cancel`;
+    // --- END OF FIX ---
+
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentChallenges = gameSession.activeGamesByTypeInGroup.get(offerKey) || [];
     const limit = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerKey] || 1;
@@ -13342,7 +13357,10 @@ async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsern
         await updateGroupGameDetails(chatId, offerId, offerKey, betAmountLamports);
         await client.query('COMMIT');
         
-        offerData.timeoutId = setTimeout(() => { /* ... existing timeout logic ... */ }, DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS);
+        offerData.timeoutId = setTimeout(() => { 
+            // Your existing timeout logic from the original file goes here.
+            // It finds the offer, refunds the user, and edits the message.
+        }, DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS);
         activeGames.set(offerId, offerData);
 
     } catch (e) {
