@@ -13044,6 +13044,8 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
 // SECTION 1: GENERIC GAME STARTERS (DATABASE HANDOFF)
 // ===================================================================
 
+// in index.js (Part 5f) - REPLACE this entire function
+
 async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLamports, chatId) {
     const userId = String(userObj.telegram_id);
     const logPrefix = `[StartInteractivePvB GID:${gameId} Type:${gameType}]`;
@@ -13067,6 +13069,14 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
             `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
             [gameId, gameType, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
         );
+
+        // --- THIS IS THE CRITICAL FIX ---
+        // Instantly notify the helper bot that a new game is ready for pickup.
+        // This eliminates the polling delay and race condition.
+        const notifyPayload = JSON.stringify({ session: { session_id: null, main_bot_game_id: gameId } });
+        await client.query(`NOTIFY game_session_pickup, '${notifyPayload}'`);
+        // --- END OF FIX ---
+
         await client.query('COMMIT');
 
         // --- FINAL FIX IS HERE: Added the missing 'gameId' property to the placeholder ---
