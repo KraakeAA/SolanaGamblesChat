@@ -12931,9 +12931,16 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
         const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_bowling', { game_id_custom_field: gameId });
         if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
         
+        // **FIX APPLIED**: Capture total wagered and create game state object
+        const totalWageredForLevelCheck = betResult.newTotalWageredLamports;
+        const initialGameState = {
+            totalWageredForLevelCheck: totalWageredForLevelCheck.toString()
+        };
+        
+        // **FIX APPLIED**: Insert the new game_state_json
         await client.query(
-            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
-            [gameId, GAME_IDS.BOWLING, userId, chatId, betAmountLamports.toString()]
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
+            [gameId, GAME_IDS.BOWLING, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
         );
         await client.query('COMMIT');
     } catch (e) {
@@ -12945,9 +12952,15 @@ async function handleStartPinpointBowlingCommand(msg, betAmountLamports) {
         if (client) client.release();
     }
 
-    activeGames.set(gameId, { type: 'bowling_placeholder', status: 'delegated' });
+    // **FIX APPLIED**: Add corrected placeholder to activeGames for locking
+    activeGames.set(gameId, { type: GAME_IDS.BOWLING, userId: userId, status: 'delegated' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
-    await safeSendMessage(chatId, `🎳 ${playerRefHTML}, your <b>Pinpoint Bowling</b> game for <b>${betDisplayUSD_HTML}</b> is starting!\n\nOur Game Bot will now present the board for you to make your choice...`, { parse_mode: 'HTML' });
+
+    // **FIX APPLIED**: Use new concise and professional message
+    const bowlingStartMessage = `🎳 <b>Pinpoint Bowling</b> for <b>${betDisplayUSD_HTML}</b>!\n` +
+        `The Game Bot will now present the lane. Aim your shot, ${playerRefHTML}!`;
+
+    await safeSendMessage(chatId, bowlingStartMessage, { parse_mode: 'HTML' });
 }
 // --- End of Part 5f, Section 1 ----
 // --- Start of Part 5f, Section 2 (Darts Fortune Game Logic) ---
@@ -12992,10 +13005,17 @@ async function handleStartDartsFortuneCommand(msg, betAmountLamports) {
         await client.query('BEGIN');
         const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_darts', { game_id_custom_field: gameId });
         if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
-        
+
+        // **FIX APPLIED**: Capture total wagered and create game state object
+        const totalWageredForLevelCheck = betResult.newTotalWageredLamports;
+        const initialGameState = {
+            totalWageredForLevelCheck: totalWageredForLevelCheck.toString()
+        };
+
+        // **FIX APPLIED**: Insert the new game_state_json
         await client.query(
-            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
-            [gameId, GAME_IDS.DARTS, userId, chatId, betAmountLamports.toString()]
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
+            [gameId, GAME_IDS.DARTS, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
         );
         await client.query('COMMIT');
     } catch (e) {
@@ -13007,9 +13027,15 @@ async function handleStartDartsFortuneCommand(msg, betAmountLamports) {
         if (client) client.release();
     }
 
-    activeGames.set(gameId, { type: 'darts_placeholder', status: 'delegated' });
+    // **FIX APPLIED**: Add corrected placeholder to activeGames for locking
+    activeGames.set(gameId, { type: GAME_IDS.DARTS, userId: userId, status: 'delegated' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
-    await safeSendMessage(chatId, `🎯 ${playerRefHTML}, your <b>Darts Fortune</b> game for <b>${betDisplayUSD_HTML}</b> is starting!\n\nOur Game Bot will now throw the dart...`, { parse_mode: 'HTML' });
+
+    // **FIX APPLIED**: Use new concise and professional message
+    const dartsStartMessage = `🎯 <b>Darts of Fortune</b> for <b>${betDisplayUSD_HTML}</b>!\n` +
+        `${playerRefHTML}, the Game Bot is throwing the dart now. Let's see what you win!`;
+
+    await safeSendMessage(chatId, dartsStartMessage, { parse_mode: 'HTML' });
 }
 // --- End of 5f, Section 2 ---
 // --- Start of Part 5f, Section 3 (3-Point Shootout Game Logic) ---
@@ -13077,9 +13103,15 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
         if (client) client.release();
     }
 
-    activeGames.set(gameId, { type: '3pt_placeholder', status: 'delegated' });
+    // **FIX APPLIED**: Add corrected placeholder to activeGames for locking
+    activeGames.set(gameId, { type: GAME_IDS.BASKETBALL, userId: userId, status: 'delegated' });
     await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
-    await safeSendMessage(chatId, `🏀 ${playerRefHTML}, your <b>3-Point Shootout</b> for <b>${betDisplayUSD_HTML}</b> is starting!\n\nOur Game Bot will now take over the action...`, { parse_mode: 'HTML' });
+    
+    // **FIX APPLIED**: Use new concise and professional message
+    const hoopsStartMessage = `🏀 <b>3-Point Shootout</b> for <b>${betDisplayUSD_HTML}</b>!\n` +
+        `You're on the court, ${playerRefHTML}! The Game Bot will now serve the shots.`;
+
+    await safeSendMessage(chatId, hoopsStartMessage, { parse_mode: 'HTML' });
 }
 // --- End of 5f, Section 3 ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
