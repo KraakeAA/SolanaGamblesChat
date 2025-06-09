@@ -13006,11 +13006,61 @@ async function setupNotificationListener() {
 
 // --- End of 5e Background Task Initializers ---
 // --- Start of Part 5f (COMPLETE & UNIFIED v4 - FINAL FIX) - Interactive Games (Bowling, Darts, Basketball) ---
-// This version corrects the user ID bug (using .telegram_id instead of .id) and ensures all flows are robust.
+// This new section unifies PvB and PvP logic for all interactive helper-bot games
+// under single commands and a complete offer/challenge system.
+// The Main Bot's role is ONLY to manage game setup and finalization.
 //----------------------------------------------------------------------------------------------------
 
 // ===================================================================
+// SECTION 0: EMOJI ROLL PROCESSOR (THE MISSING BRIDGE)
+// This function is called by the main message handler when a dice emoji is detected for an interactive game.
+// ===================================================================
+
+async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
+    const logPrefix = `[ProcessInteractiveRoll GID:${gameData.gameId} UID:${rollerId}]`;
+    let client = null;
+    try {
+        client = await pool.connect();
+        // We lock the row to prevent race conditions with the helper bot
+        const sessionRes = await client.query("SELECT * FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress' FOR UPDATE", [gameData.gameId]);
+        
+        if (sessionRes.rowCount === 0) {
+            console.warn(`${logPrefix} No active helper session found for this game. It might have already ended or timed out.`);
+            return;
+        }
+        
+        const session = sessionRes.rows[0];
+        const gameState = session.game_state_json || {};
+
+        // Verify if it's the correct player's turn
+        if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
+            console.log(`${logPrefix} Roll received from UID ${rollerId}, but it's currently UID ${gameState.currentPlayerTurn}'s turn. Ignoring.`);
+            return;
+        }
+
+        // Update the session with the roll and notify the helper bot
+        gameState.lastRoll = diceValue;
+        // Also update the timestamp to prevent a timeout right after a valid roll
+        gameState.currentTurnStartTime = Date.now(); 
+
+        await client.query("UPDATE interactive_game_sessions SET game_state_json = $1 WHERE session_id = $2", [JSON.stringify(gameState), session.session_id]);
+        
+        // This is the most important part: it sends a signal to the helper bot.
+        await client.query(`NOTIFY interactive_roll_submitted, '${JSON.stringify({ session_id: session.session_id })}'`);
+        
+        console.log(`${logPrefix} Roll of ${diceValue} submitted and helper bot notified.`);
+
+    } catch (e) {
+        console.error(`${logPrefix} Error processing interactive roll: ${e.message}`);
+    } finally {
+        if (client) client.release();
+    }
+}
+
+
+// ===================================================================
 // SECTION 1: GENERIC GAME STARTERS (DATABASE HANDOFF)
+// ... (The rest of your Part 5f code follows here) ...
 // ===================================================================
 
 /**
