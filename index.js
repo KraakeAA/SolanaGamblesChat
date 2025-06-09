@@ -13216,6 +13216,7 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
+    const logPrefix = `[InteractiveAcceptPvP_V2 GID:${offerId}]`;
 
     if (!offerData || offerData.type !== offerKey || offerData.status !== 'pending_offer') {
         await bot.answerCallbackQuery(callbackQueryId, { text: `This ${gameName} offer is no longer valid.`, show_alert: true });
@@ -13235,6 +13236,15 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
     }
     
     const opponentUserObj = await getOrCreateUser(clickerId, clickerUserObj.username, clickerUserObj.first_name, clickerUserObj.last_name);
+
+    // --- FIX IS HERE: Check if the user object was successfully retrieved ---
+    if (!opponentUserObj) {
+        console.error(`${logPrefix} CRITICAL: Failed to get/create user profile for clicker ID ${clickerId}.`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Could not retrieve your player profile. Please try /start and attempt to join again.", show_alert: true });
+        return;
+    }
+    // --- END OF FIX ---
+
     if (BigInt(opponentUserObj.balance) < offerData.betAmount) {
         await bot.answerCallbackQuery(callbackQueryId, { text: "Your balance is too low to accept this challenge.", show_alert: true });
         return;
