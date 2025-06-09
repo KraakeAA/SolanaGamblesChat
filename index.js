@@ -13156,7 +13156,13 @@ async function handleStartThreePointShootoutCommand(msg, betAmountLamports) {
 }
 // --- End of 5f, Section 3 ---
 // --- Start of 5f, Section 4 (Bowling, darts, basketball PvP) ---
-// Add this new function to index.js
+// =============================================================================
+// --- NEW GAME HANDLERS (BOWLING DUEL, DARTS DUEL, 3-POINT CLASH) ---
+// =============================================================================
+
+// --- 1. Top-Level Command Handlers ---
+// (These are the main functions called by the /command in the message listener)
+
 async function handleStartBowlingDuelCommand(msg, betAmountLamports, targetUsernameRaw = null) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
@@ -13182,11 +13188,11 @@ async function handleStartBowlingDuelCommand(msg, betAmountLamports, targetUsern
             return;
         }
 
-        const activeGameKey = GAME_IDS.BOWLING_DUEL_PVB;
+        const activeGameKey = GAME_IDS.BOWLING_DUEL;
         const gameSession = await getGroupSession(chatId, msg.chat.title);
         const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKey) || [];
         if (currentActiveGames.length >= (GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1)) {
-            await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit for Bowling Duel games has been reached. Please wait.`, { parse_mode: 'HTML' });
+            await safeSendMessage(chatId, `⏳ ${playerRefHTML}, the limit for Bowling Duel games in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
             return;
         }
 
@@ -13218,7 +13224,7 @@ async function handleStartBowlingDuelCommand(msg, betAmountLamports, targetUsern
             if (client) client.release();
         }
 
-        activeGames.set(gameId, { type: GAME_IDS.BOWLING_DUEL_PVB, userId: userId, status: 'delegated' });
+        activeGames.set(gameId, { type: GAME_IDS.BOWLING_DUEL, userId: userId, status: 'delegated' });
         await updateGroupGameDetails(chatId, gameId, activeGameKey, betAmountLamports);
 
         const bowlingStartMessage = `🎳 <b>Bowling Duel: Three-Frame Showdown</b> vs. Bot for <b>${betDisplayUSD_HTML}</b>!\n` +
@@ -13227,34 +13233,26 @@ async function handleStartBowlingDuelCommand(msg, betAmountLamports, targetUsern
     }
 }
 
-// Add this new function to index.js
 async function handleStartDartsDuelCommand(msg, betAmountLamports, targetUsernameRaw) {
-    const userId = String(msg.from.id);
-    const chatId = String(msg.chat.id);
-
     if (!targetUsernameRaw) {
-        await safeSendMessage(chatId, "🎯 Darts Duel is a PvP-only game. Please challenge another player, e.g., <code>/dartsduel 5 @username</code>", { parse_mode: 'HTML' });
+        await safeSendMessage(msg.chat.id, "🎯 Darts Duel is a PvP-only game. Please challenge another player, e.g., <code>/dartsduel 5 @username</code>", { parse_mode: 'HTML' });
         return;
     }
-    
     await handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsernameRaw, GAME_IDS.DARTS_DUEL_PVP);
 }
 
-// Add this new function to index.js
 async function handleStartHoopsClashCommand(msg, betAmountLamports, targetUsernameRaw) {
-    const userId = String(msg.from.id);
-    const chatId = String(msg.chat.id);
-    
     if (!targetUsernameRaw) {
-        await safeSendMessage(chatId, "🏀 3-Point Clash is a PvP-only game. Please challenge another player, e.g., <code>/hoopsclash 5 @username</code>", { parse_mode: 'HTML' });
+        await safeSendMessage(msg.chat.id, "🏀 3-Point Clash is a PvP-only game. Please challenge another player, e.g., <code>/hoopsclash 5 @username</code>", { parse_mode: 'HTML' });
         return;
     }
-
     await handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsernameRaw, GAME_IDS.BASKETBALL_CLASH_PVP);
 }
 
-// Add this generic direct challenge handler to index.js
-// REPLACE the generic direct challenge handler you added previously with this corrected version.
+
+// --- 2. Generic PvP Challenge Creation ---
+// (This is called by the handlers above to create a PvP challenge)
+
 async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsernameRaw, gameType) {
     const userId = String(msg.from.id);
     const chatId = String(msg.chat.id);
@@ -13283,27 +13281,24 @@ async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsern
 
     const gameName = getCleanGameName(gameType);
     
-    // --- FIX IS HERE: Correctly generate the command prefix for the callback ---
     let commandPrefix;
     switch(gameType) {
         case GAME_IDS.BOWLING_DUEL_PVP:    commandPrefix = 'bowlingduel'; break;
         case GAME_IDS.DARTS_DUEL_PVP:      commandPrefix = 'dartsduel'; break;
         case GAME_IDS.BASKETBALL_CLASH_PVP: commandPrefix = 'hoopsclash'; break;
-        // Keep fallbacks for your original games
         case GAME_IDS.COINFLIP_PVP:         commandPrefix = 'cf'; break;
         case GAME_IDS.RPS_PVP:              commandPrefix = 'rps'; break;
         case GAME_IDS.DICE_ESCALATOR_PVP:   commandPrefix = 'de'; break;
         case GAME_IDS.DICE_21_PVP:          commandPrefix = 'd21'; break;
         case GAME_IDS.DUEL_PVP:             commandPrefix = 'duel'; break;
-        default:                            commandPrefix = 'dir_chal'; break; // Generic fallback
+        default:                            commandPrefix = 'dir_chal'; break;
     }
     
-    const offerKey = `${commandPrefix}_direct_challenge_offer`; // e.g., bowlingduel_direct_challenge_offer
+    const offerKey = `${commandPrefix}_direct_challenge_offer`;
     const gameToStart = gameType;
     const acceptCallback = `${commandPrefix}_direct_accept`;
     const declineCallback = `${commandPrefix}_direct_decline`;
     const cancelCallback = `${commandPrefix}_direct_cancel`;
-    // --- END OF FIX ---
 
     const gameSession = await getGroupSession(chatId, msg.chat.title);
     const currentChallenges = gameSession.activeGamesByTypeInGroup.get(offerKey) || [];
@@ -13360,7 +13355,6 @@ async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsern
         
         offerData.timeoutId = setTimeout(() => { 
             // Your existing timeout logic from the original file goes here.
-            // It finds the offer, refunds the user, and edits the message.
         }, DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS);
         activeGames.set(offerId, offerData);
 
@@ -13371,6 +13365,84 @@ async function handleStartDirectPVPChallenge(msg, betAmountLamports, targetUsern
     } finally {
         if (client) client.release();
     }
+}
+
+
+// --- 3. PvP Game Starter Functions ---
+// (These are called when a direct challenge is accepted)
+
+async function startBowlingDuelPvPGameSequence(offerData, opponentUserObj) {
+    const pvpGameId = generateGameId(GAME_IDS.BOWLING_DUEL_PVP);
+    await startInteractivePvPGame(pvpGameId, offerData.initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.originalGroupId, GAME_IDS.BOWLING_DUEL_PVP);
+}
+
+async function startDartsDuelPvPGameSequence(offerData, opponentUserObj) {
+    const pvpGameId = generateGameId(GAME_IDS.DARTS_DUEL_PVP);
+    await startInteractivePvPGame(pvpGameId, offerData.initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.originalGroupId, GAME_IDS.DARTS_DUEL_PVP);
+}
+
+async function startBasketballPvPGameSequence(offerData, opponentUserObj) {
+    const pvpGameId = generateGameId(GAME_IDS.BASKETBALL_CLASH_PVP);
+    await startInteractivePvPGame(pvpGameId, offerData.initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.originalGroupId, GAME_IDS.BASKETBALL_CLASH_PVP);
+}
+
+
+// --- 4. Generic Interactive PvP Game Starter ---
+// (This is the core function that creates the session for the helper bot)
+
+async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
+    const LOG_PREFIX_START_INTERACTIVE_PVP = `[StartInteractivePvP GID:${gameId} Type:${gameType}]`;
+    let client = null;
+
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const betResult1 = await updateUserBalanceAndLedger(client, initiator.telegram_id, 0n, 'info_pvp_match_start');
+        const betResult2 = await updateUserBalanceAndLedger(client, opponent.telegram_id, 0n, 'info_pvp_match_start');
+
+        const initialGameState = {
+            gameMode: 'pvp',
+            initiatorId: String(initiator.telegram_id),
+            opponentId: String(opponent.telegram_id),
+            initiatorName: getPlayerDisplayReference(initiator),
+            opponentName: getPlayerDisplayReference(opponent),
+            initiatorTotalWagered: betResult1.newTotalWageredLamports.toString(),
+            opponentTotalWagered: betResult2.newTotalWageredLamports.toString()
+        };
+
+        await client.query(
+            `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
+            [gameId, gameType, String(initiator.telegram_id), chatId, betAmount.toString(), JSON.stringify(initialGameState)]
+        );
+        
+        await client.query('COMMIT');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${LOG_PREFIX_START_INTERACTIVE_PVP} Error starting game: ${e.message}`);
+        await safeSendMessage(chatId, `⚙️ A critical database error occurred while starting the PvP game. The match has been cancelled and bets (if taken) should be refunded.`, { parse_mode: 'HTML' });
+        return;
+    } finally {
+        if (client) client.release();
+    }
+
+    activeGames.set(gameId, { 
+        type: gameType, 
+        p1: { userId: String(initiator.telegram_id) }, 
+        p2: { userId: String(opponent.telegram_id) }, 
+        status: 'delegated' 
+    });
+    await updateGroupGameDetails(chatId, gameId, gameType, betAmount);
+
+    const initiatorRefHTML = escapeHTML(getPlayerDisplayReference(initiator));
+    const opponentRefHTML = escapeHTML(getPlayerDisplayReference(opponent));
+    const gameName = getCleanGameName(gameType);
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
+
+    const startMessage = `🔥 <b>${gameName} Duel!</b> 🔥\n` +
+        `${initiatorRefHTML} vs. ${opponentRefHTML} for <b>${betDisplayUSD_HTML}</b>!\n\n` +
+        `The Game Bot is now conducting the match. Good luck to both players!`;
+    await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
 }
 // --- End of 5f, Section 4 ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
