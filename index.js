@@ -13014,20 +13014,23 @@ async function setupNotificationListener() {
 // ===================================================================
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    const logPrefix = `[ProcessInteractiveRoll_V2 GID:${gameData.gameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V3_Debug GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
     try {
+        console.log(`[DEBUG] processInteractiveGameRoll CALLED. GID: ${gameData.gameId}, Roll: ${diceValue}, Roller: ${rollerId}`);
         client = await pool.connect();
         const sessionRes = await client.query("SELECT * FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress' FOR UPDATE", [gameData.gameId]);
         
+        console.log(`[DEBUG] DB query for session returned ${sessionRes.rowCount} rows.`);
         if (sessionRes.rowCount === 0) {
-            console.warn(`${logPrefix} No 'in_progress' session found. Game might be starting or has ended.`);
-            return { success: false, error: "Game not ready for your roll. Please wait for the prompt." };
+            console.warn(`${logPrefix} No 'in_progress' session found. Game might be starting, ended, or timed out.`);
+            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
         }
         
         const session = sessionRes.rows[0];
         const gameState = session.game_state_json || {};
 
+        console.log(`[DEBUG] Current player turn in DB: ${gameState.currentPlayerTurn}. Roller ID: ${rollerId}`);
         if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
             console.log(`${logPrefix} Roll from UID ${rollerId}, but it's UID ${gameState.currentPlayerTurn}'s turn. Ignoring.`);
             return { success: false, error: "It's not your turn to roll!" };
@@ -13037,7 +13040,10 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         gameState.currentTurnStartTime = Date.now(); 
 
         await client.query("UPDATE interactive_game_sessions SET game_state_json = $1 WHERE session_id = $2", [JSON.stringify(gameState), session.session_id]);
-        await client.query(`NOTIFY interactive_roll_submitted, '${JSON.stringify({ session_id: session.session_id })}'`);
+        
+        const notifyPayload = JSON.stringify({ session_id: session.session_id });
+        console.log(`[DEBUG] Preparing to NOTIFY channel 'interactive_roll_submitted' with payload: ${notifyPayload}`);
+        await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
         
         console.log(`${logPrefix} Roll of ${diceValue} submitted and helper bot notified.`);
         return { success: true };
@@ -15154,7 +15160,9 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
 }
 
 // --- Main Message Handler (`bot.on('message')`) ---
-// FINAL CORRECTED VERSION - Replaces the original in Part 5a, Section 1
+// --- Start of REPLACEMENT for the entire bot.on('message', ...) handler ---
+// FINAL VERSION + DEBUG LOGS - This version adds logging to trace the emoji handling flow.
+
 bot.on('message', async (msg) => {
     const LOG_PREFIX_MSG_HANDLER = `[MsgHandler_V_FINAL TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
 
@@ -15164,7 +15172,7 @@ bot.on('message', async (msg) => {
     if (msg.from.is_bot) {
         try {
             const selfBotInfo = await bot.getMe();
-            if (String(msg.from.id) !== String(selfBotInfo.id)) return; // Ignore other bots
+            if (String(msg.from.id) !== String(selfBotInfo.id)) return;
             if (!msg.dice) return; 
         } catch (getMeError) { return; }
     }
@@ -15174,22 +15182,27 @@ bot.on('message', async (msg) => {
     const text = msg.text || "";
     const chatType = msg.chat.type;
 
-    // --- THIS IS THE CORRECTED EMOJI HANDLING BLOCK ---
+    // --- Emoji Handling Block with DEBUG LOGS ---
     if (msg.dice && msg.from && !msg.from.is_bot) {
+        console.log(`[DEBUG] Dice emoji detected from UID ${userId}. Starting check...`);
         const diceValue = msg.dice.value;
         const rollerId = String(msg.from.id || msg.from.telegram_id);
         let gameFound = false;
 
         for (const [gameId, gData] of activeGames.entries()) {
+            console.log(`[DEBUG] Checking active game in map. ID: ${gameId}, Type: ${gData.type}, ChatID: ${gData.chatId}`);
             if (String(gData.chatId) === chatId) {
-                // Check for new interactive games FIRST
+                console.log(`[DEBUG] Chat ID matches for game ${gameId}.`);
+                
                 const isNewInteractiveGame = [
                     GAME_IDS.BOWLING, GAME_IDS.DARTS, GAME_IDS.BASKETBALL,
                     GAME_IDS.BOWLING_DUEL_PVP, GAME_IDS.DARTS_DUEL_PVP, GAME_IDS.BASKETBALL_CLASH_PVP
                 ].includes(gData.type);
 
                 if (isNewInteractiveGame) {
+                    console.log(`[DEBUG] Game ${gameId} IS an interactive game. Type: ${gData.type}`);
                     if (typeof processInteractiveGameRoll === 'function') {
+                        console.log('[DEBUG] Calling processInteractiveGameRoll...');
                         const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
                         if (result && !result.success) {
                             await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`);
@@ -15201,34 +15214,30 @@ bot.on('message', async (msg) => {
                     }
                 }
                 
-                // Check for original games managed by the main bot
                 const isDiceEscalatorEmoji = (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) || (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji'));
                 const isDice21Emoji = (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status === 'player_turn_hit_stand_prompt' || gData.status === 'player_initial_roll_1_prompted' || gData.status === 'player_initial_roll_2_prompted')) || (gData.type === GAME_IDS.DICE_21_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'playing_turn') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'playing_turn'));
                 const isDuelGameEmoji = (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') || (gData.type === GAME_IDS.DUEL_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji'));
 
                 if (isDiceEscalatorEmoji) {
-                    if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB) await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue);
-                    else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId);
-                    gameFound = true;
-                    break;
+                    if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB) await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue); else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId);
+                    gameFound = true; break;
                 }
                 if (isDice21Emoji) {
-                    if (gData.type === GAME_IDS.DICE_21) await processDice21PvBRollByEmoji(gData, diceValue, msg);
-                    else if (gData.type === GAME_IDS.DICE_21_PVP) await processDice21PvPRoll(gData, diceValue, rollerId);
-                    gameFound = true;
-                    break;
+                    if (gData.type === GAME_IDS.DICE_21) await processDice21PvBRollByEmoji(gData, diceValue, msg); else if (gData.type === GAME_IDS.DICE_21_PVP) await processDice21PvPRoll(gData, diceValue, rollerId);
+                    gameFound = true; break;
                 }
                 if (isDuelGameEmoji) {
-                    if (gData.type === GAME_IDS.DUEL_PVB) await processDuelPvBRollByEmoji(gData, diceValue);
-                    else if (gData.type === GAME_IDS.DUEL_PVP) await processDuelPvPRollByEmoji(gData, diceValue, rollerId);
-                    gameFound = true;
-                    break;
+                    if (gData.type === GAME_IDS.DUEL_PVB) await processDuelPvBRollByEmoji(gData, diceValue); else if (gData.type === GAME_IDS.DUEL_PVP) await processDuelPvPRollByEmoji(gData, diceValue, rollerId);
+                    gameFound = true; break;
                 }
             }
         }
         if (gameFound) {
+            console.log('[DEBUG] Game action found for emoji. Deleting emoji message and returning.');
             bot.deleteMessage(chatId, msg.message_id).catch(() => {});
             return;
+        } else {
+            console.log('[DEBUG] No active game found for this user/chat that requires this emoji.');
         }
     }
 
@@ -15252,18 +15261,15 @@ bot.on('message', async (msg) => {
             await safeSendMessage(chatId, "😕 Profile access error. Try `/start`.", {});
             return;
         }
-
         const now = Date.now();
         if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
             return;
         }
         userCooldowns.set(userId, now);
-
         let fullCommand = text.substring(1);
         let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
         const commandArgs = fullCommand.split(/\s+/).slice(1);
-        const originalMessageId = msg.message_id;
-
+        
         if (commandName.includes('@')) {
             try {
                 const selfBotInfo = await bot.getMe();
@@ -15298,11 +15304,11 @@ bot.on('message', async (msg) => {
 
         try {
             switch (commandName) {
-                // General & System Commands
+                // ... (all your command cases remain the same)
                 case 'start': await handleStartCommand(msg, commandArgs); break;
                 case 'help': await handleHelpCommand(msg); break;
                 case 'balance': case 'bal': await handleBalanceCommand(msg); break;
-                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, originalMessageId, false, chatType); break;
+                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, msg.message_id, false, chatType); break;
                 case 'jackpot': await handleJackpotCommand(chatId, userForCommandProcessing, chatType); break;
                 case 'leaderboards': await handleLeaderboardsCommand(msg, commandArgs); break;
                 case 'wallet': if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); break;
@@ -15314,8 +15320,6 @@ bot.on('message', async (msg) => {
                 case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
                 case 'tip': if (typeof handleTipCommand === 'function') await handleTipCommand(msg, commandArgs, userForCommandProcessing); break;
                 case 'bonus': if (typeof handleBonusCommand === 'function') await handleBonusCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleBonusCommand`); break;
-                
-                // Classic Dice & Card Games
                 case 'coinflip': case 'cf': {
                     if (chatType === 'private') { await safeSendMessage(chatId, `🪙 Coinflip is in <b>groups</b>! Use <code>/cf &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
                     if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betCF = await parseBetAmount(betArg, chatId, chatType, userId); if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF, targetRaw); }
@@ -15356,8 +15360,6 @@ bot.on('message', async (msg) => {
                 case 'mines':
                     if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
-
-                // UNIFIED INTERACTIVE GAME COMMANDS
                 case 'bowling': {
                     if (typeof handleStartBowlingCommand === 'function') {
                         const { betArg, targetRaw } = parseGameArgs(commandArgs);
@@ -15382,7 +15384,6 @@ bot.on('message', async (msg) => {
                     } else { console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleStartBasketballCommand`); }
                     break;
                 }
-
                 default:
                     const selfBotInfoDefault = await bot.getMe();
                     if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
@@ -15397,6 +15398,8 @@ bot.on('message', async (msg) => {
         }
     }
 });
+
+// --- End of REPLACEMENT for the entire bot.on('message', ...) handler ---
 // --- Callback Query Handler (`bot.on('callback_query')`) ---
 // FINAL CORRECTED VERSION - Replaces the original in Part 5a, Section 1
 bot.on('callback_query', async (callbackQuery) => {
