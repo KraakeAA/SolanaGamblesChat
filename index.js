@@ -13086,7 +13086,8 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
         );
         await client.query('COMMIT');
 
-        activeGames.set(gameId, { type: gameType, userId: userId, status: 'delegated' });
+        // --- FIX IS HERE: Added the missing 'chatId' property ---
+        activeGames.set(gameId, { type: gameType, userId: userId, chatId: chatId, status: 'delegated' });
         await updateGroupGameDetails(chatId, gameId, gameType, betAmountLamports);
 
         const gameName = getCleanGameName(gameType);
@@ -13164,8 +13165,10 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
         if (client) client.release();
     }
 
+    // --- FIX IS HERE: Added the missing 'chatId' property ---
     activeGames.set(gameId, {
         type: gameType,
+        chatId: chatId,
         p1: { userId: String(initiator.telegram_id) },
         p2: { userId: String(opponent.telegram_id) },
         status: 'delegated'
