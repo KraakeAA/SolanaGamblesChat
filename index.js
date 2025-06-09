@@ -15156,7 +15156,7 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
 // --- Main Message Handler (`bot.on('message')`) ---
 // FINAL CORRECTED VERSION - Replaces the original in Part 5a, Section 1
 bot.on('message', async (msg) => {
-    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
+    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler_V_FINAL TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
 
     if (isShuttingDown) return;
     if (!msg || !msg.from || !msg.chat || !msg.date) return;
@@ -15174,52 +15174,53 @@ bot.on('message', async (msg) => {
     const text = msg.text || "";
     const chatType = msg.chat.type;
 
-    // Dice emoji handling for active games
+    // --- THIS IS THE CORRECTED EMOJI HANDLING BLOCK ---
     if (msg.dice && msg.from && !msg.from.is_bot) {
         const diceValue = msg.dice.value;
         const rollerId = String(msg.from.id || msg.from.telegram_id);
         let gameFound = false;
-        let gameDataForDiceRoll = null;
 
         for (const [gameId, gData] of activeGames.entries()) {
             if (String(gData.chatId) === chatId) {
-                // Check if it's one of our helper-bot managed games
-                 const isNewInteractiveGame = [
-                    GAME_IDS.BOWLING, GAME_IDS.DARTS, GAME_IDS.BASKETBALL, // PvB versions
-                    GAME_IDS.BOWLING_DUEL_PVP, GAME_IDS.DARTS_DUEL_PVP, GAME_IDS.BASKETBALL_CLASH_PVP // PvP versions
+                // Check for new interactive games FIRST
+                const isNewInteractiveGame = [
+                    GAME_IDS.BOWLING, GAME_IDS.DARTS, GAME_IDS.BASKETBALL,
+                    GAME_IDS.BOWLING_DUEL_PVP, GAME_IDS.DARTS_DUEL_PVP, GAME_IDS.BASKETBALL_CLASH_PVP
                 ].includes(gData.type);
 
                 if (isNewInteractiveGame) {
                     if (typeof processInteractiveGameRoll === 'function') {
-                        await processInteractiveGameRoll(gData, diceValue, rollerId);
+                        const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
+                        if (result && !result.success) {
+                            await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`);
+                        }
                         gameFound = true;
                         break; 
+                    } else {
+                        console.error(`${LOG_PREFIX_MSG_HANDLER} CRITICAL: processInteractiveGameRoll function is missing!`);
                     }
                 }
-
+                
                 // Check for original games managed by the main bot
                 const isDiceEscalatorEmoji = (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) || (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji'));
                 const isDice21Emoji = (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status === 'player_turn_hit_stand_prompt' || gData.status === 'player_initial_roll_1_prompted' || gData.status === 'player_initial_roll_2_prompted')) || (gData.type === GAME_IDS.DICE_21_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'playing_turn') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'playing_turn'));
                 const isDuelGameEmoji = (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') || (gData.type === GAME_IDS.DUEL_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji'));
 
                 if (isDiceEscalatorEmoji) {
-                    gameDataForDiceRoll = gData;
-                    if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVB) await processDiceEscalatorPvBRollByEmoji_New(gameDataForDiceRoll, diceValue);
-                    else if (gameDataForDiceRoll.type === GAME_IDS.DICE_ESCALATOR_PVP) await processDiceEscalatorPvPRollByEmoji_New(gameDataForDiceRoll, diceValue, rollerId);
+                    if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB) await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue);
+                    else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId);
                     gameFound = true;
                     break;
                 }
                 if (isDice21Emoji) {
-                    gameDataForDiceRoll = gData;
-                    if (gameDataForDiceRoll.type === GAME_IDS.DICE_21) await processDice21PvBRollByEmoji(gameDataForDiceRoll, diceValue, msg);
-                    else if (gameDataForDiceRoll.type === GAME_IDS.DICE_21_PVP) await processDice21PvPRoll(gameDataForDiceRoll, diceValue, rollerId);
+                    if (gData.type === GAME_IDS.DICE_21) await processDice21PvBRollByEmoji(gData, diceValue, msg);
+                    else if (gData.type === GAME_IDS.DICE_21_PVP) await processDice21PvPRoll(gData, diceValue, rollerId);
                     gameFound = true;
                     break;
                 }
                 if (isDuelGameEmoji) {
-                    gameDataForDiceRoll = gData;
-                    if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVB) await processDuelPvBRollByEmoji(gameDataForDiceRoll, diceValue);
-                    else if (gameDataForDiceRoll.type === GAME_IDS.DUEL_PVP) await processDuelPvPRollByEmoji(gameDataForDiceRoll, diceValue, rollerId);
+                    if (gData.type === GAME_IDS.DUEL_PVB) await processDuelPvBRollByEmoji(gData, diceValue);
+                    else if (gData.type === GAME_IDS.DUEL_PVP) await processDuelPvPRollByEmoji(gData, diceValue, rollerId);
                     gameFound = true;
                     break;
                 }
@@ -15276,8 +15277,7 @@ bot.on('message', async (msg) => {
                 }
             } catch (getMeErr) {}
         }
-        console.log(`${LOG_PREFIX_MSG_HANDLER} CMD: /${commandName}, Args: [${commandArgs.join(', ')}] from User ${userId} (${userForCommandProcessing.username || 'NoUsername'})`);
-
+        
         const parseGameArgs = (args) => {
             let betArg = null; let targetRaw = null; let otherArgs = [];
             if (args.length === 0) {}
@@ -15357,7 +15357,7 @@ bot.on('message', async (msg) => {
                     if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
 
-                // NEW UNIFIED INTERACTIVE GAME COMMANDS
+                // UNIFIED INTERACTIVE GAME COMMANDS
                 case 'bowling': {
                     if (typeof handleStartBowlingCommand === 'function') {
                         const { betArg, targetRaw } = parseGameArgs(commandArgs);
