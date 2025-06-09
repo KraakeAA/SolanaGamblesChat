@@ -1169,6 +1169,7 @@ async function initializeDatabaseSchema() {
     console.log("⚙️ Initializing FULL database schema (All Tables & Triggers - Cleaned)...");
     const client = await pool.connect();
     try {
+        await client.query("SET LOCAL statement_timeout = '15s';");
         await client.query('BEGIN');
         console.log("DB Schema: BEGIN executed.");
 
