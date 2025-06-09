@@ -13005,53 +13005,46 @@ async function setupNotificationListener() {
 }
 
 // --- End of 5e Background Task Initializers ---
-// --- Start of Part 5f (COMPLETE & UNIFIED v4 - FINAL FIX) - Interactive Games (Bowling, Darts, Basketball) ---
-// This new section unifies PvB and PvP logic for all interactive helper-bot games
-// under single commands and a complete offer/challenge system.
-// The Main Bot's role is ONLY to manage game setup and finalization.
+// --- Start of Part 5f (COMPLETE & UNIFIED v5 - FINAL PvP TYPE FIX) - Interactive Games (Bowling, Darts, Basketball) ---
+// This version corrects the game_type being passed for PvP games and fixes the `undefined` name issue.
 //----------------------------------------------------------------------------------------------------
 
 // ===================================================================
-// SECTION 0: EMOJI ROLL PROCESSOR (THE MISSING BRIDGE)
-// This function is called by the main message handler when a dice emoji is detected for an interactive game.
+// SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    const logPrefix = `[ProcessInteractiveRoll GID:${gameData.gameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V2 GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
     try {
         client = await pool.connect();
-        // We lock the row to prevent race conditions with the helper bot
         const sessionRes = await client.query("SELECT * FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress' FOR UPDATE", [gameData.gameId]);
         
         if (sessionRes.rowCount === 0) {
-            console.warn(`${logPrefix} No active helper session found for this game. It might have already ended or timed out.`);
-            return;
+            console.warn(`${logPrefix} No 'in_progress' session found. Game might be starting or has ended.`);
+            return { success: false, error: "Game not ready for your roll. Please wait for the prompt." };
         }
         
         const session = sessionRes.rows[0];
         const gameState = session.game_state_json || {};
 
-        // Verify if it's the correct player's turn
         if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
-            console.log(`${logPrefix} Roll received from UID ${rollerId}, but it's currently UID ${gameState.currentPlayerTurn}'s turn. Ignoring.`);
-            return;
+            console.log(`${logPrefix} Roll from UID ${rollerId}, but it's UID ${gameState.currentPlayerTurn}'s turn. Ignoring.`);
+            return { success: false, error: "It's not your turn to roll!" };
         }
 
-        // Update the session with the roll and notify the helper bot
         gameState.lastRoll = diceValue;
-        // Also update the timestamp to prevent a timeout right after a valid roll
         gameState.currentTurnStartTime = Date.now(); 
 
         await client.query("UPDATE interactive_game_sessions SET game_state_json = $1 WHERE session_id = $2", [JSON.stringify(gameState), session.session_id]);
-        
-        // This is the most important part: it sends a signal to the helper bot.
         await client.query(`NOTIFY interactive_roll_submitted, '${JSON.stringify({ session_id: session.session_id })}'`);
         
         console.log(`${logPrefix} Roll of ${diceValue} submitted and helper bot notified.`);
+        return { success: true };
 
     } catch (e) {
         console.error(`${logPrefix} Error processing interactive roll: ${e.message}`);
+        return { success: false, error: "A database error occurred while processing your roll." };
     } finally {
         if (client) client.release();
     }
@@ -13060,12 +13053,8 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
 
 // ===================================================================
 // SECTION 1: GENERIC GAME STARTERS (DATABASE HANDOFF)
-// ... (The rest of your Part 5f code follows here) ...
 // ===================================================================
 
-/**
- * Creates a PvB interactive game session in the database for the helper bot.
- */
 async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLamports, chatId) {
     const userId = String(userObj.telegram_id);
     const logPrefix = `[StartInteractivePvB GID:${gameId} Type:${gameType}]`;
@@ -13080,7 +13069,7 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
 
         const initialGameState = {
             gameMode: 'pvb',
-            initiatorId: userId, // Add initiatorId for consistency
+            initiatorId: userId,
             initiatorName: getRawPlayerDisplayReference(userObj),
             totalWageredForLevelCheck: betResult.newTotalWageredLamports.toString()
         };
@@ -13125,9 +13114,6 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
     }
 }
 
-/**
- * Creates a PvP interactive game session in the database for the helper bot.
- */
 async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
     const LOG_PREFIX_START_INTERACTIVE_PVP = `[StartInteractivePvP GID:${gameId} Type:${gameType}]`;
     let client = null;
@@ -13185,7 +13171,7 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
     const gameName = getCleanGameName(gameType);
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    const startMessage = `🔥 <b>${escapeHTML(gameName)} Duel!</b> 🔥\n` +
+    const startMessage = `🔥 <b>${escapeHTML(gameName)} Duel!</b> 🔥\n\n` +
                          `${initiatorRefHTML} vs. ${opponentRefHTML} for <b>${betDisplayUSD_HTML}</b>!\n\n` +
                          `The Game Bot is now conducting the match. Good luck to both players!`;
     await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
@@ -13197,15 +13183,21 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
 // ===================================================================
 
 async function handleStartBowlingCommand(msg, betAmountLamports, targetUsernameRaw = null) {
-    await handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, GAME_IDS.BOWLING);
+    // CORRECTED: Pass the PvP specific game type if a target is provided.
+    const gameType = targetUsernameRaw ? GAME_IDS.BOWLING_DUEL_PVP : GAME_IDS.BOWLING;
+    await handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, gameType);
 }
 
 async function handleStartDartsCommand(msg, betAmountLamports, targetUsernameRaw = null) {
-    await handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, GAME_IDS.DARTS);
+    // CORRECTED: Pass the PvP specific game type if a target is provided.
+    const gameType = targetUsernameRaw ? GAME_IDS.DARTS_DUEL_PVP : GAME_IDS.DARTS;
+    await handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, gameType);
 }
 
 async function handleStartBasketballCommand(msg, betAmountLamports, targetUsernameRaw = null) {
-    await handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, GAME_IDS.BASKETBALL);
+    // CORRECTED: Pass the PvP specific game type if a target is provided.
+    const gameType = targetUsernameRaw ? GAME_IDS.BASKETBALL_CLASH_PVP : GAME_IDS.BASKETBALL;
+    await handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw, gameType);
 }
 
 
@@ -13324,7 +13316,7 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
                 }).catch(() => {});
             }
         }, timeoutDuration);
-        activeGames.set(offerId, offerData); // Re-set to include timeoutId
+        activeGames.set(offerId, offerData);
 
     } catch (error) {
         if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK');
@@ -13340,11 +13332,8 @@ async function handleStartInteractiveUnifiedOfferCommand(msg, betAmountLamports,
 // SECTION 4: GENERIC CALLBACK HANDLERS
 // ===================================================================
 
-/**
- * Generic callback handler for accepting the BOT version of an interactive game offer.
- */
 async function handleInteractiveAcceptBotCallback(offerId, clickerUserObj, callbackQueryId, gameType) {
-    const clickerId = String(clickerUserObj.telegram_id); // CORRECTED: Use .telegram_id
+    const clickerId = String(clickerUserObj.telegram_id);
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
@@ -13358,7 +13347,7 @@ async function handleInteractiveAcceptBotCallback(offerId, clickerUserObj, callb
         return;
     }
 
-    const activeGameKey = gameType;
+    const activeGameKey = gameType; // PvB games use the base key
     const gameSession = await getGroupSession(offerData.chatId);
     const gameLimit = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKey] || 1;
     if ((gameSession.activeGamesByTypeInGroup.get(activeGameKey) || []).length >= gameLimit) {
@@ -13378,15 +13367,25 @@ async function handleInteractiveAcceptBotCallback(offerId, clickerUserObj, callb
     await startInteractivePvBGame(gameId, gameType, offerData.initiatorUserObj, offerData.betAmount, offerData.chatId);
 }
 
-/**
- * Generic callback handler for accepting the PVP version of an interactive game offer.
- */
 async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callbackQueryId, gameType) {
-    const clickerId = String(clickerUserObj.telegram_id); // CORRECTED: Use .telegram_id
+    const clickerId = String(clickerUserObj.telegram_id);
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
-    const logPrefix = `[InteractiveAcceptPvP_V3 GID:${offerId}]`;
+    const logPrefix = `[InteractiveAcceptPvP_V4 GID:${offerId}]`;
+    
+    // --- Determine the correct PvP game type to start ---
+    let pvpGameType;
+    if (gameType === GAME_IDS.BOWLING) pvpGameType = GAME_IDS.BOWLING_DUEL_PVP;
+    else if (gameType === GAME_IDS.DARTS) pvpGameType = GAME_IDS.DARTS_DUEL_PVP;
+    else if (gameType === GAME_IDS.BASKETBALL) pvpGameType = GAME_IDS.BASKETBALL_CLASH_PVP;
+    else {
+        console.error(`${logPrefix} Could not determine PvP game type for base type ${gameType}`);
+        await bot.answerCallbackQuery(callbackQueryId, { text: "Internal error: Unknown game type.", show_alert: true });
+        return;
+    }
+    const pvpGameName = getCleanGameName(pvpGameType);
+
 
     if (!offerData || offerData.type !== offerKey || offerData.status !== 'pending_offer') {
         await bot.answerCallbackQuery(callbackQueryId, { text: `This ${gameName} offer is no longer valid.`, show_alert: true });
@@ -13397,23 +13396,20 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
         return;
     }
     
-    const activePvPGameKey = gameType; 
     const gameSession = await getGroupSession(offerData.chatId);
-    const gameLimit = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activePvPGameKey] || 1;
-    if ((gameSession.activeGamesByTypeInGroup.get(activePvPGameKey) || []).length >= gameLimit) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Max active ${gameName} PvP games (${gameLimit}) reached. Please wait.`, show_alert: true });
+    const gameLimit = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[pvpGameType] || 1;
+    if ((gameSession.activeGamesByTypeInGroup.get(pvpGameType) || []).length >= gameLimit) {
+        await bot.answerCallbackQuery(callbackQueryId, { text: `Max active ${pvpGameName} PvP games (${gameLimit}) reached. Please wait.`, show_alert: true });
         return;
     }
     
     const opponentUserObj = await getOrCreateUser(clickerId, clickerUserObj.username, clickerUserObj.first_name, clickerUserObj.last_name);
     
-    // --- FIX IS HERE: Added null check for the user object ---
     if (!opponentUserObj) {
         console.error(`${logPrefix} CRITICAL: Failed to get/create user profile for clicker ID ${clickerId}.`);
         await bot.answerCallbackQuery(callbackQueryId, { text: "Error: Could not retrieve your player profile. Please try /start and attempt to join again.", show_alert: true });
         return;
     }
-    // --- END OF FIX ---
 
     if (BigInt(opponentUserObj.balance) < offerData.betAmount) {
         await bot.answerCallbackQuery(callbackQueryId, { text: "Your balance is too low to accept this challenge.", show_alert: true });
@@ -13421,7 +13417,7 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
     }
 
     if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `Joining ${gameName} PvP...` });
+    await bot.answerCallbackQuery(callbackQueryId, { text: `Joining ${pvpGameName} PvP...` });
 
     await bot.deleteMessage(offerData.chatId, offerData.offerMessageId).catch(() => {});
     
@@ -13432,13 +13428,13 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
     try {
         clientBet = await pool.connect();
         await clientBet.query('BEGIN');
-        const joinBetRes = await updateUserBalanceAndLedger(clientBet, clickerId, -offerData.betAmount, `bet_placed_${gameType}_pvp_join`, { game_id_custom_field: offerId });
+        const joinBetRes = await updateUserBalanceAndLedger(clientBet, clickerId, -offerData.betAmount, `bet_placed_${pvpGameType}_pvp_join`, { game_id_custom_field: offerId });
         if (!joinBetRes.success) throw new Error(joinBetRes.error || "Failed to deduct joiner's bet.");
         opponentUserObj.balance = joinBetRes.newBalanceLamports;
         await clientBet.query('COMMIT');
     } catch(e) {
         if(clientBet) await clientBet.query('ROLLBACK');
-        console.error(`[InteractiveAcceptPvP] Error taking opponent bet: ${e.message}`);
+        console.error(`${logPrefix} Error taking opponent bet: ${e.message}`);
         await safeSendMessage(offerData.chatId, "An error occurred taking the bet. The challenge has been cancelled.");
         let refundClient = null;
         try {
@@ -13451,14 +13447,11 @@ async function handleInteractiveAcceptPvPCallback(offerId, clickerUserObj, callb
         if(clientBet) clientBet.release();
     }
 
-    await startInteractivePvPGame(generateGameId(gameType), offerData.initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.chatId, gameType);
+    await startInteractivePvPGame(generateGameId(pvpGameType), offerData.initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.chatId, pvpGameType);
 }
 
-/**
- * Generic callback handler for cancelling an interactive game offer.
- */
 async function handleInteractiveCancelCallback(offerId, clickerUserObj, callbackQueryId, gameType) {
-    const clickerId = String(clickerUserObj.telegram_id); // CORRECTED: Use .telegram_id
+    const clickerId = String(clickerUserObj.telegram_id);
     const offerData = activeGames.get(offerId);
     const gameName = getCleanGameName(gameType);
     const offerKey = `${gameType}_unified_offer`;
@@ -13502,8 +13495,6 @@ async function handleInteractiveCancelCallback(offerId, clickerUserObj, callback
 
 // ===================================================================
 // SECTION 5: PVP GAME SEQUENCE "BRIDGE" FUNCTIONS
-// These functions act as a bridge from the direct challenge handler
-// to the generic interactive PvP game starter.
 // ===================================================================
 
 async function startBowlingDuelPvPGameSequence(offerData, initiatorUserObj, opponentUserObj) {
@@ -13521,7 +13512,7 @@ async function startBasketballPvPGameSequence(offerData, initiatorUserObj, oppon
     await startInteractivePvPGame(pvpGameId, initiatorUserObj, opponentUserObj, offerData.betAmount, offerData.originalGroupId, GAME_IDS.BASKETBALL_CLASH_PVP);
 }
 
-// --- End of Part 5f (COMPLETE & UNIFIED v4 - FINAL FIX) ---
+// --- End of Part 5f (COMPLETE & UNIFIED v5 - FINAL PvP TYPE FIX) ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
 // index.js - Part 5a, Section 2: General Casino Bot Command Implementations
 //----------------------------------------------------------------------------------
