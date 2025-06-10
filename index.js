@@ -12822,116 +12822,124 @@ function startJackpotSessionPolling() {
 
 // --- REPLACE the existing finalizeInteractiveGame function in index.js (Part 5e) with this new version ---
 
+// in index.js (Part 5e) - REVISED finalizeInteractiveGame function
+
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V8_PvP_Fix SID:${sessionId}]`;
-    let finalizationClient = null;
-    let session;
+    const logPrefix = `[FinalizeInteractive_V9_CalcFix SID:${sessionId}]`;
+    let finalizationClient = null;
+    let session;
 
-    try {
-        finalizationClient = await pool.connect();
-        await finalizationClient.query('BEGIN');
+    try {
+        finalizationClient = await pool.connect();
+        await finalizationClient.query('BEGIN');
 
-        const sessionRes = await finalizationClient.query("SELECT * FROM interactive_game_sessions WHERE session_id = $1 AND status NOT LIKE 'archived_%' FOR UPDATE", [sessionId]);
-        if (sessionRes.rowCount === 0) {
-            console.warn(`${logPrefix} Session not found or already archived.`);
-            await finalizationClient.query('ROLLBACK');
-            return;
-        }
-        session = sessionRes.rows[0];
-        
-        const betAmount = BigInt(session.bet_amount_lamports);
-        const finalStatus = session.status;
-        const gameState = session.game_state_json || {};
-        const isPvP = gameState.gameMode === 'pvp';
-        const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
+        const sessionRes = await finalizationClient.query("SELECT * FROM interactive_game_sessions WHERE session_id = $1 AND status NOT LIKE 'archived_%' FOR UPDATE", [sessionId]);
+        if (sessionRes.rowCount === 0) {
+            console.warn(`${logPrefix} Session not found or already archived.`);
+            await finalizationClient.query('ROLLBACK');
+            return;
+        }
+        session = sessionRes.rows[0];
+        
+        const betAmount = BigInt(session.bet_amount_lamports);
+        const finalStatus = session.status;
+        const gameState = session.game_state_json || {};
+        const isPvP = gameState.gameMode === 'pvp';
+        const totalPot = betAmount * 2n;
+        const houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
 
-        let p1_id = String(gameState.initiatorId || session.user_id);
-        let p2_id = isPvP ? String(gameState.opponentId) : null;
-        let p1_payout = 0n;
-        let p2_payout = 0n;
-        const totalPot = betAmount * 2n;
-        const houseFee = isPvP ? BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT)) : 0n;
+        let p1_id = String(gameState.initiatorId || session.user_id);
+        let p2_id = isPvP ? String(gameState.opponentId) : null;
+        let p1_payout = 0n;
+        let p2_payout = 0n;
 
-        // Determine payouts
-        if (!isPvP) {
-            p1_payout = BigInt(session.final_payout_lamports || '0');
-        } else {
-            if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
-            else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
-            else if (finalStatus === 'completed_push') { p1_payout = betAmount; p2_payout = betAmount; }
-        }
+        // --- CORRECTED: Payout calculation is now centralized here for all outcomes ---
+        if (isPvP) {
+            if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
+            else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
+            else if (finalStatus === 'completed_push') { p1_payout = betAmount; p2_payout = betAmount; }
+        } else { // PvB logic
+            if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
+                const multiplier = gameState.currentMultiplier || 2.0; // Default to 2x for standard PvB wins
+                const preFeePayout = BigInt(Math.floor(Number(betAmount) * multiplier));
+                const pvbHouseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
+                p1_payout = preFeePayout - pvbHouseFee;
+            } else if (finalStatus === 'completed_push') {
+                p1_payout = betAmount;
+            }
+            // For 'completed_loss', 'timeout', 'error', payout remains 0n
+        }
 
-        const solPrice = await getSolUsdPrice();
-        
-        const player1Update = await updateUserBalanceAndLedger(finalizationClient, p1_id, p1_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
-        if (!player1Update.success) throw new Error(`P1 balance update failed: ${player1Update.error}`);
+        const solPrice = await getSolUsdPrice();
+        const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
+        
+        const player1Update = await updateUserBalanceAndLedger(finalizationClient, p1_id, p1_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
+        if (!player1Update.success) throw new Error(`P1 balance update failed: ${player1Update.error}`);
 
-        if (isConclusive) {
-            const p1Wagered = BigInt(gameState.initiatorTotalWagered || '0');
-            if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p1_id, betAmount, session.main_bot_game_id);
-            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p1_id, p1Wagered, solPrice, session.chat_id);
-            if (typeof processWagerMilestoneBonus === 'function' && p1Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p1_id, p1Wagered, solPrice);
-        }
+        if (isConclusive) {
+            const p1Wagered = BigInt(gameState.initiatorTotalWagered || '0');
+            if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p1_id, betAmount, session.main_bot_game_id);
+            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p1_id, p1Wagered, solPrice, session.chat_id);
+            if (typeof processWagerMilestoneBonus === 'function' && p1Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p1_id, p1Wagered, solPrice);
+        }
 
-        if (isPvP && p2_id) {
-            const player2Update = await updateUserBalanceAndLedger(finalizationClient, p2_id, p2_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
-            if (!player2Update.success) throw new Error(`P2 balance update failed: ${player2Update.error}`);
-            if (isConclusive) {
-                const p2Wagered = BigInt(gameState.opponentTotalWagered || '0');
-                if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p2_id, betAmount, session.main_bot_game_id);
-                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p2_id, p2Wagered, solPrice, session.chat_id);
-                if (typeof processWagerMilestoneBonus === 'function' && p2Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p2_id, p2Wagered, solPrice);
-            }
-        }
-        
-        await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
-        await finalizationClient.query('COMMIT');
-        
-        const gameName = getCleanGameName(session.game_type);
-        const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
-        let resultMessageHTML = ``;
+        if (isPvP && p2_id) {
+            const player2Update = await updateUserBalanceAndLedger(finalizationClient, p2_id, p2_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
+            if (!player2Update.success) throw new Error(`P2 balance update failed: ${player2Update.error}`);
+            if (isConclusive) {
+                const p2Wagered = BigInt(gameState.opponentTotalWagered || '0');
+                if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p2_id, betAmount, session.main_bot_game_id);
+                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p2_id, p2Wagered, solPrice, session.chat_id);
+                if (typeof processWagerMilestoneBonus === 'function' && p2Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p2_id, p2Wagered, solPrice);
+            }
+        }
+        
+        await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
+        await finalizationClient.query('COMMIT');
+        
+        // --- RESULT MESSAGING ---
+        const gameName = getCleanGameName(session.game_type);
+        const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
+        let resultMessageHTML = ``;
 
-        if (isPvP) {
-            const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
-            const p2Name = escapeHTML(gameState.opponentName || "Player 2");
-            resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
-            resultMessageHTML += `<b>${p1Name}:</b> ${gameState.p1Score} pts\n`;
-            resultMessageHTML += `<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
+        if (isPvP) {
+            const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
+            const p2Name = escapeHTML(gameState.opponentName || "Player 2");
+            resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
+            resultMessageHTML += `<b>${p1Name}:</b> ${gameState.p1Score} pts\n`;
+            resultMessageHTML += `<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
 
-            if (finalStatus === 'completed_p1_win') {
-                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
-                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
-            } else if (finalStatus === 'completed_p2_win') {
-                const winAmount = await formatBalanceForDisplay(p2_payout, 'USD');
-                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${winAmount}</b>!`;
-            } else if (finalStatus === 'completed_push') {
-                resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
-            } else {
-                resultMessageHTML += `Game ended inconclusively. Wagers returned.`;
-            }
-        } else { // PvB games
-            const p1Name = escapeHTML(gameState.p1Name || "Player");
-            resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`;
-            if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
-                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
-            } else {
-                resultMessageHTML += `💔 Better luck next time! Your wager of <b>${betDisplay}</b> was lost.`;
-            }
-        }
-        
-        await safeSendMessage(session.chat_id, resultMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
+            if (finalStatus === 'completed_p1_win') {
+                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
+            } else if (finalStatus === 'completed_p2_win') {
+                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${await formatBalanceForDisplay(p2_payout, 'USD')}</b>!`;
+            } else {
+                resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
+            }
+        } else { // PvB
+            const p1Name = escapeHTML(gameState.p1Name || "Player");
+            resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`;
+            if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
+                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
+            } else if (finalStatus === 'completed_push') {
+                resultMessageHTML += `⚖️ It's a draw! Your wager of <b>${betDisplay}</b> was returned.`;
+            } else {
+                resultMessageHTML += `💔 Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
+            }
+        }
+        
+        await safeSendMessage(session.chat_id, resultMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
 
-        activeGames.delete(session.main_bot_game_id);
-        await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, session.game_type, null);
+        activeGames.delete(session.main_bot_game_id);
+        await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, session.game_type, null);
 
-    } catch (e) {
-        if (finalizationClient) await finalizationClient.query('ROLLBACK');
-        console.error(`${logPrefix} CRITICAL error: ${e.message}`);
-        if (session) await notifyAdmin(`🚨 CRITICAL Error Finalizing Game Session 🚨\nSessionID: \`${session.session_id}\`\nUser: \`${session.user_id}\`\nError: \`${escapeHTML(e.message)}\``);
-    } finally {
-        if (finalizationClient) finalizationClient.release();
-    }
+    } catch (e) {
+        if (finalizationClient) await finalizationClient.query('ROLLBACK');
+        console.error(`${logPrefix} CRITICAL error: ${e.message}`);
+        if (session) await notifyAdmin(`🚨 CRITICAL Error Finalizing Game Session 🚨\nSessionID: \`${session.session_id}\`\nUser: \`${session.user_id}\`\nError: \`${escapeHTML(e.message)}\``);
+    } finally {
+        if (finalizationClient) finalizationClient.release();
+    }
 }
 // --- End of REPLACEMENT for finalizeInteractiveGame ---
 /**
