@@ -2297,7 +2297,7 @@ function getCleanGameName(technicalGameId) {
 
     const lowerCaseId = String(technicalGameId).toLowerCase();
 
-    // Use a switch for clarity and exact matching
+    // The switch handles all active game types
     switch(lowerCaseId) {
         case 'coinflip':
         case 'coinflip_pvb':
@@ -2315,6 +2315,9 @@ function getCleanGameName(technicalGameId) {
         case 'dice_escalator_pvp_from_unified':
             return "Dice Escalator";
         case 'dice21':
+        case 'dice21_pvb': // Adding PvB for completeness
+        case 'dice21_pvp':
+        case 'dice21_pvp_from_unified':
             return "Dice 18";
         case 'duel':
         case 'duel_pvb':
@@ -2335,11 +2338,11 @@ function getCleanGameName(technicalGameId) {
         
         // Original Interactive Games
         case 'bowling':
-            return "Pinpoint Bowling"; // Original Game
+            return "Pinpoint Bowling";
         case 'darts':
-            return "Darts of Fortune"; // Original Game
+            return "Darts of Fortune";
         case 'basketball':
-            return "3-Point Shootout"; // Original Game
+            return "3-Point Shootout";
 
         // New Interactive Games
         case 'bowling_duel':
@@ -2351,18 +2354,27 @@ function getCleanGameName(technicalGameId) {
         case 'basketball_clash_pvp':
             return "3-Point Clash";
         
-        // Offers and Challenges
+        // Generic Offer Type
         case 'direct_pvp_challenge':
             return "a direct challenge";
-        default:
-            // Fallback for offer keys
-            if (lowerCaseId.includes('offer')) {
-                if (lowerCaseId.includes('coinflip')) return "a Coinflip offer";
-                if (lowerCaseId.includes('rps')) return "an RPS offer";
-                // Add other offers as needed
-            }
-            return "an unknown game";
     }
+
+    // --- CORRECTED & EXPANDED FALLBACK FOR ALL OFFER TYPES ---
+    // This now runs if the switch statement doesn't find a match.
+    if (lowerCaseId.includes('offer')) {
+        if (lowerCaseId.includes('coinflip')) return "a Coinflip offer";
+        if (lowerCaseId.includes('rps')) return "an RPS offer";
+        if (lowerCaseId.includes('dice_escalator')) return "a Dice Escalator offer";
+        if (lowerCaseId.includes('dice21')) return "a Dice 18 offer";
+        if (lowerCaseId.includes('duel')) return "a Duel offer";
+        if (lowerCaseId.includes('mines')) return "a Mines offer";
+        if (lowerCaseId.includes('bowling')) return "a Bowling offer";
+        if (lowerCaseId.includes('darts')) return "a Darts offer";
+        if (lowerCaseId.includes('basketball')) return "a Basketball offer";
+    }
+
+    // Default return if no other condition is met
+    return "an unknown game";
 }
 // --- General Utility Functions ---
 
