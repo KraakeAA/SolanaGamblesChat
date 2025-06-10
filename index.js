@@ -290,6 +290,7 @@ const DUEL_DICE_COUNT = parseInt(process.env.DUEL_DICE_COUNT, 10);
 const LADDER_ROLL_COUNT = parseInt(process.env.LADDER_ROLL_COUNT, 10);
 const LADDER_BUST_ON = parseInt(process.env.LADDER_BUST_ON, 10);
 const DICE_ESCALATOR_BUST_ON = parseInt(process.env.DICE_ESCALATOR_BUST_ON, 10);
+const ROUND_BASED_HOOPS_SHOTS_PER_ROUND = 2;
 
 const LADDER_PAYOUTS = [
     { min: 10, max: 14, multiplier: 1, label: "Nice Climb!" },
