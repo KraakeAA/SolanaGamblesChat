@@ -15262,29 +15262,37 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
 // --- Start of REPLACEMENT for the entire bot.on('message', ...) handler ---
 // FINAL VERSION + DEBUG LOGS - This version adds logging to trace the emoji handling flow.
 
+// in index.js - The complete and corrected message listener.
+
 bot.on('message', async (msg) => {
-    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler_V_FINAL_InteractiveFix TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
+    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler_V_FINAL_FullCode TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
 
-    if (isShuttingDown || !msg?.from || !msg?.chat || !msg?.date) return;
-    if (msg.from.is_bot) return; // Ignore all bot messages
+    if (isShuttingDown) return;
+    if (!msg || !msg.from || !msg.chat || !msg.date) return;
 
-    const userId = String(msg.from.id);
+    // Ignore messages from all bots to prevent loops
+    if (msg.from.is_bot) {
+        return;
+    }
+
+    const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const text = msg.text || "";
+    // FIX: The chatType variable is correctly defined here for use throughout the handler.
+    const chatType = msg.chat.type;
 
-    // --- REVISED Emoji Handling Block ---
-    if (msg.dice) {
+    // --- REVISED & COMPLETE EMOJI HANDLING BLOCK ---
+    if (msg.dice && msg.from && !msg.from.is_bot) {
         const diceValue = msg.dice.value;
-        const rollerId = String(msg.from.id);
+        const rollerId = String(msg.from.id || msg.from.telegram_id);
         let gameFoundAndProcessed = false;
 
         for (const [gameId, gData] of activeGames.entries()) {
             if (String(gData.chatId) !== chatId) continue;
             
-            // --- UNIFIED EMOJI ROLL CHECK ---
             let isParticipantInTargetGame = false;
 
-            // Check for games handled by main bot
+            // Check for games handled by the main bot directly
             if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status.includes('player_turn') || gData.status.includes('prompted'))) isParticipantInTargetGame = true;
@@ -15292,9 +15300,8 @@ bot.on('message', async (msg) => {
             else if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DUEL_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
             
-            // Check for games delegated to helper bot
+            // CORRECTED CHECK: This now works for both PvB and PvP delegated games.
             else if (gData.status === 'delegated') {
-                // CORRECTED: This check now works for both PvB and PvP delegated games.
                 if (Array.isArray(gData.participants) && gData.participants.includes(rollerId)) { // For PvP
                     isParticipantInTargetGame = true;
                 } else if (gData.userId === rollerId) { // For PvB
@@ -15327,168 +15334,174 @@ bot.on('message', async (msg) => {
         }
 
         if (gameFoundAndProcessed) {
-            // Delete the user's dice emoji message after a short delay
+            // Delete the user's dice emoji message after a short delay to prevent clutter
             setTimeout(() => { bot.deleteMessage(chatId, msg.message_id).catch(() => {}); }, 4000);
             return;
         }
     }
     // --- End of Emoji Handling Block ---
 
-    if (userStateCache.has(userId) && !text.startsWith('/')) {
-        const currentState = userStateCache.get(userId);
-        if (typeof routeStatefulInput === 'function') {
-            await routeStatefulInput(msg, currentState);
-            return;
-        } else {
-            if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
-        }
-    }
+    // --- Stateful Input Handling (e.g., for withdrawals) ---
+    if (userStateCache.has(userId) && !text.startsWith('/')) {
+        const currentState = userStateCache.get(userId);
+        if (typeof routeStatefulInput === 'function') {
+            await routeStatefulInput(msg, currentState);
+            return;
+        } else {
+            if (typeof clearUserState === 'function') clearUserState(userId); else userStateCache.delete(userId);
+        }
+    }
 
-    if (text.startsWith('/')) {
-        if (!userId || userId === "undefined") {
-            await safeSendMessage(chatId, "⚠️ Error with user session. Try `/start`.", {});
-            return;
-        }
-        let userForCommandProcessing = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-        if (!userForCommandProcessing) {
-            await safeSendMessage(chatId, "😕 Profile access error. Try `/start`.", {});
-            return;
-        }
-        const now = Date.now();
-        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
-            return;
-        }
-        userCooldowns.set(userId, now);
-        let fullCommand = text.substring(1);
-        let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
-        const commandArgs = fullCommand.split(/\s+/).slice(1);
-        
-        if (commandName.includes('@')) {
-            try {
-                const selfBotInfo = await bot.getMe();
-                const botUsernameLower = selfBotInfo.username.toLowerCase();
-                if (commandName.endsWith(`@${botUsernameLower}`)) {
-                    commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
-                } else if (chatType === 'group' || chatType === 'supergroup') {
-                    return;
-                } else {
-                    commandName = commandName.split('@')[0];
-                }
-            } catch (getMeErr) {}
-        }
-        
-        const parseGameArgs = (args) => {
-            let betArg = null; let targetRaw = null; let otherArgs = [];
-            if (args.length === 0) {}
-            else if (args.length === 1) {
-                const arg0 = args[0];
-                if (arg0.startsWith('@') || (/^\d+$/.test(arg0) && arg0.length >= 7 && arg0.length <= 12)) targetRaw = arg0;
-                else betArg = arg0;
-            } else {
-                const arg0IsUserLike = args[0].startsWith('@') || (/^\d+$/.test(args[0]) && args[0].length >= 7);
-                const arg1IsUserLike = args.length > 1 && (args[1].startsWith('@') || (/^\d+$/.test(args[1]) && args[1].length >= 7));
-                if (!arg0IsUserLike && arg1IsUserLike) { betArg = args[0]; targetRaw = args[1]; otherArgs = args.slice(2); }
-                else if (arg0IsUserLike && !arg1IsUserLike) { targetRaw = args[0]; betArg = args[1]; otherArgs = args.slice(2); }
-                else if (!arg0IsUserLike && !arg1IsUserLike) { betArg = args[0]; otherArgs = args.slice(1); }
-                else { betArg = args[0]; targetRaw = null; otherArgs = args.slice(1); }
-            }
-            return { betArg, targetRaw, otherArgs };
-        };
+    // --- Command Handling ---
+    if (text.startsWith('/')) {
+        if (!userId || userId === "undefined") {
+            await safeSendMessage(chatId, "⚠️ Error with user session. Try `/start`.", {});
+            return;
+        }
+        let userForCommandProcessing = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+        if (!userForCommandProcessing) {
+            await safeSendMessage(chatId, "😕 Profile access error. Try `/start`.", {});
+            return;
+        }
+        const now = Date.now();
+        if (userCooldowns.has(userId) && (now - userCooldowns.get(userId)) < COMMAND_COOLDOWN_MS) {
+            return; // Enforce command cooldown
+        }
+        userCooldowns.set(userId, now);
 
-        try {
-            switch (commandName) {
-                case 'start': await handleStartCommand(msg, commandArgs); break;
-                case 'help': await handleHelpCommand(msg); break;
-                case 'balance': case 'bal': await handleBalanceCommand(msg); break;
-                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, msg.message_id, false, chatType); break;
-                case 'jackpot': await handleJackpotCommand(chatId, userForCommandProcessing, chatType); break;
-                case 'leaderboards': await handleLeaderboardsCommand(msg, commandArgs); break;
-                case 'wallet': if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); break;
-                case 'deposit': if (typeof handleDepositCommand === 'function') await handleDepositCommand(msg, commandArgs, userId); break;
-                case 'withdraw': if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(msg, commandArgs, userId); break;
-                case 'referral': if (typeof handleReferralCommand === 'function') await handleReferralCommand(msg); break;
-                case 'history': if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg); break;
-                case 'setwallet': if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs); break;
-                case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
-                case 'tip': if (typeof handleTipCommand === 'function') await handleTipCommand(msg, commandArgs, userForCommandProcessing); break;
-                case 'bonus': if (typeof handleBonusCommand === 'function') await handleBonusCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleBonusCommand`); break;
-                case 'coinflip': case 'cf': {
-                    if (chatType === 'private') { await safeSendMessage(chatId, `🪙 Coinflip is in <b>groups</b>! Use <code>/cf &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betCF = await parseBetAmount(betArg, chatId, chatType, userId); if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartCoinflipUnifiedOfferCommand`); break;
-                }
-                case 'rps': {
-                    if (chatType === 'private') { await safeSendMessage(chatId, `🪨📄✂️ RPS is in <b>groups</b>! Use <code>/rps &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartRPSUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betRPS = await parseBetAmount(betArg, chatId, chatType, userId); if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartRPSUnifiedOfferCommand`); break;
-                }
-                case 'de': case 'diceescalator': {
-                    if (chatType === 'private') { await safeSendMessage(chatId, `🎲 Dice Escalator is in <b>groups</b>! Use <code>/de &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betDE = await parseBetAmount(betArg, chatId, chatType, userId); if(betDE) await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDiceEscalatorUnifiedOfferCommand_New`); break;
-                }
-                case 'd18': case 'd21': case 'blackjack': { 
-                    if (chatType === 'private') { await safeSendMessage(chatId, `🎲 Dice 18 is played in <b>groups</b>! Use <code>/d18 &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartDice21Command === 'function') { const { betArg, targetRaw, otherArgs } = parseGameArgs(commandArgs); const gameModeArgD21 = otherArgs[0] || null; const betD21 = await parseBetAmount(betArg, chatId, chatType, userId); if(betD21) await handleStartDice21Command(msg, betD21, targetRaw, gameModeArgD21); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDice21Command`); break;
-                }
-                case 'duel': case 'highroller': {
-                    if (chatType === 'private') { await safeSendMessage(chatId, `⚔️ Duel is in <b>groups</b>! Use <code>/duel &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
-                    if (typeof handleStartDuelUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betDuel = await parseBetAmount(betArg, chatId, chatType, userId); if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel, targetRaw); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDuelUnifiedOfferCommand`); break;
-                }
-                case 'ou7': case 'overunder7':
-                    if (typeof handleStartOverUnder7Command === 'function') { const betOU7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betOU7) await handleStartOverUnder7Command(msg, betOU7); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartOverUnder7Command`); break;
-                case 'ladder': case 'greedsladder':
-                    if (typeof handleStartLadderCommand === 'function') { const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betLadder) await handleStartLadderCommand(msg, betLadder); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartLadderCommand`); break;
-                case 's7': case 'sevenout': case 'luckysum':
-                    if (typeof handleStartSevenOutCommand === 'function') { const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betS7) await handleStartSevenOutCommand(msg, betS7); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSevenOutCommand`); break;
-                case 'slot': case 'slots': case 'slotfrenzy':
-                    if (typeof handleStartSlotCommand === 'function') { const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betSlot) await handleStartSlotCommand(msg, betSlot); }
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSlotCommand`); break;
-                case 'mines':
-                    if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
-                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
-                case 'bowling': case 'darts': case 'basketball':
-                case 'hoops': { // Catch all interactive games
+        let fullCommand = text.substring(1);
+        let commandName = fullCommand.split(/\s+/)[0]?.toLowerCase();
+        const commandArgs = fullCommand.split(/\s+/).slice(1);
+        
+        // Handle commands of the format /command@BotUsername
+        if (commandName.includes('@')) {
+            try {
+                const selfBotInfo = await bot.getMe();
+                const botUsernameLower = selfBotInfo.username.toLowerCase();
+                if (commandName.endsWith(`@${botUsernameLower}`)) {
+                    commandName = commandName.substring(0, commandName.lastIndexOf(`@${botUsernameLower}`));
+                } else if (chatType === 'group' || chatType === 'supergroup') {
+                    return; // Ignore commands directed at other bots in a group
+                } else {
+                    // In DMs, allow commands even if they have a random @suffix
+                    commandName = commandName.split('@')[0];
+                }
+            } catch (getMeErr) {}
+        }
+        
+        // Helper function to intelligently parse arguments for game commands
+        const parseGameArgs = (args) => {
+            let betArg = null; let targetRaw = null; let otherArgs = [];
+            if (args.length === 0) {}
+            else if (args.length === 1) {
+                const arg0 = args[0];
+                if (arg0.startsWith('@') || (/^\d+$/.test(arg0) && arg0.length >= 7 && arg0.length <= 12)) targetRaw = arg0;
+                else betArg = arg0;
+            } else {
+                const arg0IsUserLike = args[0].startsWith('@') || (/^\d+$/.test(args[0]) && args[0].length >= 7);
+                const arg1IsUserLike = args.length > 1 && (args[1].startsWith('@') || (/^\d+$/.test(args[1]) && args[1].length >= 7));
+                if (!arg0IsUserLike && arg1IsUserLike) { betArg = args[0]; targetRaw = args[1]; otherArgs = args.slice(2); }
+                else if (arg0IsUserLike && !arg1IsUserLike) { targetRaw = args[0]; betArg = args[1]; otherArgs = args.slice(2); }
+                else if (!arg0IsUserLike && !arg1IsUserLike) { betArg = args[0]; otherArgs = args.slice(1); }
+                else { betArg = args[0]; targetRaw = null; otherArgs = args.slice(1); }
+            }
+            return { betArg, targetRaw, otherArgs };
+        };
+
+        try {
+            switch (commandName) {
+                case 'start': await handleStartCommand(msg, commandArgs); break;
+                case 'help': await handleHelpCommand(msg); break;
+                case 'balance': case 'bal': await handleBalanceCommand(msg); break;
+                case 'rules': case 'info': await handleRulesCommand(chatId, userForCommandProcessing, msg.message_id, false, chatType); break;
+                case 'jackpot': await handleJackpotCommand(chatId, userForCommandProcessing, chatType); break;
+                case 'leaderboards': await handleLeaderboardsCommand(msg, commandArgs); break;
+                case 'wallet': if (typeof handleWalletCommand === 'function') await handleWalletCommand(msg); break;
+                case 'deposit': if (typeof handleDepositCommand === 'function') await handleDepositCommand(msg, commandArgs, userId); break;
+                case 'withdraw': if (typeof handleWithdrawCommand === 'function') await handleWithdrawCommand(msg, commandArgs, userId); break;
+                case 'referral': if (typeof handleReferralCommand === 'function') await handleReferralCommand(msg); break;
+                case 'history': if (typeof handleHistoryCommand === 'function') await handleHistoryCommand(msg); break;
+                case 'setwallet': if (typeof handleSetWalletCommand === 'function') await handleSetWalletCommand(msg, commandArgs); break;
+                case 'grant': await handleGrantCommand(msg, commandArgs, userForCommandProcessing); break;
+                case 'tip': if (typeof handleTipCommand === 'function') await handleTipCommand(msg, commandArgs, userForCommandProcessing); break;
+                case 'bonus': if (typeof handleBonusCommand === 'function') await handleBonusCommand(msg); else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler: handleBonusCommand`); break;
+                
+                case 'coinflip': case 'cf': {
+                    if (chatType === 'private') { await safeSendMessage(chatId, `🪙 Coinflip is in <b>groups</b>! Use <code>/cf &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
+                    if (typeof handleStartCoinflipUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betCF = await parseBetAmount(betArg, chatId, chatType, userId); if(betCF) await handleStartCoinflipUnifiedOfferCommand(msg, betCF, targetRaw); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartCoinflipUnifiedOfferCommand`); break;
+                }
+                case 'rps': {
+                    if (chatType === 'private') { await safeSendMessage(chatId, `🪨📄✂️ RPS is in <b>groups</b>! Use <code>/rps &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
+                    if (typeof handleStartRPSUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betRPS = await parseBetAmount(betArg, chatId, chatType, userId); if(betRPS) await handleStartRPSUnifiedOfferCommand(msg, betRPS, targetRaw); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartRPSUnifiedOfferCommand`); break;
+                }
+                case 'de': case 'diceescalator': {
+                    if (chatType === 'private') { await safeSendMessage(chatId, `🎲 Dice Escalator is in <b>groups</b>! Use <code>/de &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
+                    if (typeof handleStartDiceEscalatorUnifiedOfferCommand_New === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betDE = await parseBetAmount(betArg, chatId, chatType, userId); if(betDE) await handleStartDiceEscalatorUnifiedOfferCommand_New(msg, betDE, targetRaw); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDiceEscalatorUnifiedOfferCommand_New`); break;
+                }
+                case 'd18': case 'd21': case 'blackjack': { 
+                    if (chatType === 'private') { await safeSendMessage(chatId, `🎲 Dice 18 is played in <b>groups</b>! Use <code>/d18 &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
+                    if (typeof handleStartDice21Command === 'function') { const { betArg, targetRaw, otherArgs } = parseGameArgs(commandArgs); const gameModeArgD21 = otherArgs[0] || null; const betD21 = await parseBetAmount(betArg, chatId, chatType, userId); if(betD21) await handleStartDice21Command(msg, betD21, targetRaw, gameModeArgD21); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDice21Command`); break;
+                }
+                case 'duel': case 'highroller': {
+                    if (chatType === 'private') { await safeSendMessage(chatId, `⚔️ Duel is in <b>groups</b>! Use <code>/duel &lt;bet&gt; [@user]</code> there.`, { parse_mode: 'HTML' }); break; }
+                    if (typeof handleStartDuelUnifiedOfferCommand === 'function') { const { betArg, targetRaw } = parseGameArgs(commandArgs); const betDuel = await parseBetAmount(betArg, chatId, chatType, userId); if(betDuel) await handleStartDuelUnifiedOfferCommand(msg, betDuel, targetRaw); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartDuelUnifiedOfferCommand`); break;
+                }
+                case 'ou7': case 'overunder7':
+                    if (typeof handleStartOverUnder7Command === 'function') { const betOU7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betOU7) await handleStartOverUnder7Command(msg, betOU7); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartOverUnder7Command`); break;
+                case 'ladder': case 'greedsladder':
+                    if (typeof handleStartLadderCommand === 'function') { const betLadder = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betLadder) await handleStartLadderCommand(msg, betLadder); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartLadderCommand`); break;
+                case 's7': case 'sevenout': case 'luckysum':
+                    if (typeof handleStartSevenOutCommand === 'function') { const betS7 = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betS7) await handleStartSevenOutCommand(msg, betS7); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSevenOutCommand`); break;
+                case 'slot': case 'slots': case 'slotfrenzy':
+                    if (typeof handleStartSlotCommand === 'function') { const betSlot = await parseBetAmount(commandArgs[0], chatId, chatType, userId); if(betSlot) await handleStartSlotCommand(msg, betSlot); }
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartSlotCommand`); break;
+                case 'mines':
+                    if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
+                    else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
+                case 'bowling': case 'darts': case 'basketball':
+                case 'hoops': {
                     let handler;
-                    // Route to the correct handler based on the command
                     if (commandName === 'bowling') handler = handleStartBowlingCommand;
                     else if (commandName === 'darts') handler = handleStartDartsCommand;
                     else if (commandName === 'basketball' || commandName === 'hoops') {
-                        // The user wants the new logic for PvB but might still use /basketball command
-                        // The Simple Hoops logic is self-contained and doesn't have a direct challenge mechanism
-                        if (commandName === 'hoops') {
+                        if (commandName === 'hoops') { // Assuming 'hoops' is a different game, not shown in your code
                             const betAmount = await parseBetAmount(commandArgs[0], chatId, chatType, userId);
-                            if (betAmount) await handleStartSimpleHoopsCommand(msg, betAmount);
+                            if (betAmount && typeof handleStartSimpleHoopsCommand === 'function') await handleStartSimpleHoopsCommand(msg, betAmount);
+                            else if (!betAmount) {} // parseBetAmount handles error messages
+                            else { console.error("handleStartSimpleHoopsCommand is not defined"); }
                             break;
                         }
-                        handler = handleStartBasketballCommand; // This handles the PvP/PvB split via offer
+                        handler = handleStartBasketballCommand;
                     }
 
-                    if (typeof handler === 'function') {
-                        const { betArg, targetRaw } = parseGameArgs(commandArgs);
-                        const bet = await parseBetAmount(betArg, chatId, chatType, userId);
-                        if (bet) await handler(msg, bet, targetRaw);
-                    } else { console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler for ${commandName}`); }
-                    break;
-                }
-                default:
-                    const selfBotInfoDefault = await bot.getMe();
-                    if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
-                        await safeSendMessage(chatId, `🤔 Unknown command: \`/${escapeMarkdownV2(commandName || "")}\`. Try \`/help\`.`, { parse_mode: 'MarkdownV2' });
-                    }
-                    break;
-            }
-        } catch (commandError) {
-            console.error(`${LOG_PREFIX_MSG_HANDLER} 🚨 UNHANDLED ERROR IN COMMAND ROUTER for /${commandName}: ${commandError.message}`, commandError.stack?.substring(0, 700));
-            await safeSendMessage(chatId, `⚙️ Oops! Error processing \`/${escapeMarkdownV2(commandName || "")}\`. Try again or \`/help\`.`, { parse_mode: 'MarkdownV2' });
-            if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 Command Router Error for /${escapeMarkdownV2(commandName)} from User: ${userId}. Error: \`${escapeMarkdownV2(commandError.message)}\``);
-        }
-    }
+                    if (typeof handler === 'function') {
+                        const { betArg, targetRaw } = parseGameArgs(commandArgs);
+                        const bet = await parseBetAmount(betArg, chatId, chatType, userId);
+                        if (bet) await handler(msg, bet, targetRaw);
+                    } else { console.error(`${LOG_PREFIX_MSG_HANDLER} Missing handler for ${commandName}`); }
+                    break;
+                }
+                default:
+                    const selfBotInfoDefault = await bot.getMe();
+                    if (chatType === 'private' || text.includes(`@${selfBotInfoDefault.username}`)) {
+                        await safeSendMessage(chatId, `🤔 Unknown command: \`/${escapeMarkdownV2(commandName || "")}\`. Try \`/help\`.`, { parse_mode: 'MarkdownV2' });
+                    }
+                    break;
+            }
+        } catch (commandError) {
+            console.error(`${LOG_PREFIX_MSG_HANDLER} 🚨 UNHANDLED ERROR IN COMMAND ROUTER for /${commandName}: ${commandError.message}`, commandError.stack?.substring(0, 700));
+            await safeSendMessage(chatId, `⚙️ Oops! Error processing \`/${escapeMarkdownV2(commandName || "")}\`. Try again or \`/help\`.`, { parse_mode: 'MarkdownV2' });
+            if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 Command Router Error for /${escapeMarkdownV2(commandName)} from User: ${userId}. Error: \`${escapeMarkdownV2(commandError.message)}\``);
+        }
+    }
 });
 
 // --- End of REPLACEMENT for the entire bot.on('message', ...) handler ---
