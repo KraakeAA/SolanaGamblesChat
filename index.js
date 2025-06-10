@@ -12823,7 +12823,7 @@ function startJackpotSessionPolling() {
 // --- REPLACE the existing finalizeInteractiveGame function in index.js (Part 5e) with this new version ---
 
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V7_FinalMsgFix SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V8_PvP_Fix SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
 
@@ -12838,24 +12838,26 @@ async function finalizeInteractiveGame(sessionId) {
             return;
         }
         session = sessionRes.rows[0];
-        
+        
         const betAmount = BigInt(session.bet_amount_lamports);
-        const finalPayoutLamports = BigInt(session.final_payout_lamports || '0');
         const finalStatus = session.status;
         const gameState = session.game_state_json || {};
         const isPvP = gameState.gameMode === 'pvp';
-        const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error');
+        const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
 
-        const p1_id = String(gameState.initiatorId || session.user_id);
-        const p2_id = isPvP ? String(gameState.opponentId) : null;
+        let p1_id = String(gameState.initiatorId || session.user_id);
+        let p2_id = isPvP ? String(gameState.opponentId) : null;
         let p1_payout = 0n;
         let p2_payout = 0n;
+        const totalPot = betAmount * 2n;
+        const houseFee = isPvP ? BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT)) : 0n;
 
+        // Determine payouts
         if (!isPvP) {
-            p1_payout = finalPayoutLamports;
+            p1_payout = BigInt(session.final_payout_lamports || '0');
         } else {
-            if (finalStatus === 'completed_p1_win') p1_payout = finalPayoutLamports;
-            else if (finalStatus === 'completed_p2_win') p2_payout = finalPayoutLamports;
+            if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
+            else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_push') { p1_payout = betAmount; p2_payout = betAmount; }
         }
 
@@ -12864,24 +12866,20 @@ async function finalizeInteractiveGame(sessionId) {
         const player1Update = await updateUserBalanceAndLedger(finalizationClient, p1_id, p1_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
         if (!player1Update.success) throw new Error(`P1 balance update failed: ${player1Update.error}`);
 
-        if(isConclusive) {
+        if (isConclusive) {
             const p1Wagered = BigInt(gameState.initiatorTotalWagered || '0');
             if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p1_id, betAmount, session.main_bot_game_id);
-            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) {
-                await checkAndUpdateUserLevel(finalizationClient, p1_id, p1Wagered, solPrice, session.chat_id);
-            }
+            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p1_id, p1Wagered, solPrice, session.chat_id);
             if (typeof processWagerMilestoneBonus === 'function' && p1Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p1_id, p1Wagered, solPrice);
         }
 
         if (isPvP && p2_id) {
             const player2Update = await updateUserBalanceAndLedger(finalizationClient, p2_id, p2_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
             if (!player2Update.success) throw new Error(`P2 balance update failed: ${player2Update.error}`);
-            if(isConclusive) {
+            if (isConclusive) {
                 const p2Wagered = BigInt(gameState.opponentTotalWagered || '0');
                 if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p2_id, betAmount, session.main_bot_game_id);
-                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) {
-                    await checkAndUpdateUserLevel(finalizationClient, p2_id, p2Wagered, solPrice, session.chat_id);
-                }
+                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p2_id, p2Wagered, solPrice, session.chat_id);
                 if (typeof processWagerMilestoneBonus === 'function' && p2Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p2_id, p2Wagered, solPrice);
             }
         }
@@ -12891,27 +12889,34 @@ async function finalizeInteractiveGame(sessionId) {
         
         const gameName = getCleanGameName(session.game_type);
         const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
-        const playerObject = await getOrCreateUser(session.user_id);
-        const playerRefHTML = escapeHTML(getPlayerDisplayReference(playerObject));
         let resultMessageHTML = ``;
 
-        // --- NEW LOGIC to add final rolls to the result message ---
-        let finalRollsText = "";
-        if (session.game_type === 'basketball' && gameState.rolls && gameState.rolls.length > 0) {
-            const finalRollsInRound = gameState.rolls.slice(-ROUND_BASED_HOOPS_SHOTS_PER_ROUND);
-            finalRollsText = `\n<i>Final Round Shots: ${finalRollsInRound.join(', ')}</i>`;
-        }
-        // --- END OF NEW LOGIC ---
-
         if (isPvP) {
-            // PvP message logic can be built here if needed
-        } else { // All PvB games
+            const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
+            const p2Name = escapeHTML(gameState.opponentName || "Player 2");
+            resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
+            resultMessageHTML += `<b>${p1Name}:</b> ${gameState.p1Score} pts\n`;
+            resultMessageHTML += `<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
+
+            if (finalStatus === 'completed_p1_win') {
+                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
+                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
+            } else if (finalStatus === 'completed_p2_win') {
+                const winAmount = await formatBalanceForDisplay(p2_payout, 'USD');
+                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${winAmount}</b>!`;
+            } else if (finalStatus === 'completed_push') {
+                resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
+            } else {
+                resultMessageHTML += `Game ended inconclusively. Wagers returned.`;
+            }
+        } else { // PvB games
+            const p1Name = escapeHTML(gameState.p1Name || "Player");
             resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`;
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
                 const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
-                resultMessageHTML += `🎉 Congratulations, <b>${playerRefHTML}</b>! You win <b>${winAmount}</b>!${finalRollsText}`;
-            } else { // This covers completed_loss, bust, timeout, error
-                resultMessageHTML += `💔 Better luck next time! Your wager of <b>${betDisplay}</b> was lost.${finalRollsText}`;
+                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
+            } else {
+                resultMessageHTML += `💔 Better luck next time! Your wager of <b>${betDisplay}</b> was lost.`;
             }
         }
         
@@ -13103,6 +13108,10 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
         const betResult1 = await updateUserBalanceAndLedger(client, initiator.telegram_id, 0n, 'info_pvp_match_start');
         const betResult2 = await updateUserBalanceAndLedger(client, opponent.telegram_id, 0n, 'info_pvp_match_start');
 
+        if (!betResult1.success || !betResult2.success) {
+            throw new Error("Failed to fetch latest wager data for players.");
+        }
+
         const initialGameState = {
             gameMode: 'pvp',
             initiatorId: String(initiator.telegram_id),
@@ -13117,12 +13126,13 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
             `INSERT INTO interactive_game_sessions (main_bot_game_id, game_type, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, $6, 'pending_pickup')`,
             [gameId, gameType, String(initiator.telegram_id), chatId, betAmount.toString(), JSON.stringify(initialGameState)]
         );
-       
+        
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         console.error(`${LOG_PREFIX_START_INTERACTIVE_PVP} Error starting game: ${e.message}`);
         await safeSendMessage(chatId, `⚙️ A critical database error occurred while starting the PvP game. The match has been cancelled and bets will be refunded.`, { parse_mode: 'HTML' });
+        // Refund logic (as you already have it)
         let refundClient = null;
         try {
             refundClient = await pool.connect();
@@ -13136,13 +13146,13 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
         if (client) client.release();
     }
 
-    // --- FINAL FIX IS HERE: Added the missing 'gameId' property to the placeholder ---
+    // This placeholder is now more robust for the message listener.
     activeGames.set(gameId, {
         gameId: gameId,
         type: gameType,
         chatId: chatId,
-        p1: { userId: String(initiator.telegram_id) },
-        p2: { userId: String(opponent.telegram_id) },
+        // CORRECTED: Added both player IDs to the top level for easy checking
+        participants: [String(initiator.telegram_id), String(opponent.telegram_id)], 
         status: 'delegated'
     });
     await updateGroupGameDetails(chatId, gameId, gameType, betAmount);
@@ -13157,7 +13167,6 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
                          `The Game Bot is now conducting the match. Good luck to both players!`;
     await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
 }
-
 
 // ===================================================================
 // SECTION 2: UNIFIED COMMAND HANDLERS
@@ -15254,76 +15263,75 @@ async function forwardAdditionalGamesCallback(action, params, userObject, origin
 // FINAL VERSION + DEBUG LOGS - This version adds logging to trace the emoji handling flow.
 
 bot.on('message', async (msg) => {
-    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler_V_FINAL_InteractiveFix TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
+    const LOG_PREFIX_MSG_HANDLER = `[MsgHandler_V_FINAL_InteractiveFix TID:${msg.message_id || 'N/A'} OriginUID:${msg.from?.id || 'N/A'} ChatID:${msg.chat?.id || 'N/A'}]`;
 
-    if (isShuttingDown) return;
-    if (!msg || !msg.from || !msg.chat || !msg.date) return;
+    if (isShuttingDown || !msg?.from || !msg?.chat || !msg?.date) return;
+    if (msg.from.is_bot) return; // Ignore all bot messages
 
-    if (msg.from.is_bot) {
-        try {
-            const selfBotInfo = await bot.getMe();
-            if (String(msg.from.id) !== String(selfBotInfo.id)) return;
-            if (!msg.dice) return; 
-        } catch (getMeError) { return; }
-    }
-
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const text = msg.text || "";
-    const chatType = msg.chat.type;
+    const userId = String(msg.from.id);
+    const chatId = String(msg.chat.id);
+    const text = msg.text || "";
 
     // --- REVISED Emoji Handling Block ---
-    if (msg.dice && msg.from && !msg.from.is_bot) {
-        const diceValue = msg.dice.value;
-        const rollerId = String(msg.from.id || msg.from.telegram_id);
-        let gameFoundAndProcessed = false;
+    if (msg.dice) {
+        const diceValue = msg.dice.value;
+        const rollerId = String(msg.from.id);
+        let gameFoundAndProcessed = false;
 
-        for (const [gameId, gData] of activeGames.entries()) {
-            if (String(gData.chatId) !== chatId) continue;
+        for (const [gameId, gData] of activeGames.entries()) {
+            if (String(gData.chatId) !== chatId) continue;
             
-            // Checks for games handled entirely by the main bot
-            const isDiceEscalatorEmoji = (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) || (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji'));
-            const isDice21Emoji = (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status === 'player_turn_hit_stand_prompt' || gData.status === 'player_initial_roll_1_prompted' || gData.status === 'player_initial_roll_2_prompted')) || (gData.type === GAME_IDS.DICE_21_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'playing_turn') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'playing_turn'));
-            const isDuelGameEmoji = (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') || (gData.type === GAME_IDS.DUEL_PVP && (gData.initiator?.userId === rollerId && gData.initiator?.isTurn && gData.initiator?.status === 'awaiting_roll_emoji') || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn && gData.opponent?.status === 'awaiting_roll_emoji'));
+            // --- UNIFIED EMOJI ROLL CHECK ---
+            let isParticipantInTargetGame = false;
 
-            if (isDiceEscalatorEmoji || isDice21Emoji || isDuelGameEmoji) {
-                if (isDiceEscalatorEmoji) {
-                    if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB) await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue);
-                    else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP) await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId);
-                } else if (isDice21Emoji) {
-                    if (gData.type === GAME_IDS.DICE_21) await processDice21PvBRollByEmoji(gData, diceValue, msg);
-                    else if (gData.type === GAME_IDS.DICE_21_PVP) await processDice21PvPRoll(gData, diceValue, rollerId);
-                } else if (isDuelGameEmoji) {
-                    if (gData.type === GAME_IDS.DUEL_PVB) await processDuelPvBRollByEmoji(gData, diceValue);
-                    else if (gData.type === GAME_IDS.DUEL_PVP) await processDuelPvPRollByEmoji(gData, diceValue, rollerId);
-                }
-                gameFoundAndProcessed = true;
-                break;
-            }
+            // Check for games handled by main bot
+            if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status.includes('player_turn') || gData.status.includes('prompted'))) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DICE_21_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DUEL_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
             
-            // --- THIS IS THE FIX: A generic check for any game delegated to a helper bot ---
-            if (gData.status === 'delegated' && gData.userId === rollerId) {
-                console.log(`[MsgHandler] Detected dice roll for delegated interactive game ${gData.type} (GID: ${gameId}). Processing...`);
-                if (typeof processInteractiveGameRoll === 'function') {
-                    const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
-                    if (result && !result.success) {
-                        await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`);
-                    }
-                    gameFoundAndProcessed = true;
-                    break; 
-                } else {
-                    console.error(`[MsgHandler] CRITICAL: processInteractiveGameRoll function is missing!`);
+            // Check for games delegated to helper bot
+            else if (gData.status === 'delegated') {
+                // CORRECTED: This check now works for both PvB and PvP delegated games.
+                if (Array.isArray(gData.participants) && gData.participants.includes(rollerId)) { // For PvP
+                    isParticipantInTargetGame = true;
+                } else if (gData.userId === rollerId) { // For PvB
+                    isParticipantInTargetGame = true;
                 }
             }
-        }
 
-        if (gameFoundAndProcessed) {
-            setTimeout(() => {
-                bot.deleteMessage(chatId, msg.message_id).catch(() => {});
-            }, 4000);
-            return;
-        }
-    }
+            if (isParticipantInTargetGame) {
+                // Route to the correct handler based on game type
+                switch (gData.type) {
+                    case GAME_IDS.DICE_ESCALATOR_PVB: await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue); break;
+                    case GAME_IDS.DICE_ESCALATOR_PVP: await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId); break;
+                    case GAME_IDS.DICE_21: await processDice21PvBRollByEmoji(gData, diceValue, msg); break;
+                    case GAME_IDS.DICE_21_PVP: await processDice21PvPRoll(gData, diceValue, rollerId); break;
+                    case GAME_IDS.DUEL_PVB: await processDuelPvBRollByEmoji(gData, diceValue); break;
+                    case GAME_IDS.DUEL_PVP: await processDuelPvPRollByEmoji(gData, diceValue, rollerId); break;
+                    default:
+                        // This handles all other interactive games like Bowling, Darts, Basketball
+                        if (gData.status === 'delegated') {
+                            const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
+                            if (result && !result.success) {
+                                await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`);
+                            }
+                        }
+                        break;
+                }
+                gameFoundAndProcessed = true;
+                break; // Exit the loop once the game is found and processed
+            }
+        }
+
+        if (gameFoundAndProcessed) {
+            // Delete the user's dice emoji message after a short delay
+            setTimeout(() => { bot.deleteMessage(chatId, msg.message_id).catch(() => {}); }, 4000);
+            return;
+        }
+    }
     // --- End of Emoji Handling Block ---
 
     if (userStateCache.has(userId) && !text.startsWith('/')) {
