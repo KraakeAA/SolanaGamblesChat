@@ -15329,77 +15329,72 @@ bot.on('message', async (msg) => {
 
     if (isShuttingDown) return;
     if (!msg || !msg.from || !msg.chat || !msg.date) return;
-
-    // Ignore messages from all bots to prevent loops
-    if (msg.from.is_bot) {
-        return;
-    }
+    if (msg.from.is_bot) return;
 
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const text = msg.text || "";
-    // FIX: The chatType variable is correctly defined here for use throughout the handler.
     const chatType = msg.chat.type;
 
     // --- REVISED & COMPLETE EMOJI HANDLING BLOCK ---
     if (msg.dice && msg.from && !msg.from.is_bot) {
-    const diceValue = msg.dice.value;
-    const rollerId = String(msg.from.id || msg.from.telegram_id);
-    let gameFoundAndProcessed = false;
-
-    for (const [gameId, gData] of activeGames.entries()) {
-        if (String(gData.chatId) !== chatId) continue;
+        const diceValue = msg.dice.value;
+        const rollerId = String(msg.from.id || msg.from.telegram_id);
         
-        let isParticipantInTargetGame = false;
+        // --- DEFINITIVE FIX STARTS HERE ---
+        // This guard prevents the entire bot from crashing if the dice value is missing.
+        if (typeof diceValue === 'undefined' || diceValue === null) {
+            console.error(`${LOG_PREFIX_MSG_HANDLER} CRITICAL: Received dice emoji from user ${rollerId} but 'dice.value' was undefined. Ignoring to prevent crash. Emoji: ${msg.dice.emoji}`);
+            // We simply stop processing this message, preventing the crash.
+            return; 
+        }
+        // --- DEFINITIVE FIX ENDS HERE ---
 
-        // Check for games handled by the main bot directly
-        if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) isParticipantInTargetGame = true;
-        else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
-        else if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status.includes('player_turn') || gData.status.includes('prompted'))) isParticipantInTargetGame = true;
-        else if (gData.type === GAME_IDS.DICE_21_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
-        else if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') isParticipantInTargetGame = true;
-        else if (gData.type === GAME_IDS.DUEL_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
-        
-        // Check for delegated interactive games
-        else if (gData.status === 'delegated') {
-            if (Array.isArray(gData.participants) && gData.participants.includes(rollerId)) { // For PvP
-                isParticipantInTargetGame = true;
-            } else if (gData.userId === rollerId) { // For PvB
-                isParticipantInTargetGame = true;
+        let gameFoundAndProcessed = false;
+
+        for (const [gameId, gData] of activeGames.entries()) {
+            if (String(gData.chatId) !== chatId) continue;
+            
+            let isParticipantInTargetGame = false;
+
+            // This logic correctly checks if the roller is an active participant in any ongoing game.
+            if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status.includes('player_turn') || gData.status.includes('prompted'))) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DICE_21_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') isParticipantInTargetGame = true;
+            else if (gData.type === GAME_IDS.DUEL_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
+            else if (gData.status === 'delegated') {
+                if (Array.isArray(gData.participants) && gData.participants.includes(rollerId)) { isParticipantInTargetGame = true; } 
+                else if (gData.userId === rollerId) { isParticipantInTargetGame = true; }
+            }
+
+            if (isParticipantInTargetGame) {
+                if (gData.status === 'delegated') {
+                    const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
+                    if (!result.success) {
+                        await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`, { parse_mode: 'HTML' });
+                    }
+                } else {
+                    switch (gData.type) {
+                        case GAME_IDS.DICE_ESCALATOR_PVB: await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue); break;
+                        case GAME_IDS.DICE_ESCALATOR_PVP: await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId); break;
+                        case GAME_IDS.DICE_21: await processDice21PvBRollByEmoji(gData, diceValue, msg); break;
+                        case GAME_IDS.DICE_21_PVP: await processDice21PvPRoll(gData, diceValue, rollerId); break;
+                        case GAME_IDS.DUEL_PVB: await processDuelPvBRollByEmoji(gData, diceValue); break;
+                        case GAME_IDS.DUEL_PVP: await processDuelPvPRollByEmoji(gData, diceValue, rollerId); break;
+                    }
+                }
+                gameFoundAndProcessed = true;
+                break;
             }
         }
 
-        if (isParticipantInTargetGame) {
-            // --- THIS IS THE MODIFIED LOGIC ---
-            if (gData.status === 'delegated') {
-                // This specifically handles the interactive games like Bowling, Darts, etc.
-                const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
-                if (!result.success) {
-                    await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`, { parse_mode: 'HTML' });
-                }
-            } else {
-                // Route to the correct handler for non-delegated games
-                switch (gData.type) {
-                    case GAME_IDS.DICE_ESCALATOR_PVB: await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue); break;
-                    case GAME_IDS.DICE_ESCALATOR_PVP: await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId); break;
-                    case GAME_IDS.DICE_21: await processDice21PvBRollByEmoji(gData, diceValue, msg); break;
-                    case GAME_IDS.DICE_21_PVP: await processDice21PvPRoll(gData, diceValue, rollerId); break;
-                    case GAME_IDS.DUEL_PVB: await processDuelPvBRollByEmoji(gData, diceValue); break;
-                    case GAME_IDS.DUEL_PVP: await processDuelPvPRollByEmoji(gData, diceValue, rollerId); break;
-                }
-            }
-            // --- END OF MODIFICATION ---
-
-            gameFoundAndProcessed = true;
-            break;
+        if (gameFoundAndProcessed) {
+            setTimeout(() => { bot.deleteMessage(chatId, msg.message_id).catch(() => {}); }, 4000);
+            return;
         }
     }
-
-    if (gameFoundAndProcessed) {
-        setTimeout(() => { bot.deleteMessage(chatId, msg.message_id).catch(() => {}); }, 4000);
-        return;
-    }
-}
     // --- End of Emoji Handling Block ---
 
     // --- Stateful Input Handling (e.g., for withdrawals) ---
