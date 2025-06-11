@@ -13151,7 +13151,8 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
     }
 }
 
-// in index.js - REPLACEMENT for startInteractivePvPGame (no NOTIFY)
+// --- Start of REPLACEMENT for startInteractivePvPGame in index.js (Part 5f) ---
+
 async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
     const LOG_PREFIX_START_INTERACTIVE_PVP = `[StartInteractivePvP GID:${gameId} Type:${gameType}]`;
     let client = null;
@@ -13182,7 +13183,10 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
             [gameId, gameType, String(initiator.telegram_id), chatId, betAmount.toString(), JSON.stringify(initialGameState)]
         );
         
-        // The NOTIFY command that was here has been removed.
+        // --- THIS IS THE FIX: The NOTIFY command is now present ---
+        const notifyPayload = JSON.stringify({ session: { main_bot_game_id: gameId } });
+        await client.query(`NOTIFY game_session_pickup, '${notifyPayload}'`);
+        // --- END OF FIX ---
         
         await client.query('COMMIT');
     } catch (e) {
@@ -13222,6 +13226,7 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
                          `The Game Bot is now conducting the match. Good luck to both players!`;
     await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
 }
+// --- End of REPLACEMENT for startInteractivePvPGame ---
 
 // ===================================================================
 // SECTION 2: UNIFIED COMMAND HANDLERS
