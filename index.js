@@ -13001,55 +13001,81 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - REPLACEMENT for processInteractiveGameRoll with Enhanced Error Logging
+// in index.js - FINAL FIX for processInteractiveGameRoll with Connection Retry Logic
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    const logPrefix = `[ProcessInteractiveRoll_V5_EnhancedLog GID:${gameData.gameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V6_Resilient GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
-    try {
-        console.log(`${logPrefix} Forwarding roll of ${diceValue} to helper bot for validation and processing.`);
-        client = await pool.connect();
+    const MAX_CONNECTION_RETRIES = 3;
+    const RETRY_DELAY_MS = 250;
 
-        const sessionRes = await client.query("SELECT session_id FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
+    // --- NEW: Retry logic for DB connection ---
+    for (let attempt = 1; attempt <= MAX_CONNECTION_RETRIES; attempt++) {
+        try {
+            client = await pool.connect();
+            // If connection is successful, break the loop and proceed.
+            break; 
+        } catch (connectionError) {
+            console.error(`❌ ${logPrefix} DB Connection Attempt ${attempt}/${MAX_CONNECTION_RETRIES} FAILED: ${connectionError.message}`);
+            if (attempt === MAX_CONNECTION_RETRIES) {
+                // If this was the last attempt, create the final error object to be returned.
+                const errorId = `C-ERR-${Date.now()}-${rollerId.slice(-4)}`;
+                if (typeof notifyAdmin === 'function') {
+                    notifyAdmin(`🚨 DB Pool Exhaustion? 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nFailed to get DB client after ${MAX_CONNECTION_RETRIES} attempts.`).catch(()=>{});
+                }
+                return { success: false, error: `The casino is experiencing high traffic. Please try again in a moment. (Ref: ${errorId})` };
+            }
+            // Wait before retrying
+            await sleep(RETRY_DELAY_MS * attempt); 
+        }
+    }
+    // --- END of Retry logic ---
+
+    // If we couldn't get a client after all retries, the loop above would have returned.
+    // So, if we are here, 'client' is guaranteed to be a valid, connected client.
+    try {
+        const sessionRes = await client.query("SELECT session_id, game_state_json FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
         if (sessionRes.rowCount === 0) {
             console.warn(`${logPrefix} Roll received, but no 'in_progress' session found. Ignoring.`);
             return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
         }
-        const sessionId = sessionRes.rows[0].session_id;
+        
+        const session = sessionRes.rows[0];
+        const gameState = session.game_state_json || {};
+
+        // Helper bot now validates the turn, but we can do a pre-check here to fail faster.
+        if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
+            return { success: false, error: "It's not your turn to roll!" };
+        }
 
         const gameStateUpdateQuery = `
             UPDATE interactive_game_sessions
             SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2)
             WHERE session_id = $3
         `;
-        await client.query(gameStateUpdateQuery, [diceValue, rollerId, sessionId]);
+        await client.query(gameStateUpdateQuery, [diceValue, rollerId, session.session_id]);
 
-        const notifyPayload = JSON.stringify({ session_id: sessionId });
+        const notifyPayload = JSON.stringify({ session_id: session.session_id });
         await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
 
         console.log(`${logPrefix} Roll successfully forwarded and helper notified.`);
         return { success: true };
 
     } catch (e) {
-        // --- THIS IS THE ENHANCED ERROR HANDLING BLOCK ---
-        const errorId = `E-${Date.now()}-${rollerId.slice(-4)}`;
-        console.error(`❌ ${logPrefix} Error forwarding interactive roll. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
+        const errorId = `Q-ERR-${Date.now()}-${rollerId.slice(-4)}`;
+        console.error(`❌ ${logPrefix} Query Error after successful connection. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
         
-        // Notify the admin with the specific error
         if (typeof notifyAdmin === 'function') {
-            const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\``;
-            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of roll error:", err));
+            const adminMsg = `🚨 Interactive Roll Query Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\``;
+            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of query error:", err));
         }
         
-        // Return a more informative error for the user
-        return { success: false, error: `A database error occurred while processing your roll. Please try again in a moment. (Ref: ${errorId})` };
-        // --- END OF ENHANCEMENT ---
+        return { success: false, error: `A database error occurred while processing your roll. Please try again. (Ref: ${errorId})` };
 
     } finally {
         if (client) client.release();
     }
 }
-
 
 // ===================================================================
 // SECTION 1: GENERIC GAME STARTERS (DATABASE HANDOFF)
