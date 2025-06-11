@@ -12837,7 +12837,7 @@ function startJackpotSessionPolling() {
 // in index.js (Part 5e) - REVISED finalizeInteractiveGame function
 
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V9_CalcFix SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V11_ScoreOnly SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
 
@@ -12858,30 +12858,30 @@ async function finalizeInteractiveGame(sessionId) {
         const gameState = session.game_state_json || {};
         const isPvP = gameState.gameMode === 'pvp';
         const totalPot = betAmount * 2n;
-        const houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+        const houseFee = isPvP ? BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT)) : 0n;
 
         let p1_id = String(gameState.initiatorId || session.user_id);
         let p2_id = isPvP ? String(gameState.opponentId) : null;
         let p1_payout = 0n;
         let p2_payout = 0n;
 
-        // --- CORRECTED: Payout calculation is now centralized here for all outcomes ---
+        // Determine Payouts
         if (isPvP) {
             if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_push') { p1_payout = betAmount; p2_payout = betAmount; }
         } else { // PvB logic
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                const multiplier = gameState.currentMultiplier || 2.0; // Default to 2x for standard PvB wins
+                const multiplier = gameState.currentMultiplier || 2.0;
                 const preFeePayout = BigInt(Math.floor(Number(betAmount) * multiplier));
                 const pvbHouseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
                 p1_payout = preFeePayout - pvbHouseFee;
             } else if (finalStatus === 'completed_push') {
                 p1_payout = betAmount;
             }
-            // For 'completed_loss', 'timeout', 'error', payout remains 0n
         }
 
+        // --- Database and Bonus Logic (remains the same) ---
         const solPrice = await getSolUsdPrice();
         const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
         
@@ -12909,7 +12909,7 @@ async function finalizeInteractiveGame(sessionId) {
         await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
         await finalizationClient.query('COMMIT');
         
-        // --- RESULT MESSAGING ---
+        // --- CORRECTED: Simplified Result Messaging (Scores Only) ---
         const gameName = getCleanGameName(session.game_type);
         const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
         let resultMessageHTML = ``;
@@ -12918,25 +12918,33 @@ async function finalizeInteractiveGame(sessionId) {
             const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
             const p2Name = escapeHTML(gameState.opponentName || "Player 2");
             resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
+            resultMessageHTML += `<b>Final Score:</b>\n`;
             resultMessageHTML += `<b>${p1Name}:</b> ${gameState.p1Score} pts\n`;
             resultMessageHTML += `<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
 
             if (finalStatus === 'completed_p1_win') {
-                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
+                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
+                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
             } else if (finalStatus === 'completed_p2_win') {
-                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${await formatBalanceForDisplay(p2_payout, 'USD')}</b>!`;
-            } else {
+                const winAmount = await formatBalanceForDisplay(p2_payout, 'USD');
+                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${winAmount}</b>!`;
+            } else { // Push or other states
                 resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
             }
         } else { // PvB
             const p1Name = escapeHTML(gameState.p1Name || "Player");
             resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`;
+            resultMessageHTML += `<b>Final Score:</b>\n`;
+            resultMessageHTML += `<b>${p1Name}:</b> ${gameState.playerScore} pts\n`;
+            resultMessageHTML += `<b>Bot Dealer:</b> ${gameState.botScore} pts\n\n`;
+
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
+                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
+                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
             } else if (finalStatus === 'completed_push') {
                 resultMessageHTML += `⚖️ It's a draw! Your wager of <b>${betDisplay}</b> was returned.`;
-            } else {
-                resultMessageHTML += `💔 Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
+            } else { // Loss
+                resultMessageHTML += `💔 Better luck next time! Your wager of <b>${betDisplay}</b> was lost.`;
             }
         }
         
