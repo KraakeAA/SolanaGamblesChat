@@ -13001,83 +13001,48 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - FINAL FIX for processInteractiveGameRoll with Validation and Retry Logic
+// in index.js - FINAL, DECOUPLED version of processInteractiveGameRoll
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    // --- NEW: Input Validation Guard Clause ---
+    // --- FINAL FIX: This function no longer touches the database directly. ---
+    // It only validates its own state and sends a notification.
+    
     if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
-        console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object.`, gameData);
-        // If the gameId is missing, we must remove the broken object from memory to prevent further errors.
+        console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object in activeGames map.`, gameData);
         if (gameData && gameData.chatId && activeGames.has(gameData.gameId)) {
              activeGames.delete(gameData.gameId);
         }
-        await notifyAdmin(`🚨 Corrupt Game State Detected 🚨\n\A malformed game object was found and removed from active memory. Type: \`${gameData?.type}\`, Chat: \`${gameData?.chatId}\``);
+        await notifyAdmin(`🚨 Corrupt Game State Detected & Purged 🚨\n\A malformed game object was found for game type: \`${gameData?.type}\`, Chat: \`${gameData?.chatId}\``);
         return { success: false, error: "A critical internal game state error occurred. The game has been cancelled." };
     }
-    // --- END of Validation ---
 
-    const logPrefix = `[ProcessInteractiveRoll_V7_Validated GID:${gameData.gameId} UID:${rollerId}]`;
-    let client = null;
-    const MAX_CONNECTION_RETRIES = 3;
-    const RETRY_DELAY_MS = 250;
-
-    for (let attempt = 1; attempt <= MAX_CONNECTION_RETRIES; attempt++) {
-        try {
-            client = await pool.connect();
-            break; 
-        } catch (connectionError) {
-            console.error(`❌ ${logPrefix} DB Connection Attempt ${attempt}/${MAX_CONNECTION_RETRIES} FAILED: ${connectionError.message}`);
-            if (attempt === MAX_CONNECTION_RETRIES) {
-                const errorId = `C-ERR-${Date.now()}-${rollerId.slice(-4)}`;
-                if (typeof notifyAdmin === 'function') {
-                    notifyAdmin(`🚨 DB Pool Exhaustion? 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nFailed to get DB client after ${MAX_CONNECTION_RETRIES} attempts.`);
-                }
-                return { success: false, error: `The casino is experiencing high traffic. Please try again in a moment. (Ref: ${errorId})` };
-            }
-            await sleep(RETRY_DELAY_MS * attempt); 
-        }
-    }
+    const logPrefix = `[ProcessInteractiveRoll_V8_Decoupled GID:${gameData.gameId} UID:${rollerId}]`;
 
     try {
-        const sessionRes = await client.query("SELECT session_id, game_state_json FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
-        if (sessionRes.rowCount === 0) {
-            console.warn(`${logPrefix} Roll received, but no 'in_progress' session found. Ignoring.`);
-            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
-        }
+        // The Main Bot's only job is to notify the Helper Bot with the necessary info.
+        const notifyPayload = JSON.stringify({
+            main_bot_game_id: gameData.gameId,
+            rollerId: rollerId,
+            diceValue: diceValue
+        });
+
+        // Use the main pool to fire a single, non-blocking NOTIFY command.
+        await pool.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
         
-        const session = sessionRes.rows[0];
-        const gameState = session.game_state_json || {};
-
-        if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
-            return { success: false, error: "It's not your turn to roll!" };
-        }
-
-        const gameStateUpdateQuery = `
-            UPDATE interactive_game_sessions
-            SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2)
-            WHERE session_id = $3
-        `;
-        await client.query(gameStateUpdateQuery, [diceValue, rollerId, session.session_id]);
-
-        const notifyPayload = JSON.stringify({ session_id: session.session_id });
-        await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
-
-        console.log(`${logPrefix} Roll successfully forwarded and helper notified.`);
+        console.log(`${logPrefix} Roll of ${diceValue} successfully forwarded to helper bot via NOTIFY.`);
         return { success: true };
 
     } catch (e) {
-        const errorId = `Q-ERR-${Date.now()}-${rollerId.slice(-4)}`;
-        console.error(`❌ ${logPrefix} Query Error after successful connection. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
+        // This block will now only catch errors related to sending the NOTIFY command itself.
+        const errorId = `N-ERR-${Date.now()}-${rollerId.slice(-4)}`;
+        console.error(`❌ ${logPrefix} CRITICAL Error sending NOTIFY signal: ${e.message}`, e.stack);
         
         if (typeof notifyAdmin === 'function') {
-            const adminMsg = `🚨 Interactive Roll Query Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\``;
-            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of query error:", err));
+            const adminMsg = `🚨 Main Bot NOTIFY Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nError: \`${escapeMarkdownV2(e.message)}\`\nHelper bot will not process this roll.`;
+            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of NOTIFY error:", err));
         }
         
-        return { success: false, error: `A database error occurred while processing your roll. Please try again. (Ref: ${errorId})` };
-
-    } finally {
-        if (client) client.release();
+        return { success: false, error: `A system communication error occurred. Please try rolling again. (Ref: ${errorId})` };
     }
 }
 
