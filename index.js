@@ -13001,26 +13001,22 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - REPLACEMENT for processInteractiveGameRoll
+// in index.js - REPLACEMENT for processInteractiveGameRoll with Enhanced Error Logging
+
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    const logPrefix = `[ProcessInteractiveRoll_V4_ForwardOnly GID:${gameData.gameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V5_EnhancedLog GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
     try {
-        // This function now only forwards the roll. The helper bot is responsible for all validation.
         console.log(`${logPrefix} Forwarding roll of ${diceValue} to helper bot for validation and processing.`);
         client = await pool.connect();
 
-        // We still check if the session is generally in progress to avoid notifying for completed games.
         const sessionRes = await client.query("SELECT session_id FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
         if (sessionRes.rowCount === 0) {
             console.warn(`${logPrefix} Roll received, but no 'in_progress' session found. Ignoring.`);
-            // No user-facing error needed; could be a late roll for a finished game.
-            return { success: false, error: "Game is not active." };
+            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
         }
         const sessionId = sessionRes.rows[0].session_id;
 
-        // Update the game state with the latest roll and notify the helper.
-        // The 'lastRoll' and 'lastRollerId' will be used by the helper to validate the turn.
         const gameStateUpdateQuery = `
             UPDATE interactive_game_sessions
             SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2)
@@ -13035,8 +13031,20 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         return { success: true };
 
     } catch (e) {
-        console.error(`${logPrefix} Error forwarding interactive roll: ${e.message}`);
-        return { success: false, error: "A database error occurred while forwarding your roll." };
+        // --- THIS IS THE ENHANCED ERROR HANDLING BLOCK ---
+        const errorId = `E-${Date.now()}-${rollerId.slice(-4)}`;
+        console.error(`❌ ${logPrefix} Error forwarding interactive roll. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
+        
+        // Notify the admin with the specific error
+        if (typeof notifyAdmin === 'function') {
+            const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\``;
+            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of roll error:", err));
+        }
+        
+        // Return a more informative error for the user
+        return { success: false, error: `A database error occurred while processing your roll. Please try again in a moment. (Ref: ${errorId})` };
+        // --- END OF ENHANCEMENT ---
+
     } finally {
         if (client) client.release();
     }
