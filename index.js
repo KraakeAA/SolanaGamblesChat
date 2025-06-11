@@ -13001,7 +13001,7 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - FINAL DIAGNOSTIC version of processInteractiveGameRoll
+// in index.js - DEFINITIVE FIX for processInteractiveGameRoll with Explicit Type Casting
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
     if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
@@ -13014,13 +13014,16 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
     }
 
     const mainBotGameId = gameData.gameId;
-    const logPrefix = `[ProcessInteractiveRoll_V11_BlackBox GID:${mainBotGameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V12_TypecastFix GID:${mainBotGameId} UID:${rollerId}]`;
     let client = null;
     
     try {
         client = await pool.connect();
 
-        const sessionRes = await client.query("SELECT session_id, game_state_json, game_type FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [mainBotGameId]);
+        // --- THE DEFINITIVE FIX ---
+        // We explicitly cast the parameter to ::text to prevent any ambiguity
+        // from the connection pooler or database driver.
+        const sessionRes = await client.query("SELECT session_id, game_state_json, game_type FROM interactive_game_sessions WHERE main_bot_game_id = $1::text AND status = 'in_progress'", [mainBotGameId]);
 
         if (sessionRes.rowCount === 0) {
             console.warn(`${logPrefix} Roll received, but no 'in_progress' session found for this gameId.`);
@@ -13047,13 +13050,11 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         const notifyPayload = JSON.stringify({ session_id: session.session_id });
         await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
         
+        console.log(`${logPrefix} Roll successfully validated against DB state and forwarded.`);
         return { success: true };
 
     } catch (e) {
         const errorId = `Q-FATAL-${Date.now()}-${rollerId.slice(-4)}`;
-        
-        // --- THIS IS THE "BLACK BOX RECORDER" ---
-        // It will log the exact state of the object that caused the crash.
         console.error(`❌ ${logPrefix} Query Error. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
         console.error(`CRITICAL: Malformed gameData object state that caused the crash:`, JSON.stringify(gameData, null, 2));
         
@@ -13062,7 +13063,6 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
             const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\`\n\n**Crashed Object State:**\n\`\`\`json\n${escapeMarkdownV2(gameDataString.substring(0, 500))}\n\`\`\``;
             notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of query error:", err));
         }
-        // --- END OF "BLACK BOX RECORDER" ---
         
         return { success: false, error: `A database error occurred while processing your roll. Please contact support. (Ref: ${errorId})` };
 
