@@ -13001,10 +13001,9 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - FINAL HARDENED version of processInteractiveGameRoll
+// in index.js - FINAL DIAGNOSTIC version of processInteractiveGameRoll
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    // This top-level check is for the object passed from the message listener's loop.
     if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
         console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object.`, gameData);
         if (gameData && gameData.chatId && activeGames.has(gameData.gameId)) {
@@ -13014,16 +13013,13 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         return { success: false, error: "A critical internal game state error occurred. The game has been cancelled." };
     }
 
-    const mainBotGameId = gameData.gameId; // Use a clean variable
-    const logPrefix = `[ProcessInteractiveRoll_V10_Hardened GID:${mainBotGameId} UID:${rollerId}]`;
+    const mainBotGameId = gameData.gameId;
+    const logPrefix = `[ProcessInteractiveRoll_V11_BlackBox GID:${mainBotGameId} UID:${rollerId}]`;
     let client = null;
     
     try {
         client = await pool.connect();
 
-        // **THE CRITICAL FIX IS HERE:** We now ONLY trust the gameId from memory.
-        // We fetch the entire session state, including the turn data, directly from the database.
-        // This makes the database the single source of truth for game state.
         const sessionRes = await client.query("SELECT session_id, game_state_json, game_type FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [mainBotGameId]);
 
         if (sessionRes.rowCount === 0) {
@@ -13034,14 +13030,12 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         const session = sessionRes.rows[0];
         const gameState = session.game_state_json || {};
 
-        // Perform the turn validation using data ONLY from the database.
         if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
             const expectedPlayerName = String(gameState.currentPlayerTurn) === String(gameState.initiatorId) ? gameState.initiatorName : gameState.opponentName;
             console.warn(`${logPrefix} Roll from wrong player. Expected: ${gameState.currentPlayerTurn} (${expectedPlayerName}). Got: ${rollerId}`);
             return { success: false, error: `It's not your turn! Waiting for ${escapeHTML(expectedPlayerName)}.` };
         }
         
-        // Update the DB with the roll data.
         const gameStateUpdateQuery = `
             UPDATE interactive_game_sessions
             SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2),
@@ -13050,21 +13044,28 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         `;
         await client.query(gameStateUpdateQuery, [diceValue, rollerId, session.session_id]);
 
-        // Send the notification to the helper bot.
         const notifyPayload = JSON.stringify({ session_id: session.session_id });
         await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
         
-        console.log(`${logPrefix} Roll successfully validated against DB state and forwarded.`);
         return { success: true };
 
     } catch (e) {
         const errorId = `Q-FATAL-${Date.now()}-${rollerId.slice(-4)}`;
+        
+        // --- THIS IS THE "BLACK BOX RECORDER" ---
+        // It will log the exact state of the object that caused the crash.
         console.error(`❌ ${logPrefix} Query Error. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
+        console.error(`CRITICAL: Malformed gameData object state that caused the crash:`, JSON.stringify(gameData, null, 2));
+        
         if (typeof notifyAdmin === 'function') {
-            const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\``;
-            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of roll error:", err));
+            const gameDataString = JSON.stringify(gameData, null, 2);
+            const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\`\n\n**Crashed Object State:**\n\`\`\`json\n${escapeMarkdownV2(gameDataString.substring(0, 500))}\n\`\`\``;
+            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of query error:", err));
         }
-        return { success: false, error: `A database error occurred while processing your roll. Please try again. (Ref: ${errorId})` };
+        // --- END OF "BLACK BOX RECORDER" ---
+        
+        return { success: false, error: `A database error occurred while processing your roll. Please contact support. (Ref: ${errorId})` };
+
     } finally {
         if (client) client.release();
     }
