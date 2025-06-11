@@ -13001,38 +13001,43 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - FINAL FIX for processInteractiveGameRoll with Connection Retry Logic
+// in index.js - FINAL FIX for processInteractiveGameRoll with Validation and Retry Logic
 
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    const logPrefix = `[ProcessInteractiveRoll_V6_Resilient GID:${gameData.gameId} UID:${rollerId}]`;
+    // --- NEW: Input Validation Guard Clause ---
+    if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
+        console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object.`, gameData);
+        // If the gameId is missing, we must remove the broken object from memory to prevent further errors.
+        if (gameData && gameData.chatId && activeGames.has(gameData.gameId)) {
+             activeGames.delete(gameData.gameId);
+        }
+        await notifyAdmin(`🚨 Corrupt Game State Detected 🚨\n\A malformed game object was found and removed from active memory. Type: \`${gameData?.type}\`, Chat: \`${gameData?.chatId}\``);
+        return { success: false, error: "A critical internal game state error occurred. The game has been cancelled." };
+    }
+    // --- END of Validation ---
+
+    const logPrefix = `[ProcessInteractiveRoll_V7_Validated GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
     const MAX_CONNECTION_RETRIES = 3;
     const RETRY_DELAY_MS = 250;
 
-    // --- NEW: Retry logic for DB connection ---
     for (let attempt = 1; attempt <= MAX_CONNECTION_RETRIES; attempt++) {
         try {
             client = await pool.connect();
-            // If connection is successful, break the loop and proceed.
             break; 
         } catch (connectionError) {
             console.error(`❌ ${logPrefix} DB Connection Attempt ${attempt}/${MAX_CONNECTION_RETRIES} FAILED: ${connectionError.message}`);
             if (attempt === MAX_CONNECTION_RETRIES) {
-                // If this was the last attempt, create the final error object to be returned.
                 const errorId = `C-ERR-${Date.now()}-${rollerId.slice(-4)}`;
                 if (typeof notifyAdmin === 'function') {
-                    notifyAdmin(`🚨 DB Pool Exhaustion? 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nFailed to get DB client after ${MAX_CONNECTION_RETRIES} attempts.`).catch(()=>{});
+                    notifyAdmin(`🚨 DB Pool Exhaustion? 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nFailed to get DB client after ${MAX_CONNECTION_RETRIES} attempts.`);
                 }
                 return { success: false, error: `The casino is experiencing high traffic. Please try again in a moment. (Ref: ${errorId})` };
             }
-            // Wait before retrying
             await sleep(RETRY_DELAY_MS * attempt); 
         }
     }
-    // --- END of Retry logic ---
 
-    // If we couldn't get a client after all retries, the loop above would have returned.
-    // So, if we are here, 'client' is guaranteed to be a valid, connected client.
     try {
         const sessionRes = await client.query("SELECT session_id, game_state_json FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
         if (sessionRes.rowCount === 0) {
@@ -13043,7 +13048,6 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         const session = sessionRes.rows[0];
         const gameState = session.game_state_json || {};
 
-        // Helper bot now validates the turn, but we can do a pre-check here to fail faster.
         if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
             return { success: false, error: "It's not your turn to roll!" };
         }
