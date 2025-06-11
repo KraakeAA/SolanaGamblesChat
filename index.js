@@ -13001,44 +13001,42 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
+// in index.js - REPLACEMENT for processInteractiveGameRoll
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    const logPrefix = `[ProcessInteractiveRoll_V3_Debug GID:${gameData.gameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V4_ForwardOnly GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
     try {
-        console.log(`[DEBUG] processInteractiveGameRoll CALLED. GID: ${gameData.gameId}, Roll: ${diceValue}, Roller: ${rollerId}`);
+        // This function now only forwards the roll. The helper bot is responsible for all validation.
+        console.log(`${logPrefix} Forwarding roll of ${diceValue} to helper bot for validation and processing.`);
         client = await pool.connect();
-        const sessionRes = await client.query("SELECT * FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress' FOR UPDATE", [gameData.gameId]);
-        
-        console.log(`[DEBUG] DB query for session returned ${sessionRes.rowCount} rows.`);
+
+        // We still check if the session is generally in progress to avoid notifying for completed games.
+        const sessionRes = await client.query("SELECT session_id FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
         if (sessionRes.rowCount === 0) {
-            console.warn(`${logPrefix} No 'in_progress' session found. Game might be starting, ended, or timed out.`);
-            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
+            console.warn(`${logPrefix} Roll received, but no 'in_progress' session found. Ignoring.`);
+            // No user-facing error needed; could be a late roll for a finished game.
+            return { success: false, error: "Game is not active." };
         }
-        
-        const session = sessionRes.rows[0];
-        const gameState = session.game_state_json || {};
+        const sessionId = sessionRes.rows[0].session_id;
 
-        console.log(`[DEBUG] Current player turn in DB: ${gameState.currentPlayerTurn}. Roller ID: ${rollerId}`);
-        if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
-            console.log(`${logPrefix} Roll from UID ${rollerId}, but it's UID ${gameState.currentPlayerTurn}'s turn. Ignoring.`);
-            return { success: false, error: "It's not your turn to roll!" };
-        }
+        // Update the game state with the latest roll and notify the helper.
+        // The 'lastRoll' and 'lastRollerId' will be used by the helper to validate the turn.
+        const gameStateUpdateQuery = `
+            UPDATE interactive_game_sessions
+            SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2)
+            WHERE session_id = $3
+        `;
+        await client.query(gameStateUpdateQuery, [diceValue, rollerId, sessionId]);
 
-        gameState.lastRoll = diceValue;
-        gameState.currentTurnStartTime = Date.now(); 
-
-        await client.query("UPDATE interactive_game_sessions SET game_state_json = $1 WHERE session_id = $2", [JSON.stringify(gameState), session.session_id]);
-        
-        const notifyPayload = JSON.stringify({ session_id: session.session_id });
-        console.log(`[DEBUG] Preparing to NOTIFY channel 'interactive_roll_submitted' with payload: ${notifyPayload}`);
+        const notifyPayload = JSON.stringify({ session_id: sessionId });
         await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
-        
-        console.log(`${logPrefix} Roll of ${diceValue} submitted and helper bot notified.`);
+
+        console.log(`${logPrefix} Roll successfully forwarded and helper notified.`);
         return { success: true };
 
     } catch (e) {
-        console.error(`${logPrefix} Error processing interactive roll: ${e.message}`);
-        return { success: false, error: "A database error occurred while processing your roll." };
+        console.error(`${logPrefix} Error forwarding interactive roll: ${e.message}`);
+        return { success: false, error: "A database error occurred while forwarding your roll." };
     } finally {
         if (client) client.release();
     }
