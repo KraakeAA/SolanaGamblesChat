@@ -12825,7 +12825,7 @@ function startJackpotSessionPolling() {
 // in index.js (Part 5e) - REVISED finalizeInteractiveGame function
 
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V9_CalcFix SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V10_MessageFix SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
 
@@ -12853,21 +12853,20 @@ async function finalizeInteractiveGame(sessionId) {
         let p1_payout = 0n;
         let p2_payout = 0n;
 
-        // --- CORRECTED: Payout calculation is now centralized here for all outcomes ---
+        // --- Payout calculation logic (Unchanged) ---
         if (isPvP) {
             if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_push') { p1_payout = betAmount; p2_payout = betAmount; }
         } else { // PvB logic
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                const multiplier = gameState.currentMultiplier || 2.0; // Default to 2x for standard PvB wins
+                const multiplier = gameState.currentMultiplier || 2.0;
                 const preFeePayout = BigInt(Math.floor(Number(betAmount) * multiplier));
                 const pvbHouseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
                 p1_payout = preFeePayout - pvbHouseFee;
             } else if (finalStatus === 'completed_push') {
                 p1_payout = betAmount;
             }
-            // For 'completed_loss', 'timeout', 'error', payout remains 0n
         }
 
         const solPrice = await getSolUsdPrice();
@@ -12897,12 +12896,16 @@ async function finalizeInteractiveGame(sessionId) {
         await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
         await finalizationClient.query('COMMIT');
         
-        // --- RESULT MESSAGING ---
+        // ===================================================================
+        // --- START OF MODIFIED RESULT MESSAGING ---
+        // ===================================================================
+
         const gameName = getCleanGameName(session.game_type);
         const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
         let resultMessageHTML = ``;
 
         if (isPvP) {
+            // PvP Message logic remains unchanged
             const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
             const p2Name = escapeHTML(gameState.opponentName || "Player 2");
             resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
@@ -12916,19 +12919,27 @@ async function finalizeInteractiveGame(sessionId) {
             } else {
                 resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
             }
-        } else { // PvB
+        } else { 
+            // --- NEW PvB Message Logic ---
             const p1Name = escapeHTML(gameState.p1Name || "Player");
-            resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`;
+            resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result: You vs. The Bot</b> 🤖\n\n`;
+            resultMessageHTML += `--- <b>Final Score</b> ---\n`;
+            resultMessageHTML += `👤 <b>${p1Name}:</b> ${gameState.playerScore} pts\n`;
+            resultMessageHTML += `🤖 <b>Bot Dealer:</b> ${gameState.botScore} pts\n\n`;
+
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
                 resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
             } else if (finalStatus === 'completed_push') {
                 resultMessageHTML += `⚖️ It's a draw! Your wager of <b>${betDisplay}</b> was returned.`;
-            } else {
-                resultMessageHTML += `💔 Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
+            } else { // This now covers 'completed_loss', 'timeout', and 'error'
+                resultMessageHTML += `💔 <b>The Bot Wins.</b> Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
             }
         }
         
         await safeSendMessage(session.chat_id, resultMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
+        // ===================================================================
+        // --- END OF MODIFIED RESULT MESSAGING ---
+        // ===================================================================
 
         activeGames.delete(session.main_bot_game_id);
         await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, session.game_type, null);
@@ -12941,7 +12952,6 @@ async function finalizeInteractiveGame(sessionId) {
         if (finalizationClient) finalizationClient.release();
     }
 }
-// --- End of REPLACEMENT for finalizeInteractiveGame ---
 /**
  * Connects a dedicated client to the database to listen for game completion notifications.
  */
