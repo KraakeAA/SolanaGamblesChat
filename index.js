@@ -13001,10 +13001,12 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - REPLACEMENT for processInteractiveGameRoll (no NOTIFY)
+// in index.js - FINAL HARDENED version of processInteractiveGameRoll
+
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
+    // This top-level check is for the object passed from the message listener's loop.
     if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
-        console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object in activeGames map.`, gameData);
+        console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object.`, gameData);
         if (gameData && gameData.chatId && activeGames.has(gameData.gameId)) {
              activeGames.delete(gameData.gameId);
         }
@@ -13012,37 +13014,57 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         return { success: false, error: "A critical internal game state error occurred. The game has been cancelled." };
     }
 
-    const logPrefix = `[ProcessInteractiveRoll_V9_Polling GID:${gameData.gameId} UID:${rollerId}]`;
+    const mainBotGameId = gameData.gameId; // Use a clean variable
+    const logPrefix = `[ProcessInteractiveRoll_V10_Hardened GID:${mainBotGameId} UID:${rollerId}]`;
     let client = null;
-
+    
     try {
         client = await pool.connect();
-        const sessionRes = await client.query("SELECT session_id, game_state_json FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
-        if (sessionRes.rowCount === 0) {
-            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
-        }
-        const sessionId = sessionRes.rows[0].session_id;
 
-        // Update the DB with the roll data. The helper bot will poll for this change.
-        // We also update the timestamp to make polling more efficient.
+        // **THE CRITICAL FIX IS HERE:** We now ONLY trust the gameId from memory.
+        // We fetch the entire session state, including the turn data, directly from the database.
+        // This makes the database the single source of truth for game state.
+        const sessionRes = await client.query("SELECT session_id, game_state_json, game_type FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [mainBotGameId]);
+
+        if (sessionRes.rowCount === 0) {
+            console.warn(`${logPrefix} Roll received, but no 'in_progress' session found for this gameId.`);
+            return { success: false, error: "This game is no longer active or is waiting to start." };
+        }
+        
+        const session = sessionRes.rows[0];
+        const gameState = session.game_state_json || {};
+
+        // Perform the turn validation using data ONLY from the database.
+        if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
+            const expectedPlayerName = String(gameState.currentPlayerTurn) === String(gameState.initiatorId) ? gameState.initiatorName : gameState.opponentName;
+            console.warn(`${logPrefix} Roll from wrong player. Expected: ${gameState.currentPlayerTurn} (${expectedPlayerName}). Got: ${rollerId}`);
+            return { success: false, error: `It's not your turn! Waiting for ${escapeHTML(expectedPlayerName)}.` };
+        }
+        
+        // Update the DB with the roll data.
         const gameStateUpdateQuery = `
             UPDATE interactive_game_sessions
             SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2),
                 updated_at = NOW() 
             WHERE session_id = $3
         `;
-        await client.query(gameStateUpdateQuery, [diceValue, rollerId, sessionId]);
+        await client.query(gameStateUpdateQuery, [diceValue, rollerId, session.session_id]);
 
-        // The NOTIFY command that was here has been removed.
-
-        console.log(`${logPrefix} Roll data saved for helper bot to poll.`);
+        // Send the notification to the helper bot.
+        const notifyPayload = JSON.stringify({ session_id: session.session_id });
+        await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
+        
+        console.log(`${logPrefix} Roll successfully validated against DB state and forwarded.`);
         return { success: true };
 
     } catch (e) {
-        const errorId = `Q-ERR-${Date.now()}-${rollerId.slice(-4)}`;
+        const errorId = `Q-FATAL-${Date.now()}-${rollerId.slice(-4)}`;
         console.error(`❌ ${logPrefix} Query Error. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
+        if (typeof notifyAdmin === 'function') {
+            const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\``;
+            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of roll error:", err));
+        }
         return { success: false, error: `A database error occurred while processing your roll. Please try again. (Ref: ${errorId})` };
-
     } finally {
         if (client) client.release();
     }
