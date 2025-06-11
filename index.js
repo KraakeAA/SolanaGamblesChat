@@ -13001,12 +13001,8 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - FINAL, DECOUPLED version of processInteractiveGameRoll
-
+// in index.js - REPLACEMENT for processInteractiveGameRoll (no NOTIFY)
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    // --- FINAL FIX: This function no longer touches the database directly. ---
-    // It only validates its own state and sends a notification.
-    
     if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
         console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object in activeGames map.`, gameData);
         if (gameData && gameData.chatId && activeGames.has(gameData.gameId)) {
@@ -13016,33 +13012,39 @@ async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
         return { success: false, error: "A critical internal game state error occurred. The game has been cancelled." };
     }
 
-    const logPrefix = `[ProcessInteractiveRoll_V8_Decoupled GID:${gameData.gameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V9_Polling GID:${gameData.gameId} UID:${rollerId}]`;
+    let client = null;
 
     try {
-        // The Main Bot's only job is to notify the Helper Bot with the necessary info.
-        const notifyPayload = JSON.stringify({
-            main_bot_game_id: gameData.gameId,
-            rollerId: rollerId,
-            diceValue: diceValue
-        });
+        client = await pool.connect();
+        const sessionRes = await client.query("SELECT session_id, game_state_json FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress'", [gameData.gameId]);
+        if (sessionRes.rowCount === 0) {
+            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
+        }
+        const sessionId = sessionRes.rows[0].session_id;
 
-        // Use the main pool to fire a single, non-blocking NOTIFY command.
-        await pool.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
-        
-        console.log(`${logPrefix} Roll of ${diceValue} successfully forwarded to helper bot via NOTIFY.`);
+        // Update the DB with the roll data. The helper bot will poll for this change.
+        // We also update the timestamp to make polling more efficient.
+        const gameStateUpdateQuery = `
+            UPDATE interactive_game_sessions
+            SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2),
+                updated_at = NOW() 
+            WHERE session_id = $3
+        `;
+        await client.query(gameStateUpdateQuery, [diceValue, rollerId, sessionId]);
+
+        // The NOTIFY command that was here has been removed.
+
+        console.log(`${logPrefix} Roll data saved for helper bot to poll.`);
         return { success: true };
 
     } catch (e) {
-        // This block will now only catch errors related to sending the NOTIFY command itself.
-        const errorId = `N-ERR-${Date.now()}-${rollerId.slice(-4)}`;
-        console.error(`❌ ${logPrefix} CRITICAL Error sending NOTIFY signal: ${e.message}`, e.stack);
-        
-        if (typeof notifyAdmin === 'function') {
-            const adminMsg = `🚨 Main Bot NOTIFY Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nError: \`${escapeMarkdownV2(e.message)}\`\nHelper bot will not process this roll.`;
-            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of NOTIFY error:", err));
-        }
-        
-        return { success: false, error: `A system communication error occurred. Please try rolling again. (Ref: ${errorId})` };
+        const errorId = `Q-ERR-${Date.now()}-${rollerId.slice(-4)}`;
+        console.error(`❌ ${logPrefix} Query Error. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
+        return { success: false, error: `A database error occurred while processing your roll. Please try again. (Ref: ${errorId})` };
+
+    } finally {
+        if (client) client.release();
     }
 }
 
@@ -13126,6 +13128,7 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
     }
 }
 
+// in index.js - REPLACEMENT for startInteractivePvPGame (no NOTIFY)
 async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
     const LOG_PREFIX_START_INTERACTIVE_PVP = `[StartInteractivePvP GID:${gameId} Type:${gameType}]`;
     let client = null;
@@ -13156,12 +13159,14 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
             [gameId, gameType, String(initiator.telegram_id), chatId, betAmount.toString(), JSON.stringify(initialGameState)]
         );
         
+        // The NOTIFY command that was here has been removed.
+        
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         console.error(`${LOG_PREFIX_START_INTERACTIVE_PVP} Error starting game: ${e.message}`);
         await safeSendMessage(chatId, `⚙️ A critical database error occurred while starting the PvP game. The match has been cancelled and bets will be refunded.`, { parse_mode: 'HTML' });
-        // Refund logic (as you already have it)
+        // Refund logic
         let refundClient = null;
         try {
             refundClient = await pool.connect();
@@ -13175,13 +13180,11 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
         if (client) client.release();
     }
 
-    // This placeholder is now more robust for the message listener.
     activeGames.set(gameId, {
         gameId: gameId,
         type: gameType,
         chatId: chatId,
-        // CORRECTED: Added both player IDs to the top level for easy checking
-        participants: [String(initiator.telegram_id), String(opponent.telegram_id)], 
+        participants: [String(initiator.telegram_id), String(opponent.telegram_id)],
         status: 'delegated'
     });
     await updateGroupGameDetails(chatId, gameId, gameType, betAmount);
@@ -13191,7 +13194,7 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
     const gameName = getCleanGameName(gameType);
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    const startMessage = `🔥 <b>${escapeHTML(gameName)} Duel!</b> 🔥\n\n` +
+    const startMessage = `🔥 <b>${escapeHTML(gameName)}!</b> 🔥\n\n` +
                          `${initiatorRefHTML} vs. ${opponentRefHTML} for <b>${betDisplayUSD_HTML}</b>!\n\n` +
                          `The Game Bot is now conducting the match. Good luck to both players!`;
     await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
