@@ -2297,7 +2297,7 @@ function getCleanGameName(technicalGameId) {
 
     const lowerCaseId = String(technicalGameId).toLowerCase();
 
-    // The switch handles all active game types
+    // Use a switch for clarity and exact matching
     switch(lowerCaseId) {
         case 'coinflip':
         case 'coinflip_pvb':
@@ -2315,9 +2315,6 @@ function getCleanGameName(technicalGameId) {
         case 'dice_escalator_pvp_from_unified':
             return "Dice Escalator";
         case 'dice21':
-        case 'dice21_pvb': // Adding PvB for completeness
-        case 'dice21_pvp':
-        case 'dice21_pvp_from_unified':
             return "Dice 18";
         case 'duel':
         case 'duel_pvb':
@@ -2338,11 +2335,11 @@ function getCleanGameName(technicalGameId) {
         
         // Original Interactive Games
         case 'bowling':
-            return "Pinpoint Bowling";
+            return "Pinpoint Bowling"; // Original Game
         case 'darts':
-            return "Darts of Fortune";
+            return "Darts of Fortune"; // Original Game
         case 'basketball':
-            return "3-Point Shootout";
+            return "3-Point Shootout"; // Original Game
 
         // New Interactive Games
         case 'bowling_duel':
@@ -2354,27 +2351,18 @@ function getCleanGameName(technicalGameId) {
         case 'basketball_clash_pvp':
             return "3-Point Clash";
         
-        // Generic Offer Type
+        // Offers and Challenges
         case 'direct_pvp_challenge':
             return "a direct challenge";
+        default:
+            // Fallback for offer keys
+            if (lowerCaseId.includes('offer')) {
+                if (lowerCaseId.includes('coinflip')) return "a Coinflip offer";
+                if (lowerCaseId.includes('rps')) return "an RPS offer";
+                // Add other offers as needed
+            }
+            return "an unknown game";
     }
-
-    // --- CORRECTED & EXPANDED FALLBACK FOR ALL OFFER TYPES ---
-    // This now runs if the switch statement doesn't find a match.
-    if (lowerCaseId.includes('offer')) {
-        if (lowerCaseId.includes('coinflip')) return "a Coinflip offer";
-        if (lowerCaseId.includes('rps')) return "an RPS offer";
-        if (lowerCaseId.includes('dice_escalator')) return "a Dice Escalator offer";
-        if (lowerCaseId.includes('dice21')) return "a Dice 18 offer";
-        if (lowerCaseId.includes('duel')) return "a Duel offer";
-        if (lowerCaseId.includes('mines')) return "a Mines offer";
-        if (lowerCaseId.includes('bowling')) return "a Bowling offer";
-        if (lowerCaseId.includes('darts')) return "a Darts offer";
-        if (lowerCaseId.includes('basketball')) return "a Basketball offer";
-    }
-
-    // Default return if no other condition is met
-    return "an unknown game";
 }
 // --- General Utility Functions ---
 
@@ -12837,7 +12825,7 @@ function startJackpotSessionPolling() {
 // in index.js (Part 5e) - REVISED finalizeInteractiveGame function
 
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V11_ScoreOnly SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V9_CalcFix SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
 
@@ -12858,30 +12846,30 @@ async function finalizeInteractiveGame(sessionId) {
         const gameState = session.game_state_json || {};
         const isPvP = gameState.gameMode === 'pvp';
         const totalPot = betAmount * 2n;
-        const houseFee = isPvP ? BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT)) : 0n;
+        const houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
 
         let p1_id = String(gameState.initiatorId || session.user_id);
         let p2_id = isPvP ? String(gameState.opponentId) : null;
         let p1_payout = 0n;
         let p2_payout = 0n;
 
-        // Determine Payouts
+        // --- CORRECTED: Payout calculation is now centralized here for all outcomes ---
         if (isPvP) {
             if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_push') { p1_payout = betAmount; p2_payout = betAmount; }
         } else { // PvB logic
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                const multiplier = gameState.currentMultiplier || 2.0;
+                const multiplier = gameState.currentMultiplier || 2.0; // Default to 2x for standard PvB wins
                 const preFeePayout = BigInt(Math.floor(Number(betAmount) * multiplier));
                 const pvbHouseFee = BigInt(Math.floor(Number(preFeePayout) * HOUSE_FEE_PERCENT));
                 p1_payout = preFeePayout - pvbHouseFee;
             } else if (finalStatus === 'completed_push') {
                 p1_payout = betAmount;
             }
+            // For 'completed_loss', 'timeout', 'error', payout remains 0n
         }
 
-        // --- Database and Bonus Logic (remains the same) ---
         const solPrice = await getSolUsdPrice();
         const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
         
@@ -12909,7 +12897,7 @@ async function finalizeInteractiveGame(sessionId) {
         await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
         await finalizationClient.query('COMMIT');
         
-        // --- CORRECTED: Simplified Result Messaging (Scores Only) ---
+        // --- RESULT MESSAGING ---
         const gameName = getCleanGameName(session.game_type);
         const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
         let resultMessageHTML = ``;
@@ -12918,33 +12906,25 @@ async function finalizeInteractiveGame(sessionId) {
             const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
             const p2Name = escapeHTML(gameState.opponentName || "Player 2");
             resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
-            resultMessageHTML += `<b>Final Score:</b>\n`;
             resultMessageHTML += `<b>${p1Name}:</b> ${gameState.p1Score} pts\n`;
             resultMessageHTML += `<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
 
             if (finalStatus === 'completed_p1_win') {
-                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
-                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
+                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
             } else if (finalStatus === 'completed_p2_win') {
-                const winAmount = await formatBalanceForDisplay(p2_payout, 'USD');
-                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${winAmount}</b>!`;
-            } else { // Push or other states
+                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${await formatBalanceForDisplay(p2_payout, 'USD')}</b>!`;
+            } else {
                 resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
             }
         } else { // PvB
             const p1Name = escapeHTML(gameState.p1Name || "Player");
             resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result</b> 🤖\n\n`;
-            resultMessageHTML += `<b>Final Score:</b>\n`;
-            resultMessageHTML += `<b>${p1Name}:</b> ${gameState.playerScore} pts\n`;
-            resultMessageHTML += `<b>Bot Dealer:</b> ${gameState.botScore} pts\n\n`;
-
             if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                const winAmount = await formatBalanceForDisplay(p1_payout, 'USD');
-                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${winAmount}</b>!`;
+                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
             } else if (finalStatus === 'completed_push') {
                 resultMessageHTML += `⚖️ It's a draw! Your wager of <b>${betDisplay}</b> was returned.`;
-            } else { // Loss
-                resultMessageHTML += `💔 Better luck next time! Your wager of <b>${betDisplay}</b> was lost.`;
+            } else {
+                resultMessageHTML += `💔 Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
             }
         }
         
@@ -13001,75 +12981,49 @@ async function setupNotificationListener() {
 // SECTION 0: EMOJI ROLL PROCESSOR
 // ===================================================================
 
-// in index.js - DEFINITIVE FIX for processInteractiveGameRoll with Explicit Type Casting
-
 async function processInteractiveGameRoll(gameData, diceValue, rollerId) {
-    if (!gameData || typeof gameData.gameId !== 'string' || gameData.gameId.trim() === '') {
-        console.error(`[ProcessInteractiveRoll] CRITICAL: Received malformed gameData object.`, gameData);
-        if (gameData && gameData.chatId && activeGames.has(gameData.gameId)) {
-             activeGames.delete(gameData.gameId);
-        }
-        await notifyAdmin(`🚨 Corrupt Game State Detected & Purged 🚨\n\A malformed game object was found for game type: \`${gameData?.type}\`, Chat: \`${gameData?.chatId}\``);
-        return { success: false, error: "A critical internal game state error occurred. The game has been cancelled." };
-    }
-
-    const mainBotGameId = gameData.gameId;
-    const logPrefix = `[ProcessInteractiveRoll_V12_TypecastFix GID:${mainBotGameId} UID:${rollerId}]`;
+    const logPrefix = `[ProcessInteractiveRoll_V3_Debug GID:${gameData.gameId} UID:${rollerId}]`;
     let client = null;
-    
     try {
+        console.log(`[DEBUG] processInteractiveGameRoll CALLED. GID: ${gameData.gameId}, Roll: ${diceValue}, Roller: ${rollerId}`);
         client = await pool.connect();
-
-        // --- THE DEFINITIVE FIX ---
-        // We explicitly cast the parameter to ::text to prevent any ambiguity
-        // from the connection pooler or database driver.
-        const sessionRes = await client.query("SELECT session_id, game_state_json, game_type FROM interactive_game_sessions WHERE main_bot_game_id = $1::text AND status = 'in_progress'", [mainBotGameId]);
-
+        const sessionRes = await client.query("SELECT * FROM interactive_game_sessions WHERE main_bot_game_id = $1 AND status = 'in_progress' FOR UPDATE", [gameData.gameId]);
+        
+        console.log(`[DEBUG] DB query for session returned ${sessionRes.rowCount} rows.`);
         if (sessionRes.rowCount === 0) {
-            console.warn(`${logPrefix} Roll received, but no 'in_progress' session found for this gameId.`);
-            return { success: false, error: "This game is no longer active or is waiting to start." };
+            console.warn(`${logPrefix} No 'in_progress' session found. Game might be starting, ended, or timed out.`);
+            return { success: false, error: "The game isn't ready for your roll. Please wait for the prompt." };
         }
         
         const session = sessionRes.rows[0];
         const gameState = session.game_state_json || {};
 
+        console.log(`[DEBUG] Current player turn in DB: ${gameState.currentPlayerTurn}. Roller ID: ${rollerId}`);
         if (String(gameState.currentPlayerTurn) !== String(rollerId)) {
-            const expectedPlayerName = String(gameState.currentPlayerTurn) === String(gameState.initiatorId) ? gameState.initiatorName : gameState.opponentName;
-            console.warn(`${logPrefix} Roll from wrong player. Expected: ${gameState.currentPlayerTurn} (${expectedPlayerName}). Got: ${rollerId}`);
-            return { success: false, error: `It's not your turn! Waiting for ${escapeHTML(expectedPlayerName)}.` };
+            console.log(`${logPrefix} Roll from UID ${rollerId}, but it's UID ${gameState.currentPlayerTurn}'s turn. Ignoring.`);
+            return { success: false, error: "It's not your turn to roll!" };
         }
-        
-        const gameStateUpdateQuery = `
-            UPDATE interactive_game_sessions
-            SET game_state_json = game_state_json || jsonb_build_object('lastRoll', $1, 'lastRollerId', $2),
-                updated_at = NOW() 
-            WHERE session_id = $3
-        `;
-        await client.query(gameStateUpdateQuery, [diceValue, rollerId, session.session_id]);
 
+        gameState.lastRoll = diceValue;
+        gameState.currentTurnStartTime = Date.now(); 
+
+        await client.query("UPDATE interactive_game_sessions SET game_state_json = $1 WHERE session_id = $2", [JSON.stringify(gameState), session.session_id]);
+        
         const notifyPayload = JSON.stringify({ session_id: session.session_id });
+        console.log(`[DEBUG] Preparing to NOTIFY channel 'interactive_roll_submitted' with payload: ${notifyPayload}`);
         await client.query(`NOTIFY interactive_roll_submitted, '${notifyPayload}'`);
         
-        console.log(`${logPrefix} Roll successfully validated against DB state and forwarded.`);
+        console.log(`${logPrefix} Roll of ${diceValue} submitted and helper bot notified.`);
         return { success: true };
 
     } catch (e) {
-        const errorId = `Q-FATAL-${Date.now()}-${rollerId.slice(-4)}`;
-        console.error(`❌ ${logPrefix} Query Error. Ref ID: ${errorId}. Details: ${e.message}`, e.stack);
-        console.error(`CRITICAL: Malformed gameData object state that caused the crash:`, JSON.stringify(gameData, null, 2));
-        
-        if (typeof notifyAdmin === 'function') {
-            const gameDataString = JSON.stringify(gameData, null, 2);
-            const adminMsg = `🚨 Interactive Roll DB Error 🚨\nRef: \`${errorId}\`\nGame: \`${gameData.type}\`\nUser: \`${rollerId}\`\nError: \`${escapeMarkdownV2(e.message)}\`\n\n**Crashed Object State:**\n\`\`\`json\n${escapeMarkdownV2(gameDataString.substring(0, 500))}\n\`\`\``;
-            notifyAdmin(adminMsg).catch(err => console.error("Failed to notify admin of query error:", err));
-        }
-        
-        return { success: false, error: `A database error occurred while processing your roll. Please contact support. (Ref: ${errorId})` };
-
+        console.error(`${logPrefix} Error processing interactive roll: ${e.message}`);
+        return { success: false, error: "A database error occurred while processing your roll." };
     } finally {
         if (client) client.release();
     }
 }
+
 
 // ===================================================================
 // SECTION 1: GENERIC GAME STARTERS (DATABASE HANDOFF)
@@ -13151,8 +13105,6 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
     }
 }
 
-// --- Start of REPLACEMENT for startInteractivePvPGame in index.js (Part 5f) ---
-
 async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, chatId, gameType) {
     const LOG_PREFIX_START_INTERACTIVE_PVP = `[StartInteractivePvP GID:${gameId} Type:${gameType}]`;
     let client = null;
@@ -13183,17 +13135,12 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
             [gameId, gameType, String(initiator.telegram_id), chatId, betAmount.toString(), JSON.stringify(initialGameState)]
         );
         
-        // --- THIS IS THE FIX: The NOTIFY command is now present ---
-        const notifyPayload = JSON.stringify({ session: { main_bot_game_id: gameId } });
-        await client.query(`NOTIFY game_session_pickup, '${notifyPayload}'`);
-        // --- END OF FIX ---
-        
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         console.error(`${LOG_PREFIX_START_INTERACTIVE_PVP} Error starting game: ${e.message}`);
         await safeSendMessage(chatId, `⚙️ A critical database error occurred while starting the PvP game. The match has been cancelled and bets will be refunded.`, { parse_mode: 'HTML' });
-        // Refund logic
+        // Refund logic (as you already have it)
         let refundClient = null;
         try {
             refundClient = await pool.connect();
@@ -13207,11 +13154,13 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
         if (client) client.release();
     }
 
+    // This placeholder is now more robust for the message listener.
     activeGames.set(gameId, {
         gameId: gameId,
         type: gameType,
         chatId: chatId,
-        participants: [String(initiator.telegram_id), String(opponent.telegram_id)],
+        // CORRECTED: Added both player IDs to the top level for easy checking
+        participants: [String(initiator.telegram_id), String(opponent.telegram_id)], 
         status: 'delegated'
     });
     await updateGroupGameDetails(chatId, gameId, gameType, betAmount);
@@ -13221,12 +13170,11 @@ async function startInteractivePvPGame(gameId, initiator, opponent, betAmount, c
     const gameName = getCleanGameName(gameType);
     const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
 
-    const startMessage = `🔥 <b>${escapeHTML(gameName)}!</b> 🔥\n\n` +
+    const startMessage = `🔥 <b>${escapeHTML(gameName)} Duel!</b> 🔥\n\n` +
                          `${initiatorRefHTML} vs. ${opponentRefHTML} for <b>${betDisplayUSD_HTML}</b>!\n\n` +
                          `The Game Bot is now conducting the match. Good luck to both players!`;
     await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
 }
-// --- End of REPLACEMENT for startInteractivePvPGame ---
 
 // ===================================================================
 // SECTION 2: UNIFIED COMMAND HANDLERS
@@ -15329,27 +15277,22 @@ bot.on('message', async (msg) => {
 
     if (isShuttingDown) return;
     if (!msg || !msg.from || !msg.chat || !msg.date) return;
-    if (msg.from.is_bot) return;
+
+    // Ignore messages from all bots to prevent loops
+    if (msg.from.is_bot) {
+        return;
+    }
 
     const userId = String(msg.from.id || msg.from.telegram_id);
     const chatId = String(msg.chat.id);
     const text = msg.text || "";
+    // FIX: The chatType variable is correctly defined here for use throughout the handler.
     const chatType = msg.chat.type;
 
     // --- REVISED & COMPLETE EMOJI HANDLING BLOCK ---
     if (msg.dice && msg.from && !msg.from.is_bot) {
         const diceValue = msg.dice.value;
         const rollerId = String(msg.from.id || msg.from.telegram_id);
-        
-        // --- DEFINITIVE FIX STARTS HERE ---
-        // This guard prevents the entire bot from crashing if the dice value is missing.
-        if (typeof diceValue === 'undefined' || diceValue === null) {
-            console.error(`${LOG_PREFIX_MSG_HANDLER} CRITICAL: Received dice emoji from user ${rollerId} but 'dice.value' was undefined. Ignoring to prevent crash. Emoji: ${msg.dice.emoji}`);
-            // We simply stop processing this message, preventing the crash.
-            return; 
-        }
-        // --- DEFINITIVE FIX ENDS HERE ---
-
         let gameFoundAndProcessed = false;
 
         for (const [gameId, gData] of activeGames.entries()) {
@@ -15357,40 +15300,49 @@ bot.on('message', async (msg) => {
             
             let isParticipantInTargetGame = false;
 
-            // This logic correctly checks if the roller is an active participant in any ongoing game.
+            // Check for games handled by the main bot directly
             if (gData.type === GAME_IDS.DICE_ESCALATOR_PVB && gData.player?.userId === rollerId && (gData.status === 'player_turn_awaiting_emoji' || gData.status === 'player_score_18_plus_awaiting_choice')) isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DICE_ESCALATOR_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DICE_21 && gData.playerId === rollerId && (gData.status.includes('player_turn') || gData.status.includes('prompted'))) isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DICE_21_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DUEL_PVB && gData.playerId === rollerId && gData.status === 'player_awaiting_roll_emoji') isParticipantInTargetGame = true;
             else if (gData.type === GAME_IDS.DUEL_PVP && ((gData.initiator?.userId === rollerId && gData.initiator?.isTurn) || (gData.opponent?.userId === rollerId && gData.opponent?.isTurn))) isParticipantInTargetGame = true;
+            
+            // CORRECTED CHECK: This now works for both PvB and PvP delegated games.
             else if (gData.status === 'delegated') {
-                if (Array.isArray(gData.participants) && gData.participants.includes(rollerId)) { isParticipantInTargetGame = true; } 
-                else if (gData.userId === rollerId) { isParticipantInTargetGame = true; }
+                if (Array.isArray(gData.participants) && gData.participants.includes(rollerId)) { // For PvP
+                    isParticipantInTargetGame = true;
+                } else if (gData.userId === rollerId) { // For PvB
+                    isParticipantInTargetGame = true;
+                }
             }
 
             if (isParticipantInTargetGame) {
-                if (gData.status === 'delegated') {
-                    const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
-                    if (!result.success) {
-                        await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`, { parse_mode: 'HTML' });
-                    }
-                } else {
-                    switch (gData.type) {
-                        case GAME_IDS.DICE_ESCALATOR_PVB: await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue); break;
-                        case GAME_IDS.DICE_ESCALATOR_PVP: await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId); break;
-                        case GAME_IDS.DICE_21: await processDice21PvBRollByEmoji(gData, diceValue, msg); break;
-                        case GAME_IDS.DICE_21_PVP: await processDice21PvPRoll(gData, diceValue, rollerId); break;
-                        case GAME_IDS.DUEL_PVB: await processDuelPvBRollByEmoji(gData, diceValue); break;
-                        case GAME_IDS.DUEL_PVP: await processDuelPvPRollByEmoji(gData, diceValue, rollerId); break;
-                    }
+                // Route to the correct handler based on game type
+                switch (gData.type) {
+                    case GAME_IDS.DICE_ESCALATOR_PVB: await processDiceEscalatorPvBRollByEmoji_New(gData, diceValue); break;
+                    case GAME_IDS.DICE_ESCALATOR_PVP: await processDiceEscalatorPvPRollByEmoji_New(gData, diceValue, rollerId); break;
+                    case GAME_IDS.DICE_21: await processDice21PvBRollByEmoji(gData, diceValue, msg); break;
+                    case GAME_IDS.DICE_21_PVP: await processDice21PvPRoll(gData, diceValue, rollerId); break;
+                    case GAME_IDS.DUEL_PVB: await processDuelPvBRollByEmoji(gData, diceValue); break;
+                    case GAME_IDS.DUEL_PVP: await processDuelPvPRollByEmoji(gData, diceValue, rollerId); break;
+                    default:
+                        // This handles all other interactive games like Bowling, Darts, Basketball
+                        if (gData.status === 'delegated') {
+                            const result = await processInteractiveGameRoll(gData, diceValue, rollerId);
+                            if (result && !result.success) {
+                                await safeSendMessage(chatId, `⚠️ ${escapeHTML(result.error)}`);
+                            }
+                        }
+                        break;
                 }
                 gameFoundAndProcessed = true;
-                break;
+                break; // Exit the loop once the game is found and processed
             }
         }
 
         if (gameFoundAndProcessed) {
+            // Delete the user's dice emoji message after a short delay to prevent clutter
             setTimeout(() => { bot.deleteMessage(chatId, msg.message_id).catch(() => {}); }, 4000);
             return;
         }
