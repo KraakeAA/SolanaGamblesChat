@@ -2698,43 +2698,50 @@ function calculateInitialBetBonusPercentage(referralCount, referralTiersConfig) 
 // CORRECTED processQualifyingBetAndInitialBonus (Fixes referral tracking)
 async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegramId, referredUserBetAmountLamports, gameIdForBet) {
     const stringReferredUserId = String(referredUserTelegramId);
-    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V4_LogicFix UID:${stringReferredUserId}]`;
+    const LOG_PREFIX_PQB = `[ProcessQualifyingBet_V5_Logging UID:${stringReferredUserId}]`;
 
     try {
+        console.log(`${LOG_PREFIX_PQB} Checking referral status for user.`);
         const referredUserDetails = await dbClient.query(
             `SELECT telegram_id, referrer_telegram_id, first_bet_placed_at FROM users WHERE telegram_id = $1 FOR UPDATE`,
             [stringReferredUserId]
         );
+
         if (referredUserDetails.rowCount === 0 || !referredUserDetails.rows[0].referrer_telegram_id) {
+            console.log(`${LOG_PREFIX_PQB} User is not a referred user or not found. No bonus action taken.`);
             return { success: true, jobQueued: false, message: "Not a referred user." };
         }
-        if (referredUserDetails.rows[0].first_bet_placed_at) {
+        
+        const referredUser = referredUserDetails.rows[0];
+        const referrerId = String(referredUser.referrer_telegram_id);
+        
+        if (referredUser.first_bet_placed_at) {
+            console.log(`${LOG_PREFIX_PQB} User has already placed their first qualifying bet. Skipping one-time bonus.`);
             return { success: true, jobQueued: false, message: "Initial bonus already handled." };
         }
         
         const solPrice = await getSolUsdPrice();
         const betAmountUSD = Number(referredUserBetAmountLamports) / Number(LAMPORTS_PER_SOL) * solPrice;
+        console.log(`${LOG_PREFIX_PQB} Bet amount in USD: $${betAmountUSD.toFixed(4)}. Qualifying minimum: $${REFERRAL_QUALIFYING_BET_USD_CONST.toFixed(2)}`);
         
-        // --- LOGIC FIX IS HERE ---
-        // First, check if the bet is large enough to qualify.
         if (betAmountUSD < REFERRAL_QUALIFYING_BET_USD_CONST) {
-            // DO NOT set the timestamp here. The user can still make a qualifying "first bet" later.
+            console.log(`${LOG_PREFIX_PQB} Bet amount is too small to be the qualifying first bet. No action taken.`);
             return { success: true, jobQueued: false, message: "Bet too small to qualify. User can try again." };
         }
-        
-        // If we get here, the bet IS a qualifying bet. NOW we set the timestamp.
-        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
-        // --- END OF LOGIC FIX ---
 
-        const referrerId = String(referredUserDetails.rows[0].referrer_telegram_id);
+        // The bet qualifies. Now we process the bonus.
+        console.log(`${LOG_PREFIX_PQB} Qualifying bet detected. Processing initial bet bonus for referrer ${referrerId}.`);
+        await dbClient.query(`UPDATE users SET first_bet_placed_at = NOW() WHERE telegram_id = $1 AND first_bet_placed_at IS NULL`, [stringReferredUserId]);
+        
         const referrerData = await dbClient.query(`SELECT referral_count FROM users WHERE telegram_id = $1 FOR UPDATE`, [referrerId]);
         const currentReferrerCount = referrerData.rows.length > 0 ? (referrerData.rows[0].referral_count || 0) : 0;
         
         const bonusPercentage = calculateInitialBetBonusPercentage(currentReferrerCount, REFERRAL_INITIAL_BET_TIERS_CONFIG);
         const initialBonusAmountLamports = BigInt(Math.floor(Number(referredUserBetAmountLamports) * bonusPercentage));
+        console.log(`${LOG_PREFIX_PQB} Referrer has ${currentReferrerCount} referrals. Bonus tier is ${bonusPercentage*100}%. Bonus Lamports: ${initialBonusAmountLamports}`);
 
         if (initialBonusAmountLamports <= 0n) {
-            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero. No commission created.`);
+            console.log(`${LOG_PREFIX_PQB} Calculated initial bonus is zero. No commission job will be created.`);
             return { success: true, jobQueued: false, message: "Bonus amount was zero." };
         }
 
@@ -2761,18 +2768,18 @@ async function processQualifyingBetAndInitialBonus(dbClient, referredUserTelegra
                 [jobPayload]
             );
             
-            console.log(`${LOG_PREFIX_PQB} Initial bet bonus of ${initialBonusAmountLamports} lamports for referrer ${referrerId} has been QUEUED.`);
-            
+            console.log(`${LOG_PREFIX_PQB} SUCCESS: Initial bet bonus of ${initialBonusAmountLamports} lamports for referrer ${referrerId} has been QUEUED.`);
             return { success: true, jobQueued: true };
         } else {
-            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus.`);
-            return { success: true, jobQueued: false, message: "No pending referral link found." };
+            console.warn(`${LOG_PREFIX_PQB} No pending referral found to update for initial bonus, or it was already processed. This might happen if two games finish simultaneously.`);
+            return { success: true, jobQueued: false, message: "No pending referral link found to apply bonus to." };
         }
     } catch (error) {
         console.error(`${LOG_PREFIX_PQB} Error processing qualifying bet and initial bonus: ${error.message}`, error.stack);
         return { success: false, jobQueued: false, error: error.message };
     }
 }
+
 
 
 /**
@@ -12825,9 +12832,10 @@ function startJackpotSessionPolling() {
 // in index.js (Part 5e) - REVISED finalizeInteractiveGame function
 
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V10_MessageFix SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V12_NotifyFix SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
+    let allNotificationsToSend = []; // Array to hold all notifications
 
     try {
         finalizationClient = await pool.connect();
@@ -12853,7 +12861,7 @@ async function finalizeInteractiveGame(sessionId) {
         let p1_payout = 0n;
         let p2_payout = 0n;
 
-        // --- Payout calculation logic (Unchanged) ---
+        // Payout calculation logic
         if (isPvP) {
             if (finalStatus === 'completed_p1_win') p1_payout = totalPot - houseFee;
             else if (finalStatus === 'completed_p2_win') p2_payout = totalPot - houseFee;
@@ -12872,23 +12880,35 @@ async function finalizeInteractiveGame(sessionId) {
         const solPrice = await getSolUsdPrice();
         const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
         
+        // Update balance for Player 1
         const player1Update = await updateUserBalanceAndLedger(finalizationClient, p1_id, p1_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
         if (!player1Update.success) throw new Error(`P1 balance update failed: ${player1Update.error}`);
+        if(player1Update.notifications) allNotificationsToSend.push(...player1Update.notifications);
 
+        // Check bonuses/referrals for Player 1
         if (isConclusive) {
             const p1Wagered = BigInt(gameState.initiatorTotalWagered || '0');
             if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p1_id, betAmount, session.main_bot_game_id);
-            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p1_id, p1Wagered, solPrice, session.chat_id);
+            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) {
+                const levelNotifications = await checkAndUpdateUserLevel(finalizationClient, p1_id, p1Wagered, solPrice, session.chat_id);
+                allNotificationsToSend.push(...levelNotifications);
+            }
             if (typeof processWagerMilestoneBonus === 'function' && p1Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p1_id, p1Wagered, solPrice);
         }
 
+        // Update balance and check bonuses for Player 2 (in PvP)
         if (isPvP && p2_id) {
             const player2Update = await updateUserBalanceAndLedger(finalizationClient, p2_id, p2_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
             if (!player2Update.success) throw new Error(`P2 balance update failed: ${player2Update.error}`);
+            if(player2Update.notifications) allNotificationsToSend.push(...player2Update.notifications);
+            
             if (isConclusive) {
                 const p2Wagered = BigInt(gameState.opponentTotalWagered || '0');
                 if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(finalizationClient, p2_id, betAmount, session.main_bot_game_id);
-                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) await checkAndUpdateUserLevel(finalizationClient, p2_id, p2Wagered, solPrice, session.chat_id);
+                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) {
+                    const levelNotifications = await checkAndUpdateUserLevel(finalizationClient, p2_id, p2Wagered, solPrice, session.chat_id);
+                    allNotificationsToSend.push(...levelNotifications);
+                }
                 if (typeof processWagerMilestoneBonus === 'function' && p2Wagered > 0n) await processWagerMilestoneBonus(finalizationClient, p2_id, p2Wagered, solPrice);
             }
         }
@@ -12896,51 +12916,31 @@ async function finalizeInteractiveGame(sessionId) {
         await finalizationClient.query("UPDATE interactive_game_sessions SET status = 'archived_finalized' WHERE session_id = $1", [session.session_id]);
         await finalizationClient.query('COMMIT');
         
-        // ===================================================================
-        // --- START OF MODIFIED RESULT MESSAGING ---
-        // ===================================================================
+        // --- Send all captured notifications AFTER the transaction is committed ---
+        for (const notification of allNotificationsToSend) {
+             await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
+        }
 
+        // Result Messaging
         const gameName = getCleanGameName(session.game_type);
         const betDisplay = await formatBalanceForDisplay(betAmount, 'USD');
         let resultMessageHTML = ``;
-
         if (isPvP) {
-            // PvP Message logic remains unchanged
             const p1Name = escapeHTML(gameState.initiatorName || "Player 1");
             const p2Name = escapeHTML(gameState.opponentName || "Player 2");
-            resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n`;
-            resultMessageHTML += `<b>${p1Name}:</b> ${gameState.p1Score} pts\n`;
-            resultMessageHTML += `<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
-
-            if (finalStatus === 'completed_p1_win') {
-                resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
-            } else if (finalStatus === 'completed_p2_win') {
-                resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${await formatBalanceForDisplay(p2_payout, 'USD')}</b>!`;
-            } else {
-                resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
-            }
+            resultMessageHTML = `🏁 <b>${escapeHTML(gameName)} Duel Result</b> 🏁\n\n<b>${p1Name}:</b> ${gameState.p1Score} pts\n<b>${p2Name}:</b> ${gameState.p2Score} pts\n\n`;
+            if (finalStatus === 'completed_p1_win') resultMessageHTML += `🏆 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
+            else if (finalStatus === 'completed_p2_win') resultMessageHTML += `🏆 Congratulations, <b>${p2Name}</b>! You win <b>${await formatBalanceForDisplay(p2_payout, 'USD')}</b>!`;
+            else resultMessageHTML += `⚖️ It's a draw! Wagers of <b>${betDisplay}</b> are returned.`;
         } else { 
-            // --- NEW PvB Message Logic ---
             const p1Name = escapeHTML(gameState.p1Name || "Player");
-            resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result: You vs. The Bot</b> 🤖\n\n`;
-            resultMessageHTML += `--- <b>Final Score</b> ---\n`;
-            resultMessageHTML += `👤 <b>${p1Name}:</b> ${gameState.playerScore} pts\n`;
-            resultMessageHTML += `🤖 <b>Bot Dealer:</b> ${gameState.botScore} pts\n\n`;
-
-            if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') {
-                resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
-            } else if (finalStatus === 'completed_push') {
-                resultMessageHTML += `⚖️ It's a draw! Your wager of <b>${betDisplay}</b> was returned.`;
-            } else { // This now covers 'completed_loss', 'timeout', and 'error'
-                resultMessageHTML += `💔 <b>The Bot Wins.</b> Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
-            }
+            resultMessageHTML = `🤖 <b>${escapeHTML(gameName)} Result: You vs. The Bot</b> 🤖\n\n--- <b>Final Score</b> ---\n👤 <b>${p1Name}:</b> ${gameState.playerScore} pts\n🤖 <b>Bot Dealer:</b> ${gameState.botScore} pts\n\n`;
+            if (finalStatus === 'completed_win' || finalStatus === 'completed_cashout') resultMessageHTML += `🎉 Congratulations, <b>${p1Name}</b>! You win <b>${await formatBalanceForDisplay(p1_payout, 'USD')}</b>!`;
+            else if (finalStatus === 'completed_push') resultMessageHTML += `⚖️ It's a draw! Your wager of <b>${betDisplay}</b> was returned.`;
+            else resultMessageHTML += `💔 <b>The Bot Wins.</b> Better luck next time, <b>${p1Name}</b>! Your wager of <b>${betDisplay}</b> was lost.`;
         }
-        
         await safeSendMessage(session.chat_id, resultMessageHTML, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(session.game_type, betAmount) });
-        // ===================================================================
-        // --- END OF MODIFIED RESULT MESSAGING ---
-        // ===================================================================
-
+        
         activeGames.delete(session.main_bot_game_id);
         await updateGroupGameDetails(session.chat_id, { removeThisId: session.main_bot_game_id }, session.game_type, null);
 
