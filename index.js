@@ -1384,6 +1384,26 @@ CREATE TABLE IF NOT EXISTS interactive_game_sessions (
        await client.query(`CREATE INDEX IF NOT EXISTS idx_interactive_game_sessions_status ON interactive_game_sessions(status);`);
        console.log("DB Schema: interactive_game_sessions table created or verified.");
 
+        // --- NEW: DEDICATED ROULETTE SESSIONS TABLE ---
+        console.log("DB Schema: Creating dedicated roulette_sessions table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS roulette_sessions (
+    session_id SERIAL PRIMARY KEY,
+    main_bot_game_id VARCHAR(255) NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    chat_id BIGINT NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending_pickup', -- pending_pickup, in_progress, completed_win, completed_loss, completed_timeout
+    game_state_json JSONB, -- Stores betType, betValue, winningNumber, etc.
+    bet_amount_lamports BIGINT NOT NULL,
+    helper_bot_id VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_roulette_sessions_status ON roulette_sessions(status);`);
+        console.log("DB Schema: roulette_sessions table created or verified.");
+        // --- END OF NEW ROULETTE TABLE ---
+
+
         // --- Background Jobs Queue ---
         console.log("DB Schema: Creating background_jobs table...");
         await client.query(`
@@ -12982,6 +13002,42 @@ async function setupNotificationListener() {
     console.log("✅ [NotificationListener] Now listening for 'game_completed' notifications.");
 }
 
+// Add this function in Part 5e (Background Task Initializers)
+
+/**
+ * Connects a dedicated client to the database to listen for ROULETTE game completion.
+ */
+async function setupRouletteNotificationListener() {
+    console.log("⚙️ [RouletteListener] Setting up ROULETTE game completion listener...");
+    const listeningClient = await pool.connect();
+    
+    listeningClient.on('error', (err) => {
+        console.error('[RouletteListener] Dedicated client error:', err);
+        setTimeout(setupRouletteNotificationListener, 5000);
+    });
+
+    listeningClient.on('notification', (msg) => {
+        if (msg.channel === 'game_completed') { // Re-use the same channel as the function is the same
+            try {
+                const payload = JSON.parse(msg.payload);
+                if (payload.session_id) {
+                    // Check which table it came from if necessary, or just call a generic finalizer
+                    // For now, we assume only roulette will use this path this way.
+                    // A better way would be to pass table name in payload.
+                    finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette game from notification: ${e.message}`));
+                }
+            } catch (e) {
+                console.error('[RouletteListener] Error processing notification payload:', e);
+            }
+        }
+    });
+
+    // The trigger already uses 'game_completed', so we listen to that.
+    // If you created a separate 'roulette_completed' channel, change this line.
+    await listeningClient.query('LISTEN game_completed');
+    console.log("✅ [RouletteListener] Now listening for ROULETTE 'game_completed' notifications.");
+}
+
 // --- End of 5e Background Task Initializers ---
 // --- Start of Part 5f (COMPLETE & UNIFIED v5 - FINAL PvP TYPE FIX) - Interactive Games (Bowling, Darts, Basketball) ---
 // This version corrects the game_type being passed for PvP games and fixes the `undefined` name issue.
@@ -13636,6 +13692,168 @@ async function startBasketballPvPGameSequence(offerData, initiatorUserObj, oppon
 }
 
 // --- End of Part 5f (COMPLETE & UNIFIED v5 - FINAL PvP TYPE FIX) ---
+// --- Start of Part 5g (NEW) - Roulette Game Logic (Handoff to Helper Bot) ---
+
+async function handleStartRouletteCommand(msg, betAmountLamports) {
+    const userId = String(msg.from.id);
+    const chatId = String(msg.chat.id);
+    const LOG_PREFIX = `[StartRoulette_Handoff_V3 UID:${userId} CH:${chatId}]`;
+
+    if (msg.chat.type === 'private') {
+        await safeSendMessage(chatId, "🎡 Roulette is a group activity! Please use `/roulette <bet>` in a group chat.", { parse_mode: 'HTML' });
+        return;
+    }
+
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId);
+    if (activeUserGameCheck.limitReached) {
+        const cleanGameName = getCleanGameName(activeUserGameCheck.details.type);
+        await safeSendMessage(chatId, `✨ You're already in a game of <b>${escapeHTML(cleanGameName)}</b>. Finish it first!`, { parse_mode: 'HTML' });
+        return;
+    }
+
+    const userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!userObj || BigInt(userObj.balance) < betAmountLamports) {
+        await safeSendMessage(chatId, "Your balance is too low for this wager.", { parse_mode: 'HTML' });
+        return;
+    }
+    
+    const gameSession = await getGroupSession(chatId);
+    const limit = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.ROULETTE] || 1;
+    if ((gameSession.activeGamesByTypeInGroup.get(GAME_IDS.ROULETTE) || []).length >= limit) {
+        await safeSendMessage(chatId, "There's already an active Roulette game here. Please wait.", { parse_mode: 'HTML' });
+        return;
+    }
+
+    let client = null;
+    const gameId = generateGameId("roulette_main");
+
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_roulette', { game_id_custom_field: gameId });
+        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
+        
+        const updatedUserObj = { ...userObj, total_wagered_lamports: betResult.newTotalWageredLamports };
+        
+        const initialGameState = {
+            initiatorId: userId,
+            initiatorName: getRawPlayerDisplayReference(updatedUserObj),
+            initiatorTotalWagered: String(updatedUserObj.total_wagered_lamports || '0'),
+        };
+
+        await client.query(
+            `INSERT INTO roulette_sessions (main_bot_game_id, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
+            [gameId, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
+        );
+        
+        // This placeholder prevents the user from starting other games
+        activeGames.set(gameId, { gameId, type: GAME_IDS.ROULETTE, userId, chatId, status: 'delegated' });
+        await updateGroupGameDetails(chatId, gameId, GAME_IDS.ROULETTE, betAmountLamports);
+        
+        await client.query('COMMIT');
+
+        const gameName = getCleanGameName(GAME_IDS.ROULETTE);
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+        const startMessage = `✅ Your bet is placed!\n\nOur Croupier Bot is now launching the <b>${escapeHTML(gameName)}</b> table. Please follow its instructions. Good luck!`;
+        await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
+
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${LOG_PREFIX} Error starting Roulette game: ${e.message}`);
+        await safeSendMessage(chatId, `⚙️ An error occurred starting the Roulette game. Please try again.`, { parse_mode: 'HTML' });
+    } finally {
+        if (client) client.release();
+    }
+}
+
+/**
+ * This function finalizes Roulette games when the helper bot is done.
+ * It's called by the new notification listener.
+ */
+async function finalizeRouletteGame(sessionId) {
+    const logPrefix = `[FinalizeRoulette SID:${sessionId}]`;
+    let client = null;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const sessionRes = await client.query("SELECT * FROM roulette_sessions WHERE session_id = $1 FOR UPDATE", [sessionId]);
+        if (sessionRes.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return;
+        }
+        
+        const session = sessionRes.rows[0];
+        const { main_bot_game_id, user_id, chat_id, bet_amount_lamports, status, game_state_json } = session;
+        
+        if (status.startsWith('archived')) {
+            await client.query('ROLLBACK');
+            console.log(`${logPrefix} Session already archived. Skipping finalization.`);
+            activeGames.delete(main_bot_game_id);
+            await updateGroupGameDetails(chat_id, { removeThisId: main_bot_game_id }, GAME_IDS.ROULETTE, null);
+            return;
+        }
+
+        const betAmount = BigInt(bet_amount_lamports);
+        const gameState = game_state_json || {};
+        
+        let payoutAmount = 0n;
+        let houseFee = 0n;
+        const isWin = gameState.outcome === 'win';
+        if (isWin) {
+            const payoutMultiplier = gameState.payoutMultiplier || 0; // The multiplier INCLUDING the original bet
+            const totalPayout = betAmount * BigInt(payoutMultiplier);
+            houseFee = BigInt(Math.floor(Number(totalPayout) * 0.027)); // Standard Roulette House Edge
+            payoutAmount = totalPayout - houseFee;
+        }
+        
+        const solPrice = await getSolUsdPrice();
+        const wageredAmount = BigInt(gameState.initiatorTotalWagered || '0');
+
+        const actualGameLogId = await logGameResultToGamesTable(client, GAME_IDS.ROULETTE, chat_id, user_id, [user_id], betAmount, `Bet: ${gameState.betValue}, Result: ${gameState.winningNumber}`, 0n, houseFee);
+        const updateResult = await updateUserBalanceAndLedger(client, user_id, payoutAmount, isWin ? 'win_roulette' : 'loss_roulette', { game_log_id: actualGameLogId });
+        if (!updateResult.success) throw new Error(updateResult.error);
+        
+        // --- Bonus & Level Up Checks ---
+        if(typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, user_id, betAmount, main_bot_game_id);
+        if(typeof checkAndUpdateUserLevel === 'function') await checkAndUpdateUserLevel(client, user_id, wageredAmount, solPrice, chat_id);
+        if(typeof processWagerMilestoneBonus === 'function') await processWagerMilestoneBonus(client, user_id, wageredAmount, solPrice);
+
+        await client.query("UPDATE roulette_sessions SET status = 'archived_finalized' WHERE session_id = $1", [sessionId]);
+        await client.query('COMMIT');
+
+        // --- Final Result Message ---
+        const userObj = await getOrCreateUser(user_id);
+        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
+        const betInfo = ROULETTE_BETS[gameState.betValue] || { name: `Number ${gameState.betValue}` };
+        
+        let resultMessage = `🏁 <b>Roulette Result</b> 🏁\n\nPlayer: ${playerRefHTML}\nLanded On: <b>${gameState.winningNumber}</b>\nYour Bet: <b>${escapeHTML(betInfo.name)}</b>\n\n`;
+        if (isWin) {
+            resultMessage += `🎉 <b>You WIN!</b> Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmount, 'USD'))}</b>`;
+        } else {
+            resultMessage += `💔 <b>You lost.</b> Better luck next time!`;
+        }
+        
+        await safeSendMessage(chat_id, resultMessage, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.ROULETTE, betAmount) });
+
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} CRITICAL error finalizing game: ${e.message}`);
+        if(typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL: Failed to finalize Roulette session ${sessionId}. Error: ${e.message}`);
+    } finally {
+        if (client) client.release();
+        if(sessionId) {
+            const sessionRes = await queryDatabase("SELECT main_bot_game_id, chat_id FROM roulette_sessions WHERE session_id = $1", [sessionId]);
+            if (sessionRes.rows.length > 0) {
+                 const { main_bot_game_id, chat_id } = sessionRes.rows[0];
+                 activeGames.delete(main_bot_game_id);
+                 await updateGroupGameDetails(chat_id, { removeThisId: main_bot_game_id }, GAME_IDS.ROULETTE, null);
+            }
+        }
+    }
+}
+// --- End of Part 5g ---
 // --- Start of Part 5a, Section 2 (CORRECTED - BOT_NAME & _CONST usage - General Command Handler Implementations, with NEW handleClaimLevelBonus) ---
 // index.js - Part 5a, Section 2: General Casino Bot Command Implementations
 //----------------------------------------------------------------------------------
@@ -15484,6 +15702,13 @@ bot.on('message', async (msg) => {
                 case 'mines':
                     if (typeof handleStartMinesCommand === 'function') await handleStartMinesCommand(msg, commandArgs, userForCommandProcessing);
                     else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartMinesCommand`); break;
+                case 'roulette': {
+            if (typeof handleStartRouletteCommand === 'function') { 
+                const bet = await parseBetAmount(commandArgs[0], chatId, chatType, userId); 
+                if(bet) await handleStartRouletteCommand(msg, bet); 
+            } else console.error(`${LOG_PREFIX_MSG_HANDLER} Missing: handleStartRouletteCommand`); 
+            break;
+        }
                 case 'bowling': case 'darts': case 'basketball':
                 case 'hoops': {
                     let handler;
@@ -16157,6 +16382,11 @@ async function main() {
 } else {
     console.warn("⚠️ Instant Notification Listener (setupNotificationListener) function not defined.");
 }
+        if (typeof setupRouletteNotificationListener === 'function') {
+        setupRouletteNotificationListener(); // For the new independent Roulette game
+    } else {
+        console.warn("⚠️ Roulette Notification Listener (setupRouletteNotificationListener) function not defined.");
+    }
 
         if (typeof startJackpotSessionPolling === 'function') {
             startJackpotSessionPolling(); // Call the new function to start the DE Jackpot poller
