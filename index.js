@@ -13057,7 +13057,7 @@ async function startInteractivePvBGame(gameId, gameType, userObj, betAmountLampo
             gameMode: 'pvb',
             initiatorId: userId,
             initiatorName: getRawPlayerDisplayReference(userObj),
-            totalWageredForLevelCheck: betResult.newTotalWageredLamports.toString()
+            initiatorTotalWagered: betResult.newTotalWageredLamports.toString()
         };
 
         await client.query(
