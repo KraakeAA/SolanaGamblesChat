@@ -249,6 +249,7 @@ const GAME_IDS = {
     SLOT_FRENZY: 'slotfrenzy',
     MINES: 'mines',
     MINES_OFFER: 'mines_offer',
+    ROULETTE: 'roulette',
     // Original Interactive Games
     BOWLING: 'bowling',
     DARTS: 'darts',
