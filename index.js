@@ -1166,7 +1166,7 @@ const generateReferralCode = (length = 8) => {
 //---------------------------------------------------------------------------
 // Database Schema Initialization
 //---------------------------------------------------------------------------
-// FINAL CORRECTED initializeDatabaseSchema (with all fixes and new independent Roulette table/triggers)
+// FINAL CORRECTED initializeDatabaseSchema (Original Structure Preserved + Roulette Updates)
 async function initializeDatabaseSchema() {
     console.log("⚙️ Initializing FULL database schema (All Tables & Triggers - Cleaned)...");
     const client = await pool.connect();
@@ -1384,8 +1384,9 @@ CREATE TABLE IF NOT EXISTS interactive_game_sessions (
 );`);
        await client.query(`CREATE INDEX IF NOT EXISTS idx_interactive_game_sessions_status ON interactive_game_sessions(status);`);
        console.log("DB Schema: interactive_game_sessions table created or verified.");
-
-        // --- NEW: DEDICATED ROULETTE SESSIONS TABLE ---
+        
+        // --- START OF ROULETTE UPDATE ---
+        // NEW: DEDICATED ROULETTE SESSIONS TABLE
         console.log("DB Schema: Creating dedicated roulette_sessions table...");
         await client.query(`
 CREATE TABLE IF NOT EXISTS roulette_sessions (
@@ -1393,8 +1394,8 @@ CREATE TABLE IF NOT EXISTS roulette_sessions (
     main_bot_game_id VARCHAR(255) NOT NULL UNIQUE,
     user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     chat_id BIGINT NOT NULL,
-    status VARCHAR(50) DEFAULT 'pending_pickup', -- pending_pickup, in_progress, completed_win, completed_loss, completed_timeout
-    game_state_json JSONB, -- Stores betType, betValue, winningNumber, etc.
+    status VARCHAR(50) DEFAULT 'pending_pickup',
+    game_state_json JSONB,
     bet_amount_lamports BIGINT NOT NULL,
     helper_bot_id VARCHAR(100),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1402,9 +1403,9 @@ CREATE TABLE IF NOT EXISTS roulette_sessions (
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_roulette_sessions_status ON roulette_sessions(status);`);
         console.log("DB Schema: roulette_sessions table created or verified.");
-        // --- END OF NEW ROULETTE TABLE ---
+        // --- END OF ROULETTE UPDATE ---
 
-        // --- Background Jobs & System Tables ---
+        // Background Jobs & System Tables
         console.log("DB Schema: Creating background_jobs table...");
         await client.query(`
 CREATE TABLE IF NOT EXISTS background_jobs (
@@ -1442,7 +1443,7 @@ CREATE TABLE IF NOT EXISTS failed_jobs (
 );`);
         console.log("DB Schema: failed_jobs table created or verified.");
 
-        // --- Litecoin Payment System Tables ---
+        // Litecoin Payment System Tables
       console.log("DB Schema: Creating tables for Litecoin payment system...");
       await client.query(`
 CREATE TABLE IF NOT EXISTS ltc_user_deposit_wallets (
@@ -1475,7 +1476,20 @@ CREATE TABLE IF NOT EXISTS ltc_deposits (
 );`);
       console.log("DB Schema: Litecoin payment system tables created or verified.");
 
-        // --- Schema modifications for Referral System ---
+
+        // --- MOVED HERE TO FIX DEPENDENCY: Create user_levels before it is referenced. ---
+        await client.query(`
+CREATE TABLE IF NOT EXISTS user_levels (
+    level_id SERIAL PRIMARY KEY,
+    level_name VARCHAR(50) NOT NULL UNIQUE,
+    wager_threshold_usd DECIMAL(12, 2) NOT NULL,
+    bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    order_index INT UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`);
+
+        // Schema modifications for Referral & Level Up Systems (as per original file)
         await client.query(`
 DO $$
 BEGIN
@@ -1502,18 +1516,6 @@ BEGIN
         ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
     END IF;
 END $$;`);
-
-        // Schema modifications for Level Up Bonus System
-        await client.query(`
-CREATE TABLE IF NOT EXISTS user_levels (
-    level_id SERIAL PRIMARY KEY,
-    level_name VARCHAR(50) NOT NULL UNIQUE,
-    wager_threshold_usd DECIMAL(12, 2) NOT NULL,
-    bonus_amount_usd DECIMAL(10, 2) NOT NULL DEFAULT 0,
-    order_index INT UNIQUE NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);`);
         await client.query(`
 CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
     claim_id SERIAL PRIMARY KEY,
@@ -1546,23 +1548,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;`);
 
-        // --- NEW: Helper Bot Notification Functions ---
-        // Generic completion notifier for ALL helper bot games
+        // --- START OF ROULETTE UPDATE ---
+        // NEW: Notification functions for helper bots
         await client.query(`
 CREATE OR REPLACE FUNCTION notify_game_completed()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Check if status is changing TO a final state from a non-final state
     IF (OLD.status NOT LIKE 'completed_%' AND OLD.status NOT LIKE 'error_%' AND OLD.status NOT LIKE 'archived_%') AND
        (NEW.status LIKE 'completed_%' OR NEW.status LIKE 'error_%') THEN
-        -- Payload now includes table name to help the main bot distinguish
         PERFORM pg_notify('game_completed', json_build_object('session_id', NEW.session_id, 'table_name', TG_TABLE_NAME)::text);
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;`);
-
-        // Specific pickup notifier for Roulette
+        
         await client.query(`
 CREATE OR REPLACE FUNCTION notify_roulette_pickup()
 RETURNS TRIGGER AS $$
@@ -1571,20 +1570,21 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;`);
-        // (You can add other pickup notifiers here if needed, e.g., notify_interactive_pickup)
-        console.log("DB Schema: Notification functions created or replaced.");
+        console.log("DB Schema: Helper bot notification functions created or replaced.");
+        // --- END OF ROULETTE UPDATE ---
 
-        // Apply timestamp trigger
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals', 'de_jackpot_sessions', 'user_levels', 'user_claimed_level_bonuses', 'interactive_game_sessions', 'roulette_sessions'];
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals', 'de_jackpot_sessions', 'user_levels', 'user_claimed_level_bonuses', 'interactive_game_sessions', 'roulette_sessions']; // Added roulette_sessions
         for (const tableName of tablesWithUpdatedAt) {
             const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
             const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
             if (triggerExistsRes.rowCount === 0) {
-                await client.query(`CREATE TRIGGER set_timestamp BEFORE UPDATE ON ${tableName} FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();`).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
+                const createTriggerQuery = `CREATE TRIGGER set_timestamp BEFORE UPDATE ON ${tableName} FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();`;
+                await client.query(createTriggerQuery).catch(err => console.warn(`[DB Schema] Could not set update trigger for ${tableName}: ${err.message}`));
             }
         }
 
-        // Apply completion triggers
+        // --- START OF ROULETTE UPDATE ---
+        // Apply completion and pickup triggers for helper bot tables
         const interactiveTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_interactive_game_update' AND tgrelid = 'interactive_game_sessions'::regclass;");
         if (interactiveTriggerExists.rowCount === 0) {
             await client.query(`CREATE TRIGGER on_interactive_game_update AFTER UPDATE OF status ON interactive_game_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
@@ -1595,12 +1595,12 @@ $$ LANGUAGE plpgsql;`);
             await client.query(`CREATE TRIGGER on_roulette_game_update AFTER UPDATE OF status ON roulette_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
         }
         
-        // Apply NEW Roulette pickup trigger
         const roulettePickupTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_roulette_game_insert' AND tgrelid = 'roulette_sessions'::regclass;");
         if (roulettePickupTriggerExists.rowCount === 0) {
             await client.query(`CREATE TRIGGER on_roulette_game_insert AFTER INSERT ON roulette_sessions FOR EACH ROW EXECUTE FUNCTION notify_roulette_pickup();`);
         }
-        console.log("DB Schema: All triggers checked and applied.");
+        console.log("DB Schema: All helper bot triggers checked and applied.");
+        // --- END OF ROULETTE UPDATE ---
 
         await client.query('COMMIT');
         console.log("✅ DB Schema: Database schema initialization complete (ALL TABLES & TRIGGERS).");
