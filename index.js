@@ -2436,6 +2436,8 @@ function getCleanGameName(technicalGameId) {
             return "Slot Frenzy";
         case 'mines':
             return "Mines";
+        case 'roulette':
+            return "Roulette";
         
         // Original Interactive Games
         case 'bowling':
