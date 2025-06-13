@@ -13103,25 +13103,25 @@ async function setupRouletteNotificationListener() {
     });
 
     listeningClient.on('notification', (msg) => {
-        if (msg.channel === 'game_completed') { // Re-use the same channel as the function is the same
+        // This listener now handles both interactive games and roulette
+        if (msg.channel === 'game_completed') { 
             try {
                 const payload = JSON.parse(msg.payload);
-                if (payload.session_id) {
-                    // Check which table it came from if necessary, or just call a generic finalizer
-                    // For now, we assume only roulette will use this path this way.
-                    // A better way would be to pass table name in payload.
-                    finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette game from notification: ${e.message}`));
+                if (payload.session_id && payload.table_name) {
+                    if (payload.table_name === 'roulette_sessions') {
+                        finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette game from notification: ${e.message}`));
+                    } else if (payload.table_name === 'interactive_game_sessions') {
+                        finalizeInteractiveGame(payload.session_id).catch(e => console.error(`Error finalizing interactive game from notification: ${e.message}`));
+                    }
                 }
             } catch (e) {
-                console.error('[RouletteListener] Error processing notification payload:', e);
+                console.error('[NotificationListener] Error processing notification payload:', e);
             }
         }
     });
 
-    // The trigger already uses 'game_completed', so we listen to that.
-    // If you created a separate 'roulette_completed' channel, change this line.
     await listeningClient.query('LISTEN game_completed');
-    console.log("✅ [RouletteListener] Now listening for ROULETTE 'game_completed' notifications.");
+    console.log("✅ [RouletteListener] Now listening for ALL 'game_completed' notifications.");
 }
 
 // --- End of 5e Background Task Initializers ---
@@ -13778,7 +13778,7 @@ async function startBasketballPvPGameSequence(offerData, initiatorUserObj, oppon
 }
 
 // --- End of Part 5f (COMPLETE & UNIFIED v5 - FINAL PvP TYPE FIX) ---
-// --- Start of Part 5g (NEW) - Roulette Game Logic (Handoff to Helper Bot) ---
+// --- Start of Part 5g (NEW) - Roulette Game Logic (Main Bot - Silent Handoff) ---
 
 async function handleStartRouletteCommand(msg, betAmountLamports) {
     const userId = String(msg.from.id);
@@ -13798,7 +13798,12 @@ async function handleStartRouletteCommand(msg, betAmountLamports) {
     }
 
     const userObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!userObj || BigInt(userObj.balance) < betAmountLamports) {
+    if (!userObj) {
+        await safeSendMessage(chatId, "Could not fetch your profile. Please try `/start` first.", { parse_mode: 'HTML' });
+        return;
+    }
+    
+    if (BigInt(userObj.balance) < betAmountLamports) {
         await safeSendMessage(chatId, "Your balance is too low for this wager.", { parse_mode: 'HTML' });
         return;
     }
@@ -13806,7 +13811,7 @@ async function handleStartRouletteCommand(msg, betAmountLamports) {
     const gameSession = await getGroupSession(chatId);
     const limit = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[GAME_IDS.ROULETTE] || 1;
     if ((gameSession.activeGamesByTypeInGroup.get(GAME_IDS.ROULETTE) || []).length >= limit) {
-        await safeSendMessage(chatId, "There's already an active Roulette game here. Please wait.", { parse_mode: 'HTML' });
+        await safeSendMessage(chatId, "There's already an active Roulette game in this group. Please wait.", { parse_mode: 'HTML' });
         return;
     }
 
@@ -13818,31 +13823,19 @@ async function handleStartRouletteCommand(msg, betAmountLamports) {
         await client.query('BEGIN');
 
         const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_roulette', { game_id_custom_field: gameId });
-        if (!betResult.success) throw new Error(betResult.error || "Failed to place bet.");
+        if (!betResult.success) {
+            throw new Error(betResult.error || "Failed to place bet.");
+        }
         
         const updatedUserObj = { ...userObj, total_wagered_lamports: betResult.newTotalWageredLamports };
         
-        const initialGameState = {
-            initiatorId: userId,
-            initiatorName: getRawPlayerDisplayReference(updatedUserObj),
-            initiatorTotalWagered: String(updatedUserObj.total_wagered_lamports || '0'),
-        };
-
-        await client.query(
-            `INSERT INTO roulette_sessions (main_bot_game_id, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
-            [gameId, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
-        );
-        
-        // This placeholder prevents the user from starting other games
-        activeGames.set(gameId, { gameId, type: GAME_IDS.ROULETTE, userId, chatId, status: 'delegated' });
-        await updateGroupGameDetails(chatId, gameId, GAME_IDS.ROULETTE, betAmountLamports);
+        // This function creates the session and notifies the helper.
+        const handoffSuccess = await startDedicatedRouletteGame(client, gameId, updatedUserObj, betAmountLamports, chatId);
+        if (!handoffSuccess) {
+            throw new Error("Failed to create the interactive game session for the helper bot.");
+        }
         
         await client.query('COMMIT');
-
-        const gameName = getCleanGameName(GAME_IDS.ROULETTE);
-        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-        const startMessage = `✅ Your bet is placed!\n\nOur Croupier Bot is now launching the <b>${escapeHTML(gameName)}</b> table. Please follow its instructions. Good luck!`;
-        await safeSendMessage(chatId, startMessage, { parse_mode: 'HTML' });
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
@@ -13853,29 +13846,55 @@ async function handleStartRouletteCommand(msg, betAmountLamports) {
     }
 }
 
-/**
- * This function finalizes Roulette games when the helper bot is done.
- * It's called by the new notification listener.
- */
+async function startDedicatedRouletteGame(client, gameId, userObj, betAmountLamports, chatId) {
+    const userId = String(userObj.telegram_id);
+    const LOG_PREFIX = `[StartDedicatedRoulette GID:${gameId}]`;
+
+    try {
+        const initialGameState = {
+            initiatorId: userId,
+            initiatorName: getRawPlayerDisplayReference(userObj),
+            initiatorTotalWagered: String(userObj.total_wagered_lamports || '0'),
+        };
+
+        await client.query(
+            `INSERT INTO roulette_sessions (main_bot_game_id, user_id, chat_id, bet_amount_lamports, game_state_json, status) VALUES ($1, $2, $3, $4, $5, 'pending_pickup')`,
+            [gameId, userId, chatId, betAmountLamports.toString(), JSON.stringify(initialGameState)]
+        );
+        
+        activeGames.set(gameId, {
+            gameId: gameId,
+            type: GAME_IDS.ROULETTE,
+            userId: userId,
+            chatId: chatId,
+            status: 'delegated' 
+        });
+        await updateGroupGameDetails(chatId, gameId, GAME_IDS.ROULETTE, betAmountLamports);
+
+        // NO MESSAGE IS SENT HERE. THE HELPER BOT HANDLES IT.
+        console.log(`${LOG_PREFIX} Successfully created and handed off Roulette session to helper.`);
+        return true;
+    } catch (e) {
+        console.error(`${LOG_PREFIX} Error during handoff: ${e.message}`);
+        return false;
+    }
+}
+
 async function finalizeRouletteGame(sessionId) {
-    const logPrefix = `[FinalizeRoulette SID:${sessionId}]`;
+    const logPrefix = `[FinalizeRoulette_Silent_V2 SID:${sessionId}]`;
     let client = null;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
         const sessionRes = await client.query("SELECT * FROM roulette_sessions WHERE session_id = $1 FOR UPDATE", [sessionId]);
-        if (sessionRes.rowCount === 0) {
-            await client.query('ROLLBACK');
-            return;
-        }
+        if (sessionRes.rowCount === 0) { await client.query('ROLLBACK'); return; }
         
         const session = sessionRes.rows[0];
         const { main_bot_game_id, user_id, chat_id, bet_amount_lamports, status, game_state_json } = session;
         
         if (status.startsWith('archived')) {
             await client.query('ROLLBACK');
-            console.log(`${logPrefix} Session already archived. Skipping finalization.`);
             activeGames.delete(main_bot_game_id);
             await updateGroupGameDetails(chat_id, { removeThisId: main_bot_game_id }, GAME_IDS.ROULETTE, null);
             return;
@@ -13887,41 +13906,41 @@ async function finalizeRouletteGame(sessionId) {
         let payoutAmount = 0n;
         let houseFee = 0n;
         const isWin = gameState.outcome === 'win';
+
         if (isWin) {
-            const payoutMultiplier = gameState.payoutMultiplier || 0; // The multiplier INCLUDING the original bet
-            const totalPayout = betAmount * BigInt(payoutMultiplier);
-            houseFee = BigInt(Math.floor(Number(totalPayout) * 0.027)); // Standard Roulette House Edge
-            payoutAmount = totalPayout - houseFee;
+            const payoutMultiplier = gameState.payoutMultiplier || 0;
+            const preFeePayout = betAmount * BigInt(payoutMultiplier);
+            const houseFeePercent = (2 / 38); // ~5.26% for American Roulette
+            houseFee = BigInt(Math.floor(Number(preFeePayout) * houseFeePercent));
+            payoutAmount = preFeePayout - houseFee;
+        } else if (gameState.outcome === 'cancelled' || gameState.outcome === 'timeout') {
+             payoutAmount = betAmount; // Refund the original bet
         }
-        
+
         const solPrice = await getSolUsdPrice();
         const wageredAmount = BigInt(gameState.initiatorTotalWagered || '0');
+        const gameOutcomeTextForTable = `Bet: ${gameState.betValue}, Result: ${gameState.winningNumber}, Outcome: ${gameState.outcome}`;
 
-        const actualGameLogId = await logGameResultToGamesTable(client, GAME_IDS.ROULETTE, chat_id, user_id, [user_id], betAmount, `Bet: ${gameState.betValue}, Result: ${gameState.winningNumber}`, 0n, houseFee);
-        const updateResult = await updateUserBalanceAndLedger(client, user_id, payoutAmount, isWin ? 'win_roulette' : 'loss_roulette', { game_log_id: actualGameLogId });
+        const actualGameLogId = await logGameResultToGamesTable(client, GAME_IDS.ROULETTE, chat_id, user_id, [user_id], betAmount, gameOutcomeTextForTable, 0n, houseFee);
+        
+        let ledgerType = 'loss_roulette';
+        if (isWin) {
+            ledgerType = 'win_roulette';
+        } else if (gameState.outcome === 'cancelled' || gameState.outcome === 'timeout') {
+            ledgerType = 'refund_roulette';
+        }
+        
+        const updateResult = await updateUserBalanceAndLedger(client, user_id, payoutAmount, ledgerType, { game_log_id: actualGameLogId });
         if (!updateResult.success) throw new Error(updateResult.error);
         
-        // --- Bonus & Level Up Checks ---
-        if(typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, user_id, betAmount, main_bot_game_id);
-        if(typeof checkAndUpdateUserLevel === 'function') await checkAndUpdateUserLevel(client, user_id, wageredAmount, solPrice, chat_id);
-        if(typeof processWagerMilestoneBonus === 'function') await processWagerMilestoneBonus(client, user_id, wageredAmount, solPrice);
+        if (gameState.outcome === 'win' || gameState.outcome === 'loss') {
+            if(typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, user_id, betAmount, main_bot_game_id);
+            if(typeof checkAndUpdateUserLevel === 'function') await checkAndUpdateUserLevel(client, user_id, wageredAmount, solPrice, chat_id);
+            if(typeof processWagerMilestoneBonus === 'function') await processWagerMilestoneBonus(client, user_id, wageredAmount, solPrice);
+        }
 
         await client.query("UPDATE roulette_sessions SET status = 'archived_finalized' WHERE session_id = $1", [sessionId]);
         await client.query('COMMIT');
-
-        // --- Final Result Message ---
-        const userObj = await getOrCreateUser(user_id);
-        const playerRefHTML = escapeHTML(getPlayerDisplayReference(userObj));
-        const betInfo = ROULETTE_BETS[gameState.betValue] || { name: `Number ${gameState.betValue}` };
-        
-        let resultMessage = `🏁 <b>Roulette Result</b> 🏁\n\nPlayer: ${playerRefHTML}\nLanded On: <b>${gameState.winningNumber}</b>\nYour Bet: <b>${escapeHTML(betInfo.name)}</b>\n\n`;
-        if (isWin) {
-            resultMessage += `🎉 <b>You WIN!</b> Payout: <b>${escapeHTML(await formatBalanceForDisplay(payoutAmount, 'USD'))}</b>`;
-        } else {
-            resultMessage += `💔 <b>You lost.</b> Better luck next time!`;
-        }
-        
-        await safeSendMessage(chat_id, resultMessage, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.ROULETTE, betAmount) });
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
@@ -16469,9 +16488,9 @@ async function main() {
     console.warn("⚠️ Instant Notification Listener (setupNotificationListener) function not defined.");
 }
         if (typeof setupRouletteNotificationListener === 'function') {
-        setupRouletteNotificationListener(); // For the new independent Roulette game
+        setupRouletteNotificationListener(); 
     } else {
-        console.warn("⚠️ Roulette Notification Listener (setupRouletteNotificationListener) function not defined.");
+        console.warn("⚠️ Roulette/Interactive Notification Listener function not defined.");
     }
 
         if (typeof startJackpotSessionPolling === 'function') {
