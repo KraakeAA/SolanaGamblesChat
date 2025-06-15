@@ -1225,6 +1225,7 @@ const generateReferralCode = (length = 8) => {
 // Database Schema Initialization
 //---------------------------------------------------------------------------
 // FINAL CORRECTED initializeDatabaseSchema (Original Structure Preserved + Roulette Updates)
+// FINAL CORRECTED initializeDatabaseSchema (With Coinflip Session Handoff)
 async function initializeDatabaseSchema() {
     console.log("⚙️ Initializing FULL database schema (All Tables & Triggers - Cleaned)...");
     const client = await pool.connect();
@@ -1443,7 +1444,7 @@ CREATE TABLE IF NOT EXISTS interactive_game_sessions (
         await client.query(`CREATE INDEX IF NOT EXISTS idx_interactive_game_sessions_status ON interactive_game_sessions(status);`);
         console.log("DB Schema: interactive_game_sessions table created or verified.");
 
-        // --- NEW: DEDICATED ROULETTE SESSIONS TABLE ---
+        // --- DEDICATED ROULETTE SESSIONS TABLE ---
         console.log("DB Schema: Creating dedicated roulette_sessions table...");
         await client.query(`
 CREATE TABLE IF NOT EXISTS roulette_sessions (
@@ -1460,28 +1461,20 @@ CREATE TABLE IF NOT EXISTS roulette_sessions (
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_roulette_sessions_status ON roulette_sessions(status);`);
         console.log("DB Schema: roulette_sessions table created or verified.");
-
-       // --- NEW: DEDICATED COINFLIP SESSIONS TABLE ---
+        
+        // --- NEW: DEDICATED COINFLIP SESSIONS TABLE ---
         console.log("DB Schema: Creating dedicated coinflip_sessions table...");
         await client.query(`
 CREATE TABLE IF NOT EXISTS coinflip_sessions (
     session_id SERIAL PRIMARY KEY,
     main_bot_game_id VARCHAR(255) NOT NULL UNIQUE,
-    game_type VARCHAR(50) NOT NULL, -- 'coinflip_pvb' or 'coinflip_pvp'
+    game_type VARCHAR(50) NOT NULL,
     chat_id BIGINT NOT NULL,
-    status VARCHAR(50) DEFAULT 'pending_pickup', -- e.g., pending_pickup, in_progress, completed_p1_win
-    
-    -- Player Information
+    status VARCHAR(50) DEFAULT 'pending_pickup',
     initiator_id BIGINT NOT NULL,
-    opponent_id BIGINT, -- NULL for PvB
-
-    -- Bet Information
+    opponent_id BIGINT,
     bet_amount_lamports BIGINT NOT NULL,
-
-    -- Game State (Managed by Helper)
     game_state_json JSONB,
-
-    -- System Fields
     helper_bot_id VARCHAR(100),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -1489,25 +1482,7 @@ CREATE TABLE IF NOT EXISTS coinflip_sessions (
         await client.query(`CREATE INDEX IF NOT EXISTS idx_coinflip_sessions_status ON coinflip_sessions(status);`);
         console.log("DB Schema: coinflip_sessions table created or verified.");
 
-        // --- NEW: Notification function for Coinflip Helper ---
-        await client.query(`
-CREATE OR REPLACE FUNCTION notify_coinflip_pickup()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Notify that a new game session is ready to be picked up by a helper
-    PERFORM pg_notify('coinflip_session_pickup', json_build_object('main_bot_game_id', NEW.main_bot_game_id)::text);
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;`);
-
-        // --- NEW: Trigger for Coinflip session creation ---
-        const coinflipPickupTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_coinflip_game_insert' AND tgrelid = 'coinflip_sessions'::regclass;");
-        if (coinflipPickupTriggerExists.rowCount === 0) {
-            await client.query(`CREATE TRIGGER on_coinflip_game_insert AFTER INSERT ON coinflip_sessions FOR EACH ROW EXECUTE FUNCTION notify_coinflip_pickup();`);
-        }
-        
-        // --- Background Jobs & System Tables ---
-        console.log("DB Schema: Creating background_jobs table...");
+        // Background Jobs & System Tables
         await client.query(`
 CREATE TABLE IF NOT EXISTS background_jobs (
     job_id SERIAL PRIMARY KEY,
@@ -1521,31 +1496,11 @@ CREATE TABLE IF NOT EXISTS background_jobs (
     process_after TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status_process_after ON background_jobs(status, process_after);`);
-        console.log("DB Schema: background_jobs table created or verified.");
-        await client.query(`
-CREATE TABLE IF NOT EXISTS processed_job_actions (
-    action_id VARCHAR(255) PRIMARY KEY,
-    job_id INTEGER REFERENCES background_jobs(job_id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);`);
+        await client.query(`CREATE TABLE IF NOT EXISTS processed_job_actions ( action_id VARCHAR(255) PRIMARY KEY, job_id INTEGER REFERENCES background_jobs(job_id) ON DELETE SET NULL, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_processed_job_actions_job_id ON processed_job_actions(job_id);`);
-        console.log("DB Schema: processed_job_actions table created or verified.");
-        await client.query(`
-CREATE TABLE IF NOT EXISTS failed_jobs (
-    job_id INTEGER PRIMARY KEY,
-    job_type VARCHAR(50) NOT NULL,
-    payload JSONB NOT NULL,
-    status VARCHAR(20),
-    attempts INT,
-    last_attempt_at TIMESTAMPTZ,
-    final_error_message TEXT,
-    created_at TIMESTAMPTZ,
-    failed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);`);
-        console.log("DB Schema: failed_jobs table created or verified.");
+        await client.query(`CREATE TABLE IF NOT EXISTS failed_jobs ( job_id INTEGER PRIMARY KEY, job_type VARCHAR(50) NOT NULL, payload JSONB NOT NULL, status VARCHAR(20), attempts INT, last_attempt_at TIMESTAMPTZ, final_error_message TEXT, created_at TIMESTAMPTZ, failed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP );`);
 
         // Litecoin Tables
-        console.log("DB Schema: Creating tables for Litecoin payment system...");
         await client.query(`
 CREATE TABLE IF NOT EXISTS ltc_user_deposit_wallets (
     wallet_id SERIAL PRIMARY KEY,
@@ -1575,37 +1530,20 @@ CREATE TABLE IF NOT EXISTS ltc_deposits (
     processed_at TIMESTAMPTZ,
     notes TEXT
 );`);
-        console.log("DB Schema: Litecoin payment system tables created or verified.");
 
-        // --- Schema modifications for Referral System (Original Structure) ---
+        // Schema modifications for Referral & Level Up Systems
         await client.query(`
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='referral_count') THEN
-        ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN
-        ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='first_bet_placed_at') THEN
-        ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ;
-    END IF;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='referral_count') THEN ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0; END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='total_referral_earnings_paid_lamports') THEN ALTER TABLE users ADD COLUMN total_referral_earnings_paid_lamports BIGINT DEFAULT 0; END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='first_bet_placed_at') THEN ALTER TABLE users ADD COLUMN first_bet_placed_at TIMESTAMPTZ; END IF;
 END $$;`);
         await client.query(`
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN
-        ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN
-        ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN
-        ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0;
-    END IF;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='referrals' AND column_name='qualifying_bet_processed_at') THEN ALTER TABLE referrals ADD COLUMN qualifying_bet_processed_at TIMESTAMPTZ; END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='referrals' AND column_name='referred_user_wager_milestones_achieved') THEN ALTER TABLE referrals ADD COLUMN referred_user_wager_milestones_achieved JSONB DEFAULT '{}'::jsonb; END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='referrals' AND column_name='last_milestone_bonus_check_wager_lamports') THEN ALTER TABLE referrals ADD COLUMN last_milestone_bonus_check_wager_lamports BIGINT DEFAULT 0; END IF;
 END $$;`);
-
-        // --- Schema modifications for Level Up Bonus System (Original Structure) ---
         await client.query(`
 CREATE TABLE IF NOT EXISTS user_levels (
     level_id SERIAL PRIMARY KEY,
@@ -1631,14 +1569,13 @@ CREATE TABLE IF NOT EXISTS user_claimed_level_bonuses (
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_user_claimed_level_bonuses_status ON user_claimed_level_bonuses(status);`);
         await client.query(`
-DO $$
-BEGIN
+DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='current_level_id') THEN
         ALTER TABLE users ADD COLUMN current_level_id INT REFERENCES user_levels(level_id) DEFAULT NULL;
     END IF;
 END $$;`);
         
-        // --- Functions & Triggers (Original Structure) ---
+        // Functions & Triggers
         await client.query(`
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
@@ -1647,8 +1584,6 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;`);
-
-        // --- START OF NEW ROULETTE UPDATE: Add notification functions here ---
         await client.query(`
 CREATE OR REPLACE FUNCTION notify_game_completed()
 RETURNS TRIGGER AS $$
@@ -1661,17 +1596,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;`);
         
+        // Pickup notification functions for helpers
         await client.query(`
-CREATE OR REPLACE FUNCTION notify_roulette_pickup()
-RETURNS TRIGGER AS $$
-BEGIN
-    PERFORM pg_notify('roulette_game_pickup', json_build_object('main_bot_game_id', NEW.main_bot_game_id)::text);
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;`);
-        console.log("DB Schema: Helper bot notification functions created or replaced.");
-        // --- END OF NEW ROULETTE UPDATE ---
+CREATE OR REPLACE FUNCTION notify_coinflip_pickup() RETURNS TRIGGER AS $$ BEGIN PERFORM pg_notify('coinflip_session_pickup', json_build_object('main_bot_game_id', NEW.main_bot_game_id)::text); RETURN NEW; END; $$ LANGUAGE plpgsql;`);
+        await client.query(`
+CREATE OR REPLACE FUNCTION notify_roulette_pickup() RETURNS TRIGGER AS $$ BEGIN PERFORM pg_notify('roulette_game_pickup', json_build_object('main_bot_game_id', NEW.main_bot_game_id)::text); RETURN NEW; END; $$ LANGUAGE plpgsql;`);
 
+        // Apply triggers
         const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals', 'de_jackpot_sessions', 'user_levels', 'user_claimed_level_bonuses', 'interactive_game_sessions', 'roulette_sessions', 'coinflip_sessions'];
         for (const tableName of tablesWithUpdatedAt) {
             const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
@@ -1682,29 +1613,21 @@ $$ LANGUAGE plpgsql;`);
             }
         }
 
-        // --- START OF NEW ROULETTE UPDATE: Apply new triggers ---
         const interactiveTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_interactive_game_update' AND tgrelid = 'interactive_game_sessions'::regclass;");
-        if (interactiveTriggerExists.rowCount === 0) {
-            await client.query(`CREATE TRIGGER on_interactive_game_update AFTER UPDATE OF status ON interactive_game_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
-        }
+        if (interactiveTriggerExists.rowCount === 0) await client.query(`CREATE TRIGGER on_interactive_game_update AFTER UPDATE OF status ON interactive_game_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
         
         const rouletteCompleteTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_roulette_game_update' AND tgrelid = 'roulette_sessions'::regclass;");
-        if (rouletteCompleteTriggerExists.rowCount === 0) {
-            await client.query(`CREATE TRIGGER on_roulette_game_update AFTER UPDATE OF status ON roulette_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
-        }
+        if (rouletteCompleteTriggerExists.rowCount === 0) await client.query(`CREATE TRIGGER on_roulette_game_update AFTER UPDATE OF status ON roulette_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
         
-        const roulettePickupTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_roulette_game_insert' AND tgrelid = 'roulette_sessions'::regclass;");
-        if (roulettePickupTriggerExists.rowCount === 0) {
-            await client.query(`CREATE TRIGGER on_roulette_game_insert AFTER INSERT ON roulette_sessions FOR EACH ROW EXECUTE FUNCTION notify_roulette_pickup();`);
-        }
-        console.log("DB Schema: All helper bot triggers checked and applied.");
-        // --- END OF NEW ROULETTE UPDATE ---
-
         const coinflipCompleteTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_coinflip_game_update' AND tgrelid = 'coinflip_sessions'::regclass;");
-        if (coinflipCompleteTriggerExists.rowCount === 0) {
-            await client.query(`CREATE TRIGGER on_coinflip_game_update AFTER UPDATE OF status ON coinflip_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
-        }
+        if (coinflipCompleteTriggerExists.rowCount === 0) await client.query(`CREATE TRIGGER on_coinflip_game_update AFTER UPDATE OF status ON coinflip_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
 
+        const roulettePickupTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_roulette_game_insert' AND tgrelid = 'roulette_sessions'::regclass;");
+        if (roulettePickupTriggerExists.rowCount === 0) await client.query(`CREATE TRIGGER on_roulette_game_insert AFTER INSERT ON roulette_sessions FOR EACH ROW EXECUTE FUNCTION notify_roulette_pickup();`);
+
+        const coinflipPickupTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_coinflip_game_insert' AND tgrelid = 'coinflip_sessions'::regclass;");
+        if (coinflipPickupTriggerExists.rowCount === 0) await client.query(`CREATE TRIGGER on_coinflip_game_insert AFTER INSERT ON coinflip_sessions FOR EACH ROW EXECUTE FUNCTION notify_coinflip_pickup();`);
+        
         await client.query('COMMIT');
         console.log("✅ DB Schema: Database schema initialization complete (ALL TABLES & TRIGGERS).");
 
