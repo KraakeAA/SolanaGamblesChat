@@ -1460,6 +1460,51 @@ CREATE TABLE IF NOT EXISTS roulette_sessions (
 );`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_roulette_sessions_status ON roulette_sessions(status);`);
         console.log("DB Schema: roulette_sessions table created or verified.");
+
+       // --- NEW: DEDICATED COINFLIP SESSIONS TABLE ---
+        console.log("DB Schema: Creating dedicated coinflip_sessions table...");
+        await client.query(`
+CREATE TABLE IF NOT EXISTS coinflip_sessions (
+    session_id SERIAL PRIMARY KEY,
+    main_bot_game_id VARCHAR(255) NOT NULL UNIQUE,
+    game_type VARCHAR(50) NOT NULL, -- 'coinflip_pvb' or 'coinflip_pvp'
+    chat_id BIGINT NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending_pickup', -- e.g., pending_pickup, in_progress, completed_p1_win
+    
+    -- Player Information
+    initiator_id BIGINT NOT NULL,
+    opponent_id BIGINT, -- NULL for PvB
+
+    -- Bet Information
+    bet_amount_lamports BIGINT NOT NULL,
+
+    -- Game State (Managed by Helper)
+    game_state_json JSONB,
+
+    -- System Fields
+    helper_bot_id VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_coinflip_sessions_status ON coinflip_sessions(status);`);
+        console.log("DB Schema: coinflip_sessions table created or verified.");
+
+        // --- NEW: Notification function for Coinflip Helper ---
+        await client.query(`
+CREATE OR REPLACE FUNCTION notify_coinflip_pickup()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Notify that a new game session is ready to be picked up by a helper
+    PERFORM pg_notify('coinflip_session_pickup', json_build_object('main_bot_game_id', NEW.main_bot_game_id)::text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;`);
+
+        // --- NEW: Trigger for Coinflip session creation ---
+        const coinflipPickupTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_coinflip_game_insert' AND tgrelid = 'coinflip_sessions'::regclass;");
+        if (coinflipPickupTriggerExists.rowCount === 0) {
+            await client.query(`CREATE TRIGGER on_coinflip_game_insert AFTER INSERT ON coinflip_sessions FOR EACH ROW EXECUTE FUNCTION notify_coinflip_pickup();`);
+        }
         
         // --- Background Jobs & System Tables ---
         console.log("DB Schema: Creating background_jobs table...");
@@ -1627,7 +1672,7 @@ $$ LANGUAGE plpgsql;`);
         console.log("DB Schema: Helper bot notification functions created or replaced.");
         // --- END OF NEW ROULETTE UPDATE ---
 
-        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals', 'de_jackpot_sessions', 'user_levels', 'user_claimed_level_bonuses', 'interactive_game_sessions', 'roulette_sessions']; // Added roulette_sessions
+        const tablesWithUpdatedAt = ['users', 'jackpots', 'user_deposit_wallets', 'deposits', 'withdrawals', 'referrals', 'de_jackpot_sessions', 'user_levels', 'user_claimed_level_bonuses', 'interactive_game_sessions', 'roulette_sessions', 'coinflip_sessions'];
         for (const tableName of tablesWithUpdatedAt) {
             const triggerExistsQuery = `SELECT 1 FROM pg_trigger WHERE tgname = 'set_timestamp' AND tgrelid = $1::regclass;`;
             const triggerExistsRes = await client.query(triggerExistsQuery, [tableName]);
@@ -1654,6 +1699,11 @@ $$ LANGUAGE plpgsql;`);
         }
         console.log("DB Schema: All helper bot triggers checked and applied.");
         // --- END OF NEW ROULETTE UPDATE ---
+
+        const coinflipCompleteTriggerExists = await client.query("SELECT 1 FROM pg_trigger WHERE tgname = 'on_coinflip_game_update' AND tgrelid = 'coinflip_sessions'::regclass;");
+        if (coinflipCompleteTriggerExists.rowCount === 0) {
+            await client.query(`CREATE TRIGGER on_coinflip_game_update AFTER UPDATE OF status ON coinflip_sessions FOR EACH ROW EXECUTE FUNCTION notify_game_completed();`);
+        }
 
         await client.query('COMMIT');
         console.log("✅ DB Schema: Database schema initialization complete (ALL TABLES & TRIGGERS).");
@@ -3286,1054 +3336,203 @@ const COIN_FLIP_ANIMATION_STEPS = Math.floor(COIN_FLIP_ANIMATION_DURATION_MS / C
 // --- Coinflip Unified Offer Command ---
 // --- START OF REPLACEMENT for handleStartCoinflipUnifiedOfferCommand function ---
 async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, targetUsernameRaw = null) {
-    const userId = String(msg.from.id || msg.from.telegram_id);
-    const chatId = String(msg.chat.id);
-    const chatType = msg.chat.type;
-    const logPrefix = `[CF_OfferOrDirect_V6_GranLimit UID:${userId} CH:${chatId}]`;
+    const userId = String(msg.from.id || msg.from.telegram_id);
+    const chatId = String(msg.chat.id);
+    const chatType = msg.chat.type;
+    const logPrefix = `[CF_Handoff_Start_V1 UID:${userId} CH:${chatId}]`;
 
-    // MODIFIED CALL to checkUserActiveGameLimit and NEW ERROR MESSAGE
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, (targetUsernameRaw != null), null); 
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
-        const blockingGameType = activeUserGameCheck.details.type;
-        const cleanGameName = getCleanGameName(blockingGameType); // Using the new helper
-        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
-        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
-        return;
-    }
-    // END OF MODIFICATION
-
-    if (chatType === 'private') {
-        await safeSendMessage(chatId, `🪙 The Coinflip arena awaits in <b>group chats</b>! Please use <code>/coinflip &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
-        return;
-    }
-
-    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
-    if (!initiatorUserObj) {
-        await safeSendMessage(chatId, `Sorry ${escapeHTML(msg.from.first_name || 'player')}, I couldn't fetch your profile. Try <code>/start</code> first.`, { parse_mode: 'HTML' });
-        return;
-    }
-    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
-    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-
-    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
-        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
-        await safeSendMessage(chatId, `${initiatorPlayerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> Coinflip game! You need ~<b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: [[{ text: "💸 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
-        return;
-    }
-
-    let targetUserObject = null;
-    let isDirectChallenge = (targetUsernameRaw != null); 
-
-    if (isDirectChallenge) {
-        targetUserObject = await findRecipientUser(targetUsernameRaw);
-        if (!targetUserObject || !targetUserObject.telegram_id) {
-            await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found. To make a general Coinflip offer, use <code>/cf ${escapeHTML(String(betAmountLamports / LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
-            return;
-        } else if (String(targetUserObject.telegram_id) === userId) {
-            await safeSendMessage(chatId, `😅 You can't challenge yourself to Coinflip, ${initiatorPlayerRefHTML}! To make a general offer, use <code>/cf ${escapeHTML(String(betAmountLamports / LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
-            return;
-        }
-    }
-
-    const gameSession = await getGroupSession(chatId, msg.chat.title || `Group Chat ${chatId}`);
-    let offerActivityKeyForLock;
-
-    if (isDirectChallenge) {
-        offerActivityKeyForLock = GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER; 
-        const currentDirectChallenges = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        const limitDirect = GAME_ACTIVITY_LIMITS.DIRECT_CHALLENGES[offerActivityKeyForLock] || 1; 
-        if (currentDirectChallenges.length >= limitDirect) {
-            await safeSendMessage(chatId, `⏳ Hold your coins, ${initiatorPlayerRefHTML}! The limit of ${limitDirect} concurrent direct Coinflip challenge(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
-            return;
-        }
-    } else {
-        offerActivityKeyForLock = GAME_IDS.COINFLIP; 
-        const currentUnifiedOffers = gameSession.activeGamesByTypeInGroup.get(offerActivityKeyForLock) || [];
-        const limitUnified = GAME_ACTIVITY_LIMITS.UNIFIED_OFFERS[offerActivityKeyForLock] || 1;
-        if (currentUnifiedOffers.length >= limitUnified) {
-            await safeSendMessage(chatId, `⏳ Slow down, ${initiatorPlayerRefHTML}! The limit of ${limitUnified} concurrent Coinflip offer(s) in this group has been reached. Please wait.`, { parse_mode: 'HTML' });
-            return;
-        }
-    }
-
-    let offerId;
-    let offerData;
-    let clientBetPlacement = null;
-    let timeoutDuration;
-
-    try {
-        clientBetPlacement = await pool.connect();
-        await clientBetPlacement.query('BEGIN');
-
-        if (isDirectChallenge) {
-            offerId = generateGameId(`dcf_${userId.slice(-3)}_${String(targetUserObject.telegram_id).slice(-3)}`);
-            timeoutDuration = DIRECT_CHALLENGE_ACCEPT_TIMEOUT_MS;
-
-            const betResultDirect = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_coinflip_direct_challenge_offer', { custom_offer_id: offerId, opponent_id_custom_field: targetUserObject.telegram_id }, `Direct Coinflip Challenge Offer to ${targetUserObject.username || targetUserObject.telegram_id}`);
-            if (!betResultDirect.success) {
-                throw new Error(betResultDirect.error || "Failed to place your bet for the direct challenge.");
-            }
-            initiatorUserObj.balance = betResultDirect.newBalanceLamports;
-
-            const targetPlayerRefHTML = escapeHTML(getPlayerDisplayReference(targetUserObject));
-            const groupChallengeTextHTML = `Hey ${targetPlayerRefHTML}❗\n\n${initiatorPlayerRefHTML} has challenged you to a <b>Coinflip</b> duel for <b>${betDisplayUSD_HTML}</b>! You have ${timeoutDuration / 1000} seconds to respond.`;
-            const groupChallengeKeyboard = {
-                inline_keyboard: [
-                    [{ text: "✅ Accept Challenge", callback_data: `cf_direct_accept:${offerId}` }],
-                    [{ text: "❌ Decline Challenge", callback_data: `cf_direct_decline:${offerId}` }],
-                    [{ text: "🚫 Withdraw My Challenge", callback_data: `cf_direct_cancel:${offerId}` }]
-                ]
-            };
-            const sentGroupMessage = await safeSendMessage(chatId, groupChallengeTextHTML, { parse_mode: 'HTML', reply_markup: groupChallengeKeyboard });
-            if (!sentGroupMessage || !sentGroupMessage.message_id) {
-                throw new Error("Could not send the direct challenge message to the group.");
-            }
-
-            offerData = {
-                type: GAME_IDS.DIRECT_PVP_CHALLENGE,
-                offerId: offerId,
-                gameId: offerId,
-                initiatorId: userId,
-                initiatorUserObj: initiatorUserObj,
-                initiatorMentionHTML: initiatorPlayerRefHTML,
-                targetUserId: String(targetUserObject.telegram_id),
-                targetUserObj: targetUserObject,
-                targetUserMentionHTML: targetPlayerRefHTML,
-                betAmount: betAmountLamports,
-                originalGroupId: chatId,
-                offerMessageIdInGroup: String(sentGroupMessage.message_id),
-                chatTitle: msg.chat.title || `Group Chat ${chatId}`,
-                status: 'pending_direct_challenge_response',
-                gameToStart: GAME_IDS.COINFLIP_PVP,
-                _offerKeyUsedForGroupLock: GAME_IDS.COINFLIP_DIRECT_CHALLENGE_OFFER, 
-                creationTime: Date.now(),
-                timeoutId: null
-            };
-        } else { // Unified Offer
-            offerId = generateGameId(GAME_IDS.COINFLIP_UNIFIED_OFFER);
-            timeoutDuration = UNIFIED_OFFER_TIMEOUT_MS;
-
-            const betResultUnified = await updateUserBalanceAndLedger(clientBetPlacement, userId, BigInt(-betAmountLamports), 'bet_placed_coinflip_unified_offer', { custom_offer_id: offerId }, `Coinflip Unified Offer`);
-            if (!betResultUnified.success) {
-                throw new Error(betResultUnified.error || "Failed to place your bet for the unified offer.");
-            }
-            initiatorUserObj.balance = betResultUnified.newBalanceLamports;
-
-            const offerMessageTextHTML = `👑 ${COIN_EMOJI_DISPLAY} <b>A Coinflip Challenge Has Been Issued!</b> ${COIN_EMOJI_DISPLAY} 👑\n\n` +
-                `High roller ${initiatorPlayerRefHTML} has bravely wagered <b>${betDisplayUSD_HTML}</b> on the toss of a coin!\n\n` +
-                `<b>Will you face the Bot Dealer, or will another player accept the PvP challenge?</b>\n\n` +
-                `<i>This offer expires in ${timeoutDuration / 1000} seconds! Initiator's bet will be refunded if it times out.</i>`;
-            const offerKeyboard = {
-                inline_keyboard: [
-                    [{ text: "🤖 Challenge Bot Dealer", callback_data: `cf_accept_bot:${offerId}` }],
-                    [{ text: "⚔️ Accept PvP Challenge", callback_data: `cf_accept_pvp:${offerId}` }],
-                    [{ text: "🚫 Withdraw My Challenge", callback_data: `cf_cancel_offer:${offerId}` }]
-                ]
-            };
-            const sentMessage = await safeSendMessage(chatId, offerMessageTextHTML, { parse_mode: 'HTML', reply_markup: offerKeyboard });
-            if (!sentMessage?.message_id) {
-                throw new Error("Could not send the unified offer message to the group.");
-            }
-
-            offerData = {
-                type: GAME_IDS.COINFLIP_UNIFIED_OFFER,
-                gameId: offerId,
-                chatId: chatId,
-                chatType: chatType,
-                initiatorId: userId,
-                initiatorMentionHTML: initiatorPlayerRefHTML,
-                initiatorUserObj: initiatorUserObj,
-                betAmount: betAmountLamports,
-                status: 'pending_offer',
-                creationTime: Date.now(),
-                offerMessageId: String(sentMessage.message_id),
-                timeoutId: null
-            };
-        }
-
-        await clientBetPlacement.query('COMMIT');
-        activeGames.set(offerId, offerData);
-        await updateGroupGameDetails(chatId, offerId, offerActivityKeyForLock, betAmountLamports);
-        console.log(`${logPrefix} Offer ${offerId} (Type: ${offerData.type}, Group Lock Key: ${offerActivityKeyForLock}) created and bet placed.`);
-
-        offerData.timeoutId = setTimeout(async () => {
-            const timedOutOffer = activeGames.get(offerId);
-            if (timedOutOffer && (timedOutOffer.status === 'pending_offer' || timedOutOffer.status === 'pending_direct_challenge_response')) {
-                console.log(`${logPrefix} Offer ${offerId} (Type: ${timedOutOffer.type}) timed out.`);
-                activeGames.delete(offerId);
-                const keyForTimeoutRemoval = timedOutOffer._offerKeyUsedForGroupLock || offerActivityKeyForLock;
-                await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForTimeoutRemoval, null);
-                console.log(`${logPrefix} Cleared group lock for timed-out offer ${offerId} using key ${keyForTimeoutRemoval}.`);
-
-
-                let refundClient = null;
-                try {
-                    refundClient = await pool.connect();
-                    await refundClient.query('BEGIN');
-                    const refundReason = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ? 'direct_challenge_expired_unanswered' : 'unified_offer_expired_unanswered';
-                    const refundNotes = `Refund for expired ${timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ? 'direct Coinflip challenge' : 'unified Coinflip offer'} ${offerId}.`;
-                    await updateUserBalanceAndLedger(refundClient, timedOutOffer.initiatorId, timedOutOffer.betAmount, `refund_coinflip_${refundReason}`, { custom_offer_id: offerId }, refundNotes);
-                    await refundClient.query('COMMIT');
-                    console.log(`${logPrefix} Bet refunded to initiator ${timedOutOffer.initiatorId} for timed out offer ${offerId}.`);
-                } catch (e) {
-                    if (refundClient) await refundClient.query('ROLLBACK').catch(() => {});
-                    console.error(`${logPrefix} CRITICAL: Failed to refund initiator ${timedOutOffer.initiatorId} for timed out offer ${offerId}: ${e.message}`);
-                    if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL REFUND FAILURE for timed out Coinflip offer ${offerId}, Initiator: ${timedOutOffer.initiatorId}, Bet: ${timedOutOffer.betAmount}. Error: ${e.message}`);
-                } finally {
-                    if (refundClient) refundClient.release();
-                }
-
-                const messageIdToEdit = timedOutOffer.offerMessageIdInGroup || timedOutOffer.offerMessageId;
-                const currentBetDisplayHTML_Timeout = escapeHTML(await formatBalanceForDisplay(timedOutOffer.betAmount, 'USD'));
-                const timeoutMessageHTML = timedOutOffer.type === GAME_IDS.DIRECT_PVP_CHALLENGE ?
-                    `⏳ The Coinflip challenge from ${timedOutOffer.initiatorMentionHTML} to ${timedOutOffer.targetUserMentionHTML} (<b>${currentBetDisplayHTML_Timeout}</b>) has expired unanswered. Initiator's bet refunded.` :
-                    `⏳ The Coinflip offer by ${timedOutOffer.initiatorMentionHTML} (<b>${currentBetDisplayHTML_Timeout}</b>) has expired unanswered. Initiator's bet refunded.`;
-
-                if (messageIdToEdit && bot) {
-                    await bot.editMessageText(timeoutMessageHTML, {
-                        chat_id: chatId, message_id: Number(messageIdToEdit),
-                        parse_mode: 'HTML', reply_markup: {}
-                    }).catch(e => console.warn(`${logPrefix} Failed to edit expired Coinflip offer message ${messageIdToEdit}: ${e.message}`));
-                }
-            }
-        }, timeoutDuration);
-        activeGames.set(offerId, offerData); 
-
-    } catch (error) {
-        if (clientBetPlacement) await clientBetPlacement.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} Error creating Coinflip offer or placing bet: ${error.message}`);
-        await safeSendMessage(chatId, `⚠️ Error creating your Coinflip offer: ${escapeHTML(error.message)}. Please try again.`, { parse_mode: 'HTML' });
-        if (offerId && activeGames.has(offerId)) {
-            activeGames.delete(offerId);
-            const keyForErrorCleanup = offerData?._offerKeyUsedForGroupLock || offerActivityKeyForLock; 
-            if(keyForErrorCleanup) await updateGroupGameDetails(chatId, { removeThisId: offerId }, keyForErrorCleanup, null);
-        }
-    } finally {
-        if (clientBetPlacement) clientBetPlacement.release();
-    }
-}
-// --- END OF REPLACEMENT for handleStartCoinflipUnifiedOfferCommand function ---
-
-// --- Coinflip Offer Callback Handlers ---
-async function handleCoinflipAcceptBotGameCallback(offerId, userWhoClicked, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const userId = String(userWhoClicked.id || userWhoClicked.telegram_id);
-    const logPrefix = `[CF_AcceptBotCB_V3_GranLimit OfferID:${offerId} UID:${userId}]`;
-    const offerData = activeGames.get(offerId);
-
-    // --- NEW USER ACTIVE GAME LIMIT CHECK ---
-    const activeUserGameCheck = await checkUserActiveGameLimit(userId, false, offerId); // Pass offerId as gameIdBeingActioned
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(userWhoClicked));
-        const blockingGameType = activeUserGameCheck.details.type;
-        const cleanGameName = getCleanGameName(blockingGameType);
-        // For callback queries, alerts should be concise.
-        let alertMessage = `✨ ${userDisplayName}, you're already in a game of ${escapeHTML(cleanGameName)}. ✨ Finish it first!`;
-        alertMessage = alertMessage.substring(0, 200); // Telegram alert character limit
-
-        await bot.answerCallbackQuery(callbackQueryId, { text: alertMessage, show_alert: true }).catch(() => {});
-        return;
-    }
-    // --- END OF NEW USER ACTIVE GAME LIMIT CHECK ---
-
-    if (!offerData || offerData.type !== GAME_IDS.COINFLIP_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Coinflip offer is no longer valid.", show_alert: true }).catch(() => {});
-        if (originalOfferMessageId && bot) bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(originalOfferMessageId) }).catch(() => {});
-        return;
-    }
-    if (offerData.initiatorId !== userId) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Only the one who made the offer can play against the Bot!", show_alert: true }).catch(() => {});
-        return;
-    }
-
-    const gameSession = await getGroupSession(originalChatId);
-    const activeGameKeyToCheck = GAME_IDS.COINFLIP_PVB; 
-    const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
-
-    if (currentActiveGames.length >= limitActive) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Max ${limitActive} active Coinflip PvB game(s) allowed in this group. Please wait.`, show_alert: true }).catch(() => {});
-        return;
-    }
-
-    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    await bot.answerCallbackQuery(callbackQueryId, { text: `🪙 ${COIN_EMOJI_DISPLAY} Starting your Coinflip duel with the Bot Dealer...` }).catch(() => {});
-
-    offerData.status = 'bot_game_accepted';
-    activeGames.set(offerId, offerData);
-
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.COINFLIP, null);
-    activeGames.delete(offerId);
-
-    await startCoinflipPvBGame(originalChatId, offerData.initiatorUserObj, offerData.betAmount, offerData.offerMessageId, null);
-}
-
-async function handleCoinflipAcceptPvPChallengeCallback(offerId, joinerUserObjFull, originalOfferMessageId, originalChatId, originalChatType, callbackQueryId) {
-    const joinerId = String(joinerUserObjFull.id || joinerUserObjFull.telegram_id);
-    const logPrefix = `[CF_AcceptPvPCB_V3_GranLimit OfferID:${offerId} JoinerID:${joinerId}]`;
-    const offerData = activeGames.get(offerId);
-
-    // --- NEW USER ACTIVE GAME LIMIT CHECK ---
-    const activeUserGameCheck = await checkUserActiveGameLimit(joinerId, false, offerId); // Pass offerId as gameIdBeingActioned
-    if (activeUserGameCheck.limitReached) {
-        const userDisplayName = escapeHTML(getPlayerDisplayReference(joinerUserObjFull));
-        const blockingGameType = activeUserGameCheck.details.type;
-        const cleanGameName = getCleanGameName(blockingGameType);
-        let alertMessage = `✨ ${userDisplayName}, you're already in a game of ${escapeHTML(cleanGameName)}. ✨ Finish it first!`;
-        alertMessage = alertMessage.substring(0, 200); // Telegram alert length limit
-
-        await bot.answerCallbackQuery(callbackQueryId, { text: alertMessage, show_alert: true }).catch(() => {});
-        return;
-    }
-    // --- END OF NEW USER ACTIVE GAME LIMIT CHECK ---
-
-    if (!offerData || offerData.type !== GAME_IDS.COINFLIP_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Coinflip PvP offer has vanished!", show_alert: true }).catch(() => {});
-        if (originalOfferMessageId && bot) bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(originalOfferMessageId) }).catch(() => {});
-        return;
-    }
-    if (offerData.initiatorId === joinerId) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "You can't accept your own Coinflip challenge for PvP!", show_alert: true }).catch(() => {});
-        return;
-    }
-
-    const gameSession = await getGroupSession(originalChatId);
-    const activeGameKeyToCheck = GAME_IDS.COINFLIP_PVP_FROM_UNIFIED; 
-    const currentActiveGames = gameSession.activeGamesByTypeInGroup.get(activeGameKeyToCheck) || [];
-    const limitActive = GAME_ACTIVITY_LIMITS.ACTIVE_GAMES[activeGameKeyToCheck] || 1;
-
-    if (currentActiveGames.length >= limitActive) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Max ${limitActive} active Coinflip PvP (from unified offers) game(s) allowed. Please wait.`, show_alert: true }).catch(() => {});
-        return;
-    }
-
-    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-    if (BigInt(joinerUserObjFull.balance) < offerData.betAmount) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: `Your funds are too low for this ${betDisplayHTML} duel!`, show_alert: true }).catch(() => {});
-        const needed = offerData.betAmount - BigInt(joinerUserObjFull.balance);
-        await safeSendMessage(originalChatId, `💰 Oops, ${escapeHTML(getPlayerDisplayReference(joinerUserObjFull))}! Your balance is short by ~<b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> to join this <b>${betDisplayHTML}</b> Coinflip.`, {
-            parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "💸 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
-        });
-        return;
-    }
-    const currentInitiatorUserObj = await getOrCreateUser(offerData.initiatorId); 
-    if (!currentInitiatorUserObj || BigInt(currentInitiatorUserObj.balance) < offerData.betAmount) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Initiator can't cover the bet. Offer cancelled.", show_alert: true }).catch(() => {});
-        if (offerData.offerMessageId && bot) {
-            await bot.editMessageText(`⚠️ <b>Offer Auto-Cancelled</b><br>The Coinflip offer by ${offerData.initiatorMentionHTML} for <b>${betDisplayHTML}</b> was cancelled as their balance is no longer sufficient.`, {
-                chat_id: originalChatId, message_id: Number(offerData.offerMessageId), parse_mode: 'HTML', reply_markup: { inline_keyboard: [] }
-            }).catch(() => {});
-        }
-        if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-        activeGames.delete(offerId);
-        await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.COINFLIP, null); 
-        return;
-    }
-
-    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    await bot.answerCallbackQuery(callbackQueryId, { text: "⚔️ PvP Challenge Accepted! The coin is ready to be flipped..." }).catch(() => {});
-
-    offerData.status = 'pvp_accepted'; 
-    activeGames.set(offerId, offerData); 
-
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.COINFLIP, null); 
-    
-    await startCoinflipPvPGame(
-        currentInitiatorUserObj,
-        joinerUserObjFull,
-        offerData.betAmount,
-        originalChatId,
-        offerData.offerMessageId, 
-        'unified_offer', 
-        false 
-    );
-    activeGames.delete(offerId); 
-}
-
-async function handleCoinflipCancelOfferCallback(offerId, userWhoClicked, originalOfferMessageId, originalChatId, callbackQueryId) {
-    const userId = String(userWhoClicked.id || userWhoClicked.telegram_id);
-    const logPrefix = `[CF_CancelOfferCB_V2 OfferID:${offerId} UID:${userId}]`; 
-    const offerData = activeGames.get(offerId);
-
-    if (!offerData || offerData.type !== GAME_IDS.COINFLIP_UNIFIED_OFFER || offerData.status !== 'pending_offer') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Offer already gone or actioned!", show_alert: false }).catch(() => {});
-        if (originalOfferMessageId && bot) bot.editMessageReplyMarkup({}, { chat_id: originalChatId, message_id: Number(originalOfferMessageId) }).catch(() => {});
-        return;
-    }
-    if (offerData.initiatorId !== userId) {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "Only the offer initiator can cancel.", show_alert: true }).catch(() => {});
+    const activeUserGameCheck = await checkUserActiveGameLimit(userId, (targetUsernameRaw != null), null);
+    if (activeUserGameCheck.limitReached) {
+        const userDisplayName = escapeHTML(getPlayerDisplayReference(msg.from));
+        const blockingGameType = activeUserGameCheck.details.type;
+        const cleanGameName = getCleanGameName(blockingGameType);
+        const alertMessage = `✨ ${userDisplayName}, you already have a pending offer or active game for <b>${escapeHTML(cleanGameName)}</b>. ✨`;
+        await safeSendMessage(chatId, alertMessage, { parse_mode: 'HTML' });
         return;
     }
 
-    if (offerData.timeoutId) clearTimeout(offerData.timeoutId);
-    await bot.answerCallbackQuery(callbackQueryId, { text: "Coinflip offer withdrawn. Refunding bet..." }).catch(() => {});
-
-    activeGames.delete(offerId);
-    await updateGroupGameDetails(originalChatId, { removeThisId: offerId }, GAME_IDS.COINFLIP, null); 
-
-    let refundClient = null;
-    try {
-        refundClient = await pool.connect();
-        await refundClient.query('BEGIN');
-        await updateUserBalanceAndLedger(refundClient, offerData.initiatorId, offerData.betAmount, 'refund_coinflip_offer_cancelled', { custom_offer_id: offerId }, `Refund for cancelled Coinflip unified offer ${offerId}`);
-        await refundClient.query('COMMIT');
-        console.log(`${logPrefix} Bet refunded to initiator ${offerData.initiatorId} for cancelled offer ${offerId}.`);
-    } catch (e) {
-        if (refundClient) await refundClient.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} CRITICAL: Failed to refund initiator ${offerData.initiatorId} for cancelled offer ${offerId}: ${e.message}`);
-        if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL REFUND FAILURE for cancelled Coinflip offer ${offerId}, Initiator: ${offerData.initiatorId}, Bet: ${offerData.betAmount}. Error: ${e.message}`);
-    } finally {
-        if (refundClient) refundClient.release();
+    if (chatType === 'private') {
+        await safeSendMessage(chatId, `🪙 The Coinflip arena awaits in <b>group chats</b>! Please use <code>/coinflip &lt;bet&gt; [@username]</code> there.`, { parse_mode: 'HTML' });
+        return;
     }
 
-    const betDisplayHTML = escapeHTML(await formatBalanceForDisplay(offerData.betAmount, 'USD'));
-    if (originalOfferMessageId && bot) {
-        await bot.editMessageText(`🚫 <b>Offer Retracted!</b>\nThe Coinflip challenge by ${offerData.initiatorMentionHTML} (wager: <b>${betDisplayHTML}</b>) has been cancelled. Bet refunded.`, {
-            chat_id: originalChatId, message_id: Number(originalOfferMessageId), parse_mode: 'HTML', reply_markup: {}
-        }).catch(async (e) => {
-            await safeSendMessage(originalChatId, `🚫 Coinflip Offer by ${offerData.initiatorMentionHTML} for <b>${betDisplayHTML}</b> withdrawn. Bet refunded.`, { parse_mode: 'HTML' });
+    let initiatorUserObj = await getOrCreateUser(userId, msg.from.username, msg.from.first_name, msg.from.last_name);
+    if (!initiatorUserObj) {
+        await safeSendMessage(chatId, `Sorry ${escapeHTML(msg.from.first_name || 'player')}, I couldn't fetch your profile. Try <code>/start</code> first.`, { parse_mode: 'HTML' });
+        return;
+    }
+    const initiatorPlayerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
+    const betDisplayUSD_HTML = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
+
+    if (BigInt(initiatorUserObj.balance) < betAmountLamports) {
+        const needed = betAmountLamports - BigInt(initiatorUserObj.balance);
+        await safeSendMessage(chatId, `${initiatorPlayerRefHTML}, your balance is too low for a <b>${betDisplayUSD_HTML}</b> Coinflip game! You need ~<b>${escapeHTML(await formatBalanceForDisplay(needed, 'USD'))}</b> more.`, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: "💸 Add Funds (DM)", callback_data: QUICK_DEPOSIT_CALLBACK_ACTION_CONST }]] }
         });
-    } else {
-        await safeSendMessage(originalChatId, `🚫 Coinflip Offer by ${offerData.initiatorMentionHTML} for <b>${betDisplayHTML}</b> withdrawn. Bet refunded.`, { parse_mode: 'HTML' });
-    }
-}
-
-// --- Coinflip Player vs. Bot (PvB) Logic ---
-async function startCoinflipPvBGame(chatId, initiatorUserObj, betAmountLamports, originalOfferMessageId, offerIdToDeleteIfAny) {
-    const userId = String(initiatorUserObj.id || initiatorUserObj.telegram_id);
-    const logPrefix = `[CF_PvB_Start_V3_GranLimit UID:${userId} CH:${chatId}]`;
-    const playerRefHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
-    
-    const activeGameActivityKey = GAME_IDS.COINFLIP_PVB; 
-
-    if (originalOfferMessageId && bot) {
-        await bot.deleteMessage(chatId, Number(originalOfferMessageId)).catch(() => {});
-    }
-    if (offerIdToDeleteIfAny) activeGames.delete(offerIdToDeleteIfAny); 
-
-    console.log(`${logPrefix} Starting Coinflip PvB. Bet was already placed by initiator ${userId}.`);
-
-    const pvbGameId = generateGameId(GAME_IDS.COINFLIP_PVB);
-    const gameDataPvB = {
-        type: GAME_IDS.COINFLIP_PVB, gameId: pvbGameId, chatId, userId,
-        playerRefHTML, userObj: initiatorUserObj, betAmount: betAmountLamports,
-        playerChoice: null, result: null, status: 'pvb_waiting_choice',
-        gameMessageId: null, lastInteractionTime: Date.now(),
-        choiceTimeoutId: null
-    };
-    activeGames.set(pvbGameId, gameDataPvB);
-    await updateGroupGameDetails(chatId, pvbGameId, activeGameActivityKey, betAmountLamports);
-    console.log(`${logPrefix} Coinflip PvB game ${pvbGameId} started. Group lock for ${activeGameActivityKey} updated.`);
-
-    const titleHTML = `🤖${COIN_EMOJI_DISPLAY} <b>Coinflip: ${playerRefHTML} vs. Bot Dealer!</b> ${COIN_EMOJI_DISPLAY}🤖`;
-    const betDisplayUSD_HTML_PvB = escapeHTML(await formatBalanceForDisplay(betAmountLamports, 'USD'));
-    const initialMessageTextHTML = `${titleHTML}\n\nWager: <b>${betDisplayUSD_HTML_PvB}</b>\n\n` +
-        `The Bot Dealer polishes a shimmering virtual coin! ${playerRefHTML}, make your call: Heads or Tails?\n<i>(You have ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000} seconds to choose)</i>`;
-    const keyboard = {
-        inline_keyboard: [
-            [
-                { text: `${COIN_EMOJI_DISPLAY} Heads`, callback_data: `cf_pvb_choice:${pvbGameId}:${COINFLIP_CHOICE_HEADS}` },
-                { text: `${COIN_EMOJI_DISPLAY} Tails`, callback_data: `cf_pvb_choice:${pvbGameId}:${COINFLIP_CHOICE_TAILS}` }
-            ],
-            [{ text: "📖 Rules", callback_data: `${RULES_CALLBACK_PREFIX_CONST}${GAME_IDS.COINFLIP}` }]
-        ]
-    };
-    const sentMessage = await safeSendMessage(chatId, initialMessageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
-    if (sentMessage?.message_id) {
-        gameDataPvB.gameMessageId = String(sentMessage.message_id);
-        gameDataPvB.choiceTimeoutId = setTimeout(() => {
-            handleCoinflipPvBChoiceTimeout(pvbGameId);
-        }, ACTIVE_GAME_TURN_TIMEOUT_MS); 
-        activeGames.set(pvbGameId, gameDataPvB); 
-    } else {
-        console.error(`${logPrefix} Failed to send Coinflip PvB game message for ${pvbGameId}. Bet was already taken.`);
-        activeGames.delete(pvbGameId);
-        await updateGroupGameDetails(chatId, { removeThisId: pvbGameId }, activeGameActivityKey, null);
-        await safeSendMessage(chatId, `⚙️ Error displaying Coinflip PvB game for ${playerRefHTML}. Your bet was placed. Please contact support if the game doesn't resolve.`, {parse_mode:'HTML'});
-    }
-}
-
-async function handleCoinflipPvBChoiceTimeout(gameId) {
-    const LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT = `[CF_PvB_ChoiceTimeout_V2 GID:${gameId}]`;
-    const gameData = activeGames.get(gameId);
-
-    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB || gameData.status !== 'pvb_waiting_choice') {
-        if (gameData && gameData.choiceTimeoutId) clearTimeout(gameData.choiceTimeoutId);
         return;
     }
-    console.log(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} Player ${gameData.userId} timed out for Coinflip PvB choice. Game forfeited, bet lost.`);
 
-    if (gameData.choiceTimeoutId) clearTimeout(gameData.choiceTimeoutId);
-    gameData.choiceTimeoutId = null;
+    let targetUserObject = null;
+    let isDirectChallenge = (targetUsernameRaw != null);
 
-    activeGames.delete(gameId);
-    await updateGroupGameDetails(String(gameData.chatId), { removeThisId: gameId }, GAME_IDS.COINFLIP_PVB, null); 
+    if (isDirectChallenge) {
+        targetUserObject = await findRecipientUser(targetUsernameRaw);
+        if (!targetUserObject || !targetUserObject.telegram_id) {
+            await safeSendMessage(chatId, `😕 Player ${escapeHTML(targetUsernameRaw)} not found. To make a general Coinflip offer, use <code>/cf ${escapeHTML(String(betAmountLamports / LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
+            return;
+        } else if (String(targetUserObject.telegram_id) === userId) {
+            await safeSendMessage(chatId, `😅 You can't challenge yourself to Coinflip, ${initiatorPlayerRefHTML}! To make a general offer, use <code>/cf ${escapeHTML(String(betAmountLamports / LAMPORTS_PER_SOL))}</code>.`, { parse_mode: 'HTML' });
+            return;
+        }
+    }
 
+    // This is a generic handoff, the helper will manage the unified/direct logic
+    const offerId = generateGameId("cf_session");
     let client = null;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-        await updateUserBalanceAndLedger(
-            client, gameData.userId, 0n, 'loss_coinflip_pvb_choice_timeout',
-            { game_id_custom_field: gameId, original_bet_amount: gameData.betAmount.toString() },
-            `Player forfeited Coinflip PvB game ${gameId} due to choice timeout. Bet lost.`
+
+        const betResult = await updateUserBalanceAndLedger(client, userId, -betAmountLamports, 'bet_placed_coinflip_offer', { custom_offer_id: offerId });
+        if (!betResult.success) {
+            throw new Error(betResult.error || "Failed to place bet for Coinflip session.");
+        }
+
+        const gameState = {
+            initiatorName: getRawPlayerDisplayReference(initiatorUserObj),
+            opponentName: isDirectChallenge ? getRawPlayerDisplayReference(targetUserObject) : null,
+            initiatorTotalWagered: betResult.newTotalWageredLamports.toString()
+        };
+        const gameTypeToStart = isDirectChallenge ? GAME_IDS.COINFLIP_PVP : GAME_IDS.COINFLIP_UNIFIED_OFFER;
+
+        await client.query(
+            `INSERT INTO coinflip_sessions (main_bot_game_id, game_type, chat_id, initiator_id, opponent_id, bet_amount_lamports, game_state_json) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [offerId, gameTypeToStart, chatId, userId, isDirectChallenge ? String(targetUserObject.telegram_id) : null, betAmountLamports.toString(), JSON.stringify(gameState)]
         );
+        
         await client.query('COMMIT');
-    } catch (dbError) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${LOG_PREFIX_CF_PVB_CHOICE_TIMEOUT} DB error logging forfeit for ${gameId}: ${dbError.message}`);
-        if(typeof notifyAdmin === 'function') notifyAdmin(`CRITICAL Coinflip PvB TIMEOUT FORFEIT LOGGING FAILURE GID: ${gameId}, User: ${gameData.userId}. Error: ${dbError.message}`);
+        
+        activeGames.set(offerId, {
+            gameId: offerId,
+            type: 'coinflip_delegated',
+            userId: userId,
+            chatId: chatId,
+            status: 'delegated_to_helper'
+        });
+        
+        const handoffMessage = `✅ Your <b>Coinflip</b> challenge for <b>${betDisplayUSD_HTML}</b> has been issued!\n\nOur dedicated Coinflip Bot is now handling the game. Good luck!`;
+        await safeSendMessage(chatId, handoffMessage, { parse_mode: 'HTML' });
+
+    } catch (error) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} Error handing off Coinflip game: ${error.message}`);
+        await safeSendMessage(chatId, `⚙️ A server error occurred while starting your Coinflip game. Please try again.`, { parse_mode: 'HTML' });
     } finally {
         if (client) client.release();
     }
-
-    const playerRefHTML = gameData.playerRefHTML || escapeHTML(getPlayerDisplayReference(gameData.userObj || { id: gameData.userId, first_name: "Player" }));
-    const betDisplayUSD_HTML_Timeout = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
-    const timeoutMessageText = `⏰ ${playerRefHTML}, your Coinflip game (Bet: <b>${betDisplayUSD_HTML_Timeout}</b>) timed out as no choice was made.\nYour bet has been forfeited.`;
-
-    const messageIdToEdit = Number(gameData.gameMessageId);
-    if (bot && messageIdToEdit) {
-        await bot.editMessageText(timeoutMessageText, {
-            chat_id: String(gameData.chatId), message_id: messageIdToEdit,
-            parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, gameData.betAmount) 
-        }).catch(async (err) => {
-            await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, gameData.betAmount) });
-        });
-    } else {
-        await safeSendMessage(String(gameData.chatId), timeoutMessageText, { parse_mode: 'HTML', reply_markup: createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, gameData.betAmount) });
-    }
 }
 
-async function handleCoinflipPvBChoiceCallback(gameId, playerChoice, userObj, originalMessageId, callbackQueryId) {
-    const userId = String(userObj.id || userObj.telegram_id);
-    const logPrefix = `[CF_PvBChoiceCB_V2 GID:${gameId} UID:${userId} Choice:${playerChoice}]`;
-    const gameData = activeGames.get(gameId);
-
-    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVB || gameData.userId !== userId || gameData.status !== 'pvb_waiting_choice') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Coinflip game action is outdated or not yours.", show_alert: true }).catch(() => {});
-        return;
-    }
-
-    if (gameData.choiceTimeoutId) clearTimeout(gameData.choiceTimeoutId);
-    gameData.choiceTimeoutId = null;
-
-    const choiceDisplay = playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-    await bot.answerCallbackQuery(callbackQueryId, { text: `You called ${choiceDisplay}! Bot is flipping...` }).catch(() => {});
-
-    gameData.playerChoice = playerChoice;
-    gameData.status = 'pvb_flipping';
-    activeGames.set(gameId, gameData);
-
-    const actualFlipOutcome = Math.random() < 0.5 ? COINFLIP_CHOICE_HEADS : COINFLIP_CHOICE_TAILS;
-    gameData.result = actualFlipOutcome;
-
-    const titleFlippingHTML = `💫 ${COIN_EMOJI_DISPLAY} <b>Coin in the Air!</b> ${COIN_EMOJI_DISPLAY} 💫`;
-    let flippingMessageText = `${titleFlippingHTML}\n\n${gameData.playerRefHTML} called <b>${escapeHTML(choiceDisplay)}</b>!\n` +
-        `The Bot Dealer flips the coin... it's spinning wildly!\n\n`;
-
-    if (gameData.gameMessageId && bot) {
-        for (let i = 0; i < COIN_FLIP_ANIMATION_STEPS; i++) {
-            const frame = COIN_FLIP_ANIMATION_FRAMES[i % COIN_FLIP_ANIMATION_FRAMES.length];
-            try {
-                await bot.editMessageText(flippingMessageText + `<b>${frame}</b>`, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: {} });
-            } catch (e) { if (!e.message?.includes("message is not modified")) console.warn(`${logPrefix} Animation edit fail step ${i}`); break; }
-            await sleep(COIN_FLIP_ANIMATION_INTERVAL_MS);
-        }
-    } else {
-        const tempAnimMsg = await safeSendMessage(gameData.chatId, flippingMessageText + "<i>Flip in progress!</i>", { parse_mode: "HTML" });
-        await sleep(COIN_FLIP_ANIMATION_DURATION_MS);
-        if (tempAnimMsg?.message_id && bot) await bot.deleteMessage(gameData.chatId, tempAnimMsg.message_id).catch(() => {});
-    }
-
-    await finalizeCoinflipPvBGame(gameData);
-}
-
-// REPLACEMENT for finalizeCoinflipPvBGame in Part 5a, Section 3
-
-async function finalizeCoinflipPvBGame(gameData) {
-    const { gameId, chatId, userId, playerRefHTML, betAmount, playerChoice, result, userObj } = gameData;
-    const logPrefix = `[CF_PvB_Finalize_V7_RefFix GID:${gameId}]`;
-    let allNotificationsToSend = [];
-
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-    } catch (priceError) {
-        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up/milestone checks will be skipped. Error: ${priceError.message}`);
-        solPrice = 0;
-    }
-
-    await updateGroupGameDetails(chatId, { removeThisId: gameId }, GAME_IDS.COINFLIP_PVB, null);
-
-    const playerWins = playerChoice === result;
-    const totalPot = betAmount * 2n;
-    let houseFee = 0n;
-    let payoutAmountLamports = 0n;
-
-    if (playerWins) {
-        houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
-        payoutAmountLamports = totalPot - houseFee;
-    }
-
-    let ledgerOutcomeCode = playerWins ? `win_coinflip_pvb_${playerChoice}` : `loss_coinflip_pvb_${playerChoice}_vs_${result}`;
-    let gameOutcomeTextForLog = playerWins ? `Player wins (${playerChoice})` : `Bot wins (Player chose ${playerChoice}, result ${result})`;
-    let finalUserBalance = BigInt(userObj.balance);
-
-    let client = null;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-
-        const actualGameLogId = await logGameResultToGamesTable(
-            client, GAME_IDS.COINFLIP_PVB, chatId, userId, [userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
-        );
-
-        const balanceUpdate = await updateUserBalanceAndLedger(
-            client, userId, payoutAmountLamports, ledgerOutcomeCode,
-            { game_log_id: actualGameLogId, original_bet_amount: betAmount.toString() }, 
-            `PvB Coinflip: ${playerChoice} vs Bot ${result}`,
-            solPrice
-        );
-
-        if (!balanceUpdate.success) {
-            throw new Error(balanceUpdate.error || "DB Error during Coinflip PvB payout.");
-        }
-        
-        if (balanceUpdate.notifications && balanceUpdate.notifications.length > 0) {
-            allNotificationsToSend.push(...balanceUpdate.notifications);
-        }
-        
-        finalUserBalance = balanceUpdate.newBalanceLamports;
-
-        const isConclusiveOutcome = ledgerOutcomeCode.startsWith('win_') || ledgerOutcomeCode.startsWith('loss_');
-        if (isConclusiveOutcome) {
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                // --- FIX IS HERE: Changed 'clientPayout' to the correct 'client' variable ---
-                const initialBonusResult = await processQualifyingBetAndInitialBonus(client, userId, betAmount, gameId);
-                if (initialBonusResult.jobQueued) {
-                    console.log(`[ReferralCheck] Queued initial bet bonus job for user ${userId} from game ${gameId}.`);
-                }
-            }
-            if (balanceUpdate.newTotalWageredLamports !== undefined && typeof checkAndUpdateUserLevel === 'function') {
-                const levelNotifications = await checkAndUpdateUserLevel(client, userId, balanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                allNotificationsToSend.push(...levelNotifications);
-            }
-            if (balanceUpdate.newTotalWageredLamports !== undefined && typeof processWagerMilestoneBonus === 'function') {
-                const milestoneResult = await processWagerMilestoneBonus(client, userId, balanceUpdate.newTotalWageredLamports, solPrice);
-                if (!milestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for PvB Coinflip: ${milestoneResult.error}`);
-            }
-        }
-
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} CRITICAL DB error: ${e.message}`);
-        if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvB Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check needed.`, { parse_mode: 'HTML'});
-    } finally { 
-        if (client) client.release(); 
-    }
-
-    for (const notification of allNotificationsToSend) {
-        if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
-            await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
-        } else {
-            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
-        }
-    }
-
-    const resultDisplay = result === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-    const titleResultHTML = playerWins ? `🎉🏆 <b>YOU WIN, ${playerRefHTML}!</b> 🏆🎉` : `💔😥 <b>Better Luck Next Time, ${playerRefHTML}!</b> 😥💔`;
-    const resultMessageHTML = `${titleResultHTML}\n\n` +
-        `You called: <b>${escapeHTML(playerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails")}</b>\n` +
-        `The coin landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
-        (playerWins ? `Congratulations! Your total payout is <b>${escapeHTML(await formatBalanceForDisplay(payoutAmountLamports, 'USD'))}</b> (after a 1% house fee).` : `The Bot Dealer claims the pot of <b>${escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'))}</b>.`);
-
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.COINFLIP_PVB, betAmount);
-    if (gameData.gameMessageId && bot) {
-        await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e) => {
-            if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-        });
-    } else {
-        await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-    }
-    activeGames.delete(gameId);
-}
-
-// --- Coinflip Player vs. Player (PvP) Logic ---
-async function startCoinflipPvPGame(
-    initiatorUserObj,
-    joinerUserObjFull,
-    betAmountInput,
-    chatIdInput,
-    originalOfferMessageIdToDelete, 
-    origin, 
-    joinerBetAlreadyDeducted = false 
-) {
-    const chatId = String(chatIdInput);
-    const betAmount = BigInt(betAmountInput);
-    const logPrefix = `[CF_PvP_Start_V3_Origin UID1:${initiatorUserObj.id} UID2:${joinerUserObjFull.id} CH:${chatId} Origin:${origin}]`;
-    
-    let activeGameKeyForStorage;
-    if (origin === 'unified_offer') {
-        activeGameKeyForStorage = GAME_IDS.COINFLIP_PVP_FROM_UNIFIED;
-    } else { 
-        activeGameKeyForStorage = GAME_IDS.COINFLIP_PVP; 
-    }
-
-    if (originalOfferMessageIdToDelete && bot) {
-        await bot.deleteMessage(chatId, Number(originalOfferMessageIdToDelete)).catch(() => {});
-    }
-
+// --- Coinflip Offer Callback Handlers ---
+// Add this new function to index.js
+async function finalizeCoinflipGame(sessionId) {
+    const logPrefix = `[FinalizeCoinflip_V1 SID:${sessionId}]`;
     let client = null;
-    const pvpGameId = generateGameId(GAME_IDS.COINFLIP_PVP); 
+    let allNotificationsToSend = [];
 
-    const initiatorId = String(initiatorUserObj.id || initiatorUserObj.telegram_id);
-    const initiatorMentionHTML = escapeHTML(getPlayerDisplayReference(initiatorUserObj));
-    const joinerId = String(joinerUserObjFull.id || joinerUserObjFull.telegram_id);
-    const joinerMentionHTML = escapeHTML(getPlayerDisplayReference(joinerUserObjFull));
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-    if (!joinerBetAlreadyDeducted) {
-        console.log(`${logPrefix} Joiner's bet not pre-deducted for ${origin} origin. Processing for Coinflip PvP game ${pvpGameId}.`);
-        try {
-            client = await pool.connect(); await client.query('BEGIN');
-            const joinBetRes = await updateUserBalanceAndLedger(client, joinerId, BigInt(-betAmount), 'bet_placed_coinflip_pvp_join', { game_id_custom_field: pvpGameId, opponent_id_custom_field: initiatorId }, `PvP Coinflip bet vs ${initiatorMentionHTML}`);
-            if (!joinBetRes.success) throw new Error(`Joiner bet failed: ${joinBetRes.error}`);
-            joinerUserObjFull.balance = joinBetRes.newBalanceLamports; 
-            await client.query('COMMIT');
-        } catch (error) {
-            if (client) await client.query('ROLLBACK').catch(() => {});
-            console.error(`${logPrefix} DB error placing joiner's PvP Coinflip bet: ${error.message}`);
-            await safeSendMessage(chatId, `⚙️ Database error placing joiner's bet for PvP Coinflip. Game cancelled.`, { parse_mode: 'HTML' });
-            return; 
-        } finally {
-            if (client) client.release();
+        const sessionRes = await client.query("SELECT * FROM coinflip_sessions WHERE session_id = $1 AND status LIKE 'completed_%' FOR UPDATE", [sessionId]);
+        if (sessionRes.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return;
         }
-    } else {
-        console.log(`${logPrefix} Joiner's bet assumed pre-deducted for Coinflip PvP game ${pvpGameId}.`);
-    }
 
-    const p1IsCaller = Math.random() < 0.5;
-    const callerId = p1IsCaller ? initiatorId : joinerId;
-    const callerMentionHTML = p1IsCaller ? initiatorMentionHTML : joinerMentionHTML;
+        const session = sessionRes.rows[0];
+        const { main_bot_game_id, chat_id, bet_amount_lamports, status, game_state_json } = session;
 
-    const gameDataPvP = {
-        type: GAME_IDS.COINFLIP_PVP, gameId: pvpGameId, chatId, betAmount,
-        p1: { userId: initiatorId, mentionHTML: initiatorMentionHTML, userObj: initiatorUserObj },
-        p2: { userId: joinerId, mentionHTML: joinerMentionHTML, userObj: joinerUserObjFull },
-        callerId: callerId,
-        callerChoice: null, result: null,
-        status: 'pvp_waiting_caller_choice',
-        gameMessageId: null, lastInteractionTime: Date.now(),
-        callerChoiceTimeoutId: null,
-        _origin_key_for_limits: activeGameKeyForStorage 
-    };
-    activeGames.set(pvpGameId, gameDataPvP);
-    await updateGroupGameDetails(chatId, pvpGameId, activeGameKeyForStorage, betAmount);
-    console.log(`${logPrefix} Coinflip PvP game ${pvpGameId} started. Group lock using key ${activeGameKeyForStorage} updated.`);
+        const gameState = game_state_json || {};
+        const betAmount = BigInt(bet_amount_lamports);
+        const p1_id = String(session.initiator_id);
+        const p2_id = session.opponent_id ? String(session.opponent_id) : null;
 
-    await promptCoinflipPvPCaller(gameDataPvP, callerMentionHTML);
-}
+        let p1_payout = 0n;
+        let p2_payout = 0n;
+        const totalPot = betAmount * 2n;
+        const houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+        const isConclusive = (status !== 'completed_push' && status !== 'completed_cancelled');
 
-async function promptCoinflipPvPCaller(gameData, callerMentionHTML) {
-    const logPrefix = `[CF_PvP_PromptCaller_V2 GID:${gameData.gameId}]`;
-    const titleHTML = `✨⚔️ <b>Coinflip PvP: ${gameData.p1.mentionHTML} vs ${gameData.p2.mentionHTML}!</b> ⚔️✨`;
-    const betDisplayHTML_PvP = escapeHTML(await formatBalanceForDisplay(gameData.betAmount, 'USD'));
-    const messageTextHTML = `${titleHTML}\nWager: <b>${betDisplayHTML_PvP}</b> each.\n\n` +
-        `The virtual coin is launched high into the digital sky! 🌪️${COIN_EMOJI_DISPLAY}🌪️\n\n` +
-        `Fate has decreed that <b>${callerMentionHTML}</b> shall make the fateful call!\n` +
-        `What is your prediction: Heads or Tails? Click your destiny below! (You have ${ACTIVE_GAME_TURN_TIMEOUT_MS / 1000} seconds)`;
-    const keyboard = {
-        inline_keyboard: [[
-            { text: `${COIN_EMOJI_DISPLAY} Heads It Is!`, callback_data: `cf_pvp_call:${gameData.gameId}:${gameData.callerId}:${COINFLIP_CHOICE_HEADS}` },
-            { text: `${COIN_EMOJI_DISPLAY} Tails, No Fails!`, callback_data: `cf_pvp_call:${gameData.gameId}:${gameData.callerId}:${COINFLIP_CHOICE_TAILS}` }
-        ]]
-    };
-    const sentMessage = await safeSendMessage(gameData.chatId, messageTextHTML, { parse_mode: 'HTML', reply_markup: keyboard });
-
-    if (sentMessage?.message_id) {
-        const currentGameData = activeGames.get(gameData.gameId);
-        if (currentGameData && currentGameData.status === 'pvp_waiting_caller_choice') {
-            currentGameData.gameMessageId = String(sentMessage.message_id);
-            currentGameData.callerChoiceTimeoutId = setTimeout(() => {
-                handleCoinflipPvPCallTimeout(gameData.gameId);
-            }, ACTIVE_GAME_TURN_TIMEOUT_MS); 
-            activeGames.set(gameData.gameId, currentGameData);
-            console.log(`${logPrefix} Caller choice timeout started for game ${gameData.gameId}, caller ${gameData.callerId}.`);
+        if (status === 'completed_p1_win') {
+            p1_payout = totalPot - houseFee;
+        } else if (status === 'completed_p2_win' && p2_id) {
+            p2_payout = totalPot - houseFee;
+        } else if (status === 'completed_push' && p2_id) {
+            p1_payout = betAmount;
+            p2_payout = betAmount;
+        } else if (status === 'completed_cancelled' || status === 'completed_timeout') {
+            p1_payout = betAmount; // Refund initiator
+        } else if (status === 'completed_bot_win') {
+            // Player 1 lost to bot, payout is 0.
+        } else {
+             // This covers player win vs bot
+             if(p1_payout === 0n && p2_payout === 0n){
+                 p1_payout = totalPot - houseFee;
+             }
         }
-    } else {
-        console.error(`${logPrefix} Failed to send caller prompt message for ${gameData.gameId}. Attempting to end game with error.`);
-        const gameToEndOnError = activeGames.get(gameData.gameId);
-        if (gameToEndOnError) {
-            gameToEndOnError.status = 'game_over_error_ui_update';
-            if (gameToEndOnError.callerChoiceTimeoutId) clearTimeout(gameToEndOnError.callerChoiceTimeoutId);
-            activeGames.set(gameData.gameId, gameToEndOnError);
-            await finalizeCoinflipPvPGame(gameToEndOnError); 
+
+        const solPrice = await getSolUsdPrice();
+
+        const p1Update = await updateUserBalanceAndLedger(client, p1_id, p1_payout, `result_${session.game_type}`, { game_log_id: session.session_id }, `Result for Coinflip Game ${main_bot_game_id}`);
+        if (!p1Update.success) throw new Error(`P1 balance update failed for Coinflip game ${main_bot_game_id}`);
+        if(p1Update.notifications) allNotificationsToSend.push(...p1Update.notifications);
+
+        if (isConclusive) {
+            const p1Wagered = BigInt(gameState.initiatorTotalWagered || '0');
+            if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, p1_id, betAmount, main_bot_game_id);
+            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) {
+                const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1_id, p1Wagered, solPrice, chat_id);
+                allNotificationsToSend.push(...p1LevelNotifications);
+            }
+             if (typeof processWagerMilestoneBonus === 'function' && p1Wagered > 0n) await processWagerMilestoneBonus(client, p1_id, p1Wagered, solPrice);
         }
-    }
-}
 
-async function handleCoinflipPvPCallTimeout(gameId) {
-    const LOG_PREFIX_CF_PVP_TIMEOUT = `[CF_PvP_CallTimeout_V2 GID:${gameId}]`;
-    const gameData = activeGames.get(gameId);
-
-    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVP || gameData.status !== 'pvp_waiting_caller_choice') {
-        if (gameData && gameData.callerChoiceTimeoutId) clearTimeout(gameData.callerChoiceTimeoutId);
-        return;
-    }
-    console.log(`${LOG_PREFIX_CF_PVP_TIMEOUT} Caller ${gameData.callerId} timed out. Game ending by forfeit.`);
-
-    if (gameData.callerChoiceTimeoutId) clearTimeout(gameData.callerChoiceTimeoutId);
-    gameData.callerChoiceTimeoutId = null;
-
-    if (gameData.callerId === gameData.p1.userId) {
-        gameData.status = 'game_over_p1_timeout_forfeit';
-    } else {
-        gameData.status = 'game_over_p2_timeout_forfeit';
-    }
-    activeGames.set(gameId, gameData);
-    await finalizeCoinflipPvPGame(gameData); 
-}
-
-async function handleCoinflipPvPCallCallback(gameId, callerIdCheck, callChoice, userObj, originalMessageId, callbackQueryId) {
-    const userId = String(userObj.id || userObj.telegram_id);
-    const logPrefix = `[CF_PvPCallCB_V2 GID:${gameId} UID:${userId} Call:${callChoice}]`;
-    const gameData = activeGames.get(gameId);
-
-    if (!gameData || gameData.type !== GAME_IDS.COINFLIP_PVP || gameData.callerId !== userId || String(gameData.callerId) !== String(callerIdCheck) || gameData.status !== 'pvp_waiting_caller_choice') {
-        await bot.answerCallbackQuery(callbackQueryId, { text: "This Coinflip call is not for you or has expired.", show_alert: true }).catch(() => {});
-        return;
-    }
-
-    if (gameData.callerChoiceTimeoutId) clearTimeout(gameData.callerChoiceTimeoutId);
-    gameData.callerChoiceTimeoutId = null;
-
-    const callDisplay = callChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-    await bot.answerCallbackQuery(callbackQueryId, { text: `You've boldly called ${callDisplay}! The coin descends...` }).catch(() => {});
-
-    gameData.callerChoice = callChoice;
-    gameData.status = 'pvp_flipping';
-    activeGames.set(gameId, gameData);
-
-    const actualFlipOutcome = Math.random() < 0.5 ? COINFLIP_CHOICE_HEADS : COINFLIP_CHOICE_TAILS;
-    gameData.result = actualFlipOutcome;
-
-    const callerPlayerObj = gameData.callerId === gameData.p1.userId ? gameData.p1 : gameData.p2;
-    const titleFlippingHTML = `💥 ${COIN_EMOJI_DISPLAY} <b>The Decisive Flip! The Moment of Truth!</b> ${COIN_EMOJI_DISPLAY} 💥`;
-    let flippingMessageText = `${titleFlippingHTML}\n\n${callerPlayerObj.mentionHTML} made the call: <b>${escapeHTML(callDisplay)}</b>!\n` +
-        `The coin tumbles through the air, secrets held tight... and finally lands!\n\n`;
-
-    if (gameData.gameMessageId && bot) {
-        for (let i = 0; i < COIN_FLIP_ANIMATION_STEPS; i++) {
-            const frame = COIN_FLIP_ANIMATION_FRAMES[i % COIN_FLIP_ANIMATION_FRAMES.length];
-            try {
-                await bot.editMessageText(flippingMessageText + `<b>${frame}</b>`, { chat_id: gameData.chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: {} });
-            } catch (e) { if (!e.message?.includes("message is not modified")) console.warn(`${logPrefix} PvP Animation edit fail step ${i}`); break; }
-            await sleep(COIN_FLIP_ANIMATION_INTERVAL_MS);
+        if (p2_id && p2_payout > 0n) {
+            const p2Update = await updateUserBalanceAndLedger(client, p2_id, p2_payout, `result_${session.game_type}`, { game_log_id: session.session_id }, `Result for Coinflip Game ${main_bot_game_id}`);
+            if (!p2Update.success) throw new Error(`P2 balance update failed for Coinflip game ${main_bot_game_id}`);
+            if(p2Update.notifications) allNotificationsToSend.push(...p2Update.notifications);
+            
+            if (isConclusive) {
+                const p2Wagered = BigInt(gameState.opponentTotalWagered || '0');
+                if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, p2_id, betAmount, main_bot_game_id);
+                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) {
+                     const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2_id, p2Wagered, solPrice, chat_id);
+                     allNotificationsToSend.push(...p2LevelNotifications);
+                }
+                 if (typeof processWagerMilestoneBonus === 'function' && p2Wagered > 0n) await processWagerMilestoneBonus(client, p2_id, p2Wagered, solPrice);
+            }
         }
-    } else {
-        const tempAnimMsg = await safeSendMessage(gameData.chatId, flippingMessageText + "<i>The result is IN!</i>", { parse_mode: "HTML" });
-        await sleep(COIN_FLIP_ANIMATION_DURATION_MS);
-        if (tempAnimMsg?.message_id && bot) await bot.deleteMessage(gameData.chatId, tempAnimMsg.message_id).catch(() => {});
+
+        await client.query("UPDATE coinflip_sessions SET status = 'archived_finalized' WHERE session_id = $1", [sessionId]);
+        await client.query('COMMIT');
+
+        for (const notification of allNotificationsToSend) {
+            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
+        }
+
+        activeGames.delete(main_bot_game_id);
+        await updateGroupGameDetails(chat_id, { removeThisId: main_bot_game_id }, 'coinflip_delegated', null);
+        console.log(`${logPrefix} Successfully finalized and archived Coinflip session.`);
+
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error(`${logPrefix} CRITICAL error: ${e.message}`);
+        if (typeof notifyAdmin === 'function') await notifyAdmin(`CRITICAL: Failed to finalize Coinflip session ${sessionId}. Error: ${e.message}`);
+    } finally {
+        if (client) client.release();
     }
-
-    await finalizeCoinflipPvPGame(gameData);
 }
-
-// REPLACEMENT for finalizeCoinflipPvPGame in Part 5a, Section 3
-
-async function finalizeCoinflipPvPGame(gameData) {
-    const { gameId, chatId, betAmount, p1, p2, callerId, callerChoice, result, status: finalStatus, _origin_key_for_limits } = gameData;
-    const logPrefix = `[CF_PvP_Finalize_V7_FullFix GID:${gameId}]`;
-    const activeGameKeyToClear = _origin_key_for_limits || GAME_IDS.COINFLIP_PVP;
-    let allNotificationsToSend = [];
-
-    let solPrice;
-    try {
-        solPrice = await getSolUsdPrice();
-    } catch (priceError) {
-        console.error(`${logPrefix} CRITICAL: Could not get SOL price. Level-up/milestone checks will be skipped. Error: ${priceError.message}`);
-        solPrice = 0;
-    }
-
-    activeGames.delete(gameId);
-    await updateGroupGameDetails(chatId, { removeThisId: gameId }, activeGameKeyToClear, null);
-    console.log(`${logPrefix} Cleared active game lock for chat ${chatId} using key ${activeGameKeyToClear}.`);
-
-    let winnerObj, loserObj;
-    let p1Payout = 0n;
-    let p2Payout = 0n;
-    let houseFee = 0n;
-    let p1LedgerCode = '';
-    let p2LedgerCode = '';
-    let titleResultHTML = `🎊 ${COIN_EMOJI_DISPLAY} <b>Coinflip PvP - The Outcome is Revealed!</b> ${COIN_EMOJI_DISPLAY} 🎊`;
-    let resultDetailsHTML = "";
-    let gameOutcomeTextForLog = "";
-    let isConclusiveOutcome = false;
-
-    const p1MentionHTML = p1.mentionHTML || escapeHTML(getPlayerDisplayReference(p1.userObj));
-    const p2MentionHTML = p2.mentionHTML || escapeHTML(getPlayerDisplayReference(p2.userObj));
-    const betDisplayUSD_HTML_Final = escapeHTML(await formatBalanceForDisplay(betAmount, 'USD'));
-    const totalPotLamports = betAmount * 2n;
-
-    if (finalStatus === 'game_over_p1_timeout_forfeit') {
-        isConclusiveOutcome = true;
-        winnerObj = p2; loserObj = p1;
-        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
-        p2Payout = totalPotLamports - houseFee; 
-        p1Payout = 0n; 
-        p2LedgerCode = 'win_coinflip_pvp_opponent_timeout'; p1LedgerCode = 'loss_coinflip_pvp_self_forfeit';
-        titleResultHTML = `⏳🏆 <b>${p2MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
-        resultDetailsHTML = `${p1MentionHTML} (the caller) timed out making a choice.\n🥳 <b>${p2MentionHTML}</b> wins the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(p2Payout, 'USD'))}</b> (after a 1% house fee)!`;
-        gameOutcomeTextForLog = `P2 wins by P1 forfeit (timeout)`;
-    } else if (finalStatus === 'game_over_p2_timeout_forfeit') {
-        isConclusiveOutcome = true;
-        winnerObj = p1; loserObj = p2; 
-        houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
-        p1Payout = totalPotLamports - houseFee;
-        p2Payout = 0n; 
-        p1LedgerCode = 'win_coinflip_pvp_opponent_timeout'; p2LedgerCode = 'loss_coinflip_pvp_self_timeout';
-        titleResultHTML = `⏳🏆 <b>${p1MentionHTML} Wins by Forfeit!</b> 🏆⏳`;
-        resultDetailsHTML = `${p2MentionHTML} (the caller) timed out making a choice.\n🥳 <b>${p1MentionHTML}</b> wins the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(p1Payout, 'USD'))}</b> (after a 1% house fee)!`;
-        gameOutcomeTextForLog = `P1 wins by P2 forfeit (timeout)`;
-    } else if (finalStatus === 'game_over_error_ui_update' || finalStatus === 'game_over_error_timeout_logic') {
-        isConclusiveOutcome = false;
-        p1Payout = betAmount; p2Payout = betAmount; 
-        p1LedgerCode = 'refund_coinflip_pvp_error'; p2LedgerCode = 'refund_coinflip_pvp_error';
-        titleResultHTML = `⚙️ <b>Coinflip PvP - Game Error</b> ⚙️`;
-        resultDetailsHTML = `An unexpected error occurred. Bets of <b>${betDisplayUSD_HTML_Final}</b> each are being refunded.`;
-        winnerObj = null; loserObj = null; 
-        gameOutcomeTextForLog = `Error - bets refunded`;
-    } else { 
-        const callerWon = callerChoice === result;
-        winnerObj = callerWon ? (callerId === p1.userId ? p1 : p2) : (callerId === p1.userId ? p2 : p1);
-        loserObj = callerWon ? (callerId === p1.userId ? p2 : p1) : (callerId === p1.userId ? p1 : p2);
-        
-        if (winnerObj.userId === p1.userId) {
-            isConclusiveOutcome = true;
-            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
-            p1Payout = totalPotLamports - houseFee;
-            p2Payout = 0n;
-            p1LedgerCode = `win_coinflip_pvp_result`; p2LedgerCode = `loss_coinflip_pvp_result`;
-            gameOutcomeTextForLog = `P1 wins (Called: ${callerChoice}, Result: ${result})`;
-        } else {
-            isConclusiveOutcome = true;
-            houseFee = BigInt(Math.floor(Number(totalPotLamports) * HOUSE_FEE_PERCENT));
-            p2Payout = totalPotLamports - houseFee;
-            p1Payout = 0n;
-            p2LedgerCode = `win_coinflip_pvp_result`; p1LedgerCode = `loss_coinflip_pvp_result`;
-            gameOutcomeTextForLog = `P2 wins (Called: ${callerChoice}, Result: ${result})`;
-        }
-
-        const callerActualMentionHTML = (callerId === p1.userId ? p1MentionHTML : p2MentionHTML);
-        const resultDisplay = result === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-        const callDisplay = callerChoice === COINFLIP_CHOICE_HEADS ? "Heads" : "Tails";
-        const winnerMentionToUse = winnerObj.userId === p1.userId ? p1MentionHTML : p2MentionHTML;
-        const loserMentionToUse = loserObj.userId === p1.userId ? p1MentionHTML : p2MentionHTML;
-
-        const winnerPayout = winnerObj.userId === p1.userId ? p1Payout : p2Payout;
-        resultDetailsHTML = `The epic duel between ${p1MentionHTML} and ${p2MentionHTML} (wager: <b>${betDisplayUSD_HTML_Final}</b> each) has concluded!\n\n` +
-            `<b>${callerActualMentionHTML}</b> was chosen to make the call and predicted: <b>${escapeHTML(callDisplay)}</b>!\n` +
-            `The coin majestically landed on... ✨ <b>${COIN_EMOJI_DISPLAY} ${escapeHTML(resultDisplay)}!</b> ✨\n\n` +
-            `And thus, the champion of this fateful flip is... 🥳🏆 <b>${winnerMentionToUse}</b>! You seize the glorious pot of <b>${escapeHTML(await formatBalanceForDisplay(winnerPayout, 'USD'))}</b> (after a 1% house fee)!\n\n` +
-            `Commiserations, ${loserMentionToUse}! Better luck on the next toss.`;
-    }
-    
-    let client = null;
-    try {
-        client = await pool.connect(); await client.query('BEGIN');
-        let p1BalanceUpdate, p2BalanceUpdate;
-
-        const actualGameLogId = await logGameResultToGamesTable(
-            client, activeGameKeyToClear, chatId, p1.userId, [p1.userId, p2.userId], betAmount, gameOutcomeTextForLog, 0n, houseFee
-        );
-        
-        // --- DEADLOCK PREVENTION: Sort players by ID before locking/updating ---
-        const [playerA, playerB] = [p1, p2].sort((a, b) => String(a.userId).localeCompare(String(b.userId)));
-        console.log(`${logPrefix} Locking order established. Player A: ${playerA.userId}, Player B: ${playerB.userId}`);
-
-        const payoutA = (playerA.userId === p1.userId) ? p1Payout : p2Payout;
-        const payoutB = (playerB.userId === p1.userId) ? p1Payout : p2Payout;
-        const ledgerCodeA = (playerA.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-        const ledgerCodeB = (playerB.userId === p1.userId) ? p1LedgerCode : p2LedgerCode;
-
-        // Process Player A first
-        const updateA = await updateUserBalanceAndLedger(client, playerA.userId, payoutA, ledgerCodeA, 
-            { game_log_id: actualGameLogId, opponent_id_custom_field: playerB.userId }, 
-            `PvP Coinflip vs ${playerB.displayName || playerB.userId}. Caller: ${callerId === playerA.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice || 'N/A (Timeout)'}, Result: ${result || 'N/A (Timeout)'}`, 
-            solPrice
-        );
-        if (!updateA.success) throw new Error(`Player A (${playerA.userId}) balance update failed: ${updateA.error}`);
-        if(updateA.notifications) allNotificationsToSend.push(...updateA.notifications);
-
-        // Process Player B second
-        const updateB = await updateUserBalanceAndLedger(client, playerB.userId, payoutB, ledgerCodeB, 
-            { game_log_id: actualGameLogId, opponent_id_custom_field: playerA.userId }, 
-            `PvP Coinflip vs ${playerA.displayName || playerA.userId}. Caller: ${callerId === playerB.userId ? 'Self' : 'Opponent'}, Call: ${callerChoice || 'N/A (Timeout)'}, Result: ${result || 'N/A (Timeout)'}`, 
-            solPrice
-        );
-        if (!updateB.success && updateB.errorCode !== 'INSUFFICIENT_FUNDS') {
-            console.warn(`${logPrefix} Non-critical error updating Player B (${playerB.userId}) ledger: ${updateB.error}`);
-        } else if (!updateB.success) {
-            throw new Error(`Player B (${playerB.userId}) balance update failed: ${updateB.error}`);
-        }
-        if(updateB.notifications) allNotificationsToSend.push(...updateB.notifications);
-        
-        // Map results back to original p1 and p2 for subsequent logic
-        p1BalanceUpdate = (p1.userId === playerA.userId) ? updateA : updateB;
-        p2BalanceUpdate = (p2.userId === playerA.userId) ? updateA : updateB;
-
-        if (isConclusiveOutcome) {
-            // --- ADDED: Check initial bet bonus for both players ---
-            if (typeof processQualifyingBetAndInitialBonus === 'function') {
-                await processQualifyingBetAndInitialBonus(client, p1.userId, betAmount, gameId);
-                await processQualifyingBetAndInitialBonus(client, p2.userId, betAmount, gameId);
-            }
-
-            // --- Level up and milestone bonus checks ---
-            if (p1BalanceUpdate.success && p1BalanceUpdate.newTotalWageredLamports !== undefined) {
-                const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1.userId, p1BalanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                allNotificationsToSend.push(...p1LevelNotifications);
-                const p1MilestoneResult = await processWagerMilestoneBonus(client, p1.userId, p1BalanceUpdate.newTotalWageredLamports, solPrice);
-                if (!p1MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P1: ${p1MilestoneResult.error}`);
-            }
-            if (p2BalanceUpdate.success && p2BalanceUpdate.newTotalWageredLamports !== undefined) {
-                const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2.userId, p2BalanceUpdate.newTotalWageredLamports, solPrice, chatId);
-                allNotificationsToSend.push(...p2LevelNotifications);
-                const p2MilestoneResult = await processWagerMilestoneBonus(client, p2.userId, p2BalanceUpdate.newTotalWageredLamports, solPrice);
-                if (!p2MilestoneResult.success) console.warn(`${logPrefix} Failed to process milestone bonus for P2: ${p2MilestoneResult.error}`);
-            }
-        }
-
-        await client.query('COMMIT');
-    } catch (e) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        console.error(`${logPrefix} CRITICAL DB error during PvP Coinflip payout: ${e.message}`);
-        resultDetailsHTML += `\n\n⚠️ Critical error settling wagers. Admin notified.`;
-        if (typeof notifyAdmin === 'function') notifyAdmin(`🚨 CRITICAL Coinflip PvP Payout Failure 🚨\nGame ID: <code>${escapeHTML(gameId)}</code>\nError: ${escapeHTML(e.message)}. Manual check required.`, { parse_mode: 'HTML' });
-    } finally { if (client) client.release(); }
-    
-    for (const notification of allNotificationsToSend) {
-        if (notification.to === ADMIN_USER_ID && typeof notifyAdmin === 'function') {
-            await notifyAdmin(notification.text, notification.options).catch(err => console.error(`Failed to send admin notification: ${err.message}`));
-        } else {
-            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
-        }
-    }
-
-    const resultMessageHTML = `${titleResultHTML}\n\n${resultDetailsHTML}`;
-    const postGameKeyboard = createPostGameKeyboard(GAME_IDS.COINFLIP_PVP, betAmount);
-
-    if (gameData.gameMessageId && bot) {
-        await bot.editMessageText(resultMessageHTML, { chat_id: chatId, message_id: Number(gameData.gameMessageId), parse_mode: 'HTML', reply_markup: postGameKeyboard }).catch(async (e) => {
-            if (!e.message?.includes("message is not modified")) await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-        });
-    } else {
-        await safeSendMessage(chatId, resultMessageHTML, { parse_mode: 'HTML', reply_markup: postGameKeyboard });
-    }
-}
-
 
 // --- Start of REVISED Rock Paper Scissors (RPS) Game Logic & Handlers (Unified Offer, HTML, New Mechanics, Granular Limits) ---
 // (RPS_CHOICES, RPS_EMOJIS, RPS_RULES are assumed defined from Part 4)
@@ -15359,7 +14558,7 @@ const parseBetAmount = async (arg, commandInitiationChatId, commandInitiationCha
     }
 };
 
-// --- Definitions of Callback Forwarding Helper Functions (Play Again cases REMOVED) ---
+// THIS IS THE NEW CODE TO USE INSTEAD
 async function forwardCoinflipRPSCallback(action, params, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId) {
     const LOG_PREFIX_CF_RPS_CB_FWD = `[CF_RPS_CB_Fwd UID:${userObject.telegram_id || userObject.id} Act:${action}]`;
     const offerIdOrGameId = params[0];
@@ -15367,34 +14566,7 @@ async function forwardCoinflipRPSCallback(action, params, userObject, originalMe
     const actualChoice = params[2];
 
     switch (action) {
-        case 'cf_accept_bot':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_bot.`); return; }
-            if (typeof handleCoinflipAcceptBotGameCallback === 'function') await handleCoinflipAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipAcceptBotGameCallback`);
-            break;
-        case 'cf_accept_pvp':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_accept_pvp.`); return; }
-            if (typeof handleCoinflipAcceptPvPChallengeCallback === 'function') await handleCoinflipAcceptPvPChallengeCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipAcceptPvPChallengeCallback`);
-            break;
-        case 'cf_cancel_offer':
-            if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for cf_cancel_offer.`); return; }
-            if (typeof handleCoinflipCancelOfferCallback === 'function') await handleCoinflipCancelOfferCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipCancelOfferCallback`);
-            break;
-        case 'cf_pvb_choice':
-            const playerChoiceCF = choiceOrPlayerId;
-            if (!offerIdOrGameId || !playerChoiceCF) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing gameId or choice for cf_pvb_choice.`); return; }
-            if (typeof handleCoinflipPvBChoiceCallback === 'function') await handleCoinflipPvBChoiceCallback(offerIdOrGameId, playerChoiceCF, userObject, originalMessageId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvBChoiceCallback`);
-            break;
-        case 'cf_pvp_call':
-            const callerIdCheckCF = choiceOrPlayerId;
-            const callChoiceCF = actualChoice;
-            if (!offerIdOrGameId || !callerIdCheckCF || !callChoiceCF) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing params for cf_pvp_call.`); return; }
-            if (typeof handleCoinflipPvPCallCallback === 'function') await handleCoinflipPvPCallCallback(offerIdOrGameId, callerIdCheckCF, callChoiceCF, userObject, originalMessageId, callbackQueryId);
-            else console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing handler: handleCoinflipPvPCallCallback`);
-            break;
+        // ALL 'cf_' CASES HAVE BEEN REMOVED
         case 'rps_accept_bot':
             if (!offerIdOrGameId) { console.error(`${LOG_PREFIX_CF_RPS_CB_FWD} Missing offerId for rps_accept_bot.`); return; }
             if (typeof handleRPSAcceptBotGameCallback === 'function') await handleRPSAcceptBotGameCallback(offerIdOrGameId, userObject, originalMessageId, originalChatId, originalChatType, callbackQueryId);
@@ -16488,11 +15660,39 @@ async function main() {
 } else {
     console.warn("⚠️ Instant Notification Listener (setupNotificationListener) function not defined.");
 }
-        if (typeof setupRouletteNotificationListener === 'function') {
-        setupRouletteNotificationListener(); 
-    } else {
-        console.warn("⚠️ Roulette/Interactive Notification Listener function not defined.");
-    }
+        async function setupGameCompletionListener() {
+    console.log("⚙️ [GameListener] Setting up unified game completion listener...");
+    const listeningClient = await pool.connect();
+
+    listeningClient.on('error', (err) => {
+        console.error('[GameListener] Dedicated client error:', err);
+        // Optional: Implement a mechanism to re-establish the listener on error
+    });
+
+    listeningClient.on('notification', (msg) => {
+        if (msg.channel === 'game_completed') {
+            try {
+                const payload = JSON.parse(msg.payload);
+                if (payload.session_id && payload.table_name) {
+                    console.log(`[GameListener] Received completion for session ${payload.session_id} from table ${payload.table_name}`);
+                    if (payload.table_name === 'roulette_sessions') {
+                        finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette: ${e.message}`));
+                    } else if (payload.table_name === 'interactive_game_sessions') {
+                        finalizeInteractiveGame(payload.session_id).catch(e => console.error(`Error finalizing interactive game: ${e.message}`));
+                    } else if (payload.table_name === 'coinflip_sessions') {
+                        finalizeCoinflipGame(payload.session_id).catch(e => console.error(`Error finalizing coinflip game: ${e.message}`));
+                    }
+                    // We will add more 'else if' blocks here for other games later.
+                }
+            } catch (e) {
+                console.error('[GameListener] Error processing notification payload:', e);
+            }
+        }
+    });
+
+    await listeningClient.query('LISTEN game_completed');
+    console.log("✅ [GameListener] Now listening for 'game_completed' notifications.");
+}
 
         if (typeof startJackpotSessionPolling === 'function') {
             startJackpotSessionPolling(); // Call the new function to start the DE Jackpot poller
