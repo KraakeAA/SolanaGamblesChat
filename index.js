@@ -3359,7 +3359,7 @@ async function handleStartCoinflipUnifiedOfferCommand(msg, betAmountLamports, ta
 // --- Coinflip Offer Callback Handlers ---
 // Add this new function to index.js
 async function finalizeCoinflipGame(sessionId) {
-    const logPrefix = `[FinalizeCoinflip_V1 SID:${sessionId}]`;
+    const logPrefix = `[FinalizeCoinflip_V2_FullBonus SID:${sessionId}]`;
     let client = null;
     let allNotificationsToSend = [];
 
@@ -3369,71 +3369,80 @@ async function finalizeCoinflipGame(sessionId) {
 
         const sessionRes = await client.query("SELECT * FROM coinflip_sessions WHERE session_id = $1 AND status LIKE 'completed_%' FOR UPDATE", [sessionId]);
         if (sessionRes.rowCount === 0) {
+            console.warn(`${logPrefix} Coinflip session not found or not in a completed state.`);
             await client.query('ROLLBACK');
             return;
         }
 
         const session = sessionRes.rows[0];
         const { main_bot_game_id, chat_id, bet_amount_lamports, status, game_state_json } = session;
-
+        
         const gameState = game_state_json || {};
         const betAmount = BigInt(bet_amount_lamports);
         const p1_id = String(session.initiator_id);
         const p2_id = session.opponent_id ? String(session.opponent_id) : null;
+        const isPvP = !!p2_id;
 
         let p1_payout = 0n;
         let p2_payout = 0n;
-        const totalPot = betAmount * 2n;
-        const houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
-        const isConclusive = (status !== 'completed_push' && status !== 'completed_cancelled');
+        let houseFee = 0n;
+        const isConclusive = !(status === 'completed_push' || status === 'completed_cancelled' || status === 'completed_timeout');
+        
+        if (isConclusive) {
+            const totalPot = betAmount * 2n;
+            houseFee = BigInt(Math.floor(Number(totalPot) * HOUSE_FEE_PERCENT));
+        }
 
         if (status === 'completed_p1_win') {
-            p1_payout = totalPot - houseFee;
+            p1_payout = (betAmount * 2n) - houseFee;
         } else if (status === 'completed_p2_win' && p2_id) {
-            p2_payout = totalPot - houseFee;
+            p2_payout = (betAmount * 2n) - houseFee;
         } else if (status === 'completed_push' && p2_id) {
             p1_payout = betAmount;
             p2_payout = betAmount;
         } else if (status === 'completed_cancelled' || status === 'completed_timeout') {
-            p1_payout = betAmount; // Refund initiator
+            p1_payout = betAmount;
         } else if (status === 'completed_bot_win') {
-            // Player 1 lost to bot, payout is 0.
-        } else {
-             // This covers player win vs bot
-             if(p1_payout === 0n && p2_payout === 0n){
-                 p1_payout = totalPot - houseFee;
-             }
+             p1_payout = 0n;
         }
 
         const solPrice = await getSolUsdPrice();
-
+        
+        // --- Process Player 1 (Initiator) ---
         const p1Update = await updateUserBalanceAndLedger(client, p1_id, p1_payout, `result_${session.game_type}`, { game_log_id: session.session_id }, `Result for Coinflip Game ${main_bot_game_id}`);
         if (!p1Update.success) throw new Error(`P1 balance update failed for Coinflip game ${main_bot_game_id}`);
         if(p1Update.notifications) allNotificationsToSend.push(...p1Update.notifications);
 
         if (isConclusive) {
             const p1Wagered = BigInt(gameState.initiatorTotalWagered || '0');
-            if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, p1_id, betAmount, main_bot_game_id);
-            if (typeof checkAndUpdateUserLevel === 'function' && p1Wagered > 0n) {
-                const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1_id, p1Wagered, solPrice, chat_id);
-                allNotificationsToSend.push(...p1LevelNotifications);
+            if(p1Wagered <= 0n) console.warn(`${logPrefix} P1 wagered amount not found in game state.`);
+            else {
+                if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, p1_id, betAmount, main_bot_game_id);
+                if (typeof checkAndUpdateUserLevel === 'function') {
+                    const p1LevelNotifications = await checkAndUpdateUserLevel(client, p1_id, p1Wagered, solPrice, chat_id);
+                    allNotificationsToSend.push(...p1LevelNotifications);
+                }
+                if (typeof processWagerMilestoneBonus === 'function') await processWagerMilestoneBonus(client, p1_id, p1Wagered, solPrice);
             }
-             if (typeof processWagerMilestoneBonus === 'function' && p1Wagered > 0n) await processWagerMilestoneBonus(client, p1_id, p1Wagered, solPrice);
         }
 
-        if (p2_id && p2_payout > 0n) {
+        // --- Process Player 2 (Opponent) if PvP ---
+        if (isPvP && p2_id) {
             const p2Update = await updateUserBalanceAndLedger(client, p2_id, p2_payout, `result_${session.game_type}`, { game_log_id: session.session_id }, `Result for Coinflip Game ${main_bot_game_id}`);
             if (!p2Update.success) throw new Error(`P2 balance update failed for Coinflip game ${main_bot_game_id}`);
             if(p2Update.notifications) allNotificationsToSend.push(...p2Update.notifications);
             
             if (isConclusive) {
                 const p2Wagered = BigInt(gameState.opponentTotalWagered || '0');
-                if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, p2_id, betAmount, main_bot_game_id);
-                if (typeof checkAndUpdateUserLevel === 'function' && p2Wagered > 0n) {
-                     const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2_id, p2Wagered, solPrice, chat_id);
-                     allNotificationsToSend.push(...p2LevelNotifications);
+                if(p2Wagered <= 0n) console.warn(`${logPrefix} P2 wagered amount not found in game state.`);
+                else {
+                    if (typeof processQualifyingBetAndInitialBonus === 'function') await processQualifyingBetAndInitialBonus(client, p2_id, betAmount, main_bot_game_id);
+                    if (typeof checkAndUpdateUserLevel === 'function') {
+                         const p2LevelNotifications = await checkAndUpdateUserLevel(client, p2_id, p2Wagered, solPrice, chat_id);
+                         allNotificationsToSend.push(...p2LevelNotifications);
+                    }
+                    if (typeof processWagerMilestoneBonus === 'function') await processWagerMilestoneBonus(client, p2_id, p2Wagered, solPrice);
                 }
-                 if (typeof processWagerMilestoneBonus === 'function' && p2Wagered > 0n) await processWagerMilestoneBonus(client, p2_id, p2Wagered, solPrice);
             }
         }
 
@@ -12216,40 +12225,36 @@ async function setupNotificationListener() {
     console.log("✅ [NotificationListener] Now listening for 'game_completed' notifications.");
 }
 
-// Add this function in Part 5e (Background Task Initializers)
-
-/**
- * Connects a dedicated client to the database to listen for ROULETTE game completion.
- */
-async function setupRouletteNotificationListener() {
-    console.log("⚙️ [RouletteListener] Setting up ROULETTE game completion listener...");
+async function setupGameCompletionListener() {
+    console.log("⚙️ [GameListener] Setting up unified game completion listener...");
     const listeningClient = await pool.connect();
     
     listeningClient.on('error', (err) => {
-        console.error('[RouletteListener] Dedicated client error:', err);
-        setTimeout(setupRouletteNotificationListener, 5000);
+        console.error('[GameListener] Dedicated client error:', err);
     });
 
     listeningClient.on('notification', (msg) => {
-        // This listener now handles both interactive games and roulette
-        if (msg.channel === 'game_completed') { 
+        if (msg.channel === 'game_completed') {
             try {
                 const payload = JSON.parse(msg.payload);
                 if (payload.session_id && payload.table_name) {
+                    console.log(`[GameListener] Received completion for session ${payload.session_id} from table ${payload.table_name}`);
                     if (payload.table_name === 'roulette_sessions') {
-                        finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette game from notification: ${e.message}`));
+                        finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette: ${e.message}`));
                     } else if (payload.table_name === 'interactive_game_sessions') {
-                        finalizeInteractiveGame(payload.session_id).catch(e => console.error(`Error finalizing interactive game from notification: ${e.message}`));
+                        finalizeInteractiveGame(payload.session_id).catch(e => console.error(`Error finalizing interactive game: ${e.message}`));
+                    } else if (payload.table_name === 'coinflip_sessions') {
+                        finalizeCoinflipGame(payload.session_id).catch(e => console.error(`Error finalizing coinflip game: ${e.message}`));
                     }
                 }
             } catch (e) {
-                console.error('[NotificationListener] Error processing notification payload:', e);
+                console.error('[GameListener] Error processing notification payload:', e);
             }
         }
     });
 
     await listeningClient.query('LISTEN game_completed');
-    console.log("✅ [RouletteListener] Now listening for ALL 'game_completed' notifications.");
+    console.log("✅ [GameListener] Now listening for 'game_completed' notifications.");
 }
 
 // --- End of 5e Background Task Initializers ---
