@@ -770,6 +770,7 @@ const processedDepositTxSignatures = new Set();
 const userStateCache = new Map();
 const SOL_PRICE_CACHE_KEY = 'sol_usd_price_cache';
 const solPriceCache = new Map();
+const processingSessions = new Set();
 
 // For MainBot's Dice Escalator Jackpot Session Poller
 let jackpotSessionPollIntervalId = null;
@@ -12074,11 +12075,12 @@ function startJackpotSessionPolling() {
 
 // in index.js (Part 5e) - REVISED finalizeInteractiveGame function
 
+// in index.js (Part 5e) - REPLACEMENT for finalizeInteractiveGame function
 async function finalizeInteractiveGame(sessionId) {
-    const logPrefix = `[FinalizeInteractive_V12_NotifyFix SID:${sessionId}]`;
+    const logPrefix = `[FinalizeInteractive_V13_LockFix SID:${sessionId}]`;
     let finalizationClient = null;
     let session;
-    let allNotificationsToSend = []; // Array to hold all notifications
+    let allNotificationsToSend = [];
 
     try {
         finalizationClient = await pool.connect();
@@ -12121,7 +12123,7 @@ async function finalizeInteractiveGame(sessionId) {
         }
 
         const solPrice = await getSolUsdPrice();
-        const isConclusive = !(finalStatus === 'completed_push' || finalStatus === 'error' || finalStatus.includes('timeout'));
+        const isConclusive = !(finalStatus === 'completed_push' || finalStatus.startsWith('error') || finalStatus.includes('timeout') || finalStatus.includes('cancelled'));
         
         // Update balance for Player 1
         const player1Update = await updateUserBalanceAndLedger(finalizationClient, p1_id, p1_payout, `result_${session.game_type}`, { game_id_custom_field: session.main_bot_game_id });
@@ -12161,7 +12163,7 @@ async function finalizeInteractiveGame(sessionId) {
         
         // --- Send all captured notifications AFTER the transaction is committed ---
         for (const notification of allNotificationsToSend) {
-             await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
+            await safeSendMessage(notification.to, notification.text, notification.options).catch(err => console.error(`Failed to send game-related notification to ${notification.to}: ${err.message}`));
         }
 
         // Result Messaging
@@ -12192,37 +12194,12 @@ async function finalizeInteractiveGame(sessionId) {
         console.error(`${logPrefix} CRITICAL error: ${e.message}`);
         if (session) await notifyAdmin(`🚨 CRITICAL Error Finalizing Game Session 🚨\nSessionID: \`${session.session_id}\`\nUser: \`${session.user_id}\`\nError: \`${escapeHTML(e.message)}\``);
     } finally {
+        // THIS IS THE CRUCIAL ADDITION: Release the lock
+        if (sessionId) {
+            processingSessions.delete(sessionId);
+        }
         if (finalizationClient) finalizationClient.release();
     }
-}
-/**
- * Connects a dedicated client to the database to listen for game completion notifications.
- */
-async function setupNotificationListener() {
-    console.log("⚙️ [NotificationListener] Setting up instant game completion listener...");
-    const listeningClient = await pool.connect();
-    
-    listeningClient.on('error', (err) => {
-        console.error('[NotificationListener] Dedicated client error:', err);
-        // Attempt to re-establish the listener
-        setTimeout(setupNotificationListener, 5000);
-    });
-
-    listeningClient.on('notification', (msg) => {
-        console.log(`[NotificationListener] ⚡ Received notification on channel: ${msg.channel}`);
-        try {
-            const payload = JSON.parse(msg.payload);
-            if (payload.session_id) {
-                // Instantly call the finalizer instead of waiting for a poll
-                finalizeInteractiveGame(payload.session_id);
-            }
-        } catch (e) {
-            console.error('[NotificationListener] Error processing notification payload:', e);
-        }
-    });
-
-    await listeningClient.query('LISTEN game_completed');
-    console.log("✅ [NotificationListener] Now listening for 'game_completed' notifications.");
 }
 
 async function setupGameCompletionListener() {
@@ -12237,14 +12214,25 @@ async function setupGameCompletionListener() {
         if (msg.channel === 'game_completed') {
             try {
                 const payload = JSON.parse(msg.payload);
-                if (payload.session_id && payload.table_name) {
-                    console.log(`[GameListener] Received completion for session ${payload.session_id} from table ${payload.table_name}`);
+                const sessionId = payload.session_id;
+
+                if (sessionId && payload.table_name) {
+                    // --- LOCKING LOGIC ---
+                    if (processingSessions.has(sessionId)) {
+                        console.log(`[GameListener] Ignoring duplicate notification for already processing session ID: ${sessionId}`);
+                        return; // Ignore if already being processed
+                    }
+                    processingSessions.add(sessionId);
+                    // --- END LOCKING LOGIC ---
+
+                    console.log(`[GameListener] Received completion for session ${sessionId} from table ${payload.table_name}`);
+                    
                     if (payload.table_name === 'roulette_sessions') {
-                        finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette: ${e.message}`));
+                        finalizeRouletteGame(sessionId).catch(e => console.error(`Error finalizing roulette: ${e.message}`));
                     } else if (payload.table_name === 'interactive_game_sessions') {
-                        finalizeInteractiveGame(payload.session_id).catch(e => console.error(`Error finalizing interactive game: ${e.message}`));
+                        finalizeInteractiveGame(sessionId).catch(e => console.error(`Error finalizing interactive game: ${e.message}`));
                     } else if (payload.table_name === 'coinflip_sessions') {
-                        finalizeCoinflipGame(payload.session_id).catch(e => console.error(`Error finalizing coinflip game: ${e.message}`));
+                        finalizeCoinflipGame(sessionId).catch(e => console.error(`Error finalizing coinflip game: ${e.message}`));
                     }
                 }
             } catch (e) {
@@ -15511,19 +15499,15 @@ async function main() {
         await initializeDatabaseSchema();
         console.log("✅ Database schema initialized successfully.");
 
-        // --- NEW: Initialize User Levels Table from Config ---
         console.log("⚙️ Step 1b: Initializing User Levels from Config...");
         if (typeof initializeLevelsDB === 'function') {
-            await initializeLevelsDB(); // Call the function here
-            // The initializeLevelsDB function handles its own console logs for success/failure
+            await initializeLevelsDB();
         } else {
             console.warn("⚠️ initializeLevelsDB function not defined. User levels may not be populated from config.");
-            // You might want to notify admin here if this is critical
             if (typeof notifyAdmin === 'function') {
                 notifyAdmin("⚠️ ALERT: `initializeLevelsDB` function is missing. Level definitions from `LEVEL_CONFIG` cannot be populated into the database. Leveling system might not work correctly.", { parse_mode: 'MarkdownV2' });
             }
         }
-        // --- END OF NEW: Initialize User Levels Table ---
 
         console.log("⚙️ Step 2: Connecting to Telegram & Starting Bot...");
         if (!bot || typeof bot.getMe !== 'function') {
@@ -15551,7 +15535,7 @@ async function main() {
         console.log("✅ Telegram Bot is online and polling for messages (or webhook configured).");
         
         if (ADMIN_USER_ID && typeof safeSendMessage === 'function') {
-            const currentTime = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London' } || 'UTC'); // Fallback to UTC
+            const currentTime = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London' } || 'UTC');
             await safeSendMessage(ADMIN_USER_ID, `🚀 *${escapeMarkdownV2(BOT_NAME)} v${escapeMarkdownV2(BOT_VERSION)} Started Successfully* 🚀\nBot is online and operational\\. Current time: ${currentTime}`, {parse_mode: 'MarkdownV2'});
         }
 
@@ -15568,71 +15552,26 @@ async function main() {
         }
 
         console.log("⚙️ Step 4: Starting Background Payment Processes...");
-        if (typeof startDepositMonitoring === 'function') {
-            startDepositMonitoring(); 
-            // console.log("  ▶️ Deposit monitoring process initiated."); // Reduced log
+        if (typeof startDepositMonitoring === 'function') startDepositMonitoring();
+        else console.warn("⚠️ Deposit monitoring (startDepositMonitoring) function not defined.");
+
+        if (typeof startSweepingProcess === 'function') startSweepingProcess();
+        else console.warn("⚠️ Address sweeping (startSweepingProcess) function not defined.");
+
+        if (typeof startLitecoinDepositMonitoring === 'function') startLitecoinDepositMonitoring();
+        else console.warn("⚠️ startLitecoinDepositMonitoring function not defined.");
+
+        // --- THIS IS THE CORRECTED PART ---
+        // It now only calls our new, single, unified game listener.
+        if (typeof setupGameCompletionListener === 'function') {
+            setupGameCompletionListener();
         } else {
-            console.warn("⚠️ Deposit monitoring (startDepositMonitoring) function not defined.");
+            console.warn("⚠️ Unified Game Completion Listener (setupGameCompletionListener) function not defined.");
         }
+        // --- END OF CORRECTION ---
 
-        if (typeof startSweepingProcess === 'function') {
-            startSweepingProcess(); 
-            // console.log("  ▶️ Address sweeping process initiated."); // Reduced log
-        } else {
-            console.warn("⚠️ Address sweeping (startSweepingProcess) function not defined.");
-        }
-
-        if (typeof startLitecoinDepositMonitoring === 'function') {
-        startLitecoinDepositMonitoring();
-    } else {
-        console.warn("⚠️ startLitecoinDepositMonitoring function not defined.");
-    }
-
-        if (typeof setupNotificationListener === 'function') {
-    setupNotificationListener();
-} else {
-    console.warn("⚠️ Instant Notification Listener (setupNotificationListener) function not defined.");
-}
-        async function setupGameCompletionListener() {
-    console.log("⚙️ [GameListener] Setting up unified game completion listener...");
-    const listeningClient = await pool.connect();
-
-    listeningClient.on('error', (err) => {
-        console.error('[GameListener] Dedicated client error:', err);
-        // Optional: Implement a mechanism to re-establish the listener on error
-    });
-
-    listeningClient.on('notification', (msg) => {
-        if (msg.channel === 'game_completed') {
-            try {
-                const payload = JSON.parse(msg.payload);
-                if (payload.session_id && payload.table_name) {
-                    console.log(`[GameListener] Received completion for session ${payload.session_id} from table ${payload.table_name}`);
-                    if (payload.table_name === 'roulette_sessions') {
-                        finalizeRouletteGame(payload.session_id).catch(e => console.error(`Error finalizing roulette: ${e.message}`));
-                    } else if (payload.table_name === 'interactive_game_sessions') {
-                        finalizeInteractiveGame(payload.session_id).catch(e => console.error(`Error finalizing interactive game: ${e.message}`));
-                    } else if (payload.table_name === 'coinflip_sessions') {
-                        finalizeCoinflipGame(payload.session_id).catch(e => console.error(`Error finalizing coinflip game: ${e.message}`));
-                    }
-                    // We will add more 'else if' blocks here for other games later.
-                }
-            } catch (e) {
-                console.error('[GameListener] Error processing notification payload:', e);
-            }
-        }
-    });
-
-    await listeningClient.query('LISTEN game_completed');
-    console.log("✅ [GameListener] Now listening for 'game_completed' notifications.");
-}
-
-        if (typeof startJackpotSessionPolling === 'function') {
-            startJackpotSessionPolling(); // Call the new function to start the DE Jackpot poller
-            // console.log("   ▶️ Dice Escalator Jackpot session poller initiated."); // Optional log
-        } else {
-            console.warn("⚠️ Dice Escalator Jackpot session polling (startJackpotSessionPolling) function not defined.");
-        }
+        if (typeof startJackpotSessionPolling === 'function') startJackpotSessionPolling();
+        else console.warn("⚠️ Dice Escalator Jackpot session polling (startJackpotSessionPolling) function not defined.");
         
         if (process.env.ENABLE_PAYMENT_WEBHOOKS === 'true') {
             console.log("⚙️ Step 5: Setting up and starting Payment Webhook Server...");
@@ -15642,27 +15581,25 @@ async function main() {
                     setupPaymentWebhook(app); 
                     
                     expressServerInstance = app.listen(port, () => {
-                        console.log(`  ✅ Payment webhook server listening on port ${port} at path ${process.env.PAYMENT_WEBHOOK_PATH || '/webhook/solana-payments'}`);
+                        console.log(`  ✅ Payment webhook server listening on port ${port} at path ${process.env.PAYMENT_WEBHOOK_PATH || '/webhook/solana-payments'}`);
                     });
 
                     expressServerInstance.on('error', (serverErr) => {
-                        console.error(`  ❌ Express server error: ${serverErr.message}`, serverErr);
+                        console.error(`  ❌ Express server error: ${serverErr.message}`, serverErr);
                         if (serverErr.code === 'EADDRINUSE') {
-                            console.error(`  🚨 FATAL: Port ${port} is already in use for webhooks. Webhook server cannot start.`);
+                            console.error(`  🚨 FATAL: Port ${port} is already in use for webhooks. Webhook server cannot start.`);
                             if(typeof notifyAdmin === 'function') notifyAdmin(`🚨 Webhook Server Failed to Start 🚨\nPort \`${port}\` is already in use\\. Payment webhooks will not function\\.`, {parse_mode:'MarkdownV2'});
                         }
                     });
 
                 } catch (webhookError) {
-                    console.error(`  ❌ Failed to set up or start payment webhook server: ${webhookError.message}`);
+                    console.error(`  ❌ Failed to set up or start payment webhook server: ${webhookError.message}`);
                 }
             } else {
-                console.warn("  ⚠️ Payment webhooks enabled, but setupPaymentWebhook function or Express app instance not available.");
+                console.warn("  ⚠️ Payment webhooks enabled, but setupPaymentWebhook function or Express app instance not available.");
             }
-        } else {
-            // console.log("ℹ️ Payment webhooks are disabled (ENABLE_PAYMENT_WEBHOOKS is not 'true')."); // Reduced log
         }
-
+        
         console.log(`\n✨✨✨ ${BOT_NAME} is fully operational! Waiting for commands... ✨✨✨\n`);
 
     } catch (error) {
