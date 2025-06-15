@@ -12038,12 +12038,17 @@ async function handleMinesGameTimeout(gameId) {
             if (forfeitUpdateResult.notifications) allNotificationsToSend.push(...forfeitUpdateResult.notifications);
 
             if (gameData.totalWageredForLevelCheck !== undefined) {
+                // Correctly use gameData.userId and gameData.chatId
                 const levelNotifications = await checkAndUpdateUserLevel(client, gameData.userId, gameData.totalWageredForLevelCheck, solPrice, gameData.chatId);
                 allNotificationsToSend.push(...levelNotifications);
+
+                // This is the corrected block
                 const milestoneResult = await processWagerMilestoneBonus(client, gameData.userId, gameData.totalWageredForLevelCheck, solPrice);
-if (!milestoneResult.success) {
-    console.warn(`${logPrefix} Failed to process milestone bonus on timeout: ${milestoneResult.error}`);
-}
+                if (!milestoneResult.success) {
+                    console.warn(`${logPrefix} Failed to process milestone bonus on timeout: ${milestoneResult.error}`);
+                }
+                // The line causing the error has been removed.
+            }
             
             await client.query('COMMIT');
         } else {
