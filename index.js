@@ -2651,64 +2651,47 @@ async function getGroupSession(chatId, chatTitle = null) {
  * @param {bigint | number | null} betAmount - The bet amount (optional, primarily for logging or if needed by other logic).
  */
 async function updateGroupGameDetails(chatId, gameIdToAddOrRemove, familyActivityKey, betAmount) {
-    const stringChatId = String(chatId);
-    const logPrefix = `[UpdateGroupGameDetails CH:${stringChatId} FamKey:${familyActivityKey || 'N/A'} V2_ArrayStore_DebugLog]`; // Added DebugLog to version
+    const stringChatId = String(chatId);
+    const logPrefix = `[UpdateGroupGameDetails CH:${stringChatId} FamKey:${familyActivityKey || 'N/A'} V3_GracefulRemove]`;
 
-    console.log(`${logPrefix} Entry. gameIdToAddOrRemove: ${typeof gameIdToAddOrRemove === 'object' ? JSON.stringify(gameIdToAddOrRemove) : gameIdToAddOrRemove}, familyActivityKey: ${familyActivityKey}`);
+    const session = await getGroupSession(stringChatId, null);
 
-    const session = await getGroupSession(stringChatId, null); // Ensures session and activeGamesByTypeInGroup map exist
+    if (!familyActivityKey) {
+        console.warn(`${logPrefix} Attempted to update/clear game details without specifying a familyActivityKey. Action skipped.`);
+        session.lastActivity = Date.now();
+        return;
+    }
 
-    if (!familyActivityKey) {
-        console.warn(`${logPrefix} Attempted to update/clear game details without specifying a familyActivityKey. Action skipped.`);
-        session.lastActivity = Date.now();
-        return;
-    }
+    if (!session.activeGamesByTypeInGroup.has(familyActivityKey)) {
+        session.activeGamesByTypeInGroup.set(familyActivityKey, []);
+    }
+    
+    const activeIdsForFamily = session.activeGamesByTypeInGroup.get(familyActivityKey);
 
-    // Ensure an array exists for this familyActivityKey
-    if (!session.activeGamesByTypeInGroup.has(familyActivityKey)) {
-        console.log(`${logPrefix} Initializing new empty array for FamilyKey=${familyActivityKey}.`);
-        session.activeGamesByTypeInGroup.set(familyActivityKey, []);
-    }
-    
-    const activeIdsForFamily = session.activeGamesByTypeInGroup.get(familyActivityKey);
-    console.log(`${logPrefix} List for FamilyKey='${familyActivityKey}' BEFORE operation: [${activeIdsForFamily.join(', ')}] (Length: ${activeIdsForFamily.length})`);
+    if (typeof gameIdToAddOrRemove === 'string') {
+        const gameIdToAdd = gameIdToAddOrRemove;
+        if (!activeIdsForFamily.includes(gameIdToAdd)) {
+            activeIdsForFamily.push(gameIdToAdd);
+            console.log(`${logPrefix} Added GameID='${gameIdToAdd}' to FamilyKey='${familyActivityKey}'. Current count: ${activeIdsForFamily.length}.`);
+        }
+    } else if (gameIdToAddOrRemove && typeof gameIdToAddOrRemove.removeThisId === 'string') {
+        const gameIdToRemove = gameIdToAddOrRemove.removeThisId;
+        const index = activeIdsForFamily.indexOf(gameIdToRemove);
 
-    if (typeof gameIdToAddOrRemove === 'string') {
-        // Add a new game/offer ID
-        const gameIdToAdd = gameIdToAddOrRemove;
-        if (!activeIdsForFamily.includes(gameIdToAdd)) {
-            activeIdsForFamily.push(gameIdToAdd);
-            console.log(`${logPrefix} Added GameID='${gameIdToAdd}' to FamilyKey='${familyActivityKey}'. New list: [${activeIdsForFamily.join(', ')}]. Current count: ${activeIdsForFamily.length}.`);
-        } else {
-            console.warn(`${logPrefix} Attempted to add already existing GameID='${gameIdToAdd}' to FamilyKey='${familyActivityKey}'. No change to list.`);
-        }
-    } else if (gameIdToAddOrRemove && typeof gameIdToAddOrRemove.removeThisId === 'string') {
-        // Remove a specific game/offer ID
-        const gameIdToRemove = gameIdToAddOrRemove.removeThisId;
-        console.log(`${logPrefix} Attempting to remove GameID='${gameIdToRemove}' from FamilyKey='${familyActivityKey}'.`);
-        const index = activeIdsForFamily.indexOf(gameIdToRemove);
-        console.log(`${logPrefix} Index of '${gameIdToRemove}' in list: ${index}.`);
+        if (index > -1) {
+            activeIdsForFamily.splice(index, 1);
+            console.log(`${logPrefix} Successfully removed GameID='${gameIdToRemove}' from FamilyKey='${familyActivityKey}'. Current count: ${activeIdsForFamily.length}.`);
+        } else {
+            // THIS IS THE CHANGED PART: It's no longer a scary warning.
+            console.log(`${logPrefix} GameID='${gameIdToRemove}' was not found in list for removal. This is expected after a bot restart. List remains unchanged.`);
+        }
+    } else if (gameIdToAddOrRemove === null) {
+        console.warn(`${logPrefix} Received null gameId for removal. This is not a valid operation for removing specific games. List remains unchanged.`);
+    } else {
+        console.warn(`${logPrefix} Invalid gameIdToAddOrRemove parameter type: ${typeof gameIdToAddOrRemove}.`);
+    }
 
-        if (index > -1) {
-            activeIdsForFamily.splice(index, 1);
-            console.log(`${logPrefix} Successfully removed GameID='${gameIdToRemove}' from FamilyKey='${familyActivityKey}'. New list: [${activeIdsForFamily.join(', ')}]. Current count: ${activeIdsForFamily.length}.`);
-        } else {
-            console.warn(`${logPrefix} Attempted to remove GameID='${gameIdToRemove}' from FamilyKey='${familyActivityKey}', but it was NOT FOUND in current list: [${activeIdsForFamily.join(', ')}]. List remains unchanged.`);
-        }
-    } else if (gameIdToAddOrRemove === null) {
-        // This case is now problematic for removal if multiple games of the same type exist.
-        // The calling code MUST be updated to pass a specific gameId for removal.
-        console.warn(`${logPrefix} Received null gameId for FamilyKey=${familyActivityKey}. ` +
-                     `Cannot determine which game to remove if multiple exist for this key. ` +
-                     `No change made to the list. Current list: [${activeIdsForFamily.join(', ')}]. ` +
-                     `Ensure calling code provides a specific ID for removal.`);
-    } else {
-        console.warn(`${logPrefix} Invalid gameIdToAddOrRemove parameter type: ${typeof gameIdToAddOrRemove}. Expected string or { removeThisId: string }. Value: ${JSON.stringify(gameIdToAddOrRemove)}`);
-    }
-
-    console.log(`${logPrefix} List for FamilyKey='${familyActivityKey}' AFTER operation: [${activeIdsForFamily.join(', ')}] (Length: ${activeIdsForFamily.length})`);
-    session.lastActivity = Date.now();
-    // groupGameSessions.set(stringChatId, session); // Not strictly necessary if session is a direct reference and activeGamesByTypeInGroup is mutated in place.
+    session.lastActivity = Date.now();
 }
 // --- End of REVISED Group Game Session Management Functions ---
 
